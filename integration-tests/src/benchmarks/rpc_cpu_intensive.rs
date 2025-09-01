@@ -89,6 +89,7 @@ impl Benchmark for RpcCpuIntensive {
         let child_component_id = benchmark_context
             .deps
             .admin()
+            .await
             .component("child_component")
             .unique()
             .store()
@@ -97,6 +98,7 @@ impl Benchmark for RpcCpuIntensive {
         let component_id = benchmark_context
             .deps
             .admin()
+            .await
             .component("parent_component_composed")
             .unique()
             .store()
@@ -131,11 +133,13 @@ impl Benchmark for RpcCpuIntensive {
             benchmark_context
                 .deps
                 .admin()
+                .await
                 .start_worker_with(
                     &parent_worker_id.component_id,
                     &parent_worker_id.worker_name,
                     vec![],
                     env,
+                    vec![],
                 )
                 .await
                 .expect("Failed to start parent worker");
@@ -213,12 +217,14 @@ impl Benchmark for RpcCpuIntensive {
             benchmark_context
                 .deps
                 .admin()
+                .await
                 .delete_worker(&worker_id.parent)
                 .await
                 .expect("Failed to delete parent worker");
             benchmark_context
                 .deps
                 .admin()
+                .await
                 .delete_worker(&worker_id.child)
                 .await
                 .expect("Failed to delete child worker");
@@ -253,7 +259,7 @@ impl RpcCpuIntensive {
             let _ = fibers.spawn(async move {
                 for _ in 0..length {
                     let result = invoke_and_await(
-                        &context_clone.deps.admin(),
+                        &context_clone.deps.admin().await,
                         &worker_id_clone,
                         &function_clone,
                         params_clone.clone(),

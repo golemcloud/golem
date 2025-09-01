@@ -15,6 +15,7 @@
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
+use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::Path;
 use std::time::Duration;
@@ -23,6 +24,7 @@ use uuid::Uuid;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor::services::golem_config::CompiledComponentServiceConfig;
 
@@ -48,6 +50,43 @@ pub struct ServerConfig {
     pub http_port: u16,
 }
 
+impl SafeDisplay for ServerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "tracing:");
+        let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "component service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.component_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "compiled component service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.compiled_component_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "compile worker:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.compile_worker.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "gRPC host: {}", self.grpc_host);
+        let _ = writeln!(&mut result, "gRPC port: {}", self.grpc_port);
+        let _ = writeln!(&mut result, "HTTP host: {}", self.http_host);
+        let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        result
+    }
+}
+
 impl ServerConfig {
     pub fn http_addr(&self) -> Option<SocketAddrV4> {
         let address = self.http_host.parse::<Ipv4Addr>().ok()?;
@@ -71,6 +110,23 @@ impl ComponentServiceConfig {
     }
 }
 
+impl SafeDisplay for ComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ComponentServiceConfig::Static(inner) => {
+                let _ = writeln!(&mut result, "static:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            ComponentServiceConfig::Dynamic(inner) => {
+                let _ = writeln!(&mut result, "dynamic:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StaticComponentServiceConfig {
     pub host: String,
@@ -89,9 +145,27 @@ impl StaticComponentServiceConfig {
     }
 }
 
+impl SafeDisplay for StaticComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access_token: ****");
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct DynamicComponentServiceConfig {
     pub access_token: Uuid,
+}
+
+impl SafeDisplay for DynamicComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "access_token: ****");
+        result
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -99,6 +173,21 @@ pub struct CompileWorkerConfig {
     pub retries: RetryConfig,
     pub max_component_size: usize,
     pub connect_timeout: Duration,
+}
+
+impl SafeDisplay for CompileWorkerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "max component size: {}",
+            self.max_component_size
+        );
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
 }
 
 impl Default for ServerConfig {

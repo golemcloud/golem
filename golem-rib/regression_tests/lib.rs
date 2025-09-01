@@ -2,10 +2,10 @@ test_r::enable!();
 
 use test_r::test;
 
-use golem_wasm_ast::analysis::{
-    AnalysedType, NameTypePair, TypeBool, TypeF32, TypeF64, TypeRecord, TypeS16, TypeS32, TypeStr,
-    TypeU64, TypeU8,
+use golem_wasm_ast::analysis::analysed_type::{
+    bool, f32, f64, field, record, s16, s32, str, u64, u8,
 };
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, Expr, Interpreter, RibCompiler,
@@ -570,214 +570,59 @@ fn expected_value_and_type() -> ValueAndType {
 }
 
 fn expected_analysed_type() -> AnalysedType {
-    AnalysedType::Record(TypeRecord {
-        fields: vec![
-            NameTypePair {
-                name: "a".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "aa".to_string(),
-                typ: AnalysedType::U64(TypeU64),
-            },
-            NameTypePair {
-                name: "ab".to_string(),
-                typ: AnalysedType::S32(TypeS32),
-            },
-            NameTypePair {
-                name: "ac".to_string(),
-                typ: AnalysedType::F32(TypeF32),
-            },
-            NameTypePair {
-                name: "ad".to_string(),
-                typ: AnalysedType::F64(TypeF64),
-            },
-            NameTypePair {
-                name: "ae".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "af".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "ag".to_string(),
-                typ: AnalysedType::S16(TypeS16),
-            },
-            NameTypePair {
-                name: "ah".to_string(),
-                typ: AnalysedType::U8(TypeU8),
-            },
-            NameTypePair {
-                name: "ai".to_string(),
-                typ: AnalysedType::Bool(TypeBool),
-            },
-            NameTypePair {
-                name: "aj".to_string(),
-                typ: AnalysedType::F64(TypeF64),
-            },
-            NameTypePair {
-                name: "ak".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "b".to_string(),
-                typ: AnalysedType::U64(TypeU64),
-            },
-            NameTypePair {
-                name: "bb".to_string(),
-                typ: AnalysedType::U64(TypeU64),
-            },
-            NameTypePair {
-                name: "c".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "cc".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "d".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "dd".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "e".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "ee".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "f".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "ff".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "g".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "gg".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "h".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "hh".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "i".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "j".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "k".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "l".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "m".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "n".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "o".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "p".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "q".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "qq".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "r".to_string(),
-                typ: AnalysedType::U64(TypeU64),
-            },
-            NameTypePair {
-                name: "rr".to_string(),
-                typ: AnalysedType::U64(TypeU64),
-            },
-            NameTypePair {
-                name: "s".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "ss".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "t".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "tt".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "u".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "uu".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "v".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "vv".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "w".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "ww".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "x".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "y".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-            NameTypePair {
-                name: "z".to_string(),
-                typ: AnalysedType::Str(TypeStr),
-            },
-        ],
-    })
+    record(vec![
+        field("a", str()),
+        field("aa", u64()),
+        field("ab", s32()),
+        field("ac", f32()),
+        field("ad", f64()),
+        field("ae", bool()),
+        field("af", str()),
+        field("ag", s16()),
+        field("ah", u8()),
+        field("ai", bool()),
+        field("aj", f64()),
+        field("ak", str()),
+        field("b", u64()),
+        field("bb", u64()),
+        field("c", str()),
+        field("cc", str()),
+        field("d", str()),
+        field("dd", str()),
+        field("e", str()),
+        field("ee", str()),
+        field("f", str()),
+        field("ff", str()),
+        field("g", str()),
+        field("gg", str()),
+        field("h", str()),
+        field("hh", str()),
+        field("i", str()),
+        field("j", str()),
+        field("k", str()),
+        field("l", str()),
+        field("m", str()),
+        field("n", str()),
+        field("o", str()),
+        field("p", str()),
+        field("q", str()),
+        field("qq", str()),
+        field("r", u64()),
+        field("rr", u64()),
+        field("s", str()),
+        field("ss", str()),
+        field("t", str()),
+        field("tt", str()),
+        field("u", str()),
+        field("uu", str()),
+        field("v", str()),
+        field("vv", str()),
+        field("w", str()),
+        field("ww", str()),
+        field("x", str()),
+        field("y", str()),
+        field("z", str()),
+    ])
 }
 
 mod component_metadata {
@@ -1311,269 +1156,198 @@ mod function_metadata {
 }
 
 mod data_types {
-    use crate::test_utils;
+    use golem_wasm_ast::analysis::analysed_type::{
+        bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, s16, s32,
+        s64, s8, str, tuple, u16, u32, u64, u8, unit_case, variant,
+    };
     use golem_wasm_ast::analysis::*;
 
     // Result
     pub(crate) fn result_of_str_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(AnalysedType::Str(TypeStr))),
-            err: Some(Box::new(AnalysedType::Str(TypeStr))),
-        })
+        result(str(), str())
     }
 
     pub(crate) fn result_of_number_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(AnalysedType::U64(TypeU64))),
-            err: Some(Box::new(AnalysedType::U64(TypeU64))),
-        })
+        result(u64(), u64())
     }
 
     pub(crate) fn result_of_option_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(option_of_str_type())),
-            err: Some(Box::new(option_of_str_type())),
-        })
+        result(option_of_str_type(), option_of_str_type())
     }
 
     pub(crate) fn result_of_variant_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(variant_type())),
-            err: Some(Box::new(variant_type())),
-        })
+        result(variant_type(), variant_type())
     }
 
     pub(crate) fn result_of_enum_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(enum_type())),
-            err: Some(Box::new(enum_type())),
-        })
+        result(enum_type(), enum_type())
     }
 
     pub(crate) fn result_of_tuple_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(tuple_type())),
-            err: Some(Box::new(tuple_type())),
-        })
+        result(tuple_type(), tuple_type())
     }
 
     pub(crate) fn result_of_flag_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(flag_type())),
-            err: Some(Box::new(flag_type())),
-        })
+        result(flag_type(), flag_type())
     }
 
     pub(crate) fn result_of_record_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(record_type())),
-            err: Some(Box::new(record_type())),
-        })
+        result(record_type(), record_type())
     }
 
     pub(crate) fn result_of_list_type() -> AnalysedType {
-        AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(list_of_str_type())),
-            err: Some(Box::new(list_of_str_type())),
-        })
+        result(list_of_str_type(), list_of_str_type())
     }
 
     // List
     pub(crate) fn list_of_number_type_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::U64(TypeU64)),
-        })
+        list(u64())
     }
 
     pub(crate) fn list_of_str_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::Str(TypeStr)),
-        })
+        list(str())
     }
 
     pub(crate) fn list_of_option_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            })),
-        })
+        list(option(str()))
     }
 
     pub(crate) fn list_of_list_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::List(TypeList {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            })),
-        })
+        list(list(str()))
     }
 
     pub(crate) fn list_of_variant_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(variant_type()),
-        })
+        list(variant_type())
     }
 
     pub(crate) fn list_of_enum_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(enum_type()),
-        })
+        list(enum_type())
     }
 
     pub(crate) fn list_of_tuple() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(tuple_type()),
-        })
+        list(tuple_type())
     }
 
     pub(crate) fn list_of_record_type() -> AnalysedType {
-        AnalysedType::List(TypeList {
-            inner: Box::new(record_type()),
-        })
+        list(record_type())
     }
 
     pub(crate) fn option_of_number_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::U64(TypeU64)),
-        })
+        option(u64())
     }
 
     // Option
     pub(crate) fn option_of_str_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::Str(TypeStr)),
-        })
+        option(str())
     }
 
     pub(crate) fn option_of_option_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::Option(TypeOption {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            })),
-        })
+        option(option(str()))
     }
 
     pub(crate) fn option_of_variant_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(variant_type()),
-        })
+        option(variant_type())
     }
 
     pub(crate) fn option_of_enum_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(enum_type()),
-        })
+        option(enum_type())
     }
 
     pub(crate) fn option_of_tuple() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(tuple_type()),
-        })
+        option(tuple_type())
     }
 
     pub(crate) fn option_of_record_type() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(record_type()),
-        })
+        option(record_type())
     }
 
     pub(crate) fn option_of_list() -> AnalysedType {
-        AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::List(TypeList {
-                inner: Box::new(AnalysedType::Str(TypeStr)),
-            })),
-        })
+        option(list(str()))
     }
 
     // Record
     pub(crate) fn record_type() -> AnalysedType {
-        test_utils::analysed_type_record(vec![
-            (
+        record(vec![
+            field(
                 "string-headers",
-                test_utils::analysed_type_record(vec![(
-                    "authorization-string",
-                    AnalysedType::Str(TypeStr),
-                )]),
+                record(vec![field("authorization-string", str())]),
             ),
-            (
+            field(
                 "data-body",
-                test_utils::analysed_type_record(vec![
-                    ("str", AnalysedType::Str(TypeStr)),
-                    ("list-of-str", list_of_str_type()),
-                    ("list-of-option", list_of_option_type()),
-                    ("list-of-list", list_of_list_type()),
-                    ("list-of-variant", list_of_variant_type()),
-                    ("list-of-enum", list_of_enum_type()),
-                    ("list-of-tuple", list_of_tuple()),
-                    (
+                record(vec![
+                    field("str", str()),
+                    field("list-of-str", list_of_str_type()),
+                    field("list-of-option", list_of_option_type()),
+                    field("list-of-list", list_of_list_type()),
+                    field("list-of-variant", list_of_variant_type()),
+                    field("list-of-enum", list_of_enum_type()),
+                    field("list-of-tuple", list_of_tuple()),
+                    field(
                         "list-of-record",
-                        AnalysedType::List(TypeList {
-                            inner: Box::new(test_utils::analysed_type_record(vec![
-                                ("field-string-one", AnalysedType::Str(TypeStr)),
-                                ("field-string-two", AnalysedType::Str(TypeStr)),
-                            ])),
-                        }),
+                        list(record(vec![
+                            field("field-string-one", str()),
+                            field("field-string-two", str()),
+                        ])),
                     ),
-                    ("option-of-str", option_of_str_type()),
-                    ("option-of-option", option_of_option_type()),
-                    ("option-of-variant", option_of_variant_type()),
-                    ("option-of-enum", option_of_enum_type()),
-                    ("option-of-tuple", option_of_tuple()),
-                    (
+                    field("option-of-str", option_of_str_type()),
+                    field("option-of-option", option_of_option_type()),
+                    field("option-of-variant", option_of_variant_type()),
+                    field("option-of-enum", option_of_enum_type()),
+                    field("option-of-tuple", option_of_tuple()),
+                    field(
                         "option-of-record",
-                        AnalysedType::Option(TypeOption {
-                            inner: Box::new(test_utils::analysed_type_record(vec![
-                                ("field-string-one", AnalysedType::Str(TypeStr)),
-                                ("field-string-two", AnalysedType::Str(TypeStr)),
-                            ])),
-                        }),
+                        option(record(vec![
+                            field("field-string-one", str()),
+                            field("field-string-two", str()),
+                        ])),
                     ),
-                    ("option-of-list", option_of_list()),
-                    (
+                    field("option-of-list", option_of_list()),
+                    field(
                         "nested-record",
-                        test_utils::analysed_type_record(vec![
-                            ("field-string-one", AnalysedType::Str(TypeStr)),
-                            ("field-string-two", AnalysedType::Str(TypeStr)),
+                        record(vec![
+                            field("field-string-one", str()),
+                            field("field-string-two", str()),
                         ]),
                     ),
-                    ("variant-data-a", variant_type()),
-                    ("variant-data-b", variant_type()),
-                    ("variant-data-c", variant_type()),
-                    ("variant-data-d", variant_type()),
-                    ("variant-data-e", variant_type()),
-                    ("variant-data-f", variant_type()),
-                    ("enum-data-a", enum_type()),
-                    ("enum-data-b", enum_type()),
-                    ("enum-data-c", enum_type()),
-                    ("flags-data-a", flag_type()),
-                    ("flags-data-b", flag_type()),
-                    ("flags-data-c", flag_type()),
-                    ("result-data-a", result_of_str_type()),
-                    ("result-data-b", result_of_number_type()),
-                    ("result-data-c", result_of_enum_type()),
-                    ("result-data-d", result_of_variant_type()),
-                    ("result-data-e", result_of_tuple_type()),
-                    ("result-data-f", result_of_option_type()),
-                    ("result-data-g", result_of_str_type()),
-                    ("result-data-h", result_of_number_type()),
-                    ("result-data-i", result_of_enum_type()),
-                    ("result-data-j", result_of_variant_type()),
-                    ("result-data-k", result_of_tuple_type()),
-                    ("result-data-l", result_of_option_type()),
-                    ("result-data-m", result_of_flag_type()),
-                    ("result-data-n", result_of_flag_type()),
-                    ("tuple-data", tuple_type()),
-                    ("character-data", AnalysedType::Chr(TypeChr)),
-                    ("f64-data", AnalysedType::F64(TypeF64)),
-                    ("f32-data", AnalysedType::F32(TypeF32)),
-                    ("u64-data", AnalysedType::U64(TypeU64)),
-                    ("s64-data", AnalysedType::S64(TypeS64)),
-                    ("u32-data", AnalysedType::U32(TypeU32)),
-                    ("s32-data", AnalysedType::S32(TypeS32)),
-                    ("u16-data", AnalysedType::U16(TypeU16)),
-                    ("s16-data", AnalysedType::S16(TypeS16)),
-                    ("u8-data", AnalysedType::U8(TypeU8)),
-                    ("s8-data", AnalysedType::S8(TypeS8)),
-                    ("boolean-data", AnalysedType::Bool(TypeBool)),
+                    field("variant-data-a", variant_type()),
+                    field("variant-data-b", variant_type()),
+                    field("variant-data-c", variant_type()),
+                    field("variant-data-d", variant_type()),
+                    field("variant-data-e", variant_type()),
+                    field("variant-data-f", variant_type()),
+                    field("enum-data-a", enum_type()),
+                    field("enum-data-b", enum_type()),
+                    field("enum-data-c", enum_type()),
+                    field("flags-data-a", flag_type()),
+                    field("flags-data-b", flag_type()),
+                    field("flags-data-c", flag_type()),
+                    field("result-data-a", result_of_str_type()),
+                    field("result-data-b", result_of_number_type()),
+                    field("result-data-c", result_of_enum_type()),
+                    field("result-data-d", result_of_variant_type()),
+                    field("result-data-e", result_of_tuple_type()),
+                    field("result-data-f", result_of_option_type()),
+                    field("result-data-g", result_of_str_type()),
+                    field("result-data-h", result_of_number_type()),
+                    field("result-data-i", result_of_enum_type()),
+                    field("result-data-j", result_of_variant_type()),
+                    field("result-data-k", result_of_tuple_type()),
+                    field("result-data-l", result_of_option_type()),
+                    field("result-data-m", result_of_flag_type()),
+                    field("result-data-n", result_of_flag_type()),
+                    field("tuple-data", tuple_type()),
+                    field("character-data", chr()),
+                    field("f64-data", f64()),
+                    field("f32-data", f32()),
+                    field("u64-data", u64()),
+                    field("s64-data", s64()),
+                    field("u32-data", u32()),
+                    field("s32-data", s32()),
+                    field("u16-data", u16()),
+                    field("s16-data", s16()),
+                    field("u8-data", u8()),
+                    field("s8-data", s8()),
+                    field("boolean-data", bool()),
                 ]),
             ),
         ])
@@ -1581,169 +1355,62 @@ mod data_types {
 
     // Tuple
     pub(crate) fn tuple_type() -> AnalysedType {
-        AnalysedType::Tuple(TypeTuple {
-            items: vec![
-                AnalysedType::Str(TypeStr),
-                AnalysedType::U64(TypeU64),
-                AnalysedType::S32(TypeS32),
-                AnalysedType::F32(TypeF32),
-                AnalysedType::F64(TypeF64),
-                AnalysedType::Bool(TypeBool),
-                AnalysedType::Chr(TypeChr),
-                AnalysedType::Option(TypeOption {
-                    inner: Box::new(AnalysedType::S16(TypeS16)),
-                }),
-                AnalysedType::Result(TypeResult {
-                    ok: Some(Box::new(AnalysedType::U8(TypeU8))),
-                    err: Some(Box::new(AnalysedType::S8(TypeS8))),
-                }),
-                AnalysedType::List(TypeList {
-                    inner: Box::new(AnalysedType::Bool(TypeBool)),
-                }),
-                AnalysedType::Variant(TypeVariant {
-                    cases: vec![
-                        NameOptionTypePair {
-                            name: "case-hello".to_string(),
-                            typ: Some(AnalysedType::F64(TypeF64)),
-                        },
-                        NameOptionTypePair {
-                            name: "case-none".to_string(),
-                            typ: None,
-                        },
-                    ],
-                }),
-                AnalysedType::Record(TypeRecord {
-                    // Option<Record>
-                    fields: vec![
-                        NameTypePair {
-                            name: "field-one".to_string(),
-                            typ: AnalysedType::Bool(TypeBool),
-                        },
-                        NameTypePair {
-                            name: "field-two".to_string(),
-                            typ: AnalysedType::Str(TypeStr),
-                        },
-                    ],
-                }),
-            ],
-        })
+        tuple(vec![
+            str(),
+            u64(),
+            s32(),
+            f32(),
+            f64(),
+            bool(),
+            chr(),
+            option(s16()),
+            result(u8(), s8()),
+            list(bool()),
+            variant(vec![case("case-hello", f64()), unit_case("case-none")]),
+            record(vec![field("field-one", bool()), field("field-two", str())]),
+        ])
     }
 
     // Enum
     pub(crate) fn enum_type() -> AnalysedType {
-        AnalysedType::Enum(TypeEnum {
-            cases: vec![
-                "enum-a".to_string(),
-                "enum-b".to_string(),
-                "enum-c".to_string(),
-            ],
-        })
+        r#enum(&["enum-a", "enum-b", "enum-c"])
     }
 
     // Str
     pub(crate) fn str_type() -> AnalysedType {
-        AnalysedType::Str(TypeStr)
+        str()
     }
 
     // Number
     pub(crate) fn number_type() -> AnalysedType {
-        AnalysedType::U64(TypeU64)
+        u64()
     }
 
     // Flag
     pub(crate) fn flag_type() -> AnalysedType {
-        AnalysedType::Flags(TypeFlags {
-            names: vec![
-                "featurex".to_string(),
-                "featurey".to_string(),
-                "featurez".to_string(),
-            ],
-        })
+        flags(&["featurex", "featurey", "featurez"])
     }
 
     // Variant
     pub(crate) fn variant_type() -> AnalysedType {
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "case-none".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "case-str".to_string(),
-                    typ: Some(AnalysedType::Str(TypeStr)), // Variant case for String
-                },
-                NameOptionTypePair {
-                    name: "case-u64".to_string(),
-                    typ: Some(AnalysedType::U64(TypeU64)), // Variant case for u64
-                },
-                NameOptionTypePair {
-                    name: "case-s32".to_string(),
-                    typ: Some(AnalysedType::S32(TypeS32)), // Variant case for i32
-                },
-                NameOptionTypePair {
-                    name: "case-f32".to_string(),
-                    typ: Some(AnalysedType::F32(TypeF32)), // Variant case for f32
-                },
-                NameOptionTypePair {
-                    name: "case-f64".to_string(),
-                    typ: Some(AnalysedType::F64(TypeF64)), // Variant case for f64
-                },
-                NameOptionTypePair {
-                    name: "case-bool".to_string(),
-                    typ: Some(AnalysedType::Bool(TypeBool)), // Variant case for bool
-                },
-                NameOptionTypePair {
-                    name: "case-chr".to_string(),
-                    typ: Some(AnalysedType::Chr(TypeChr)), // Variant case for char
-                },
-                NameOptionTypePair {
-                    name: "case-list".to_string(),
-                    typ: Some(AnalysedType::List(TypeList {
-                        // Variant case for List
-                        inner: Box::new(AnalysedType::S16(TypeS16)),
-                    })),
-                },
-                NameOptionTypePair {
-                    name: "case-option".to_string(),
-                    typ: Some(AnalysedType::Option(TypeOption {
-                        // Variant case for Option
-                        inner: Box::new(AnalysedType::U16(TypeU16)),
-                    })),
-                },
-                NameOptionTypePair {
-                    name: "case-result".to_string(),
-                    typ: Some(AnalysedType::Result(TypeResult {
-                        // Variant case for Result
-                        ok: Some(Box::new(AnalysedType::U8(TypeU8))),
-                        err: Some(Box::new(AnalysedType::S8(TypeS8))),
-                    })),
-                },
-                NameOptionTypePair {
-                    name: "case-record".to_string(),
-                    typ: Some(AnalysedType::Record(TypeRecord {
-                        // Variant case for Record
-                        fields: vec![
-                            NameTypePair {
-                                name: "field1".to_string(),
-                                typ: AnalysedType::Str(TypeStr),
-                            },
-                            NameTypePair {
-                                name: "field2".to_string(),
-                                typ: AnalysedType::Bool(TypeBool),
-                            },
-                        ],
-                    })),
-                },
-                NameOptionTypePair {
-                    name: "case-tuple".to_string(),
-                    typ: Some(AnalysedType::Tuple(TypeTuple {
-                        // Variant case for Tuple
-                        items: vec![AnalysedType::F32(TypeF32), AnalysedType::U32(TypeU32)],
-                    })),
-                },
-            ],
-        })
+        variant(vec![
+            unit_case("case-none"),
+            case("case-str", str()),
+            case("case-u64", u64()),
+            case("case-s32", s32()),
+            case("case-f32", f32()),
+            case("case-f64", f64()),
+            case("case-bool", bool()),
+            case("case-chr", chr()),
+            case("case-list", list(s16())),
+            case("case-option", option(u16())),
+            case("case-result", result(u8(), s8())),
+            case(
+                "case-record",
+                record(vec![field("field1", str()), field("field2", bool())]),
+            ),
+            case("case-tuple", tuple(vec![f32(), u32()])),
+        ])
     }
 }
 
@@ -2049,7 +1716,8 @@ mod mock_interpreter {
     };
     use async_trait::async_trait;
 
-    use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+    use golem_wasm_ast::analysis::analysed_type::{field, record, str};
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::ValueAndType;
     use rib::{ComponentDependencyKey, DefaultWorkerNameGenerator, InstructionId};
     use std::collections::HashMap;
@@ -2208,19 +1876,10 @@ mod mock_interpreter {
                 .map(|(name, result)| (FunctionName(name.to_string()), result))
                 .collect();
 
-        let record_input_type = test_utils::analysed_type_record(vec![
-            (
-                "headers",
-                test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
-            ),
-            (
-                "body",
-                test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
-            ),
-            (
-                "path",
-                test_utils::analysed_type_record(vec![("name", AnalysedType::Str(TypeStr))]),
-            ),
+        let record_input_type = record(vec![
+            field("headers", record(vec![field("name", str())])),
+            field("body", record(vec![field("name", str())])),
+            field("path", record(vec![field("name", str())])),
         ]);
 
         let record_input_value = test_utils::get_value_and_type(
@@ -2262,7 +1921,7 @@ mod mock_interpreter {
             &self,
             _component_info: ComponentDependencyKey,
             _instruction_id: &InstructionId,
-            _worker_name: Option<EvaluatedWorkerName>,
+            _worker_name: EvaluatedWorkerName,
             function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
             _return_type: Option<AnalysedType>,
@@ -2283,18 +1942,6 @@ mod mock_interpreter {
 mod test_utils {
     use golem_wasm_ast::analysis::*;
     use golem_wasm_rpc::ValueAndType;
-
-    pub(crate) fn analysed_type_record(fields: Vec<(&str, AnalysedType)>) -> AnalysedType {
-        AnalysedType::Record(TypeRecord {
-            fields: fields
-                .into_iter()
-                .map(|(name, typ)| NameTypePair {
-                    name: name.to_string(),
-                    typ,
-                })
-                .collect(),
-        })
-    }
 
     pub(crate) fn get_value_and_type(
         analysed_type: &AnalysedType,

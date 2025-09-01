@@ -7,6 +7,8 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: AgentTypes
+  description: API working on registered agent types
 - name: ApiCertificate
 - name: ApiDefinition
 - name: ApiDeployment
@@ -521,96 +523,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_and_await_function
-  /v1/components/{component_id}/invoke-and-await:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function and await its resolution on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        Supply the parameters in the request body as JSON.
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: Idempotency-Key
-        schema:
-          type: string
-        in: header
-        required: false
-        deprecated: false
-        explode: true
-      - name: function
-        schema:
-          type: string
-        in: query
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: invoke_and_await_function_without_name
   /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
@@ -707,97 +619,6 @@ paths:
       - Cookie: []
       - Token: []
       operationId: invoke_function
-  /v1/components/{component_id}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      parameters:
-      - name: component_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      - name: Idempotency-Key
-        schema:
-          type: string
-        in: header
-        required: false
-        deprecated: false
-        explode: true
-      - name: function
-        schema:
-          type: string
-        in: query
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        explode: true
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: invoke_function_without_name
   /v1/components/{component_id}/workers/{worker_name}/complete:
     post:
       tags:
@@ -2370,6 +2191,88 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_definition
+  /v1/api/definitions/{project_id}/{id}/{version}/export:
+    get:
+      tags:
+      - ApiDefinition
+      summary: Export an API definition in OpenAPI format
+      description: Exports an API definition by its API definition ID and version in OpenAPI format.
+      parameters:
+      - name: project_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: id
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: version
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OpenApiHttpApiDefinitionResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: export_definition
   /v1/api/deployments/deploy:
     post:
       tags:
@@ -3853,7 +3756,9 @@ components:
       - componentVersion
       - args
       - env
-      - accountId
+      - projectId
+      - createdBy
+      - wasiConfigVars
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -3874,8 +3779,15 @@ components:
           type: object
           additionalProperties:
             type: string
-        accountId:
+        projectId:
           type: string
+          format: uuid
+        createdBy:
+          type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         parent:
           $ref: '#/components/schemas/WorkerId'
         componentSize:
@@ -3906,27 +3818,6 @@ components:
     DeleteWorkerResponse:
       type: object
       title: DeleteWorkerResponse
-    DescribeResourceParameters:
-      type: object
-      title: DescribeResourceParameters
-      required:
-      - timestamp
-      - id
-      - resourceName
-      - resourceParams
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        id:
-          type: integer
-          format: uint64
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
     DomainRequest:
       type: object
       title: DomainRequest
@@ -4075,6 +3966,18 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+    ExportedResourceMetadata:
+      type: object
+      title: ExportedResourceMetadata
+      required:
+      - key
+      - description
+      properties:
+        key:
+          type: integer
+          format: uint64
+        description:
+          $ref: '#/components/schemas/WorkerResourceDescription'
     FailedUpdate:
       type: object
       title: FailedUpdate
@@ -4215,6 +4118,7 @@ components:
       - file-server
       - http-handler
       - cors-preflight
+      - swagger-ui
     GetFilesResponse:
       type: object
       title: GetFilesResponse
@@ -4335,7 +4239,7 @@ components:
       - functionName
       - request
       - response
-      - wrappedFunctionType
+      - durableFunctionType
       properties:
         timestamp:
           type: string
@@ -4346,21 +4250,8 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrappedFunctionType:
+        durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
-    IndexedWorkerMetadata:
-      type: object
-      title: IndexedWorkerMetadata
-      required:
-      - resourceName
-      - resourceParams
-      properties:
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            type: string
     InterruptResponse:
       type: object
       title: InterruptResponse
@@ -4382,7 +4273,7 @@ components:
       title: InvokeResult
       properties:
         result:
-          $ref: '#/components/schemas/TypeAnnotatedValue'
+          $ref: '#/components/schemas/ValueAndType'
     JumpParameters:
       type: object
       title: JumpParameters
@@ -4467,6 +4358,20 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
+    OpenApiHttpApiDefinitionResponse:
+      type: object
+      title: OpenApiHttpApiDefinitionResponse
+      required:
+      - id
+      - version
+      - openapi_yaml
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        openapi_yaml:
+          type: string
     OplogCursor:
       type: object
       title: OplogCursor
@@ -4708,7 +4613,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
@@ -4744,7 +4648,6 @@ components:
           GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
           CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
           DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
           Log: '#/components/schemas/PublicOplogEntry_LogParameters'
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
@@ -4893,27 +4796,6 @@ components:
             - DeactivatePlugin
             example: DeactivatePlugin
       - $ref: '#/components/schemas/DeactivatePluginParameters'
-    PublicOplogEntry_DescribeResourceParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - DescribeResource
-            example: DescribeResource
-      - $ref: '#/components/schemas/DescribeResourceParameters'
     PublicOplogEntry_EndRegionParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -5430,23 +5312,14 @@ components:
         version:
           type: integer
           format: uint64
-    ResourceMetadata:
-      type: object
-      title: ResourceMetadata
-      required:
-      - createdAt
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        indexed:
-          $ref: '#/components/schemas/IndexedWorkerMetadata'
     ResourceParameters:
       type: object
       title: ResourceParameters
       required:
       - timestamp
       - id
+      - name
+      - owner
       properties:
         timestamp:
           type: string
@@ -5454,6 +5327,10 @@ components:
         id:
           type: integer
           format: uint64
+        name:
+          type: string
+        owner:
+          type: string
     ResumeResponse:
       type: object
       title: ResumeResponse
@@ -5721,15 +5598,6 @@ components:
         timestamp:
           type: string
           format: date-time
-    TypeAnnotatedValue:
-      type: object
-      required:
-      - typ
-      - value
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
     TypeBool:
       type: object
       title: TypeBool
@@ -5742,6 +5610,10 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -5758,6 +5630,10 @@ components:
       required:
       - names
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -5769,6 +5645,10 @@ components:
       - resource_id
       - mode
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -5780,6 +5660,10 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
@@ -5788,6 +5672,10 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeRecord:
@@ -5796,6 +5684,10 @@ components:
       required:
       - fields
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         fields:
           type: array
           items:
@@ -5804,6 +5696,10 @@ components:
       type: object
       title: TypeResult
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -5829,6 +5725,10 @@ components:
       required:
       - items
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -5851,6 +5751,10 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -5943,6 +5847,17 @@ components:
       properties:
         version:
           type: string
+    WasiConfigVarsEntry:
+      type: object
+      title: WasiConfigVarsEntry
+      required:
+      - key
+      - value
+      properties:
+        key:
+          type: string
+        value:
+          type: string
     WorkerAndFilter:
       type: object
       title: WorkerAndFilter
@@ -5983,6 +5898,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          default: []
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
     WorkerCreationResponse:
       type: object
       title: WorkerCreationResponse
@@ -6034,6 +5954,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
       discriminator:
         propertyName: type
         mapping:
@@ -6045,6 +5966,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -6141,6 +6063,18 @@ components:
             - Version
             example: Version
       - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_WorkerWasiConfigVarsFilter:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - WasiConfigVars
+            example: WasiConfigVars
+      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       type: object
       title: WorkerId
@@ -6158,9 +6092,11 @@ components:
       title: WorkerMetadata
       required:
       - workerId
-      - accountId
+      - projectId
+      - createdBy
       - args
       - env
+      - wasiConfigVars
       - status
       - componentVersion
       - retryCount
@@ -6169,14 +6105,17 @@ components:
       - createdAt
       - componentSize
       - totalLinearMemorySize
-      - ownedResources
+      - exportedResourceInstances
       - activePlugins
       - skippedRegions
       - deletedRegions
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         args:
           type: array
@@ -6186,6 +6125,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentVersion:
@@ -6212,10 +6155,10 @@ components:
         totalLinearMemorySize:
           type: integer
           format: uint64
-        ownedResources:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ResourceMetadata'
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
         activePlugins:
           type: array
           items:
@@ -6263,6 +6206,21 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/WorkerFilter'
+    WorkerResourceDescription:
+      type: object
+      title: WorkerResourceDescription
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
     WorkerStatus:
       type: string
       description: |-
@@ -6306,6 +6264,20 @@ components:
         value:
           type: integer
           format: uint64
+    WorkerWasiConfigVarsFilter:
+      type: object
+      title: WorkerWasiConfigVarsFilter
+      required:
+      - name
+      - comparator
+      - value
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
     WorkersMetadataRequest:
       type: object
       title: WorkersMetadataRequest

@@ -43,6 +43,8 @@ pub enum TypeInternal {
     },
     Variant(Vec<(String, Option<InferredType>)>),
     Resource {
+        name: Option<String>,
+        owner: Option<String>,
         resource_id: u64,
         resource_mode: u8,
     },
@@ -60,6 +62,10 @@ pub enum TypeInternal {
 }
 
 impl TypeInternal {
+    pub fn is_instance(&self) -> bool {
+        matches!(self, TypeInternal::Instance { .. })
+    }
+
     pub fn to_inferred_type(&self) -> InferredType {
         InferredType::new(self.clone(), TypeOrigin::NoOrigin)
     }
@@ -136,10 +142,23 @@ impl Hash for TypeInternal {
             TypeInternal::Resource {
                 resource_id,
                 resource_mode,
+                name,
+                owner,
             } => {
                 21.hash(state);
                 resource_id.hash(state);
                 resource_mode.hash(state);
+                if let Some(name) = name {
+                    name.hash(state);
+                } else {
+                    "name-unknown".hash(state);
+                }
+
+                if let Some(owner) = owner {
+                    owner.hash(state);
+                } else {
+                    "owner-unknown".hash(state);
+                }
             }
             TypeInternal::Range { from, to } => {
                 22.hash(state);
@@ -198,12 +217,16 @@ impl PartialEq for TypeInternal {
                 TypeInternal::Resource {
                     resource_id: id1,
                     resource_mode: mode1,
+                    name: name1,
+                    owner: owner1,
                 },
                 TypeInternal::Resource {
                     resource_id: id2,
                     resource_mode: mode2,
+                    name: name2,
+                    owner: owner2,
                 },
-            ) => id1 == id2 && mode1 == mode2,
+            ) => id1 == id2 && mode1 == mode2 && name1 == name2 && owner1 == owner2,
             (
                 TypeInternal::Range {
                     from: from1,

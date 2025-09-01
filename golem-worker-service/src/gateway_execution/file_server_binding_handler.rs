@@ -18,9 +18,9 @@ use crate::service::worker::{WorkerService, WorkerServiceError};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use futures_util::TryStreamExt;
+use futures::TryStreamExt;
 use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::{ComponentFilePath, ComponentId, TargetWorkerId, WorkerId};
+use golem_common::model::{ComponentFilePath, ComponentId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
@@ -38,7 +38,7 @@ pub trait FileServerBindingHandler: Send + Sync {
     async fn handle_file_server_binding_result(
         &self,
         namespace: Namespace,
-        worker_name: Option<&str>,
+        worker_name: &str,
         component_id: &ComponentId,
         original_result: RibResult,
     ) -> FileServerBindingResult;
@@ -199,14 +199,14 @@ impl DefaultFileServerBindingHandler {
     async fn get_component_metadata(
         &self,
         namespace: &Namespace,
-        worker_name: Option<&str>,
+        worker_name: &str,
         component_id: &ComponentId,
     ) -> Result<Component, FileServerBindingError> {
         // Two cases, we either have an existing worker or not (either not configured or not existing).
         // If there is no worker we need use the lastest component version, if there is none we need to use the exact component version
         // the worker is using. Not doing that would make the blob_storage optimization for read-only files visible to users.
 
-        let component_version = if let Some(worker_name) = worker_name {
+        let component_version = {
             let worker_metadata = self
                 .worker_service
                 .get_metadata(
@@ -223,8 +223,6 @@ impl DefaultFileServerBindingHandler {
                 Err(WorkerServiceError::WorkerNotFound(_)) => None,
                 Err(other) => Err(other)?,
             }
-        } else {
-            None
         };
 
         let component_metadata = if let Some(component_version) = component_version {
@@ -248,7 +246,7 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
     async fn handle_file_server_binding_result(
         &self,
         namespace: Namespace,
-        worker_name: Option<&str>,
+        worker_name: &str,
         component_id: &ComponentId,
         original_result: RibResult,
     ) -> FileServerBindingResult {
@@ -268,7 +266,7 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         if let Some(file) = matching_ro_file {
             let data = self
                 .initial_component_files_service
-                .get(&namespace.account_id, &file.key)
+                .get(&namespace.project_id, &file.key)
                 .await
                 .map_err(|e| {
                     FileServerBindingError::InternalError(format!(
@@ -291,19 +289,15 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
         } else {
             // Read write files need to be fetched from a running worker.
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
-            let worker_name_opt_validated = worker_name
-                .as_ref()
-                .map(|&w| WorkerId::validate_worker_name(w).map(|_| w.to_string()))
-                .transpose()
-                .map_err(|e| {
-                    FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))
-                })?;
+            WorkerId::validate_worker_name(worker_name).map_err(|e| {
+                FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))
+            })?;
 
             let component_id = component_id.clone();
 
-            let worker_id = TargetWorkerId {
+            let worker_id = WorkerId {
                 component_id,
-                worker_name: worker_name_opt_validated.map(|w| w.to_string()),
+                worker_name: worker_name.to_string(),
             };
 
             let stream = self

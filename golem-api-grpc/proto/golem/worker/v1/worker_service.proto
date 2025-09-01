@@ -21,8 +21,8 @@ import public "golem/worker/public_oplog.proto";
 import public "golem/worker/worker_id.proto";
 import public "golem/component/component_id.proto";
 import public "golem/worker/update_mode.proto";
-import public "golem/worker/target_worker_id.proto";
 import public "golem/worker/filesystem.proto";
+import "golem/worker/wasi_config_vars.proto";
 
 service WorkerService {
   rpc LaunchNewWorker (LaunchNewWorkerRequest) returns (LaunchNewWorkerResponse);
@@ -45,7 +45,7 @@ service WorkerService {
   rpc GetOplog(GetOplogRequest) returns (GetOplogResponse);
   rpc SearchOplog(SearchOplogRequest) returns (SearchOplogResponse);
 
-  rpc ListDirectory(ListDirectoryRequest) returns (ListDirectoryResponse);
+  rpc GetFileSystemNode(GetFileSystemNodeRequest) returns (GetFileSystemNodeResponse);
   rpc GetFileContents(GetFileContentsRequest) returns (stream GetFileContentsResponse);
 
   rpc ActivatePlugin(ActivatePluginRequest) returns (ActivatePluginResponse);
@@ -64,6 +64,8 @@ message LaunchNewWorkerRequest {
   string name = 2;
   repeated string args = 3;
   map<string, string> env = 4;
+  golem.worker.WasiConfigVars wasi_config_vars = 5;
+  bool ignore_already_existing = 6;
 }
 
 message LaunchNewWorkerResponse {
@@ -142,7 +144,7 @@ message InterruptWorkerResponse {
 }
 
 message InvokeAndAwaitRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
@@ -164,7 +166,7 @@ message InvokeAndAwaitTypedResponse {
 }
 
 message InvokeAndAwaitJsonRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
@@ -179,7 +181,7 @@ message InvokeAndAwaitJsonResponse {
 }
 
 message InvokeRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
@@ -194,7 +196,7 @@ message InvokeResponse {
 }
 
 message InvokeJsonRequest {
-  golem.worker.TargetWorkerId workerId = 1;
+  golem.worker.WorkerId workerId = 1;
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
@@ -294,24 +296,25 @@ message SearchOplogSuccessResponse {
   uint64 last_index = 5;
 }
 
-message ListDirectoryRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+message GetFileSystemNodeRequest {
+  golem.worker.WorkerId worker_id = 1;
   string path = 2;
 }
 
-message ListDirectoryResponse {
+message GetFileSystemNodeResponse {
   oneof result {
-    ListDirectorySuccessResponse success = 1;
+    ListFileSystemNodeResponse success = 1;
     WorkerError error = 2;
   }
 }
 
-message ListDirectorySuccessResponse {
+message ListFileSystemNodeResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
+ 
 
 message GetFileContentsRequest {
-  golem.worker.TargetWorkerId worker_id = 1;
+  golem.worker.WorkerId worker_id = 1;
   string file_path = 2;
 }
 

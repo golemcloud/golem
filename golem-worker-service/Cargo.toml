@@ -32,12 +32,12 @@ name = "tree"
 harness = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-rib = { workspace = true, default-features = true }
+golem-service-base = { workspace = true }
+golem-wasm-ast = { workspace = true, default-features = true }
+golem-wasm-rpc = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -51,7 +51,6 @@ derive_more = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
 futures = { workspace = true }
-futures-util = { workspace = true }
 headers = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
@@ -83,6 +82,7 @@ rusoto_sts = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+indexmap = { workspace = true }
 sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }

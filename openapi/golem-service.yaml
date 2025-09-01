@@ -1950,7 +1950,7 @@ paths:
       tags:
       - Project
       summary: Applies a batch of changes to the installed plugins of a component
-      operationId: bath_update_installed_plugins_of_project
+      operationId: batch_update_installed_plugins_of_project
       parameters:
       - in: path
         name: project_id
@@ -2890,6 +2890,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
               required:
               - component
         required: true
@@ -3042,6 +3044,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
               required:
               - query
               - component
@@ -3650,7 +3654,7 @@ paths:
       tags:
       - Component
       summary: Applies a batch of changes to the installed plugins of a component
-      operationId: bath_update_installed_plugins
+      operationId: batch_update_installed_plugins
       parameters:
       - in: path
         name: component_id
@@ -4231,6 +4235,136 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/agent-types:
+    get:
+      tags:
+      - AgentTypes
+      operationId: get_all_agent_types
+      parameters:
+      - in: query
+        name: project-id
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/agent-types/{agent-type}:
+    get:
+      tags:
+      - AgentTypes
+      operationId: get_agent_type
+      parameters:
+      - in: path
+        name: agent-type
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: project-id
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/components/{component_id}/workers:
     get:
       tags:
@@ -4670,92 +4804,6 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/invoke-and-await:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function and await its resolution on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        Supply the parameters in the request body as JSON.
-      operationId: invoke_and_await_function_without_name
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
   /v1/components/{component_id}/workers/{worker_name}/invoke:
     post:
       tags:
@@ -4779,93 +4827,6 @@ paths:
         deprecated: false
         schema:
           type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function on a new worker with a random generated name
-      description: |-
-        Ideal for invoking ephemeral components, but works with durable ones as well.
-        A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      operationId: invoke_function_without_name
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
         explode: true
         style: simple
       - in: header
@@ -6437,6 +6398,85 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/api/definitions/{project_id}/{id}/{version}/export:
+    get:
+      tags:
+      - ApiDefinition
+      summary: Export an API definition in OpenAPI format
+      description: Exports an API definition by its API definition ID and version in OpenAPI format.
+      operationId: export_definition
+      parameters:
+      - in: path
+        name: project_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: path
+        name: version
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/OpenApiHttpApiDefinitionResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
   /v1/api/deployments/deploy:
     post:
       tags:
@@ -7808,6 +7848,7 @@ components:
       - CreatePluginDefinition
       - UpdatePluginDefinition
       - DeletePluginDefinition
+      - ExportApiDefinition
     ProjectPolicy:
       title: ProjectPolicy
       type: object
@@ -7922,6 +7963,92 @@ components:
     WebFlowCallbackSuccessResponse:
       title: WebFlowCallbackSuccessResponse
       type: object
+    AgentConstructor:
+      title: AgentConstructor
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - description
+      - inputSchema
+    AgentDependency:
+      title: AgentDependency
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+      required:
+      - typeName
+      - constructor
+      - methods
+    AgentMethod:
+      title: AgentMethod
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+        outputSchema:
+          $ref: '#/components/schemas/DataSchema'
+      required:
+      - name
+      - description
+      - inputSchema
+      - outputSchema
+    AgentType:
+      title: AgentType
+      type: object
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentDependency'
+      required:
+      - typeName
+      - description
+      - constructor
+      - methods
+      - dependencies
+    AgentTypes:
+      title: AgentTypes
+      type: object
+      properties:
+        types:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+      required:
+      - types
     AnalysedExport:
       discriminator:
         propertyName: type
@@ -8330,6 +8457,22 @@ components:
           type: string
       required:
       - blobStorageKey
+    BinaryDescriptor:
+      title: BinaryDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      title: BinaryType
+      type: object
+      properties:
+        mimeType:
+          type: string
+      required:
+      - mimeType
     Component:
       title: Component
       type: object
@@ -8441,12 +8584,25 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
       required:
       - exports
       - producers
       - memories
       - binaryWit
       - dynamicLinking
+      - agentTypes
+    ComponentModelElementSchema:
+      title: ComponentModelElementSchema
+      type: object
+      properties:
+        elementType:
+          $ref: '#/components/schemas/AnalysedType'
+      required:
+      - elementType
     ComponentPluginScope:
       title: ComponentPluginScope
       type: object
@@ -8511,6 +8667,28 @@ components:
       enum:
       - Durable
       - Ephemeral
+    DataSchema:
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataSchema_NamedElementSchemas'
+          Multimodal: '#/components/schemas/DataSchema_NamedElementSchemas'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+    DataSchema_NamedElementSchemas:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Multimodal
+            type: string
+            enum:
+            - Multimodal
+        required:
+        - type
+      - $ref: '#/components/schemas/NamedElementSchemas'
     DynamicLinkedInstance:
       discriminator:
         propertyName: type
@@ -8552,6 +8730,54 @@ components:
             $ref: '#/components/schemas/DynamicLinkedInstance'
       required:
       - dynamicLinking
+    ElementSchema:
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
+          UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
+          UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
+      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
+      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
+    ElementSchema_BinaryDescriptor:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredBinary
+            type: string
+            enum:
+            - UnstructuredBinary
+        required:
+        - type
+      - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_ComponentModelElementSchema:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: ComponentModel
+            type: string
+            enum:
+            - ComponentModel
+        required:
+        - type
+      - $ref: '#/components/schemas/ComponentModelElementSchema'
+    ElementSchema_TextDescriptor:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: UnstructuredText
+            type: string
+            enum:
+            - UnstructuredText
+        required:
+        - type
+      - $ref: '#/components/schemas/TextDescriptor'
     InitialComponentFile:
       title: InitialComponentFile
       type: object
@@ -8613,6 +8839,27 @@ components:
       required:
       - name
       - typ
+    NamedElementSchema:
+      title: NamedElementSchema
+      type: object
+      properties:
+        name:
+          type: string
+        schema:
+          $ref: '#/components/schemas/ElementSchema'
+      required:
+      - name
+      - schema
+    NamedElementSchemas:
+      title: NamedElementSchemas
+      type: object
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementSchema'
+      required:
+      - elements
     OplogProcessorDefinition:
       title: OplogProcessorDefinition
       type: object
@@ -8878,6 +9125,34 @@ components:
           format: uuid
       required:
       - projectId
+    RegisteredAgentType:
+      title: RegisteredAgentType
+      type: object
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
+          type: string
+          format: uuid
+      required:
+      - agentType
+      - implementedBy
+    TextDescriptor:
+      title: TextDescriptor
+      type: object
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextType'
+    TextType:
+      title: TextType
+      type: object
+      properties:
+        languageCode:
+          type: string
+      required:
+      - languageCode
     TypeBool:
       title: TypeBool
       type: object
@@ -8888,6 +9163,10 @@ components:
       title: TypeEnum
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -8904,6 +9183,10 @@ components:
       title: TypeFlags
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -8914,6 +9197,10 @@ components:
       title: TypeHandle
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -8926,6 +9213,10 @@ components:
       title: TypeList
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8934,6 +9225,10 @@ components:
       title: TypeOption
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
       required:
@@ -8942,6 +9237,10 @@ components:
       title: TypeRecord
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         fields:
           type: array
           items:
@@ -8952,6 +9251,10 @@ components:
       title: TypeResult
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -8975,6 +9278,10 @@ components:
       title: TypeTuple
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -8997,6 +9304,10 @@ components:
       title: TypeVariant
       type: object
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -9250,8 +9561,15 @@ components:
           type: object
           additionalProperties:
             type: string
-        accountId:
+        projectId:
           type: string
+          format: uuid
+        createdBy:
+          type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         parent:
           $ref: '#/components/schemas/WorkerId'
         componentSize:
@@ -9270,7 +9588,9 @@ components:
       - componentVersion
       - args
       - env
-      - accountId
+      - projectId
+      - createdBy
+      - wasiConfigVars
       - componentSize
       - initialTotalLinearMemorySize
       - initialActivePlugins
@@ -9292,27 +9612,6 @@ components:
     DeleteWorkerResponse:
       title: DeleteWorkerResponse
       type: object
-    DescribeResourceParameters:
-      title: DescribeResourceParameters
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        id:
-          type: integer
-          format: uint64
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            $ref: '#/components/schemas/ValueAndType'
-      required:
-      - timestamp
-      - id
-      - resourceName
-      - resourceParams
     DomainRequest:
       title: DomainRequest
       type: object
@@ -9440,6 +9739,18 @@ components:
       - traceId
       - traceStates
       - invocationContext
+    ExportedResourceMetadata:
+      title: ExportedResourceMetadata
+      type: object
+      properties:
+        key:
+          type: integer
+          format: uint64
+        description:
+          $ref: '#/components/schemas/WorkerResourceDescription'
+      required:
+      - key
+      - description
     FailedUpdate:
       title: FailedUpdate
       type: object
@@ -9580,6 +9891,7 @@ components:
       - file-server
       - http-handler
       - cors-preflight
+      - swagger-ui
     GetFilesResponse:
       title: GetFilesResponse
       type: object
@@ -9702,27 +10014,14 @@ components:
           $ref: '#/components/schemas/ValueAndType'
         response:
           $ref: '#/components/schemas/ValueAndType'
-        wrappedFunctionType:
+        durableFunctionType:
           $ref: '#/components/schemas/PublicDurableFunctionType'
       required:
       - timestamp
       - functionName
       - request
       - response
-      - wrappedFunctionType
-    IndexedWorkerMetadata:
-      title: IndexedWorkerMetadata
-      type: object
-      properties:
-        resourceName:
-          type: string
-        resourceParams:
-          type: array
-          items:
-            type: string
-      required:
-      - resourceName
-      - resourceParams
+      - durableFunctionType
     InterruptResponse:
       title: InterruptResponse
       type: object
@@ -9744,7 +10043,7 @@ components:
       type: object
       properties:
         result:
-          $ref: '#/components/schemas/TypeAnnotatedValue'
+          $ref: '#/components/schemas/ValueAndType'
     JumpParameters:
       title: JumpParameters
       type: object
@@ -9808,6 +10107,20 @@ components:
       - Options
       - Trace
       - Head
+    OpenApiHttpApiDefinitionResponse:
+      title: OpenApiHttpApiDefinitionResponse
+      type: object
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        openapi_yaml:
+          type: string
+      required:
+      - id
+      - version
+      - openapi_yaml
     OplogCursor:
       title: OplogCursor
       type: object
@@ -10050,7 +10363,6 @@ components:
           GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
           CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
           DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
           Log: '#/components/schemas/PublicOplogEntry_LogParameters'
           Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
           ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
@@ -10085,7 +10397,6 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
       - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
       - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
@@ -10234,27 +10545,6 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/DeactivatePluginParameters'
-    PublicOplogEntry_DescribeResourceParameters:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: DescribeResource
-            type: string
-            enum:
-            - DescribeResource
-        required:
-        - type
-      - $ref: '#/components/schemas/DescribeResourceParameters'
     PublicOplogEntry_EndRegionParameters:
       description: |-
         A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
@@ -10771,17 +11061,6 @@ components:
       required:
       - name
       - version
-    ResourceMetadata:
-      title: ResourceMetadata
-      type: object
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        indexed:
-          $ref: '#/components/schemas/IndexedWorkerMetadata'
-      required:
-      - createdAt
     ResourceParameters:
       title: ResourceParameters
       type: object
@@ -10792,9 +11071,15 @@ components:
         id:
           type: integer
           format: uint64
+        name:
+          type: string
+        owner:
+          type: string
       required:
       - timestamp
       - id
+      - name
+      - owner
     ResumeResponse:
       title: ResumeResponse
       type: object
@@ -11062,15 +11347,6 @@ components:
           format: date-time
       required:
       - timestamp
-    TypeAnnotatedValue:
-      type: object
-      properties:
-        typ:
-          $ref: '#/components/schemas/AnalysedType'
-        value: {}
-      required:
-      - typ
-      - value
     UpdateRecord:
       discriminator:
         propertyName: type
@@ -11151,6 +11427,17 @@ components:
       required:
       - typ
       - value
+    WasiConfigVarsEntry:
+      title: WasiConfigVarsEntry
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          type: string
+      required:
+      - key
+      - value
     WorkerAndFilter:
       title: WorkerAndFilter
       type: object
@@ -11187,6 +11474,11 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
       required:
       - name
       - args
@@ -11243,6 +11535,7 @@ components:
           And: '#/components/schemas/WorkerFilter_WorkerAndFilter'
           Or: '#/components/schemas/WorkerFilter_WorkerOrFilter'
           Not: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+          WasiConfigVars: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
       type: object
       oneOf:
       - $ref: '#/components/schemas/WorkerFilter_WorkerNameFilter'
@@ -11253,6 +11546,7 @@ components:
       - $ref: '#/components/schemas/WorkerFilter_WorkerAndFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerOrFilter'
       - $ref: '#/components/schemas/WorkerFilter_WorkerNotFilter'
+      - $ref: '#/components/schemas/WorkerFilter_WorkerWasiConfigVarsFilter'
     WorkerFilter_WorkerAndFilter:
       allOf:
       - type: object
@@ -11349,6 +11643,18 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/WorkerVersionFilter'
+    WorkerFilter_WorkerWasiConfigVarsFilter:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: WasiConfigVars
+            type: string
+            enum:
+            - WasiConfigVars
+        required:
+        - type
+      - $ref: '#/components/schemas/WorkerWasiConfigVarsFilter'
     WorkerId:
       title: WorkerId
       type: object
@@ -11367,7 +11673,10 @@ components:
       properties:
         workerId:
           $ref: '#/components/schemas/WorkerId'
-        accountId:
+        projectId:
+          type: string
+          format: uuid
+        createdBy:
           type: string
         args:
           type: array
@@ -11377,6 +11686,10 @@ components:
           type: object
           additionalProperties:
             type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
         status:
           $ref: '#/components/schemas/WorkerStatus'
         componentVersion:
@@ -11403,10 +11716,10 @@ components:
         totalLinearMemorySize:
           type: integer
           format: uint64
-        ownedResources:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ResourceMetadata'
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
         activePlugins:
           type: array
           items:
@@ -11427,9 +11740,11 @@ components:
             $ref: '#/components/schemas/OplogRegion'
       required:
       - workerId
-      - accountId
+      - projectId
+      - createdBy
       - args
       - env
+      - wasiConfigVars
       - status
       - componentVersion
       - retryCount
@@ -11438,7 +11753,7 @@ components:
       - createdAt
       - componentSize
       - totalLinearMemorySize
-      - ownedResources
+      - exportedResourceInstances
       - activePlugins
       - skippedRegions
       - deletedRegions
@@ -11471,6 +11786,21 @@ components:
             $ref: '#/components/schemas/WorkerFilter'
       required:
       - filters
+    WorkerResourceDescription:
+      title: WorkerResourceDescription
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
     WorkerStatus:
       description: |-
         Represents last known status of a worker
@@ -11512,6 +11842,20 @@ components:
           type: integer
           format: uint64
       required:
+      - comparator
+      - value
+    WorkerWasiConfigVarsFilter:
+      title: WorkerWasiConfigVarsFilter
+      type: object
+      properties:
+        name:
+          type: string
+        comparator:
+          $ref: '#/components/schemas/StringFilterComparator'
+        value:
+          type: string
+      required:
+      - name
       - comparator
       - value
     WorkersMetadataRequest:
@@ -11558,6 +11902,8 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: AgentTypes
+  description: API working on registered agent types
 - name: ApiCertificate
 - name: ApiDefinition
 - name: ApiDeployment

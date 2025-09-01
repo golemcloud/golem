@@ -7,6 +7,8 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: AgentTypes
+  description: API working on registered agent types
 - name: ApiCertificate
 - name: ApiDefinition
 - name: ApiDeployment
@@ -248,6 +250,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
         required: true
       responses:
         '200':
@@ -329,6 +333,8 @@ paths:
                   $ref: '#/components/schemas/DynamicLinking'
                 env:
                   $ref: '#/components/schemas/ComponentEnv'
+                agentTypes:
+                  $ref: '#/components/schemas/AgentTypes'
         required: true
       responses:
         '200':
@@ -1057,7 +1063,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: bath_update_installed_plugins
+      operationId: batch_update_installed_plugins
   /v1/components/{component_id}/versions/{version}/file-contents/{file_path}:
     get:
       tags:
@@ -1566,8 +1572,223 @@ paths:
       - Cookie: []
       - Token: []
       operationId: create_app_plugin
+  /v1/agent-types:
+    get:
+      tags:
+      - AgentTypes
+      parameters:
+      - name: project-id
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_all_agent_types
+  /v1/agent-types/{agent-type}:
+    get:
+      tags:
+      - AgentTypes
+      parameters:
+      - name: agent-type
+        schema:
+          type: string
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: project-id
+        schema:
+          type: string
+          format: uuid
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/RegisteredAgentType'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Maximum number of components exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Component not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: Component already exists
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_agent_type
 components:
   schemas:
+    AgentConstructor:
+      type: object
+      title: AgentConstructor
+      required:
+      - description
+      - inputSchema
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+    AgentDependency:
+      type: object
+      title: AgentDependency
+      required:
+      - typeName
+      - constructor
+      - methods
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+    AgentMethod:
+      type: object
+      title: AgentMethod
+      required:
+      - name
+      - description
+      - inputSchema
+      - outputSchema
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        promptHint:
+          type: string
+        inputSchema:
+          $ref: '#/components/schemas/DataSchema'
+        outputSchema:
+          $ref: '#/components/schemas/DataSchema'
+    AgentType:
+      type: object
+      title: AgentType
+      required:
+      - typeName
+      - description
+      - constructor
+      - methods
+      - dependencies
+      properties:
+        typeName:
+          type: string
+        description:
+          type: string
+        constructor:
+          $ref: '#/components/schemas/AgentConstructor'
+        methods:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentMethod'
+        dependencies:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentDependency'
+    AgentTypes:
+      type: object
+      title: AgentTypes
+      required:
+      - types
+      properties:
+        types:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
     AnalysedExport:
       type: object
       oneOf:
@@ -1986,6 +2207,22 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/PluginInstallationAction'
+    BinaryDescriptor:
+      type: object
+      title: BinaryDescriptor
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/BinaryType'
+    BinaryType:
+      type: object
+      title: BinaryType
+      required:
+      - mimeType
+      properties:
+        mimeType:
+          type: string
     Component:
       type: object
       title: Component
@@ -2079,6 +2316,7 @@ components:
       - memories
       - binaryWit
       - dynamicLinking
+      - agentTypes
       properties:
         exports:
           type: array
@@ -2103,6 +2341,18 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+    ComponentModelElementSchema:
+      type: object
+      title: ComponentModelElementSchema
+      required:
+      - elementType
+      properties:
+        elementType:
+          $ref: '#/components/schemas/AnalysedType'
     ComponentPluginScope:
       type: object
       title: ComponentPluginScope
@@ -2167,6 +2417,28 @@ components:
       enum:
       - Durable
       - Ephemeral
+    DataSchema:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+      - $ref: '#/components/schemas/DataSchema_NamedElementSchemas'
+      discriminator:
+        propertyName: type
+        mapping:
+          Tuple: '#/components/schemas/DataSchema_NamedElementSchemas'
+          Multimodal: '#/components/schemas/DataSchema_NamedElementSchemas'
+    DataSchema_NamedElementSchemas:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Multimodal
+            example: Multimodal
+      - $ref: '#/components/schemas/NamedElementSchemas'
     DynamicLinkedInstance:
       type: object
       oneOf:
@@ -2208,6 +2480,54 @@ components:
           type: object
           additionalProperties:
             $ref: '#/components/schemas/DynamicLinkedInstance'
+    ElementSchema:
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
+      - $ref: '#/components/schemas/ElementSchema_TextDescriptor'
+      - $ref: '#/components/schemas/ElementSchema_BinaryDescriptor'
+      discriminator:
+        propertyName: type
+        mapping:
+          ComponentModel: '#/components/schemas/ElementSchema_ComponentModelElementSchema'
+          UnstructuredText: '#/components/schemas/ElementSchema_TextDescriptor'
+          UnstructuredBinary: '#/components/schemas/ElementSchema_BinaryDescriptor'
+    ElementSchema_BinaryDescriptor:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredBinary
+            example: UnstructuredBinary
+      - $ref: '#/components/schemas/BinaryDescriptor'
+    ElementSchema_ComponentModelElementSchema:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - ComponentModel
+            example: ComponentModel
+      - $ref: '#/components/schemas/ComponentModelElementSchema'
+    ElementSchema_TextDescriptor:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - UnstructuredText
+            example: UnstructuredText
+      - $ref: '#/components/schemas/TextDescriptor'
     Empty:
       type: object
       title: Empty
@@ -2293,6 +2613,27 @@ components:
           type: string
         typ:
           $ref: '#/components/schemas/AnalysedType'
+    NamedElementSchema:
+      type: object
+      title: NamedElementSchema
+      required:
+      - name
+      - schema
+      properties:
+        name:
+          type: string
+        schema:
+          $ref: '#/components/schemas/ElementSchema'
+    NamedElementSchemas:
+      type: object
+      title: NamedElementSchemas
+      required:
+      - elements
+      properties:
+        elements:
+          type: array
+          items:
+            $ref: '#/components/schemas/NamedElementSchema'
     OplogProcessorDefinition:
       type: object
       title: OplogProcessorDefinition
@@ -2696,6 +3037,34 @@ components:
         projectId:
           type: string
           format: uuid
+    RegisteredAgentType:
+      type: object
+      title: RegisteredAgentType
+      required:
+      - agentType
+      - implementedBy
+      properties:
+        agentType:
+          $ref: '#/components/schemas/AgentType'
+        implementedBy:
+          type: string
+          format: uuid
+    TextDescriptor:
+      type: object
+      title: TextDescriptor
+      properties:
+        restrictions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TextType'
+    TextType:
+      type: object
+      title: TextType
+      required:
+      - languageCode
+      properties:
+        languageCode:
+          type: string
     TypeBool:
       type: object
       title: TypeBool
@@ -2708,6 +3077,10 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         cases:
           type: array
           items:
@@ -2724,6 +3097,10 @@ components:
       required:
       - names
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         names:
           type: array
           items:
@@ -2735,6 +3112,10 @@ components:
       - resource_id
       - mode
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         resource_id:
           type: integer
           format: uint64
@@ -2746,6 +3127,10 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeOption:
@@ -2754,6 +3139,10 @@ components:
       required:
       - inner
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         inner:
           $ref: '#/components/schemas/AnalysedType'
     TypeRecord:
@@ -2762,6 +3151,10 @@ components:
       required:
       - fields
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         fields:
           type: array
           items:
@@ -2770,6 +3163,10 @@ components:
       type: object
       title: TypeResult
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         ok:
           $ref: '#/components/schemas/AnalysedType'
         err:
@@ -2795,6 +3192,10 @@ components:
       required:
       - items
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         items:
           type: array
           items:
@@ -2817,6 +3218,10 @@ components:
       required:
       - cases
       properties:
+        name:
+          type: string
+        owner:
+          type: string
         cases:
           type: array
           items:

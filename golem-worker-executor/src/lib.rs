@@ -31,6 +31,7 @@ test_r::enable!();
 
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
@@ -44,6 +45,7 @@ use crate::services::oplog::{
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::projects::ProjectService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -100,7 +102,7 @@ pub struct RunDetails {
 
 /// The Bootstrap trait should be implemented by all Worker Executors to customize the initialization
 /// of its services.
-/// With a valid `Bootstrap` implementation the service can be started with the `run` method.
+/// With a valid `Bootstrap` implementation, the service can be started with the `run` method.
 #[async_trait]
 #[allow(clippy::too_many_arguments)]
 pub trait Bootstrap<Ctx: WorkerCtx> {
@@ -114,7 +116,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<u16> {
         let golem_config = service_dependencies.config();
-        let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+        let (health_reporter, health_service) = tonic_health::server::health_reporter();
         health_reporter
             .set_serving::<WorkerExecutorServer<WorkerExecutorImpl<Ctx, All<Ctx>>>>()
             .await;
@@ -169,6 +171,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -200,6 +203,8 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
+        agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
@@ -282,7 +287,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         Arc<dyn KeyValueStorage + Send + Sync>,
     ) = match &golem_config.key_value_storage {
         KeyValueStorageConfig::Redis(redis) => {
-            info!("Using Redis for key-value storage at {}", redis.url());
             let pool = RedisPool::configured(redis)
                 .await
                 .map_err(|err| anyhow!(err))?;
@@ -291,11 +295,9 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             (Some(pool), None, key_value_storage)
         }
         KeyValueStorageConfig::InMemory(_) => {
-            info!("Using in-memory key-value storage");
             (None, None, Arc::new(InMemoryKeyValueStorage::new()))
         }
         KeyValueStorageConfig::Sqlite(sqlite) => {
-            info!("Using Sqlite for key-value storage at {}", sqlite.database);
             let pool = SqlitePool::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
@@ -311,18 +313,15 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let indexed_storage: Arc<dyn IndexedStorage + Send + Sync> = match &golem_config.indexed_storage
     {
         IndexedStorageConfig::KVStoreRedis(_) => {
-            info!("Using the same Redis for indexed-storage");
             let redis = redis
                 .expect("Redis must be configured as key-value storage when using KVStoreRedis");
             Arc::new(RedisIndexedStorage::new(redis.clone()))
         }
         IndexedStorageConfig::Redis(redis) => {
-            info!("Using Redis for indexed-storage at {}", redis.url());
             let pool = RedisPool::configured(redis).await?;
             Arc::new(RedisIndexedStorage::new(pool.clone()))
         }
         IndexedStorageConfig::KVStoreSqlite(_) => {
-            info!("Using the same Sqlite for indexed-storage");
             let sqlite = sqlite
                 .clone()
                 .expect("Sqlite must be configured as key-value storage when using KVStoreSqlite");
@@ -333,7 +332,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             )
         }
         IndexedStorageConfig::Sqlite(sqlite) => {
-            info!("Using Sqlite for indexed storage at {}", sqlite.database);
             let pool = SqlitePool::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
@@ -344,28 +342,17 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             )
         }
         IndexedStorageConfig::InMemory(_) => {
-            info!("Using in-memory indexed storage");
             Arc::new(storage::indexed::memory::InMemoryIndexedStorage::new())
         }
     };
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &golem_config.blob_storage {
-        BlobStorageConfig::S3(config) => {
-            info!("Using S3 for blob storage");
-            Arc::new(S3BlobStorage::new(config.clone()).await)
-        }
-        BlobStorageConfig::LocalFileSystem(config) => {
-            info!(
-                "Using local file system for blob storage at {:?}",
-                config.root
-            );
-            Arc::new(
-                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
-                    .await
-                    .map_err(|err| anyhow!(err))?,
-            )
-        }
+        BlobStorageConfig::S3(config) => Arc::new(S3BlobStorage::new(config.clone()).await),
+        BlobStorageConfig::LocalFileSystem(config) => Arc::new(
+            golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+                .await
+                .map_err(|err| anyhow!(err))?,
+        ),
         BlobStorageConfig::KVStoreSqlite(_) => {
-            info!("Using the same Sqlite for blob-storage");
             let sqlite = sqlite
                 .expect("Sqlite must be configured as key-value storage when using KVStoreSqlite");
             Arc::new(
@@ -375,7 +362,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             )
         }
         BlobStorageConfig::Sqlite(sqlite) => {
-            info!("Using Sqlite for blob storage at {}", sqlite.database);
             let pool = SqlitePool::configured(sqlite)
                 .await
                 .map_err(|err| anyhow!(err))?;
@@ -386,7 +372,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             )
         }
         BlobStorageConfig::InMemory(_) => {
-            info!("Using in-memory blob storage");
             Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
         }
     };
@@ -396,10 +381,18 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
     let (plugins, plugins_observations) = bootstrap.create_plugins(&golem_config);
 
+    let project_service = services::projects::configured(&golem_config.project_service);
+
     let component_service = bootstrap.create_component_service(
         &golem_config,
         blob_storage.clone(),
         plugins_observations,
+        project_service.clone(),
+    );
+
+    let agent_type_service = services::agent_types::configured(
+        &golem_config.agent_types_service,
+        component_service.clone(),
     );
 
     let golem_config = Arc::new(golem_config.clone());
@@ -501,6 +494,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         shard_service.clone(),
         lazy_worker_activator.clone(),
         plugins.clone(),
+        project_service.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
@@ -508,6 +502,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         oplog_processor_plugin.clone(),
         component_service.clone(),
         plugins.clone(),
+        project_service.clone(),
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
@@ -557,6 +552,8 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             plugins,
             oplog_processor_plugin,
+            project_service,
+            agent_type_service,
         )
         .await?;
 

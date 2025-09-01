@@ -15,24 +15,38 @@
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
+use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AccountId, PluginInstallationId, ScanCursor, WorkerId};
+use golem_common::model::worker::WasiConfigVars;
+use golem_common::model::{
+    AccountId, PluginInstallationId, ScanCursor, WorkerId, WorkerResourceDescription,
+};
 use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
-use golem_service_base::model::{ResourceMetadata, UpdateRecord};
+use golem_service_base::model::UpdateRecord;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Display};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
+#[serde(rename_all = "camelCase")]
+#[oai(rename_all = "camelCase")]
+pub struct ExportedResourceMetadata {
+    pub key: WorkerResourceId,
+    pub description: WorkerResourceDescription,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
+    pub wasi_config_vars: WasiConfigVars,
     pub status: WorkerStatus,
     pub component_version: ComponentVersion,
     pub retry_count: u64,
@@ -42,7 +56,7 @@ pub struct WorkerMetadata {
     pub last_error: Option<String>,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
-    pub owned_resources: HashMap<u64, ResourceMetadata>,
+    pub exported_resource_instances: Vec<ExportedResourceMetadata>,
     pub active_plugins: HashSet<PluginInstallationId>,
     /// Oplog regions that are skipped during the worker's state recovery, but describe
     /// the history of the worker. For example if an atomic region gets restarted, its partially
@@ -58,11 +72,28 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
     fn try_from(
         value: golem_api_grpc::proto::golem::worker::WorkerMetadata,
     ) -> Result<Self, Self::Error> {
+        let mut exported_resource_instances = Vec::new();
+
+        for desc in value.owned_resources {
+            exported_resource_instances.push(ExportedResourceMetadata {
+                key: WorkerResourceId(desc.resource_id),
+                description: WorkerResourceDescription {
+                    created_at: desc.created_at.ok_or("Missing created_at")?.into(),
+                    resource_owner: desc.resource_owner,
+                    resource_name: desc.resource_name,
+                },
+            });
+        }
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            account_id: value.account_id.ok_or("Missing account_id")?.into(),
+            project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            created_by: value.created_by.ok_or("Missing account_id")?.into(),
             args: value.args,
             env: value.env,
+            wasi_config_vars: value
+                .wasi_config_vars
+                .ok_or("Missing wasi_config_vars field")?
+                .into(),
             status: value.status.try_into()?,
             component_version: value.component_version,
             retry_count: value.retry_count,
@@ -76,11 +107,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value
-                .owned_resources
-                .into_iter()
-                .map(|(k, v)| v.try_into().map(|v| (k, v)))
-                .collect::<Result<HashMap<_, _>, _>>()?,
+            exported_resource_instances,
             active_plugins: value
                 .active_plugins
                 .into_iter()
@@ -102,11 +129,23 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
 
 impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
     fn from(value: WorkerMetadata) -> Self {
+        let mut owned_resources = Vec::new();
+        for instance in value.exported_resource_instances {
+            owned_resources.push(golem_api_grpc::proto::golem::worker::ResourceDescription {
+                resource_id: instance.key.0,
+                resource_name: instance.description.resource_name,
+                resource_owner: instance.description.resource_owner,
+                created_at: Some(instance.description.created_at.into()),
+            });
+        }
+
         Self {
             worker_id: Some(value.worker_id.into()),
-            account_id: Some(value.account_id.into()),
+            project_id: Some(value.project_id.into()),
+            created_by: Some(value.created_by.into()),
             args: value.args,
             env: value.env,
+            wasi_config_vars: Some(value.wasi_config_vars.into()),
             status: value.status.into(),
             component_version: value.component_version,
             retry_count: value.retry_count,
@@ -116,11 +155,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            owned_resources: value
-                .owned_resources
-                .into_iter()
-                .map(|(k, v)| (k, v.into()))
-                .collect(),
+            owned_resources,
             active_plugins: value
                 .active_plugins
                 .into_iter()
@@ -140,7 +175,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, Object)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkersMetadataResponse {
     pub workers: Vec<WorkerMetadata>,
     pub cursor: Option<ScanCursor>,

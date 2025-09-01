@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use crate::durable_host::DurableWorkerCtx;
-use crate::preview2::{golem_api_1_x, golem_durability};
+use crate::preview2::{golem_agent, golem_api_1_x, golem_durability};
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
@@ -24,6 +25,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -38,7 +40,7 @@ use crate::services::worker_fork::DefaultWorkerFork;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{rdbms, resource_limits, All, NoAdditionalDeps};
 use crate::wasi_host::create_linker;
-use crate::workerctx::cloud::Context;
+use crate::workerctx::default::Context;
 use crate::{Bootstrap, RunDetails};
 use async_trait::async_trait;
 use golem_service_base::storage::blob::BlobStorage;
@@ -73,14 +75,15 @@ impl Bootstrap<Context> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
             &golem_config.component_service,
-            &golem_config.project_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
@@ -109,6 +112,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
+        agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
 
@@ -143,6 +148,8 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_type_service.clone(),
             additional_deps.clone(),
         ));
 
@@ -175,11 +182,14 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_type_service.clone(),
             additional_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
+            agent_type_service,
             engine,
             linker,
             runtime.clone(),
@@ -205,6 +215,7 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            project_service,
             additional_deps,
         ))
     }
@@ -215,6 +226,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,

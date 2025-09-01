@@ -68,8 +68,10 @@ impl Tracing {
 pub async fn create_deps(_tracing: &Tracing) -> Deps {
     let deps = EnvBasedTestDependencies::new(EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 3,
-        ..EnvBasedTestDependenciesConfig::new()
-    })
+            ..EnvBasedTestDependenciesConfig::new()
+        }
+        .with_env_overrides(),
+    )
     .await;
 
     deps.redis_monitor().assert_valid();

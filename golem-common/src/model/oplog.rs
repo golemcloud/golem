@@ -15,21 +15,22 @@
 pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
-use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
     WorkerInvocation,
 };
+use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
@@ -196,12 +197,6 @@ impl Display for WorkerResourceId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode)]
-pub struct IndexedResourceKey {
-    pub resource_name: String,
-    pub resource_params: Vec<String>,
-}
-
 /// Worker log levels including the special stdout and stderr channels
 #[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
@@ -280,31 +275,6 @@ pub enum PersistenceLevel {
 
 #[derive(Clone, Debug, PartialEq, Encode, Decode)]
 pub enum OplogEntry {
-    CreateV1 {
-        timestamp: Timestamp,
-        worker_id: WorkerId,
-        component_version: ComponentVersion,
-        args: Vec<String>,
-        env: Vec<(String, String)>,
-        account_id: AccountId,
-        parent: Option<WorkerId>,
-        component_size: u64,
-        initial_total_linear_memory_size: u64,
-    },
-    /// The worker invoked a host function (original 1.0 version)
-    ImportedFunctionInvokedV1 {
-        timestamp: Timestamp,
-        function_name: String,
-        response: OplogPayload,
-        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
-    },
-    /// The worker has been invoked
-    ExportedFunctionInvokedV1 {
-        timestamp: Timestamp,
-        function_name: String,
-        request: OplogPayload,
-        idempotency_key: IdempotencyKey,
-    },
     /// The worker has completed an invocation
     ExportedFunctionCompleted {
         timestamp: Timestamp,
@@ -371,12 +341,6 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         description: UpdateDescription,
     },
-    /// An update was successfully applied
-    SuccessfulUpdateV1 {
-        timestamp: Timestamp,
-        target_version: ComponentVersion,
-        new_component_size: u64,
-    },
     /// An update failed to be applied
     FailedUpdate {
         timestamp: Timestamp,
@@ -389,17 +353,13 @@ pub enum OplogEntry {
     CreateResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
+        resource_type_id: ResourceTypeId,
     },
     /// Dropped a resource instance
     DropResource {
         timestamp: Timestamp,
         id: WorkerResourceId,
-    },
-    /// Adds additional information for a created resource instance
-    DescribeResource {
-        timestamp: Timestamp,
-        id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
+        resource_type_id: ResourceTypeId,
     },
     /// The worker emitted a log message
     Log {
@@ -416,20 +376,22 @@ pub enum OplogEntry {
         function_name: String,
         request: OplogPayload,
         response: OplogPayload,
-        wrapped_function_type: DurableFunctionType, // TODO: rename in Golem 2.0
+        durable_function_type: DurableFunctionType,
     },
-    /// The current version of the Create entry (previous is CreateV1)
+    /// The first entry of every oplog
     Create {
         timestamp: Timestamp,
         worker_id: WorkerId,
         component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        account_id: AccountId,
+        project_id: ProjectId,
+        created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
         initial_active_plugins: HashSet<PluginInstallationId>,
+        wasi_config_vars: BTreeMap<String, String>,
     },
     /// Activates a plugin for the worker
     ActivatePlugin {
@@ -501,7 +463,9 @@ impl OplogEntry {
         component_version: ComponentVersion,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        account_id: AccountId,
+        wasi_config_vars: BTreeMap<String, String>,
+        project_id: ProjectId,
+        created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
@@ -513,11 +477,13 @@ impl OplogEntry {
             component_version,
             args,
             env,
-            account_id,
+            project_id,
+            created_by,
             parent,
             component_size,
             initial_total_linear_memory_size,
             initial_active_plugins,
+            wasi_config_vars,
         }
     }
 
@@ -634,28 +600,19 @@ impl OplogEntry {
         }
     }
 
-    pub fn create_resource(id: WorkerResourceId) -> OplogEntry {
+    pub fn create_resource(id: WorkerResourceId, resource_type_id: ResourceTypeId) -> OplogEntry {
         OplogEntry::CreateResource {
             timestamp: Timestamp::now_utc(),
             id,
+            resource_type_id,
         }
     }
 
-    pub fn drop_resource(id: WorkerResourceId) -> OplogEntry {
+    pub fn drop_resource(id: WorkerResourceId, resource_type_id: ResourceTypeId) -> OplogEntry {
         OplogEntry::DropResource {
             timestamp: Timestamp::now_utc(),
             id,
-        }
-    }
-
-    pub fn describe_resource(
-        id: WorkerResourceId,
-        indexed_resource: IndexedResourceKey,
-    ) -> OplogEntry {
-        OplogEntry::DescribeResource {
-            timestamp: Timestamp::now_utc(),
-            id,
-            indexed_resource,
+            resource_type_id,
         }
     }
 
@@ -754,9 +711,9 @@ impl OplogEntry {
     pub fn no_concurrent_side_effect(&self, idx: OplogIndex) -> bool {
         match self {
             OplogEntry::ImportedFunctionInvoked {
-                wrapped_function_type,
+                durable_function_type,
                 ..
-            } => match wrapped_function_type {
+            } => match durable_function_type {
                 DurableFunctionType::WriteRemoteBatched(Some(begin_index))
                     if *begin_index == idx =>
                 {
@@ -783,12 +740,10 @@ impl OplogEntry {
                 | OplogEntry::PendingWorkerInvocation { .. }
                 | OplogEntry::PendingUpdate { .. }
                 | OplogEntry::SuccessfulUpdate { .. }
-                | OplogEntry::SuccessfulUpdateV1 { .. }
                 | OplogEntry::FailedUpdate { .. }
                 | OplogEntry::GrowMemory { .. }
                 | OplogEntry::CreateResource { .. }
                 | OplogEntry::DropResource { .. }
-                | OplogEntry::DescribeResource { .. }
                 | OplogEntry::Log { .. }
                 | OplogEntry::Restart { .. }
                 | OplogEntry::ActivatePlugin { .. }
@@ -801,8 +756,6 @@ impl OplogEntry {
     pub fn timestamp(&self) -> Timestamp {
         match self {
             OplogEntry::Create { timestamp, .. }
-            | OplogEntry::ImportedFunctionInvokedV1 { timestamp, .. }
-            | OplogEntry::ExportedFunctionInvokedV1 { timestamp, .. }
             | OplogEntry::ExportedFunctionCompleted { timestamp, .. }
             | OplogEntry::Suspend { timestamp }
             | OplogEntry::Error { timestamp, .. }
@@ -822,12 +775,9 @@ impl OplogEntry {
             | OplogEntry::GrowMemory { timestamp, .. }
             | OplogEntry::CreateResource { timestamp, .. }
             | OplogEntry::DropResource { timestamp, .. }
-            | OplogEntry::DescribeResource { timestamp, .. }
             | OplogEntry::Log { timestamp, .. }
             | OplogEntry::Restart { timestamp }
             | OplogEntry::ImportedFunctionInvoked { timestamp, .. }
-            | OplogEntry::CreateV1 { timestamp, .. }
-            | OplogEntry::SuccessfulUpdateV1 { timestamp, .. }
             | OplogEntry::ActivatePlugin { timestamp, .. }
             | OplogEntry::DeactivatePlugin { timestamp, .. }
             | OplogEntry::Revert { timestamp, .. }
@@ -845,48 +795,25 @@ impl OplogEntry {
             OplogEntry::Create {
                 component_version, ..
             } => Some(*component_version),
-            OplogEntry::CreateV1 {
-                component_version, ..
-            } => Some(*component_version),
             OplogEntry::SuccessfulUpdate { target_version, .. } => Some(*target_version),
-            OplogEntry::SuccessfulUpdateV1 { target_version, .. } => Some(*target_version),
             _ => None,
         }
     }
 
     pub fn update_worker_id(&self, worker_id: &WorkerId) -> Option<OplogEntry> {
         match self {
-            OplogEntry::CreateV1 {
-                timestamp,
-                component_version,
-                args,
-                env,
-                account_id,
-                parent,
-                component_size,
-                initial_total_linear_memory_size,
-                worker_id: _,
-            } => Some(OplogEntry::CreateV1 {
-                timestamp: *timestamp,
-                worker_id: worker_id.clone(),
-                component_version: *component_version,
-                args: args.clone(),
-                env: env.clone(),
-                account_id: account_id.clone(),
-                parent: parent.clone(),
-                component_size: *component_size,
-                initial_total_linear_memory_size: *initial_total_linear_memory_size,
-            }),
             OplogEntry::Create {
                 timestamp,
                 component_version,
                 args,
                 env,
-                account_id,
+                project_id,
+                created_by,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
                 initial_active_plugins,
+                wasi_config_vars,
                 worker_id: _,
             } => Some(OplogEntry::Create {
                 timestamp: *timestamp,
@@ -894,11 +821,13 @@ impl OplogEntry {
                 component_version: *component_version,
                 args: args.clone(),
                 env: env.clone(),
-                account_id: account_id.clone(),
+                project_id: project_id.clone(),
+                created_by: created_by.clone(),
                 parent: parent.clone(),
                 component_size: *component_size,
                 initial_total_linear_memory_size: *initial_total_linear_memory_size,
                 initial_active_plugins: initial_active_plugins.clone(),
+                wasi_config_vars: wasi_config_vars.clone(),
             }),
             _ => None,
         }
@@ -1000,25 +929,7 @@ impl WorkerError {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use super::WorkerError;
-    use crate::model::oplog::{IndexedResourceKey, PersistenceLevel};
-
-    impl From<IndexedResourceKey> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-        fn from(value: IndexedResourceKey) -> Self {
-            golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-                resource_name: value.resource_name,
-                resource_params: value.resource_params,
-            }
-        }
-    }
-
-    impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedResourceKey {
-        fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
-            IndexedResourceKey {
-                resource_name: value.resource_name,
-                resource_params: value.resource_params,
-            }
-        }
-    }
+    use crate::model::oplog::PersistenceLevel;
 
     impl From<PersistenceLevel> for golem_api_grpc::proto::golem::worker::PersistenceLevel {
         fn from(value: PersistenceLevel) -> Self {

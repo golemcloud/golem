@@ -4,4 +4,5 @@ ALTER TABLE project_policies
     ADD COLUMN view_plugin_installations BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN create_plugin_installation BOOLEAN NOT NULL DEFAULT false,
     ADD COLUMN update_plugin_installation BOOLEAN NOT NULL DEFAULT false,
-    ADD COLUMN delete_plugin_installation BOOLEAN NOT NULL DEFAULT false;
+    ADD COLUMN delete_plugin_installation BOOLEAN NOT NULL DEFAULT false,
+    ADD COLUMN export_api_definition BOOLEAN NOT NULL DEFAULT false;

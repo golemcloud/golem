@@ -53,7 +53,9 @@ impl GetIndexedStorage for InMemoryIndexedStorageWrapper {
 }
 
 #[test_dep(tagged_as = "in_memory")]
-async fn in_memory_storage(_deps: &Deps) -> Arc<dyn GetIndexedStorage + Send + Sync> {
+async fn in_memory_storage(
+    _deps: &Deps,
+) -> Arc<dyn GetIndexedStorage + Send + Sync> {
     Arc::new(InMemoryIndexedStorageWrapper)
 }
 
@@ -90,7 +92,9 @@ impl GetIndexedStorage for RedisIndexedStorageWrapper {
 }
 
 #[test_dep(tagged_as = "redis")]
-async fn redis_storage(deps: &Deps) -> Arc<dyn GetIndexedStorage + Send + Sync> {
+async fn redis_storage(
+    deps: &Deps,
+) -> Arc<dyn GetIndexedStorage + Send + Sync> {
     let redis = deps.redis.clone();
     let redis_monitor = deps.redis_monitor.clone();
     redis.assert_valid();
@@ -122,7 +126,9 @@ impl GetIndexedStorage for SqliteIndexedStorageWrapper {
 }
 
 #[test_dep(tagged_as = "sqlite")]
-async fn sqlite_storage(_deps: &Deps) -> Arc<dyn GetIndexedStorage + Send + Sync> {
+async fn sqlite_storage(
+    _deps: &Deps,
+) -> Arc<dyn GetIndexedStorage + Send + Sync> {
     Arc::new(SqliteIndexedStorageWrapper)
 }
 

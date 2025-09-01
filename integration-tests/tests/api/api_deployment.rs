@@ -12,21 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{to_grpc_rib_expr, Deps, Tracing};
+use crate::{Deps, Tracing};
 use assert2::{assert, check};
-use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, ApiDefinitionRequest,
-    CreateApiDefinitionRequest,
-};
-use golem_api_grpc::proto::golem::apidefinition::{
-    ApiDefinition, ApiDefinitionId, GatewayBinding, GatewayBindingType, HttpApiDefinition,
-    HttpMethod, HttpRoute,
-};
-use golem_api_grpc::proto::golem::component::VersionedComponentId;
 use golem_client::model::{
     ApiDefinitionInfo, ApiDeployment, ApiDeploymentRequest, ApiSite, ComponentType,
+    GatewayBindingComponent, GatewayBindingData, GatewayBindingType, HttpApiDefinitionRequest,
+    HttpApiDefinitionResponseData, MethodPattern, RouteRequestData,
 };
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::ProjectId;
 use golem_test_framework::config::{GolemClientProtocol, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use std::collections::HashMap;
@@ -44,9 +37,14 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
 
-    let admin = deps.admin();
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
+
+    let (_, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -56,7 +54,7 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-1".to_string(),
@@ -67,7 +65,7 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("b"),
         "2".to_string(),
         "/path-2".to_string(),
@@ -78,11 +76,11 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         project_id: project_id.0,
         api_definitions: vec![
             ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                id: api_definition_1.id.clone(),
                 version: api_definition_1.version.clone(),
             },
             ApiDefinitionInfo {
-                id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                id: api_definition_2.id.clone(),
                 version: api_definition_2.version.clone(),
             },
         ],
@@ -112,7 +110,7 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("c"),
         "1".to_string(),
         "/path-3".to_string(),
@@ -123,11 +121,11 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         project_id: project_id.0,
         api_definitions: vec![
             ApiDefinitionInfo {
-                id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                id: api_definition_2.id.clone(),
                 version: api_definition_2.version.clone(),
             },
             ApiDefinitionInfo {
-                id: api_definition_3.id.as_ref().unwrap().value.clone(),
+                id: api_definition_3.id.clone(),
                 version: api_definition_3.version.clone(),
             },
         ],
@@ -142,15 +140,15 @@ async fn create_and_get_api_deployment(deps: &Deps) {
         project_id: project_id.0,
         api_definitions: vec![
             ApiDefinitionInfo {
-                id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                id: api_definition_1.id.clone(),
                 version: api_definition_1.version.clone(),
             },
             ApiDefinitionInfo {
-                id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                id: api_definition_2.id.clone(),
                 version: api_definition_2.version.clone(),
             },
             ApiDefinitionInfo {
-                id: api_definition_3.id.as_ref().unwrap().value.clone(),
+                id: api_definition_3.id.clone(),
                 version: api_definition_3.version.clone(),
             },
         ],
@@ -200,10 +198,18 @@ async fn create_and_get_api_deployment(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn create_api_deployment_and_update_component(deps: &Deps) {
-    let admin = deps.admin();
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
 
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let (component_id, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -213,7 +219,7 @@ async fn create_api_deployment_and_update_component(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-4".to_string(),
@@ -223,7 +229,7 @@ async fn create_api_deployment_and_update_component(deps: &Deps) {
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            id: api_definition_1.id.clone(),
             version: api_definition_1.version.clone(),
         }],
         site: ApiSite {
@@ -289,10 +295,18 @@ async fn create_api_deployment_and_update_component(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_1(deps: &Deps) {
-    let admin = deps.admin();
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
 
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let (component_id, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -302,7 +316,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-5".to_string(),
@@ -313,7 +327,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &Deps) {
     let request1 = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition.id.as_ref().unwrap().value.clone(),
+            id: api_definition.id.clone(),
             version: api_definition.version.clone(),
         }],
         site: ApiSite {
@@ -325,7 +339,7 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &Deps) {
     let request2 = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition.id.as_ref().unwrap().value.clone(),
+            id: api_definition.id.clone(),
             version: api_definition.version.clone(),
         }],
         site: ApiSite {
@@ -421,8 +435,16 @@ async fn create_multiple_api_deployments_and_update_component_1(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
-    let admin = deps.admin();
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
+    let admin = deps.admin().await;
+    let (component_id, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
     let project_id = admin.default_project().await;
 
     fn new_api_definition_id(prefix: &str) -> String {
@@ -433,7 +455,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-6".to_string(),
@@ -444,7 +466,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-7".to_string(),
@@ -455,7 +477,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
     let request1 = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition1.id.as_ref().unwrap().value.clone(),
+            id: api_definition1.id.clone(),
             version: api_definition1.version.clone(),
         }],
         site: ApiSite {
@@ -467,7 +489,7 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
     let request2 = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition2.id.as_ref().unwrap().value.clone(),
+            id: api_definition2.id.clone(),
             version: api_definition2.version.clone(),
         }],
         site: ApiSite {
@@ -539,15 +561,23 @@ async fn create_multiple_api_deployments_and_update_component_2(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn get_all_api_deployments(deps: &Deps) {
-    let admin = deps.admin();
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
+    let admin = deps.admin().await;
     let project_id = admin.default_project().await;
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let (_, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     let api_definition_1 = create_api_definition(
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         Uuid::new_v4().to_string(),
         "1".to_string(),
         "/path-1".to_string(),
@@ -557,7 +587,7 @@ async fn get_all_api_deployments(deps: &Deps) {
         deps,
         &admin.token,
         &project_id,
-        &component_id,
+        &component_name.0,
         Uuid::new_v4().to_string(),
         "2".to_string(),
         "/path-2".to_string(),
@@ -570,7 +600,7 @@ async fn get_all_api_deployments(deps: &Deps) {
             ApiDeploymentRequest {
                 project_id: project_id.0,
                 api_definitions: vec![ApiDefinitionInfo {
-                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                    id: api_definition_1.id.clone(),
                     version: api_definition_1.version.clone(),
                 }],
                 site: ApiSite {
@@ -588,7 +618,7 @@ async fn get_all_api_deployments(deps: &Deps) {
             ApiDeploymentRequest {
                 project_id: project_id.0,
                 api_definitions: vec![ApiDefinitionInfo {
-                    id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                    id: api_definition_1.id.clone(),
                     version: api_definition_1.version.clone(),
                 }],
                 site: ApiSite {
@@ -606,7 +636,7 @@ async fn get_all_api_deployments(deps: &Deps) {
             ApiDeploymentRequest {
                 project_id: project_id.0,
                 api_definitions: vec![ApiDefinitionInfo {
-                    id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                    id: api_definition_2.id.clone(),
                     version: api_definition_2.version.clone(),
                 }],
                 site: ApiSite {
@@ -646,11 +676,7 @@ async fn get_all_api_deployments(deps: &Deps) {
 
     let result = by_domains(
         deps.worker_service()
-            .list_api_deployments(
-                &admin.token,
-                &project_id,
-                Some(&api_definition_1.id.as_ref().unwrap().value),
-            )
+            .list_api_deployments(&admin.token, &project_id, Some(&api_definition_1.id))
             .await
             .unwrap(),
     );
@@ -660,11 +686,7 @@ async fn get_all_api_deployments(deps: &Deps) {
 
     let result = by_domains(
         deps.worker_service()
-            .list_api_deployments(
-                &admin.token,
-                &project_id,
-                Some(&api_definition_2.id.as_ref().unwrap().value),
-            )
+            .list_api_deployments(&admin.token, &project_id, Some(&api_definition_2.id))
             .await
             .unwrap(),
     );
@@ -677,55 +699,46 @@ async fn create_api_definition_without_worker_calls(
     deps: &Deps,
     token: &Uuid,
     project: &ProjectId,
-    component_id: &ComponentId,
+    component_name: &str,
     api_definition_id: String,
     version: String,
     path: String,
-) -> ApiDefinition {
+) -> HttpApiDefinitionResponseData {
     deps.worker_service()
         .create_api_definition(
             token,
             project,
-            CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                    ApiDefinitionRequest {
-                        id: Some(ApiDefinitionId {
-                            value: api_definition_id,
+            &HttpApiDefinitionRequest {
+                id: api_definition_id,
+                version,
+                draft: false,
+                security: None,
+                routes: vec![RouteRequestData {
+                    method: MethodPattern::Post,
+                    path,
+                    binding: GatewayBindingData {
+                        component: Some(GatewayBindingComponent {
+                            name: component_name.to_string(),
+                            version: Some(0),
                         }),
-                        version,
-                        draft: false,
-                        definition: Some(api_definition_request::Definition::Http(
-                            HttpApiDefinition {
-                                routes: vec![HttpRoute {
-                                    method: HttpMethod::Post as i32,
-                                    path,
-                                    binding: Some(GatewayBinding {
-                                        component: Some(VersionedComponentId {
-                                            component_id: Some(component_id.clone().into()),
-                                            version: 0,
-                                        }),
-                                        worker_name: None,
-                                        response: Some(to_grpc_rib_expr(
-                                            r#"
-                                            let status: u64 = 200;
-                                            {
-                                              headers: {ContentType: "json", userid: "foo"},
-                                              body: "foo",
-                                              status: status
-                                            }
-                                        "#,
-                                        )),
-                                        idempotency_key: None,
-                                        binding_type: Some(GatewayBindingType::Default as i32),
-                                        static_binding: None,
-                                        invocation_context: None,
-                                    }),
-                                    middleware: None,
-                                }],
-                            },
-                        )),
+                        worker_name: None,
+                        response: Some(
+                            r#"
+                                let status: u64 = 200;
+                                {
+                                    headers: {ContentType: "json", userid: "foo"},
+                                    body: "foo",
+                                    status: status
+                                }
+                            "#
+                            .to_string(),
+                        ),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default),
+                        invocation_context: None,
                     },
-                )),
+                    security: None,
+                }],
             },
         )
         .await
@@ -736,57 +749,48 @@ async fn create_api_definition(
     deps: &Deps,
     token: &Uuid,
     project: &ProjectId,
-    component_id: &ComponentId,
+    component_name: &str,
     api_definition_id: String,
     version: String,
     path: String,
-) -> ApiDefinition {
+) -> HttpApiDefinitionResponseData {
     deps.worker_service()
         .create_api_definition(
             token,
             project,
-            CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                    ApiDefinitionRequest {
-                        id: Some(ApiDefinitionId {
-                            value: api_definition_id,
+            &HttpApiDefinitionRequest {
+                id: api_definition_id,
+                version,
+                draft: false,
+                security: None,
+                routes: vec![RouteRequestData {
+                    method: MethodPattern::Post,
+                    path,
+                    binding: GatewayBindingData {
+                        component: Some(GatewayBindingComponent {
+                            name: component_name.to_string(),
+                            version: Some(0),
                         }),
-                        version,
-                        draft: false,
-                        definition: Some(api_definition_request::Definition::Http(
-                            HttpApiDefinition {
-                                routes: vec![HttpRoute {
-                                    method: HttpMethod::Post as i32,
-                                    path,
-                                    binding: Some(GatewayBinding {
-                                        component: Some(VersionedComponentId {
-                                            component_id: Some(component_id.clone().into()),
-                                            version: 0,
-                                        }),
-                                        worker_name: None,
-                                        response: Some(to_grpc_rib_expr(
-                                            r#"
-                                            let worker = instance("shopping-cart");
-                                            let result = worker.get-cart-contents();
-                                            let status: u64 = 200;
-                                            {
-                                              headers: { ContentType: "json", userid: "foo" },
-                                              body: "foo",
-                                              status: status
-                                            }
-                                        "#,
-                                        )),
-                                        idempotency_key: None,
-                                        binding_type: Some(GatewayBindingType::Default as i32),
-                                        static_binding: None,
-                                        invocation_context: None,
-                                    }),
-                                    middleware: None,
-                                }],
-                            },
-                        )),
+                        worker_name: None,
+                        response: Some(
+                            r#"
+                                let worker = instance("shopping-cart");
+                                let result = worker.get-cart-contents();
+                                let status: u64 = 200;
+                                {
+                                    headers: { ContentType: "json", userid: "foo" },
+                                    body: "foo",
+                                    status: status
+                                }
+                            "#
+                            .to_string(),
+                        ),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default),
+                        invocation_context: None,
                     },
-                )),
+                    security: None,
+                }],
             },
         )
         .await
@@ -796,15 +800,19 @@ async fn create_api_definition(
 #[test]
 #[tracing::instrument]
 async fn undeploy_api_test(deps: &Deps) {
-    let admin = deps.admin();
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let admin = deps.admin().await;
+    let (_, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
     let project = admin.default_project().await;
 
     let api_definition_1 = create_api_definition(
         deps,
         &admin.token,
         &project,
-        &component_id,
+        &component_name.0,
         Uuid::new_v4().to_string(),
         "1".to_string(),
         "/api/v1/path-1".to_string(),
@@ -815,7 +823,7 @@ async fn undeploy_api_test(deps: &Deps) {
         deps,
         &admin.token,
         &project,
-        &component_id,
+        &component_name.0,
         Uuid::new_v4().to_string(),
         "2".to_string(),
         "/api/v2/path-2".to_string(),
@@ -830,11 +838,11 @@ async fn undeploy_api_test(deps: &Deps) {
                 project_id: project.0,
                 api_definitions: vec![
                     ApiDefinitionInfo {
-                        id: api_definition_1.id.as_ref().unwrap().value.clone(),
+                        id: api_definition_1.id.clone(),
                         version: api_definition_1.version.clone(),
                     },
                     ApiDefinitionInfo {
-                        id: api_definition_2.id.as_ref().unwrap().value.clone(),
+                        id: api_definition_2.id.clone(),
                         version: api_definition_2.version.clone(),
                     },
                 ],
@@ -856,13 +864,13 @@ async fn undeploy_api_test(deps: &Deps) {
     check!(deployments
         .iter()
         .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            id: api_definition_1.id.clone(),
             version: api_definition_1.version.clone(),
         })));
     check!(deployments
         .iter()
         .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-            id: api_definition_2.id.as_ref().unwrap().value.clone(),
+            id: api_definition_2.id.clone(),
             version: api_definition_2.version.clone(),
         })));
 
@@ -872,7 +880,7 @@ async fn undeploy_api_test(deps: &Deps) {
             &admin.token,
             &project,
             "undeploy-test.localhost",
-            &api_definition_1.id.as_ref().unwrap().value,
+            &api_definition_1.id,
             &api_definition_1.version,
         )
         .await
@@ -887,7 +895,7 @@ async fn undeploy_api_test(deps: &Deps) {
     check!(!deployments
         .iter()
         .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            id: api_definition_1.id.clone(),
             version: api_definition_1.version.clone(),
         })));
 
@@ -895,7 +903,7 @@ async fn undeploy_api_test(deps: &Deps) {
     check!(deployments
         .iter()
         .any(|d| d.api_definitions.contains(&ApiDefinitionInfo {
-            id: api_definition_2.id.as_ref().unwrap().value.clone(),
+            id: api_definition_2.id.clone(),
             version: api_definition_2.version.clone(),
         })));
 
@@ -919,7 +927,7 @@ async fn undeploy_api_test(deps: &Deps) {
             &admin.token,
             &project,
             "non-existent.localhost",
-            &api_definition_2.id.as_ref().unwrap().value,
+            &api_definition_2.id,
             &api_definition_2.version,
         )
         .await;
@@ -929,10 +937,18 @@ async fn undeploy_api_test(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn undeploy_component_constraint_test(deps: &Deps) {
-    let admin = deps.admin();
+    if deps.worker_service().client_protocol() != GolemClientProtocol::Http {
+        return assert!(false, "Test requires to select HTTP golem client protocol");
+    }
+
+    let admin = deps.admin().await;
     let project = admin.default_project().await;
 
-    let component_id = admin.component("shopping-cart").unique().store().await;
+    let (component_id, component_name) = admin
+        .component("shopping-cart")
+        .unique()
+        .store_and_get_name()
+        .await;
 
     fn new_api_definition_id(prefix: &str) -> String {
         format!("{}-{}", prefix, Uuid::new_v4())
@@ -942,7 +958,7 @@ async fn undeploy_component_constraint_test(deps: &Deps) {
         deps,
         &admin.token,
         &project,
-        &component_id,
+        &component_name.0,
         new_api_definition_id("a"),
         "1".to_string(),
         "/path-undeploy".to_string(),
@@ -952,7 +968,7 @@ async fn undeploy_component_constraint_test(deps: &Deps) {
     let request = ApiDeploymentRequest {
         project_id: project.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition_1.id.as_ref().unwrap().value.clone(),
+            id: api_definition_1.id.clone(),
             version: api_definition_1.version.clone(),
         }],
         site: ApiSite {
@@ -995,7 +1011,7 @@ async fn undeploy_component_constraint_test(deps: &Deps) {
             &admin.token,
             &project,
             "undeploy-test.localhost",
-            &api_definition_1.id.as_ref().unwrap().value,
+            &api_definition_1.id,
             &api_definition_1.version,
         )
         .await

@@ -26,8 +26,8 @@ use golem_api_grpc::proto::golem::account::v1::{
     AccountUpdateResponse,
 };
 use golem_api_grpc::proto::golem::account::Account;
+use golem_api_grpc::proto::golem::account::Plan;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody, ErrorsBody};
-use golem_api_grpc::proto::golem::plan::Plan;
 use golem_common::grpc::proto_account_id_string;
 use golem_common::metrics::api::TraceErrorKind;
 use golem_common::model::auth::AccountAction;

@@ -87,6 +87,10 @@ pub struct AnalysedInstance {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeResult {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub ok: Option<Box<AnalysedType>>,
     pub err: Option<Box<AnalysedType>>,
 }
@@ -114,6 +118,10 @@ pub struct NameOptionTypePair {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeVariant {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub cases: Vec<NameOptionTypePair>,
 }
 
@@ -122,6 +130,10 @@ pub struct TypeVariant {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeOption {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
@@ -130,6 +142,10 @@ pub struct TypeOption {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeEnum {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub cases: Vec<String>,
 }
 
@@ -138,6 +154,10 @@ pub struct TypeEnum {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeFlags {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub names: Vec<String>,
 }
 
@@ -146,6 +166,10 @@ pub struct TypeFlags {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeRecord {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub fields: Vec<NameTypePair>,
 }
 
@@ -154,6 +178,10 @@ pub struct TypeRecord {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeTuple {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub items: Vec<AnalysedType>,
 }
 
@@ -162,6 +190,10 @@ pub struct TypeTuple {
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeList {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
@@ -248,6 +280,10 @@ pub struct TypeBool;
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
 pub struct TypeHandle {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
     pub resource_id: AnalysedResourceId,
     pub mode: AnalysedResourceMode,
 }
@@ -284,6 +320,149 @@ pub enum AnalysedType {
     S8(TypeS8),
     Bool(TypeBool),
     Handle(TypeHandle),
+}
+
+impl AnalysedType {
+    pub fn name(&self) -> Option<&str> {
+        match self {
+            AnalysedType::Variant(typ) => typ.name.as_deref(),
+            AnalysedType::Result(typ) => typ.name.as_deref(),
+            AnalysedType::Option(typ) => typ.name.as_deref(),
+            AnalysedType::Enum(typ) => typ.name.as_deref(),
+            AnalysedType::Flags(typ) => typ.name.as_deref(),
+            AnalysedType::Record(typ) => typ.name.as_deref(),
+            AnalysedType::Tuple(typ) => typ.name.as_deref(),
+            AnalysedType::List(typ) => typ.name.as_deref(),
+            AnalysedType::Handle(typ) => typ.name.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn with_optional_name(self, name: Option<String>) -> Self {
+        match self {
+            AnalysedType::Variant(mut typ) => {
+                typ.name = name;
+                AnalysedType::Variant(typ)
+            }
+            AnalysedType::Result(mut typ) => {
+                typ.name = name;
+                AnalysedType::Result(typ)
+            }
+            AnalysedType::Option(mut typ) => {
+                typ.name = name;
+                AnalysedType::Option(typ)
+            }
+            AnalysedType::Enum(mut typ) => {
+                typ.name = name;
+                AnalysedType::Enum(typ)
+            }
+            AnalysedType::Flags(mut typ) => {
+                typ.name = name;
+                AnalysedType::Flags(typ)
+            }
+            AnalysedType::Record(mut typ) => {
+                typ.name = name;
+                AnalysedType::Record(typ)
+            }
+            AnalysedType::Tuple(mut typ) => {
+                typ.name = name;
+                AnalysedType::Tuple(typ)
+            }
+            AnalysedType::List(mut typ) => {
+                typ.name = name;
+                AnalysedType::List(typ)
+            }
+            AnalysedType::Handle(mut typ) => {
+                typ.name = name;
+                AnalysedType::Handle(typ)
+            }
+            _ => self,
+        }
+    }
+
+    pub fn named(self, name: impl AsRef<str>) -> Self {
+        self.with_optional_name(Some(name.as_ref().to_string()))
+    }
+
+    pub fn owner(&self) -> Option<&str> {
+        match self {
+            AnalysedType::Variant(typ) => typ.owner.as_deref(),
+            AnalysedType::Result(typ) => typ.owner.as_deref(),
+            AnalysedType::Option(typ) => typ.owner.as_deref(),
+            AnalysedType::Enum(typ) => typ.owner.as_deref(),
+            AnalysedType::Flags(typ) => typ.owner.as_deref(),
+            AnalysedType::Record(typ) => typ.owner.as_deref(),
+            AnalysedType::Tuple(typ) => typ.owner.as_deref(),
+            AnalysedType::List(typ) => typ.owner.as_deref(),
+            AnalysedType::Handle(typ) => typ.owner.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn with_optional_owner(self, owner: Option<String>) -> Self {
+        match self {
+            AnalysedType::Variant(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Variant(typ)
+            }
+            AnalysedType::Result(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Result(typ)
+            }
+            AnalysedType::Option(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Option(typ)
+            }
+            AnalysedType::Enum(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Enum(typ)
+            }
+            AnalysedType::Flags(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Flags(typ)
+            }
+            AnalysedType::Record(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Record(typ)
+            }
+            AnalysedType::Tuple(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Tuple(typ)
+            }
+            AnalysedType::List(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::List(typ)
+            }
+            AnalysedType::Handle(mut typ) => {
+                typ.owner = owner;
+                AnalysedType::Handle(typ)
+            }
+            _ => self,
+        }
+    }
+
+    pub fn owned(self, owner: impl AsRef<str>) -> Self {
+        self.with_optional_owner(Some(owner.as_ref().to_string()))
+    }
+
+    pub fn contains_handle(&self) -> bool {
+        match self {
+            AnalysedType::Handle(_) => true,
+            AnalysedType::Variant(typ) => typ
+                .cases
+                .iter()
+                .any(|case| case.typ.as_ref().is_some_and(|t| t.contains_handle())),
+            AnalysedType::Result(typ) => {
+                typ.ok.as_ref().is_some_and(|t| t.contains_handle())
+                    || typ.err.as_ref().is_some_and(|t| t.contains_handle())
+            }
+            AnalysedType::Option(typ) => typ.inner.contains_handle(),
+            AnalysedType::Record(typ) => typ.fields.iter().any(|f| f.typ.contains_handle()),
+            AnalysedType::Tuple(typ) => typ.items.iter().any(|t| t.contains_handle()),
+            AnalysedType::List(typ) => typ.inner.contains_handle(),
+            _ => false,
+        }
+    }
 }
 
 pub mod analysed_type {
@@ -371,34 +550,48 @@ pub mod analysed_type {
 
     pub fn list(inner: AnalysedType) -> AnalysedType {
         AnalysedType::List(TypeList {
+            name: None,
+            owner: None,
             inner: Box::new(inner),
         })
     }
 
     pub fn option(inner: AnalysedType) -> AnalysedType {
         AnalysedType::Option(TypeOption {
+            name: None,
+            owner: None,
             inner: Box::new(inner),
         })
     }
 
     pub fn flags(names: &[&str]) -> AnalysedType {
         AnalysedType::Flags(TypeFlags {
+            name: None,
+            owner: None,
             names: names.iter().map(|n| n.to_string()).collect(),
         })
     }
 
     pub fn r#enum(cases: &[&str]) -> AnalysedType {
         AnalysedType::Enum(TypeEnum {
+            name: None,
+            owner: None,
             cases: cases.iter().map(|n| n.to_string()).collect(),
         })
     }
 
     pub fn tuple(items: Vec<AnalysedType>) -> AnalysedType {
-        AnalysedType::Tuple(TypeTuple { items })
+        AnalysedType::Tuple(TypeTuple {
+            name: None,
+            owner: None,
+            items,
+        })
     }
 
     pub fn result(ok: AnalysedType, err: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
+            name: None,
+            owner: None,
             ok: Some(Box::new(ok)),
             err: Some(Box::new(err)),
         })
@@ -406,6 +599,8 @@ pub mod analysed_type {
 
     pub fn result_ok(ok: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
+            name: None,
+            owner: None,
             ok: Some(Box::new(ok)),
             err: None,
         })
@@ -413,21 +608,36 @@ pub mod analysed_type {
 
     pub fn result_err(err: AnalysedType) -> AnalysedType {
         AnalysedType::Result(TypeResult {
+            name: None,
+            owner: None,
             ok: None,
             err: Some(Box::new(err)),
         })
     }
 
     pub fn record(fields: Vec<NameTypePair>) -> AnalysedType {
-        AnalysedType::Record(TypeRecord { fields })
+        AnalysedType::Record(TypeRecord {
+            name: None,
+            owner: None,
+            fields,
+        })
     }
 
     pub fn variant(cases: Vec<NameOptionTypePair>) -> AnalysedType {
-        AnalysedType::Variant(TypeVariant { cases })
+        AnalysedType::Variant(TypeVariant {
+            name: None,
+            owner: None,
+            cases,
+        })
     }
 
     pub fn handle(resource_id: AnalysedResourceId, mode: AnalysedResourceMode) -> AnalysedType {
-        AnalysedType::Handle(TypeHandle { resource_id, mode })
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id,
+            mode,
+        })
     }
 }
 
@@ -440,7 +650,7 @@ pub enum AnalysedResourceMode {
     Borrowed,
 }
 
-#[derive(Debug, Clone, PartialEq, Hash, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Hash, Eq)]
 #[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "poem_openapi", derive(poem_openapi::NewType))]

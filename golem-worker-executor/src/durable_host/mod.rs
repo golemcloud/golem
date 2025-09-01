@@ -15,23 +15,43 @@
 // WASI Host implementation for Golem, delegating to the core WASI implementation (wasmtime_wasi)
 // implementing the Golem specific instrumentation on top of it.
 
+pub mod blobstore;
+mod cli;
+mod clocks;
+mod config;
+pub mod durability;
+mod dynamic_linking;
+mod filesystem;
+pub mod golem;
+pub mod http;
+pub mod io;
+pub mod keyvalue;
+mod logging;
+mod random;
+pub mod rdbms;
+mod replay_state;
+pub mod serialized;
+mod sockets;
+pub mod wasm_rpc;
+
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ListDirectoryResult,
-    ReadFileResult, TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
+    WorkerConfig,
 };
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::ComponentService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -40,18 +60,18 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
+use crate::services::{
+    worker_enumeration, HasAll, HasConfig, HasOplog, HasProjectService, HasWorker,
+};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
-use crate::worker::invocation::{
-    find_first_available_function, invoke_observed_and_traced, InvokeResult,
-};
+use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    ExternalOperations, FileSystemReading, IndexedResourceStore, InvocationContextManagement,
-    InvocationHooks, InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement,
-    WorkerCtx,
+    ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -59,31 +79,31 @@ use bytes::BytesMut;
 use chrono::{DateTime, Utc};
 pub use durability::*;
 use futures::future::try_join_all;
-use futures_util::TryFutureExt;
-use futures_util::TryStreamExt;
+use futures::TryFutureExt;
+use futures::TryStreamExt;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+    DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{exports, PluginInstallationId};
+use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
+    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
-    FailedUpdateRecord, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    FailedUpdateRecord, GetFileSystemNodeResult, IdempotencyKey, InitialComponentFile,
+    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
-use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Add;
@@ -105,24 +125,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-
-pub mod blobstore;
-mod cli;
-mod clocks;
-pub mod durability;
-mod dynamic_linking;
-mod filesystem;
-pub mod golem;
-pub mod http;
-pub mod io;
-pub mod keyvalue;
-mod logging;
-mod random;
-pub mod rdbms;
-mod replay_state;
-pub mod serialized;
-mod sockets;
-pub mod wasm_rpc;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -146,7 +148,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
         key_value_service: Arc<dyn KeyValueService>,
         blob_store_service: Arc<dyn BlobStoreService>,
-        rdbms_service: Arc<dyn crate::services::rdbms::RdbmsService>,
+        rdbms_service: Arc<dyn RdbmsService>,
         event_service: Arc<dyn WorkerEventService + Send + Sync>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
@@ -161,6 +163,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -182,7 +186,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let component_metadata = component_service
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.component_id(),
                 Some(worker_config.component_version_for_replay),
             )
@@ -190,11 +194,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.account_id,
+            &owned_worker_id.project_id,
             temp_dir.path(),
             &component_metadata.files,
         )
         .await?;
+
+        // TODO: pass config vars from component metadata
+        let wasi_config_vars = effective_wasi_config_vars(
+            worker_config.initial_wasi_config_vars.clone(),
+            BTreeMap::new(),
+        );
 
         let stdin = ManagedStdIn::disabled();
         let stdout = ManagedStdOut::from_stdout(Stdout);
@@ -237,6 +247,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 blob_store_service,
                 rdbms_service,
                 component_service,
+                agent_types_service,
                 plugins,
                 config.clone(),
                 owned_worker_id.clone(),
@@ -250,6 +261,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
+                project_service,
+                worker_config.created_by.clone(),
+                worker_config.initial_wasi_config_vars,
+                wasi_config_vars,
             )
             .await,
             temp_dir,
@@ -264,7 +279,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .expect("ResourceTable mutex must never fail")
     }
 
-    fn is_read_only(&mut self, fd: &Resource<Descriptor>) -> Result<bool, ResourceTableError> {
+    fn check_if_file_is_readonly(
+        &mut self,
+        fd: &Resource<Descriptor>,
+    ) -> Result<bool, ResourceTableError> {
         let table = Arc::get_mut(&mut self.table)
             .expect("ResourceTable is shared and cannot be borrowed mutably")
             .get_mut()
@@ -281,7 +299,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     fn fail_if_read_only(&mut self, fd: &Resource<Descriptor>) -> FsResult<()> {
-        if self.is_read_only(fd)? {
+        if self.check_if_file_is_readonly(fd)? {
             Err(wasmtime_wasi::p2::bindings::filesystem::types::ErrorCode::NotPermitted.into())
         } else {
             Ok(())
@@ -310,7 +328,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.owned_worker_id
     }
 
-    pub fn component_metadata(&self) -> &ComponentMetadata {
+    pub fn created_by(&self) -> &AccountId {
+        &self.state.created_by
+    }
+
+    pub fn component_metadata(&self) -> &golem_service_base::model::Component {
         &self.state.component_metadata
     }
 
@@ -371,6 +393,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn component_service(&self) -> Arc<dyn ComponentService> {
         self.state.component_service.clone()
+    }
+
+    pub fn agent_types_service(&self) -> Arc<dyn AgentTypesService> {
+        self.state.agent_types_service.clone()
     }
 
     pub fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
@@ -463,66 +489,56 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ..
             } = &entry
             {
-                // Stdout and stderr writes are persistent and overwritten by sending the data to the event
-                // service instead of the real output stream
+                match Ctx::LOG_EVENT_EMIT_BEHAVIOUR {
+                    LogEventEmitBehaviour::LiveOnly => {
+                        // Stdout and stderr writes are persistent and overwritten by sending the data to the event
+                        // service instead of the real output stream
 
-                if self.state.is_live()
-                // If the worker is still in replay mode we never emit events.
-                {
-                    if !self
-                        .state
-                        .replay_state
-                        .seen_log(*level, context, message)
-                        .await
-                    {
-                        // haven't seen this log before
+                        if self.state.is_live()
+                        // If the worker is in live mode we always emit events
+                        {
+                            if !self
+                                .state
+                                .replay_state
+                                .seen_log(*level, context, message)
+                                .await
+                            {
+                                // haven't seen this log before
+                                self.public_state
+                                    .event_service
+                                    .emit_event(event.clone(), true);
+                                self.state.oplog.add(entry).await;
+                            } else {
+                                // we have persisted emitting this log before, so we mark it as non-live and
+                                // remove the entry from the seen log set.
+                                // note that we still call emit_event because we need replayed log events for
+                                // improved error reporting in case of invocation failures
+                                self.public_state
+                                    .event_service
+                                    .emit_event(event.clone(), false);
+                                self.state
+                                    .replay_state
+                                    .remove_seen_log(*level, context, message)
+                                    .await;
+                            }
+                        }
+                    }
+                    LogEventEmitBehaviour::Always => {
                         self.public_state
                             .event_service
                             .emit_event(event.clone(), true);
-                        self.state.oplog.add(entry).await;
-                    } else {
-                        // we have persisted emitting this log before, so we mark it as non-live and
-                        // remove the entry from the seen log set.
-                        // note that we still call emit_event because we need replayed log events for
-                        // improved error reporting in case of invocation failures
-                        self.public_state
-                            .event_service
-                            .emit_event(event.clone(), false);
-                        self.state
-                            .replay_state
-                            .remove_seen_log(*level, context, message)
-                            .await;
+
+                        if self.state.is_live()
+                            && !self
+                                .state
+                                .replay_state
+                                .seen_log(*level, context, message)
+                                .await
+                        {
+                            self.state.oplog.add(entry).await;
+                        }
                     }
                 }
-            }
-        }
-    }
-
-    pub async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        match remote_worker_id.clone().try_into_worker_id() {
-            Some(worker_id) => Ok(worker_id),
-            None => {
-                let durability = Durability::<WorkerId, SerializableError>::new(
-                    self,
-                    "golem::rpc::wasm-rpc",
-                    "generate_unique_local_worker_id",
-                    DurableFunctionType::ReadLocal,
-                )
-                .await?;
-                let worker_id = if durability.is_live() {
-                    let result = self
-                        .rpc()
-                        .generate_unique_local_worker_id(remote_worker_id)
-                        .await;
-                    durability.persist(self, (), result).await
-                } else {
-                    durability.replay(self).await
-                }?;
-
-                Ok(worker_id)
             }
         }
     }
@@ -535,6 +551,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .await
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasWasiConfigVars for DurableWorkerCtx<Ctx> {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.state.wasi_config_vars.read().unwrap().clone()
     }
 }
 
@@ -567,73 +589,82 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                     .await
                 {
                     Ok(Some(data)) => {
-                        let failed = if let Some(load_snapshot) = find_first_available_function(
-                            store,
-                            instance,
-                            vec![
-                                "golem:api/load-snapshot@1.1.0.{load}".to_string(),
-                                "golem:api/load-snapshot@0.2.0.{load}".to_string(),
-                            ],
-                        ) {
-                            let idempotency_key = IdempotencyKey::fresh();
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .durable_ctx_mut()
-                                .set_current_idempotency_key(idempotency_key.clone())
+                        let component_metadata = store
+                            .as_context()
+                            .data()
+                            .component_metadata()
+                            .metadata
+                            .clone();
+
+                        let failed = match component_metadata.load_snapshot().await {
+                            Ok(Some(load_snapshot)) => {
+                                let idempotency_key = IdempotencyKey::fresh();
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .durable_ctx_mut()
+                                    .set_current_idempotency_key(idempotency_key.clone())
+                                    .await;
+
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .begin_call_snapshotting_function();
+                                let load_result = invoke_observed_and_traced(
+                                    load_snapshot.name.to_string(),
+                                    vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
+                                    store,
+                                    instance,
+                                    &component_metadata,
+                                )
                                 .await;
+                                store
+                                    .as_context_mut()
+                                    .data_mut()
+                                    .end_call_snapshotting_function();
 
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .begin_call_snapshotting_function();
-                            let load_result = invoke_observed_and_traced(
-                                load_snapshot,
-                                vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
-                                store,
-                                instance,
-                            )
-                            .await;
-                            store
-                                .as_context_mut()
-                                .data_mut()
-                                .end_call_snapshotting_function();
-
-                            match load_result {
-                                Err(error) => {
-                                    Some(format!("Manual update failed to load snapshot: {error}"))
-                                }
-                                Ok(InvokeResult::Failed { error, .. }) => {
-                                    let stderr = store
-                                        .as_context()
-                                        .data()
-                                        .get_public_state()
-                                        .event_service()
-                                        .get_last_invocation_errors();
-                                    let error = error.to_string(&stderr);
-                                    Some(format!("Manual update failed to load snapshot: {error}"))
-                                }
-                                Ok(InvokeResult::Succeeded { output, .. }) => {
-                                    if let Some(output) = output {
-                                        match output {
-                                            Value::Result(Err(Some(boxed_error_value))) => {
-                                                match &*boxed_error_value {
-                                                    Value::String(error) =>
-                                                        Some(format!("Manual update failed to load snapshot: {error}")),
-                                                    _ =>
-                                                        Some("Unexpected result value from the snapshot load function".to_string())
-                                                }
-                                            }
-                                            _ => None
-                                        }
-                                    } else {
-                                        Some("Unexpected result value from the snapshot load function".to_string())
+                                match load_result {
+                                    Err(error) => Some(format!(
+                                        "Manual update failed to load snapshot: {error}"
+                                    )),
+                                    Ok(InvokeResult::Failed { error, .. }) => {
+                                        let stderr = store
+                                            .as_context()
+                                            .data()
+                                            .get_public_state()
+                                            .event_service()
+                                            .get_last_invocation_errors();
+                                        let error = error.to_string(&stderr);
+                                        Some(format!(
+                                            "Manual update failed to load snapshot: {error}"
+                                        ))
                                     }
+                                    Ok(InvokeResult::Succeeded { output, .. }) => {
+                                        if let Some(output) = output {
+                                            match output {
+                                                Value::Result(Err(Some(boxed_error_value))) => {
+                                                    match &*boxed_error_value {
+                                                        Value::String(error) =>
+                                                            Some(format!("Manual update failed to load snapshot: {error}")),
+                                                        _ =>
+                                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                                    }
+                                                }
+                                                _ => None
+                                            }
+                                        } else {
+                                            Some("Unexpected result value from the snapshot load function".to_string())
+                                        }
+                                    }
+                                    _ => None,
                                 }
-                                _ => None,
                             }
-                        } else {
-                            Some("Failed to find exported load-snapshot function".to_string())
+                            Ok(None) => {
+                                Some("Failed to find exported load-snapshot function".to_string())
+                            }
+                            Err(err) => Some(format!(
+                                "Failed to find exported load-snapshot function: {err}"
+                            )),
                         };
 
                         if let Some(error) = failed {
@@ -651,10 +682,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .data_mut()
                                 .on_worker_update_succeeded(
                                     &description,
-                                    component_metadata.size,
+                                    component_metadata.component_size,
                                     HashSet::from_iter(
                                         component_metadata
-                                            .plugin_installations
+                                            .installed_plugins
                                             .into_iter()
                                             .map(|installation| installation.id),
                                     ),
@@ -739,10 +770,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
                             self.on_worker_update_succeeded(
                                 &pending_update.description,
-                                component_metadata.size,
+                                component_metadata.component_size,
                                 HashSet::from_iter(
                                     component_metadata
-                                        .plugin_installations
+                                        .installed_plugins
                                         .into_iter()
                                         .map(|installation| installation.id),
                                 ),
@@ -768,7 +799,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
-        if new_version <= current_metadata.version {
+        if new_version <= current_metadata.versioned_component_id.version {
             debug!("Update {new_version} was already applied, skipping");
             return Ok(());
         };
@@ -776,7 +807,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let new_metadata = self
             .component_service()
             .get_metadata(
-                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.project_id,
                 &self.owned_worker_id.component_id(),
                 Some(new_version),
             )
@@ -786,13 +817,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.account_id,
+            &self.owned_worker_id.project_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
         .await?;
 
-        (*self.state.read_only_paths.write().unwrap()) = compute_read_only_paths(&current_files);
+        let mut read_only_paths = self.state.read_only_paths.write().unwrap();
+        *read_only_paths = compute_read_only_paths(&current_files);
+
+        // TODO: take config vars from component metadata
+        let mut wasi_config_vars = self.state.wasi_config_vars.write().unwrap();
+        *wasi_config_vars = effective_wasi_config_vars(
+            self.state.initial_wasi_config_vars.clone(),
+            BTreeMap::new(),
+        );
 
         self.state.component_metadata = new_metadata;
 
@@ -947,6 +986,7 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
                 .schedule(
                     at,
                     ScheduledAction::ArchiveOplog {
+                        account_id: self.state.created_by.clone(),
                         owned_worker_id: self.owned_worker_id.clone(),
                         last_oplog_index: self.public_state.oplog.current_oplog_index().await,
                         next_after: self.state.config.oplog.archive_interval,
@@ -1130,18 +1170,19 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         self.state.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        let id = self.state.add(resource).await;
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
+        let id = self.state.add(resource, name.clone()).await;
         let resource_id = WorkerResourceId(id);
         if self.state.is_live() {
-            let entry = OplogEntry::create_resource(resource_id);
+            let entry = OplogEntry::create_resource(resource_id, name.clone());
             self.state.oplog.add(entry.clone()).await;
             self.update_worker_status(move |status| {
                 status.owned_resources.insert(
                     resource_id,
                     WorkerResourceDescription {
                         created_at: entry.timestamp(),
-                        indexed_resource_key: None,
+                        resource_owner: name.owner,
+                        resource_name: name.name,
                     },
                 );
             })
@@ -1150,12 +1191,15 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         id
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         let result = self.state.borrow(resource_id).await;
-        if result.is_some() {
+        if let Some((resource_type_id, _)) = &result {
             let id = WorkerResourceId(resource_id);
             if self.state.is_live() {
-                self.state.oplog.add(OplogEntry::drop_resource(id)).await;
+                self.state
+                    .oplog
+                    .add(OplogEntry::drop_resource(id, resource_type_id.clone()))
+                    .await;
                 self.update_worker_status(move |status| {
                     status.owned_resources.remove(&id);
                 })
@@ -1165,7 +1209,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         result
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.state.borrow(resource_id).await
     }
 }
@@ -1266,54 +1310,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             }
         })
         .await;
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
-    fn get_indexed_resource(
-        &self,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        let key = IndexedResourceKey {
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.get(&key).copied()
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        let key = IndexedResourceKey {
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.insert(key.clone(), resource);
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::describe_resource(resource, key.clone()))
-                .await;
-            self.update_worker_status(|status| {
-                if let Some(description) = status.owned_resources.get_mut(&resource) {
-                    description.indexed_resource_key = Some(key);
-                }
-            })
-            .await;
-        }
-    }
-
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
-        let key = IndexedResourceKey {
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.remove(&key);
     }
 }
 
@@ -1488,6 +1484,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         }
         Ok(())
     }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.state
+            .invocation_context
+            .clone_as_inherited_stack(current_span_id)
+    }
 }
 
 pub trait DurableWorkerCtxView<Ctx: WorkerCtx> {
@@ -1518,8 +1520,27 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
         let mut number_of_replayed_functions = 0;
+
+        if refresh_replay_target {
+            let new_target = store
+                .as_context()
+                .data()
+                .durable_ctx()
+                .state
+                .oplog
+                .current_oplog_index()
+                .await;
+            store
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .replay_state
+                .set_replay_target(new_target);
+        }
 
         let resume_result = loop {
             let cont = store.as_context().data().durable_ctx().state.is_replay();
@@ -1572,18 +1593,26 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .set_current_invocation_context(invocation_context)
                             .await?;
 
+                        let component_metadata = store
+                            .as_context()
+                            .data()
+                            .component_metadata()
+                            .metadata
+                            .clone();
+
                         let full_function_name = function_name.to_string();
                         let invoke_result = invoke_observed_and_traced(
                             full_function_name.clone(),
                             function_input.clone(),
                             store,
                             instance,
+                            &component_metadata,
                         )
                         .instrument(span)
                         .await;
 
                         // We are removing the spans introduced by the invocation. Not calling `finish_span` here,
-                        // as it would add FinishSpan oplog entries without corersponding StartSpan ones. Instead,
+                        // as it would add FinishSpan oplog entries without corresponding StartSpan ones. Instead,
                         // the oplog processor should assume that spans implicitly created by ExportedFunctionInvoked
                         // are finished at ExportedFunctionCompleted.
                         for span_id in local_span_ids {
@@ -1601,19 +1630,20 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 let component_metadata =
                                     store.as_context().data().component_metadata();
 
-                                match exports::function_by_name(
-                                    &component_metadata.exports,
-                                    &full_function_name,
-                                ) {
+                                match component_metadata
+                                    .metadata
+                                    .find_function(&full_function_name)
+                                    .await
+                                {
                                     Ok(value) => {
                                         if let Some(value) = value {
-                                            let result =
-                                                interpret_function_result(output, value.result)
-                                                    .map_err(|e| {
-                                                        WorkerExecutorError::ValueMismatch {
-                                                            details: e.join(", "),
-                                                        }
-                                                    })?;
+                                            let result = interpret_function_result(
+                                                output,
+                                                value.analysed_export.result,
+                                            )
+                                            .map_err(|e| WorkerExecutorError::ValueMismatch {
+                                                details: e.join(", "),
+                                            })?;
                                             if let Err(err) = store
                                                 .as_context_mut()
                                                 .data_mut()
@@ -1798,7 +1828,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         }
                         UpdateDescription::Automatic { target_version, .. } => {
                             // snapshot update will be succeeded as part of the replay.
-                            let result = Self::resume_replay(store, instance).await;
+                            let result = Self::resume_replay(store, instance, false).await;
                             record_resume_worker(start.elapsed());
 
                             match result {
@@ -1857,7 +1887,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     }
                 }
                 None => {
-                    let result = Self::resume_replay(store, instance).await;
+                    let result = Self::resume_replay(store, instance, false).await;
                     record_resume_worker(start.elapsed());
 
                     result
@@ -1879,7 +1909,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         _this: &T,
-        _account_id: &AccountId,
+        _project_id: &ProjectId,
         _last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
@@ -1908,6 +1938,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         let default_retry_config = &this.config().retry;
         for worker in workers {
             let owned_worker_id = worker.owned_worker_id();
+            let created_by = worker.created_by.clone();
             let latest_worker_status =
                 calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
             let last_error =
@@ -1929,11 +1960,14 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 RetryDecision::Immediate | RetryDecision::ReacquirePermits => {
                     let _ = Worker::get_or_create_running(
                         this,
+                        &created_by,
                         &owned_worker_id,
                         None,
                         None,
                         None,
                         None,
+                        None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                 }
@@ -1950,13 +1984,23 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(owned_worker_id, None, None, None, None)
+            .get_or_create_suspended(
+                account_id,
+                owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -1984,10 +2028,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
 #[async_trait]
 impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWorkerCtx<Ctx> {
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let root = self.temp_dir.path();
         let target = root.join(PathBuf::from(path.to_rel_string()));
 
@@ -1999,20 +2043,43 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 }
             })?;
             if !exists {
-                return Ok(ListDirectoryResult::NotFound);
+                return Ok(GetFileSystemNodeResult::NotFound);
             };
         }
 
-        {
-            let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
-                WorkerExecutorError::FileSystemError {
-                    path: path.to_string(),
-                    reason: format!("Failed to get metadata: {e}"),
-                }
-            })?;
-            if !metadata.is_dir() {
-                return Ok(ListDirectoryResult::NotADirectory);
+        let metadata = tokio::fs::metadata(&target).await.map_err(|e| {
+            WorkerExecutorError::FileSystemError {
+                path: path.to_string(),
+                reason: format!("Failed to get metadata: {e}"),
+            }
+        })?;
+
+        if metadata.is_file() {
+            let is_readonly_by_host = metadata.permissions().readonly();
+            let is_readonly_by_us = self.state.read_only_paths.read().unwrap().contains(&target);
+
+            let permissions = if is_readonly_by_host || is_readonly_by_us {
+                ComponentFilePermissions::ReadOnly
+            } else {
+                ComponentFilePermissions::ReadWrite
             };
+
+            let last_modified = metadata.modified().ok().unwrap_or(SystemTime::UNIX_EPOCH);
+            let file_name = target
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+
+            let file_node = ComponentFileSystemNode {
+                name: file_name,
+                last_modified,
+                details: ComponentFileSystemNodeDetails::File {
+                    size: metadata.len(),
+                    permissions,
+                },
+            };
+
+            return Ok(GetFileSystemNodeResult::File(file_node));
         }
 
         let mut entries = tokio::fs::read_dir(target).await.map_err(|e| {
@@ -2069,7 +2136,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
                 });
             };
         }
-        Ok(ListDirectoryResult::Ok(result))
+        Ok(GetFileSystemNodeResult::Ok(result))
     }
 
     async fn read_file(
@@ -2211,7 +2278,6 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     break;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvokedV1 { .. })) => break,
             Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
             _ => {}
         }
@@ -2259,13 +2325,15 @@ struct PrivateDurableWorkerState {
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
+    agent_types_service: Arc<dyn AgentTypesService>,
     plugins: Arc<dyn Plugins>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
+    created_by: AccountId,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
-    resources: HashMap<WorkerResourceId, ResourceAny>,
+    resources: HashMap<WorkerResourceId, (ResourceTypeId, ResourceAny)>,
     last_resource_id: WorkerResourceId,
     replay_state: ReplayState,
     overridden_retry_policy: Option<RetryConfig>,
@@ -2277,8 +2345,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
-    component_metadata: ComponentMetadata,
+    component_metadata: golem_service_base::model::Component,
 
     total_linear_memory_size: u64,
 
@@ -2292,6 +2359,12 @@ struct PrivateDurableWorkerState {
     read_only_paths: RwLock<HashSet<PathBuf>>,
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
+
+    project_service: Arc<dyn ProjectService>,
+    /// The initial config vars that the worker was configured with
+    initial_wasi_config_vars: BTreeMap<String, String>,
+    /// The current config vars of the worker, taking into account component version, etc.
+    wasi_config_vars: RwLock<BTreeMap<String, String>>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2307,6 +2380,7 @@ impl PrivateDurableWorkerState {
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
         plugins: Arc<dyn Plugins>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
@@ -2314,12 +2388,16 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: ComponentMetadata,
+        component_metadata: golem_service_base::model::Component,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
+        project_service: Arc<dyn ProjectService>,
+        created_by: AccountId,
+        initial_wasi_config_vars: BTreeMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2342,6 +2420,7 @@ impl PrivateDurableWorkerState {
             blob_store_service,
             rdbms_service,
             component_service,
+            agent_types_service,
             plugins,
             config,
             owned_worker_id,
@@ -2355,7 +2434,6 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             snapshotting_mode: None,
-            indexed_resources: HashMap::new(),
             component_metadata,
             total_linear_memory_size,
             replay_state,
@@ -2367,6 +2445,10 @@ impl PrivateDurableWorkerState {
             read_only_paths,
             files,
             file_loader,
+            project_service,
+            created_by,
+            initial_wasi_config_vars,
+            wasi_config_vars: RwLock::new(wasi_config_vars),
         }
     }
 
@@ -2505,7 +2587,8 @@ impl PrivateDurableWorkerState {
             .schedule(
                 when,
                 ScheduledAction::CompletePromise {
-                    account_id: self.owned_worker_id.account_id(),
+                    account_id: self.created_by.clone(),
+                    project_id: self.owned_worker_id.project_id(),
                     promise_id,
                 },
             )
@@ -2537,7 +2620,7 @@ impl PrivateDurableWorkerState {
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.account_id,
+                &self.owned_worker_id.project_id,
                 component_id,
                 filter,
                 cursor,
@@ -2556,19 +2639,19 @@ impl ResourceStore for PrivateDurableWorkerState {
         }
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
         let id = self.last_resource_id;
         self.last_resource_id = self.last_resource_id.next();
-        self.resources.insert(id, resource);
+        self.resources.insert(id, (name, resource));
         id.0
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         let resource_id = WorkerResourceId(resource_id);
         self.resources.remove(&resource_id)
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.resources.get(&WorkerResourceId(resource_id)).cloned()
     }
 }
@@ -2594,6 +2677,12 @@ impl HasConfig for PrivateDurableWorkerState {
 impl HasPlugins for PrivateDurableWorkerState {
     fn plugins(&self) -> Arc<dyn Plugins> {
         self.plugins.clone()
+    }
+}
+
+impl HasProjectService for PrivateDurableWorkerState {
+    fn project_service(&self) -> Arc<dyn ProjectService> {
+        self.project_service.clone()
     }
 }
 
@@ -2726,7 +2815,7 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
@@ -2740,7 +2829,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(account_id, &file.key, &path)
+                        .get_read_only_to(project_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -2753,7 +2842,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -2766,7 +2855,7 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(), WorkerExecutorError> {
@@ -2782,7 +2871,7 @@ async fn update_filesystem(
             .map(|f| root.join(PathBuf::from(f.path.to_rel_string()))),
     );
 
-    // We do this in two phases to make errors less likely. First delete all files that are no longer needed and then create
+    // We do this in two phases to make errors less likely. First, delete all files that are no longer needed and then create
     // new ones.
     let futures_phase_1 = current_state.iter().map(|(path, file)| {
         let path = path.clone();
@@ -2819,21 +2908,21 @@ async fn update_filesystem(
                     let exists = tokio::fs::try_exists(&path).map_err(|e| WorkerExecutorError::FileSystemError { path: file.path.to_rel_string(), reason: format!("Failed checking whether path exists: {e}") }).await?;
 
                     if exists {
-                        // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
+                        // Try removing it if it's an empty directory; this will fail otherwise, and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}")
+                                reason: format!("Tried replacing an existing non-empty path with ro file during update: {e}"),
                             }
                         )?;
                     };
 
                     let token = file_loader
-                        .get_read_only_to(account_id, &file.key, &path)
+                        .get_read_only_to(project_id, &file.key, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
-                },
+                }
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Ro { file: existing_file, .. })) => {
                     if existing_file.key == file.key {
                         Ok(UpdateFileSystemResult::NoChanges)
@@ -2842,11 +2931,11 @@ async fn update_filesystem(
                         tokio::fs::remove_file(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Failed deleting file during update: {e}")
+                                reason: format!("Failed deleting file during update: {e}"),
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(account_id, &file.key, &path)
+                            .get_read_only_to(project_id, &file.key, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -2854,7 +2943,7 @@ async fn update_filesystem(
                 (ComponentFilePermissions::ReadOnly, Some(IFSWorkerFile::Rw)) => {
                     Err(WorkerExecutorError::FileSystemError {
                         path: file.path.to_rel_string(),
-                        reason: "Tried updating rw file to ro during update".to_string()
+                        reason: "Tried updating rw file to ro during update".to_string(),
                     })
                 }
                 (ComponentFilePermissions::ReadWrite, None) => {
@@ -2866,45 +2955,45 @@ async fn update_filesystem(
                         let metadata = tokio::fs::metadata(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Failed getting metadata of path: {e}")
+                                reason: format!("Failed getting metadata of path: {e}"),
                             }
                         )?;
 
                         if metadata.is_file() {
-                            return Ok(UpdateFileSystemResult::NoChanges)
+                            return Ok(UpdateFileSystemResult::NoChanges);
                         }
 
-                        // Try removing it if it's an empty directory, this will fail otherwise and we can report the error.
+                        // Try removing it if it's an empty directory, this will fail otherwise, and we can report the error.
                         tokio::fs::remove_dir(&path).await.map_err(|e|
                             WorkerExecutorError::FileSystemError {
                                 path: file.path.to_rel_string(),
-                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}")
+                                reason: format!("Tried replacing an existing non-empty path with rw file during update: {e}"),
                             }
                         )?;
                     }
 
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
+                }
                 (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Ro { .. })) => {
                     debug!("Updating ro file to rw {}", path.display());
                     tokio::fs::remove_file(&path).await.map_err(|e|
                         WorkerExecutorError::FileSystemError {
                             path: file.path.to_rel_string(),
-                            reason: format!("Failed deleting file during update: {e}")
+                            reason: format!("Failed deleting file during update: {e}"),
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(account_id, &file.key, &path)
+                        .get_read_write_to(project_id, &file.key, &path)
                         .await?;
-                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw})
-                },
+                    Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
+                }
                 (ComponentFilePermissions::ReadWrite, Some(IFSWorkerFile::Rw)) => {
                     debug!("Updating rw file {}", path.display());
                     Ok(UpdateFileSystemResult::NoChanges)
-                },
+                }
             }
         }
     });
@@ -2933,6 +3022,23 @@ fn compute_read_only_paths(files: &HashMap<PathBuf, IFSWorkerFile>) -> HashSet<P
         _ => None,
     });
     HashSet::from_iter(ro_paths)
+}
+
+fn effective_wasi_config_vars(
+    worker_wasi_config_vars: BTreeMap<String, String>,
+    component_wasi_config_vars: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    let mut result = BTreeMap::new();
+
+    for (k, v) in component_wasi_config_vars {
+        result.insert(k, v);
+    }
+
+    for (k, v) in worker_wasi_config_vars {
+        result.insert(k, v);
+    }
+
+    result
 }
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during

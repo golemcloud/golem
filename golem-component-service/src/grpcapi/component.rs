@@ -16,9 +16,9 @@ use crate::api::common::ComponentTraceErrorKind;
 use crate::authed::component::AuthedComponentService;
 use crate::grpcapi::{auth, bad_request_error, internal_error, require_component_id};
 use async_trait::async_trait;
-use futures_util::stream::BoxStream;
-use futures_util::StreamExt;
-use futures_util::TryStreamExt;
+use futures::stream::BoxStream;
+use futures::StreamExt;
+use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentService as GrpcComponentService;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -178,6 +178,13 @@ impl ComponentGrpcApi {
                 })?,
         );
 
+        let agent_types = request
+            .agent_types
+            .iter()
+            .map(|agent_type| agent_type.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad_request_error(&format!("Invalid agent types: {e}")))?;
+
         let result = self
             .component_service
             .create_internal(
@@ -189,6 +196,7 @@ impl ComponentGrpcApi {
                 dynamic_linking,
                 &auth,
                 request.env,
+                agent_types,
             )
             .await?;
 
@@ -233,6 +241,13 @@ impl ComponentGrpcApi {
                 })?,
         );
 
+        let agent_types = request
+            .agent_types
+            .iter()
+            .map(|agent_type| agent_type.clone().try_into())
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| bad_request_error(&format!("Invalid agent types: {e}")))?;
+
         let result = self
             .component_service
             .update_internal(
@@ -243,6 +258,7 @@ impl ComponentGrpcApi {
                 dynamic_linking,
                 &auth,
                 request.env,
+                agent_types,
             )
             .await?;
 

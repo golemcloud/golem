@@ -17,16 +17,10 @@ use assert2::check;
 use axum::http::HeaderMap;
 use axum::routing::post;
 use axum::{Json, Router};
-use golem_api_grpc::proto::golem::apidefinition::v1::{
-    api_definition_request, create_api_definition_request, ApiDefinitionRequest,
-    CreateApiDefinitionRequest,
+use golem_client::model::{
+    ApiDefinitionInfo, ApiDeploymentRequest, ApiSite, GatewayBindingComponent, GatewayBindingData,
+    GatewayBindingType, HttpApiDefinitionRequest, MethodPattern, RouteRequestData,
 };
-use golem_api_grpc::proto::golem::apidefinition::{
-    ApiDefinitionId, GatewayBinding, GatewayBindingType, HttpApiDefinition, HttpMethod, HttpRoute,
-};
-use golem_api_grpc::proto::golem::component::VersionedComponentId;
-use golem_api_grpc::proto::golem::rib::Expr;
-use golem_client::model::{ApiDefinitionInfo, ApiDeploymentRequest, ApiSite};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
@@ -52,7 +46,7 @@ inherit_test_dep!(Deps);
 #[timeout(120000)]
 #[allow(clippy::await_holding_lock)]
 async fn invocation_context_test(deps: &Deps) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let host_http_port = 8588;
 
     let contexts = Arc::new(Mutex::new(Vec::new()));
@@ -97,7 +91,7 @@ async fn invocation_context_test(deps: &Deps) {
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let component_id = admin
+    let (component_id, component_name) = admin
         .component("golem_ictest")
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
@@ -112,79 +106,69 @@ async fn invocation_context_test(deps: &Deps) {
                 )]),
             }),
         )])
-        .store()
-        .await;
-    let _worker_id = admin
-        .start_worker_with(&component_id, "w1", vec![], env.clone())
+        .store_and_get_name()
         .await;
 
-    let api_definition_id = ApiDefinitionId {
-        value: Uuid::new_v4().to_string(),
-    };
-    let request = ApiDefinitionRequest {
-        id: Some(api_definition_id.clone()),
+    let _worker_id = admin
+        .start_worker_with(&component_id, "w1", vec![], env.clone(), vec![])
+        .await;
+
+    let api_definition_id = Uuid::new_v4().to_string();
+
+    let request = HttpApiDefinitionRequest {
+        id: api_definition_id.clone(),
         version: "1".to_string(),
         draft: true,
-        definition: Some(api_definition_request::Definition::Http(
-            HttpApiDefinition {
-                routes: vec![HttpRoute {
-                    method: HttpMethod::Post as i32,
-                    path: "/test-path-1/{name}".to_string(),
-                    binding: Some(GatewayBinding {
-                        component: Some(VersionedComponentId {
-                            component_id: Some(component_id.clone().into()),
-                            version: 0,
-                        }),
-                        worker_name: Some(to_grpc_rib_expr(r#""counter""#)),
-                        response: Some(to_grpc_rib_expr(
-                            r#"
-                                let worker = instance("w1");
-                                worker.test1();
-                                {
-                                   body: "ok",
-                                   status: 200,
-                                   headers: { Content-Type: "application/json" }
-                                }
-                            "#,
-                        )),
-                        idempotency_key: None,
-                        binding_type: Some(GatewayBindingType::Default as i32),
-                        static_binding: None,
-                        invocation_context: Some(to_grpc_rib_expr(
-                            r#"
-                                {
-                                    name: request.path.name,
-                                    source: "rib"
-                                }
-                            "#,
-                        )),
-                    }),
-                    middleware: None,
-                }],
+        security: None,
+        routes: vec![RouteRequestData {
+            method: MethodPattern::Post,
+            path: "/test-path-1/{name}".to_string(),
+            binding: GatewayBindingData {
+                component: Some(GatewayBindingComponent {
+                    name: component_name.0,
+                    version: Some(0),
+                }),
+                worker_name: None,
+                response: Some(
+                    r#"
+                        let worker = instance("w1");
+                        worker.test1();
+                        {
+                            body: "ok",
+                            status: 200,
+                            headers: { Content-Type: "application/json" }
+                        }
+                    "#
+                    .to_string(),
+                ),
+                idempotency_key: None,
+                binding_type: Some(GatewayBindingType::Default),
+                invocation_context: Some(
+                    r#"
+                        {
+                            name: request.path.name,
+                            source: "rib"
+                        }
+                    "#
+                    .to_string(),
+                ),
             },
-        )),
+            security: None,
+        }],
     };
 
     let project_id = admin.default_project().await;
 
     let _ = deps
         .worker_service()
-        .create_api_definition(
-            &admin.token,
-            &project_id,
-            CreateApiDefinitionRequest {
-                api_definition: Some(create_api_definition_request::ApiDefinition::Definition(
-                    request.clone(),
-                )),
-            },
-        )
+        .create_api_definition(&admin.token, &project_id, &request)
         .await
         .unwrap();
 
     let request = ApiDeploymentRequest {
         project_id: project_id.0,
         api_definitions: vec![ApiDefinitionInfo {
-            id: api_definition_id.value,
+            id: api_definition_id,
             version: "1".to_string(),
         }],
         site: ApiSite {
@@ -327,8 +311,4 @@ async fn invocation_context_test(deps: &Deps) {
     check!(
         dump[2].as_object().unwrap().get("trace_id") == Some(&Value::String(format!("{trace_id}")))
     ); // coming from the custom invocation context rib
-}
-
-pub fn to_grpc_rib_expr(expr: &str) -> Expr {
-    rib::Expr::from_text(expr).unwrap().into()
 }

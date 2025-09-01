@@ -7,6 +7,8 @@ tags:
 - name: Account
   description: The account API allows users to query and manipulate their own account data.
 - name: AccountSummary
+- name: AgentTypes
+  description: API working on registered agent types
 - name: ApiCertificate
 - name: ApiDefinition
 - name: ApiDeployment
@@ -2015,7 +2017,7 @@ paths:
       security:
       - Cookie: []
       - Token: []
-      operationId: bath_update_installed_plugins_of_project
+      operationId: batch_update_installed_plugins_of_project
   /v1/projects/{project_id}/grants:
     get:
       tags:
@@ -3163,6 +3165,7 @@ components:
       - CreatePluginDefinition
       - UpdatePluginDefinition
       - DeletePluginDefinition
+      - ExportApiDefinition
     ProjectPolicy:
       type: object
       title: ProjectPolicy

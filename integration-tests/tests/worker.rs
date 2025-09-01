@@ -17,7 +17,7 @@ use test_r::{flaky, inherit_test_dep, test, timeout};
 use assert2::check;
 
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
@@ -27,15 +27,18 @@ use crate::{Deps, Tracing};
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
-use golem_common::model::oplog::{OplogIndex, WorkerResourceId};
+use golem_client::model::AnalysedType;
+use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
-    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, TargetWorkerId,
-    Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::TestDependencies;
-use golem_wasm_ast::analysis::analysed_type;
+use golem_wasm_ast::analysis::{
+    analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
+};
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::time::{Duration, SystemTime};
@@ -49,7 +52,7 @@ inherit_test_dep!(Deps);
 #[tracing::instrument]
 #[timeout(120000)]
 async fn dynamic_worker_creation(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("environment-service").store().await;
     let worker_id = WorkerId {
         component_id: component_id.clone(),
@@ -84,140 +87,11 @@ async fn dynamic_worker_creation(deps: &Deps, _tracing: &Tracing) {
     );
 }
 
-fn get_env_result(env: Vec<Value>) -> HashMap<String, String> {
-    match env.into_iter().next() {
-        Some(Value::Result(Ok(Some(inner)))) => match *inner {
-            Value::List(items) => {
-                let pairs = items
-                    .into_iter()
-                    .filter_map(|item| match item {
-                        Value::Tuple(values) if values.len() == 2 => {
-                            let mut iter = values.into_iter();
-                            let key = iter.next();
-                            let value = iter.next();
-                            match (key, value) {
-                                (Some(Value::String(key)), Some(Value::String(value))) => {
-                                    Some((key, value))
-                                }
-                                _ => None,
-                            }
-                        }
-                        _ => None,
-                    })
-                    .collect::<Vec<(String, String)>>();
-                HashMap::from_iter(pairs)
-            }
-            _ => panic!("Unexpected result value"),
-        },
-        _ => panic!("Unexpected result value"),
-    }
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
-async fn dynamic_worker_creation_without_name(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
-    let component_id = admin.component("environment-service").store().await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: None,
-    };
-
-    let env1 = admin
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-    let env2 = admin
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-
-    let env1 = get_env_result(env1);
-    let env2 = get_env_result(env2);
-
-    check!(env1.contains_key("GOLEM_WORKER_NAME"));
-    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env2.contains_key("GOLEM_WORKER_NAME"));
-    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
-async fn ephemeral_worker_creation_without_name(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
-    let component_id = admin
-        .component("environment-service")
-        .ephemeral()
-        .store()
-        .await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: None,
-    };
-
-    let env1 = admin
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-    let env2 = admin
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{get-environment}", vec![])
-        .await
-        .unwrap();
-
-    let env1 = get_env_result(env1);
-    let env2 = get_env_result(env2);
-
-    check!(env1.contains_key("GOLEM_WORKER_NAME"));
-    check!(env1.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env1.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env2.contains_key("GOLEM_WORKER_NAME"));
-    check!(env2.get("GOLEM_COMPONENT_ID") == Some(&component_id.to_string()));
-    check!(env2.get("GOLEM_COMPONENT_VERSION") == Some(&"0".to_string()));
-    check!(env1.get("GOLEM_WORKER_NAME") != env2.get("GOLEM_WORKER_NAME"));
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
-async fn ephemeral_worker_creation_with_name_is_not_persistent(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
-    let component_id = admin.component("counters").ephemeral().store().await;
-    let worker_id = TargetWorkerId {
-        component_id: component_id.clone(),
-        worker_name: Some("test".to_string()),
-    };
-
-    let _ = admin
-        .invoke_and_await(
-            worker_id.clone(),
-            "rpc:counters-exports/api.{inc-global-by}",
-            vec![2u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
-
-    let result = admin
-        .invoke_and_await(
-            worker_id.clone(),
-            "rpc:counters-exports/api.{get-global-value}",
-            vec![],
-        )
-        .await
-        .unwrap();
-
-    check!(result == vec![Value::U64(0)]);
-}
-
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
 async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
     let worker_id = admin.start_worker(&component_id, "counters-1").await;
     admin.log_output(&worker_id).await;
@@ -296,7 +170,7 @@ async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
         .iter()
         .map(|(k, v)| {
             (
-                *k,
+                k.to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
                     ..v.clone()
@@ -304,14 +178,15 @@ async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
             )
         })
         .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| *k);
+    resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
-                WorkerResourceId(0),
+                "0".to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
-                    indexed_resource_key: None
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string(),
                 }
             ),]
     );
@@ -322,7 +197,7 @@ async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
         .iter()
         .map(|(k, v)| {
             (
-                *k,
+                k.to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
                     ..v.clone()
@@ -337,7 +212,7 @@ async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
     let worker_id = admin.start_worker(&component_id, "counters-1j").await;
     admin.log_output(&worker_id).await;
@@ -453,7 +328,7 @@ async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
         .iter()
         .map(|(k, v)| {
             (
-                *k,
+                k.to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
                     ..v.clone()
@@ -461,14 +336,15 @@ async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
             )
         })
         .collect::<Vec<_>>();
-    resources1.sort_by_key(|(k, _v)| *k);
+    resources1.sort_by_key(|(k, _v)| k.clone());
     check!(
         resources1
             == vec![(
-                WorkerResourceId(0),
+                "0".to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
-                    indexed_resource_key: None
+                    resource_owner: "rpc:counters-exports/api".to_string(),
+                    resource_name: "counter".to_string(),
                 }
             ),]
     );
@@ -479,7 +355,7 @@ async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
         .iter()
         .map(|(k, v)| {
             (
-                *k,
+                k.to_string(),
                 WorkerResourceDescription {
                     created_at: ts,
                     ..v.clone()
@@ -493,283 +369,118 @@ async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-async fn counter_resource_test_2(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
-    let component_id = admin.component("counters").unique().store().await;
-    let worker_id = admin.start_worker(&component_id, "counters-2").await;
-    admin.log_output(&worker_id).await;
-
-    let _ = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![5u64.into_value_and_type()],
-        )
-        .await;
-
-    let _ = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![1u64.into_value_and_type()],
-        )
-        .await;
-    let _ = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![2u64.into_value_and_type()],
-        )
-        .await;
-
-    let result1 = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
-        )
-        .await;
-    let result2 = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
-        )
-        .await;
-
-    let _ = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
-            vec![],
-        )
-        .await;
-    let _ = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
-            vec![],
-        )
-        .await;
-
-    let result3 = admin
-        .invoke_and_await(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await;
-
-    check!(result1 == Ok(vec![Value::U64(5)]));
-    check!(result2 == Ok(vec![Value::U64(3)]));
-    check!(
-        result3
-            == Ok(vec![Value::List(vec![
-                Value::Tuple(vec![Value::String("counter1".to_string()), Value::U64(5)]),
-                Value::Tuple(vec![Value::String("counter2".to_string()), Value::U64(3)])
-            ])])
-    );
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
-async fn counter_resource_test_2_json(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+async fn counter_resource_test_2_json_no_types(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
+    let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
     let worker_id = admin.start_worker(&component_id, "counters-2j").await;
     admin.log_output(&worker_id).await;
 
-    let _ = admin
+    let counter1 = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![json!(
-                {
-                    "typ": { "type": "U64" }, "value": 5
-                }
-            )],
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec![json!({ "typ": { "type": "Str" }, "value": "counter1" })],
         )
-        .await;
+        .await
+        .unwrap();
 
-    let _ = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![json!(
-                {
-                    "typ": { "type": "U64" }, "value": 1
-                }
-            )],
-        )
-        .await;
-    let _ = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![json!(
-                {
-                    "typ": { "type": "U64" }, "value": 2
-                }
-            )],
-        )
-        .await;
-
-    let result1 = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
-        )
-        .await;
-    let result2 = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
-        )
-        .await;
-
-    let _ = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
-            vec![],
-        )
-        .await;
-    let _ = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
-            vec![],
-        )
-        .await;
-
-    let result3 = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{get-all-dropped}",
-            vec![],
-        )
-        .await;
-
-    check!(
-        result1
-            == Ok(json!(
-                {
-                    "typ": { "type": "U64" },
-                    "value": 5
-                }
-            ))
-    );
-    check!(
-        result2
-            == Ok(json!(
-                {
-                    "typ": { "type": "U64" },
-                    "value": 3
-                }
-            ))
+    let counter1_value = counter1.as_object().unwrap().get("value").unwrap();
+    let counter1 = json!(
+        {
+            "value": counter1_value
+        }
     );
 
-    check!(
-        result3
-            == Ok(json!(
-                {
-              "typ": {
-                    "type": "List",
-                    "inner": {
-                      "type": "Tuple",
-                      "items": [
-                        {
-                          "type": "Str"
-                        },
-                        {
-                          "type": "U64"
-                        }
-                      ]
+    let counter2 = admin
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec![json!({ "typ": { "type": "Str" }, "value": "counter2" })],
+        )
+        .await
+        .unwrap();
+
+    let counter2_value = counter2.as_object().unwrap().get("value").unwrap();
+    let counter2 = json!(
+        {
+            "value": counter2_value
+        }
+    );
+
+    let _ = admin
+        .invoke_and_await_json(
+            &worker_id,
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![
+                counter1.clone(),
+                json!(
+                    {
+                        "value": 5
                     }
-                },
-                "value": [
-                    ["counter1",5],
-                    ["counter2",3]
-                ]
-            }
-            ))
-    );
-}
-
-#[test]
-#[tracing::instrument]
-#[timeout(120000)]
-async fn counter_resource_test_2_json_no_types(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
-    let component_id = admin.component("counters").unique().store().await;
-    let worker_id = admin.start_worker(&component_id, "counters-2j").await;
-    admin.log_output(&worker_id).await;
-
-    let _ = admin
-        .invoke_and_await_json(
-            &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![json!(
-                {
-                    "value": 5
-                }
-            )],
+                ),
+            ],
         )
         .await;
 
     let _ = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![json!(
-                {
-                    "value": 1
-                }
-            )],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![
+                counter2.clone(),
+                json!(
+                    {
+                        "value": 1
+                    }
+                ),
+            ],
         )
         .await;
     let _ = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![json!(
-                {
-                    "value": 2
-                }
-            )],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![
+                counter2.clone(),
+                json!(
+                    {
+                        "value": 2
+                    }
+                ),
+            ],
         )
         .await;
 
     let result1 = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter1.clone()],
         )
         .await;
     let result2 = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter2.clone()],
         )
         .await;
 
     let _ = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").drop}",
-            vec![],
+            "rpc:counters-exports/api.{[drop]counter}",
+            vec![counter1.clone()],
         )
         .await;
     let _ = admin
         .invoke_and_await_json(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").drop}",
-            vec![],
+            "rpc:counters-exports/api.{[drop]counter}",
+            vec![counter2.clone()],
         )
         .await;
 
@@ -833,7 +544,7 @@ async fn counter_resource_test_2_json_no_types(deps: &Deps, _tracing: &Tracing) 
 #[tracing::instrument]
 #[timeout(120000)]
 async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
     let worker_id = admin.start_worker(&component_id, "shopping-cart-1").await;
 
@@ -849,12 +560,12 @@ async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -863,12 +574,12 @@ async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -877,12 +588,12 @@ async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -932,7 +643,7 @@ async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn auction_example_1(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let registry_component_id = admin.component("auction_registry_composed").store().await;
     let auction_component_id = admin.component("auction").store().await;
 
@@ -942,7 +653,13 @@ async fn auction_example_1(deps: &Deps, _tracing: &Tracing) {
         auction_component_id.to_string(),
     );
     let registry_worker_id = admin
-        .start_worker_with(&registry_component_id, "auction-registry-1", vec![], env)
+        .start_worker_with(
+            &registry_component_id,
+            "auction-registry-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let _ = admin.log_output(&registry_worker_id).await;
@@ -996,7 +713,7 @@ fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<Wor
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_workers(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let workers_count = 150;
@@ -1096,7 +813,7 @@ async fn get_workers(deps: &Deps, _tracing: &Tracing) {
 #[timeout(120000)]
 #[flaky(10)] // TODO: stabilize test
 async fn get_running_workers(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("http-client-2").unique().store().await;
     let host_http_port = 8585;
 
@@ -1148,6 +865,7 @@ async fn get_running_workers(deps: &Deps, _tracing: &Tracing) {
                 &format!("worker-http-client-{i}"),
                 vec![],
                 env.clone(),
+                vec![],
             )
             .await;
 
@@ -1229,7 +947,7 @@ async fn get_running_workers(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(300000)]
 async fn auto_update_on_idle(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("update-test-v1").unique().store().await;
     let worker_id = admin
         .start_worker(&component_id, "auto_update_on_idle")
@@ -1263,8 +981,11 @@ async fn auto_update_on_idle(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(300000)]
-async fn auto_update_on_idle_via_host_function(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+async fn auto_update_on_idle_via_host_function(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
+    let admin = deps.admin().await;
     let component_id = admin.component("update-test-v1").unique().store().await;
     let worker_id = admin
         .start_worker(&component_id, "auto_update_on_idle_via_host_function")
@@ -1288,24 +1009,24 @@ async fn auto_update_on_idle_via_host_function(deps: &Deps, _tracing: &Tracing) 
             &runtime_svc_worker,
             "golem:it/api.{update-worker}",
             vec![
-                vec![
+                Record(vec![
                     (
                         "component-id",
-                        vec![(
+                        Record(vec![(
                             "uuid",
-                            vec![
+                            Record(vec![
                                 ("high-bits", high_bits.into_value_and_type()),
                                 ("low-bits", low_bits.into_value_and_type()),
-                            ]
+                            ])
                             .into_value_and_type(),
-                        )]
+                        )])
                         .into_value_and_type(),
                     ),
                     (
                         "worker-name",
                         worker_id.worker_name.clone().into_value_and_type(),
                     ),
-                ]
+                ])
                 .into_value_and_type(),
                 target_version.into_value_and_type(),
                 ValueAndType {
@@ -1337,7 +1058,7 @@ async fn auto_update_on_idle_via_host_function(deps: &Deps, _tracing: &Tracing) 
 #[tracing::instrument]
 #[timeout(120000)]
 async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("runtime-service").store().await;
 
     let worker_id = WorkerId {
@@ -1350,7 +1071,7 @@ async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
 
     let _ = admin
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
@@ -1358,7 +1079,7 @@ async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
         .unwrap();
     let _ = admin
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -1367,7 +1088,7 @@ async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
         .unwrap();
     let _ = admin
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -1399,7 +1120,7 @@ async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(120000)]
 async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let worker_id = WorkerId {
@@ -1419,12 +1140,12 @@ async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1433,12 +1154,12 @@ async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1447,12 +1168,12 @@ async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -1492,19 +1213,37 @@ async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
     let worker_id = admin
         .start_worker(&component_id, "counters-recreation")
         .await;
+
+    let counter1 = admin
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter1 = ValueAndType::new(
+        counter1[0].clone(),
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id: AnalysedResourceId(0),
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    );
 
     // Doing many requests, so parts of the oplog gets archived
     for _ in 1..=1200 {
         let _ = admin
             .invoke_and_await(
                 &worker_id,
-                "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-                vec![1u64.into_value_and_type()],
+                "rpc:counters-exports/api.{[method]counter.inc-by}",
+                vec![counter1.clone(), 1u64.into_value_and_type()],
             )
             .await;
     }
@@ -1512,8 +1251,8 @@ async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
     let result1 = admin
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter1.clone()],
         )
         .await;
 
@@ -1522,19 +1261,37 @@ async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
     admin.delete_worker(&worker_id).await;
 
     // Invoking again should create a new worker
+    let counter1 = admin
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter1 = ValueAndType::new(
+        counter1[0].clone(),
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id: AnalysedResourceId(0),
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    );
+
     let _ = admin
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![1u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter1.clone(), 1u64.into_value_and_type()],
         )
         .await;
 
     let result2 = admin
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter1.clone()],
         )
         .await;
 
@@ -1545,11 +1302,29 @@ async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
         .start_worker(&component_id, "counters-recreation")
         .await;
 
+    let counter1 = admin
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter1 = ValueAndType::new(
+        counter1[0].clone(),
+        AnalysedType::Handle(TypeHandle {
+            name: None,
+            owner: None,
+            resource_id: AnalysedResourceId(0),
+            mode: AnalysedResourceMode::Borrowed,
+        }),
+    );
+
     let result3 = admin
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter1.clone()],
         )
         .await;
 
@@ -1562,7 +1337,7 @@ async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_use_initial_files(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_files = admin
         .add_initial_component_files(&[
             (
@@ -1610,7 +1385,7 @@ async fn worker_use_initial_files(deps: &Deps, _tracing: &Tracing) {
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_list_files(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_files = admin
         .add_initial_component_files(&[
             (
@@ -1642,7 +1417,7 @@ async fn worker_list_files(deps: &Deps, _tracing: &Tracing) {
         .start_worker(&component_id, "initial-file-read-write-1")
         .await;
 
-    let result = admin.list_directory(&worker_id, "/").await;
+    let result = admin.get_file_system_node(&worker_id, "/").await;
 
     let mut result = result
         .into_iter()
@@ -1680,13 +1455,61 @@ async fn worker_list_files(deps: &Deps, _tracing: &Tracing) {
                 },
             ]
     );
+
+    let result = admin.get_file_system_node(&worker_id, "/bar").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
+    );
+
+    let result = admin.get_file_system_node(&worker_id, "/baz.txt").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: 4,
+                }
+            },]
+    );
 }
 
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]
 async fn worker_read_files(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_files = admin
         .add_initial_component_files(&[
             (
@@ -1733,8 +1556,11 @@ async fn worker_read_files(deps: &Deps, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(600000)]
-async fn worker_initial_files_after_automatic_worker_update(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+async fn worker_initial_files_after_automatic_worker_update(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
+    let admin = deps.admin().await;
     let component_files_1 = admin
         .add_initial_component_files(&[
             (
@@ -1815,7 +1641,7 @@ async fn worker_initial_files_after_automatic_worker_update(deps: &Deps, _tracin
 #[test]
 #[tracing::instrument]
 async fn resolve_components_from_name(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     // Make sure the name is unique
     let counter_component_id = admin

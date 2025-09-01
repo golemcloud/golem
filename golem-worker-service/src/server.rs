@@ -14,6 +14,7 @@
 
 use anyhow::anyhow;
 use golem_common::tracing::init_tracing_with_default_env_filter;
+use golem_common::SafeDisplay;
 use golem_worker_service::config::{make_worker_service_config_loader, WorkerServiceConfig};
 use golem_worker_service::service::Services;
 use golem_worker_service::WorkerService;
@@ -30,12 +31,7 @@ fn main() -> anyhow::Result<()> {
             .block_on(dump_openapi_yaml())
     } else if let Some(config) = make_worker_service_config_loader().load_or_dump_config() {
         init_tracing_with_default_env_filter(&config.tracing);
-
-        if config.is_local_env() {
-            info!("Golem Worker Service starting up (local mode)...");
-        } else {
-            info!("Golem Worker Service starting up...");
-        }
+        info!("Using configuration:\n{}", config.to_safe_string_indented());
 
         let prometheus_registry = prometheus::Registry::new();
 

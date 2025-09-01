@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Expr;
 use bincode::{BorrowDecode, Decode, Encode};
 use combine::stream::position::Stream;
 use combine::{eof, EasyParser, Parser};
-use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use semver::{BuildMetadata, Prerelease};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
@@ -24,6 +22,14 @@ use std::fmt::Display;
 
 #[derive(PartialEq, Hash, Eq, Clone, Ord, PartialOrd)]
 pub struct SemVer(pub semver::Version);
+
+impl SemVer {
+    pub fn parse(version: &str) -> Result<Self, String> {
+        semver::Version::parse(version)
+            .map(SemVer)
+            .map_err(|e| format!("Invalid semver string: {e}"))
+    }
+}
 
 impl std::fmt::Debug for SemVer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -132,45 +138,35 @@ impl ParsedFunctionSite {
             } => Some(format!("{namespace}:{package}/{interface}@{}", version.0)),
         }
     }
+
+    pub fn unversioned(&self) -> ParsedFunctionSite {
+        match self {
+            ParsedFunctionSite::Global => ParsedFunctionSite::Global,
+            ParsedFunctionSite::Interface { name } => {
+                ParsedFunctionSite::Interface { name: name.clone() }
+            }
+            ParsedFunctionSite::PackagedInterface {
+                namespace,
+                package,
+                interface,
+                version: _,
+            } => ParsedFunctionSite::PackagedInterface {
+                namespace: namespace.clone(),
+                package: package.clone(),
+                interface: interface.clone(),
+                version: None,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone, Ord, PartialOrd)]
 pub enum DynamicParsedFunctionReference {
-    Function {
-        function: String,
-    },
-    RawResourceConstructor {
-        resource: String,
-    },
-    RawResourceDrop {
-        resource: String,
-    },
-    RawResourceMethod {
-        resource: String,
-        method: String,
-    },
-    RawResourceStaticMethod {
-        resource: String,
-        method: String,
-    },
-    IndexedResourceConstructor {
-        resource: String,
-        resource_params: Vec<Expr>,
-    },
-    IndexedResourceMethod {
-        resource: String,
-        resource_params: Vec<Expr>,
-        method: String,
-    },
-    IndexedResourceStaticMethod {
-        resource: String,
-        resource_params: Vec<Expr>,
-        method: String,
-    },
-    IndexedResourceDrop {
-        resource: String,
-        resource_params: Vec<Expr>,
-    },
+    Function { function: String },
+    RawResourceConstructor { resource: String },
+    RawResourceDrop { resource: String },
+    RawResourceMethod { resource: String, method: String },
+    RawResourceStaticMethod { resource: String, method: String },
 }
 
 impl DynamicParsedFunctionReference {
@@ -185,25 +181,6 @@ impl DynamicParsedFunctionReference {
             DynamicParsedFunctionReference::RawResourceStaticMethod { method, .. } => {
                 method.to_string()
             }
-            DynamicParsedFunctionReference::IndexedResourceConstructor {
-                resource,
-                resource_params,
-            } => format!(
-                "{}({})",
-                resource,
-                resource_params
-                    .iter()
-                    .map(|x| x.to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            DynamicParsedFunctionReference::IndexedResourceMethod { method, .. } => {
-                method.to_string()
-            }
-            DynamicParsedFunctionReference::IndexedResourceStaticMethod { method, .. } => {
-                method.to_string()
-            }
-            DynamicParsedFunctionReference::IndexedResourceDrop { .. } => "drop".to_string(),
         }
     }
 
@@ -232,127 +209,17 @@ impl DynamicParsedFunctionReference {
                     method: method.clone(),
                 }
             }
-            Self::IndexedResourceConstructor {
-                resource,
-                resource_params,
-            } => ParsedFunctionReference::IndexedResourceConstructor {
-                resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|expr| expr.to_string())
-                    .collect(),
-            },
-            Self::IndexedResourceMethod {
-                resource,
-                resource_params,
-                method,
-            } => ParsedFunctionReference::IndexedResourceMethod {
-                resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|expr| expr.to_string())
-                    .collect(),
-                method: method.clone(),
-            },
-            Self::IndexedResourceStaticMethod {
-                resource,
-                resource_params,
-                method,
-            } => ParsedFunctionReference::IndexedResourceStaticMethod {
-                resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|expr| expr.to_string())
-                    .collect(),
-                method: method.clone(),
-            },
-            Self::IndexedResourceDrop {
-                resource,
-                resource_params,
-            } => ParsedFunctionReference::IndexedResourceDrop {
-                resource: resource.clone(),
-                resource_params: resource_params
-                    .iter()
-                    .map(|expr| expr.to_string())
-                    .collect(),
-            },
-        }
-    }
-
-    pub fn raw_resource_params_mut(&mut self) -> Option<&mut [Expr]> {
-        match self {
-            Self::IndexedResourceConstructor {
-                resource_params, ..
-            }
-            | Self::IndexedResourceMethod {
-                resource_params, ..
-            }
-            | Self::IndexedResourceStaticMethod {
-                resource_params, ..
-            }
-            | Self::IndexedResourceDrop {
-                resource_params, ..
-            } => Some(resource_params.as_mut_slice()),
-            _ => None,
-        }
-    }
-
-    pub fn raw_resource_params(&self) -> Option<&Vec<Expr>> {
-        match self {
-            Self::IndexedResourceConstructor {
-                resource_params, ..
-            }
-            | Self::IndexedResourceMethod {
-                resource_params, ..
-            }
-            | Self::IndexedResourceStaticMethod {
-                resource_params, ..
-            }
-            | Self::IndexedResourceDrop {
-                resource_params, ..
-            } => Some(resource_params),
-            _ => None,
         }
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
 pub enum ParsedFunctionReference {
-    Function {
-        function: String,
-    },
-    RawResourceConstructor {
-        resource: String,
-    },
-    RawResourceDrop {
-        resource: String,
-    },
-    RawResourceMethod {
-        resource: String,
-        method: String,
-    },
-    RawResourceStaticMethod {
-        resource: String,
-        method: String,
-    },
-    IndexedResourceConstructor {
-        resource: String,
-        resource_params: Vec<String>,
-    },
-    IndexedResourceMethod {
-        resource: String,
-        resource_params: Vec<String>,
-        method: String,
-    },
-    IndexedResourceStaticMethod {
-        resource: String,
-        resource_params: Vec<String>,
-        method: String,
-    },
-    IndexedResourceDrop {
-        resource: String,
-        resource_params: Vec<String>,
-    },
+    Function { function: String },
+    RawResourceConstructor { resource: String },
+    RawResourceDrop { resource: String },
+    RawResourceMethod { resource: String, method: String },
+    RawResourceStaticMethod { resource: String, method: String },
 }
 
 impl Display for ParsedFunctionReference {
@@ -360,42 +227,11 @@ impl Display for ParsedFunctionReference {
         let function_name = match self {
             Self::Function { function } => function.clone(),
             Self::RawResourceConstructor { resource } => format!("{resource}.new"),
-            Self::IndexedResourceConstructor {
-                resource,
-                resource_params,
-            } => {
-                format!("{}({}).new", resource, resource_params.join(", "))
-            }
             Self::RawResourceMethod { resource, method } => format!("{resource}.{method}"),
             Self::RawResourceStaticMethod { resource, method } => {
                 format!("[static]{resource}.{method}")
             }
             Self::RawResourceDrop { resource } => format!("{resource}.drop"),
-            Self::IndexedResourceDrop {
-                resource,
-                resource_params,
-            } => {
-                format!("{}({}).drop", resource, resource_params.join(", "))
-            }
-            Self::IndexedResourceMethod {
-                resource,
-                resource_params,
-                method,
-            } => {
-                format!("{}({}).{}", resource, resource_params.join(", "), method)
-            }
-            Self::IndexedResourceStaticMethod {
-                resource,
-                resource_params,
-                method,
-            } => {
-                format!(
-                    "[static]{}({}).{}",
-                    resource,
-                    resource_params.join(", "),
-                    method
-                )
-            }
         };
 
         write!(f, "{function_name}")
@@ -414,31 +250,13 @@ impl ParsedFunctionReference {
             Self::RawResourceStaticMethod {
                 resource, method, ..
             } => format!("[static]{resource}.{method}"),
-            Self::IndexedResourceConstructor { resource, .. } => {
-                format!("[constructor]{resource}")
-            }
-            Self::IndexedResourceMethod {
-                resource, method, ..
-            } => {
-                format!("[method]{resource}.{method}")
-            }
-            Self::IndexedResourceStaticMethod {
-                resource, method, ..
-            } => {
-                format!("[static]{resource}.{method}")
-            }
-            Self::IndexedResourceDrop { resource, .. } => {
-                format!("[drop]{resource}")
-            }
         }
     }
 
     pub fn resource_method_name(&self) -> Option<String> {
         match self {
-            Self::IndexedResourceStaticMethod { method, .. }
-            | Self::RawResourceMethod { method, .. }
-            | Self::RawResourceStaticMethod { method, .. }
-            | Self::IndexedResourceMethod { method, .. } => Some(method.clone()),
+            Self::RawResourceMethod { method, .. }
+            | Self::RawResourceStaticMethod { method, .. } => Some(method.clone()),
             _ => None,
         }
     }
@@ -449,43 +267,7 @@ impl ParsedFunctionReference {
                 resource: resource.clone(),
                 method: method.clone(),
             }),
-            Self::IndexedResourceMethod {
-                resource,
-                resource_params,
-                method,
-            } => Some(Self::IndexedResourceStaticMethod {
-                resource: resource.clone(),
-                resource_params: resource_params.clone(),
-                method: method.clone(),
-            }),
-            _ => None,
-        }
-    }
 
-    pub fn is_indexed_resource(&self) -> bool {
-        matches!(
-            self,
-            Self::IndexedResourceConstructor { .. }
-                | Self::IndexedResourceMethod { .. }
-                | Self::IndexedResourceStaticMethod { .. }
-                | Self::IndexedResourceDrop { .. }
-        )
-    }
-
-    pub fn raw_resource_params(&self) -> Option<&Vec<String>> {
-        match self {
-            Self::IndexedResourceConstructor {
-                resource_params, ..
-            }
-            | Self::IndexedResourceMethod {
-                resource_params, ..
-            }
-            | Self::IndexedResourceStaticMethod {
-                resource_params, ..
-            }
-            | Self::IndexedResourceDrop {
-                resource_params, ..
-            } => Some(resource_params),
             _ => None,
         }
     }
@@ -495,36 +277,8 @@ impl ParsedFunctionReference {
             Self::RawResourceConstructor { resource }
             | Self::RawResourceDrop { resource }
             | Self::RawResourceMethod { resource, .. }
-            | Self::RawResourceStaticMethod { resource, .. }
-            | Self::IndexedResourceConstructor { resource, .. }
-            | Self::IndexedResourceMethod { resource, .. }
-            | Self::IndexedResourceStaticMethod { resource, .. }
-            | Self::IndexedResourceDrop { resource, .. } => Some(resource),
+            | Self::RawResourceStaticMethod { resource, .. } => Some(resource),
             _ => None,
-        }
-    }
-
-    pub fn resource_params(
-        &self,
-        types: &[golem_wasm_ast::analysis::AnalysedType],
-    ) -> Result<Option<Vec<ValueAndType>>, String> {
-        if let Some(raw_params) = self.raw_resource_params() {
-            if raw_params.len() != types.len() {
-                Err(format!(
-                    "Resource params count mismatch: expected {}, got {}",
-                    types.len(),
-                    raw_params.len()
-                ))
-            } else {
-                let mut result = Vec::new();
-                for (raw_param, param_type) in raw_params.iter().zip(types.iter()) {
-                    let value_and_type: ValueAndType = parse_value_and_type(param_type, raw_param)?;
-                    result.push(value_and_type);
-                }
-                Ok(Some(result))
-            }
-        } else {
-            Ok(None)
         }
     }
 }
@@ -580,10 +334,6 @@ impl DynamicParsedFunctionName {
             .resource_method_name()
     }
 
-    pub fn raw_resource_params_mut(&mut self) -> Option<&mut [Expr]> {
-        self.function.raw_resource_params_mut()
-    }
-
     //
     pub fn to_parsed_function_name(&self) -> ParsedFunctionName {
         ParsedFunctionName {
@@ -600,7 +350,7 @@ impl Display for DynamicParsedFunctionName {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Clone, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash, Encode, Decode)]
 pub struct ParsedFunctionName {
     pub site: ParsedFunctionSite,
     pub function: ParsedFunctionReference,
@@ -687,10 +437,7 @@ impl ParsedFunctionName {
 
     pub fn is_constructor(&self) -> Option<&str> {
         match &self.function {
-            ParsedFunctionReference::RawResourceConstructor { resource, .. }
-            | ParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
-                Some(resource)
-            }
+            ParsedFunctionReference::RawResourceConstructor { resource, .. } => Some(resource),
             _ => None,
         }
     }
@@ -698,22 +445,22 @@ impl ParsedFunctionName {
     pub fn is_method(&self) -> Option<&str> {
         match &self.function {
             ParsedFunctionReference::RawResourceMethod { resource, .. }
-            | ParsedFunctionReference::IndexedResourceMethod { resource, .. }
-            | ParsedFunctionReference::RawResourceStaticMethod { resource, .. }
-            | ParsedFunctionReference::IndexedResourceStaticMethod { resource, .. } => {
-                Some(resource)
-            }
+            | ParsedFunctionReference::RawResourceStaticMethod { resource, .. } => Some(resource),
             _ => None,
         }
     }
 
     pub fn is_static_method(&self) -> Option<&str> {
         match &self.function {
-            ParsedFunctionReference::RawResourceStaticMethod { resource, .. }
-            | ParsedFunctionReference::IndexedResourceStaticMethod { resource, .. } => {
-                Some(resource)
-            }
+            ParsedFunctionReference::RawResourceStaticMethod { resource, .. } => Some(resource),
             _ => None,
+        }
+    }
+
+    pub fn with_site(&self, site: ParsedFunctionSite) -> Self {
+        Self {
+            site,
+            function: self.function.clone(),
         }
     }
 }
@@ -721,7 +468,7 @@ impl ParsedFunctionName {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::{
-        DynamicParsedFunctionName, DynamicParsedFunctionReference, Expr, ParsedFunctionName,
+        DynamicParsedFunctionName, DynamicParsedFunctionReference, ParsedFunctionName,
         ParsedFunctionReference, ParsedFunctionSite, SemVer,
     };
     use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
@@ -847,32 +594,6 @@ mod protobuf {
                 DynamicParsedFunctionReference::RawResourceDrop { resource } => ProtoDynamicFunctionReference::RawResourceDrop(
                     golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
                 ),
-                DynamicParsedFunctionReference::IndexedResourceConstructor { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceConstructor(
-                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
-                        resource,
-                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                    },
-                ),
-                DynamicParsedFunctionReference::IndexedResourceMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceMethod(
-                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
-                        resource,
-                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                        method,
-                    },
-                ),
-                DynamicParsedFunctionReference::IndexedResourceStaticMethod { resource, resource_params, method } => ProtoDynamicFunctionReference::IndexedResourceStaticMethod(
-                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
-                        resource,
-                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                        method,
-                    },
-                ),
-                DynamicParsedFunctionReference::IndexedResourceDrop { resource, resource_params } => ProtoDynamicFunctionReference::IndexedResourceDrop(
-                    golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
-                        resource,
-                        resource_params: resource_params.into_iter().map(|x| x.into()).collect(),
-                    },
-                ),
             };
 
             golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
@@ -894,71 +615,31 @@ mod protobuf {
                 .ok_or("Missing function reference".to_string())?;
 
             match function {
-                ProtoDynamicFunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
-                                                            function
-                                                        }) => {
-                    Ok(Self::Function { function })
-                }
-                ProtoDynamicFunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
-                                                                          resource
-                                                                      }) => {
-                    Ok(Self::RawResourceConstructor { resource })
-                }
-                ProtoDynamicFunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
-                                                                     resource,
-                                                                     method
-                                                                 }) => {
-                    Ok(Self::RawResourceMethod { resource, method })
-                }
-                ProtoDynamicFunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
-                                                                           resource,
-                                                                           method
-                                                                       }) => {
-                    Ok(Self::RawResourceStaticMethod { resource, method })
-                }
-                ProtoDynamicFunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
-                                                                   resource
-                                                               }) => {
-                    Ok(Self::RawResourceDrop { resource })
-                }
-                ProtoDynamicFunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceConstructorFunctionReference {
-                                                                              resource,
-                                                                              resource_params
-                                                                          }) => {
-                    let resource_params: Vec<Expr> =
-                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                    Ok(Self::IndexedResourceConstructor { resource, resource_params })
-                }
-                ProtoDynamicFunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceMethodFunctionReference {
-                                                                         resource,
-                                                                         resource_params,
-                                                                         method
-                                                                     }) => {
-                    let resource_params: Vec<Expr> =
-                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                    Ok(Self::IndexedResourceMethod { resource, resource_params, method })
-                }
-                ProtoDynamicFunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceStaticMethodFunctionReference {
-                                                                               resource,
-                                                                               resource_params,
-                                                                               method
-                                                                           }) => {
-                    let resource_params: Vec<Expr> =
-                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                    Ok(Self::IndexedResourceStaticMethod { resource, resource_params, method })
-                }
-                ProtoDynamicFunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::DynamicIndexedResourceDropFunctionReference {
-                                                                       resource,
-                                                                       resource_params
-                                                                   }) => {
-                    let resource_params: Vec<Expr> =
-                        resource_params.into_iter().map(Expr::try_from).collect::<Result<Vec<Expr>, String>>()?;
-
-                    Ok(Self::IndexedResourceDrop { resource, resource_params })
-                }
+                ProtoDynamicFunctionReference::Function(
+                    golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+                ) => Ok(Self::Function { function }),
+                ProtoDynamicFunctionReference::RawResourceConstructor(
+                    golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                        resource,
+                    },
+                ) => Ok(Self::RawResourceConstructor { resource }),
+                ProtoDynamicFunctionReference::RawResourceMethod(
+                    golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                        resource,
+                        method,
+                    },
+                ) => Ok(Self::RawResourceMethod { resource, method }),
+                ProtoDynamicFunctionReference::RawResourceStaticMethod(
+                    golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                        resource,
+                        method,
+                    },
+                ) => Ok(Self::RawResourceStaticMethod { resource, method }),
+                ProtoDynamicFunctionReference::RawResourceDrop(
+                    golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
+                        resource,
+                    },
+                ) => Ok(Self::RawResourceDrop { resource }),
             }
         }
     }
@@ -1002,46 +683,6 @@ mod protobuf {
                                                                                                                  }) => {
                     Ok(Self::RawResourceDrop { resource })
                 }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
-                                                                                                                                resource,
-                                                                                                                                resource_params
-                                                                                                                            }) => {
-                    Ok(Self::IndexedResourceConstructor {
-                        resource,
-                        resource_params,
-                    })
-                }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
-                                                                                                                           resource,
-                                                                                                                           resource_params,
-                                                                                                                           method
-                                                                                                                       }) => {
-                    Ok(Self::IndexedResourceMethod {
-                        resource,
-                        resource_params,
-                        method,
-                    })
-                }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
-                                                                                                                                 resource,
-                                                                                                                                 resource_params,
-                                                                                                                                 method
-                                                                                                                             }) => {
-                    Ok(Self::IndexedResourceStaticMethod {
-                        resource,
-                        resource_params,
-                        method,
-                    })
-                }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
-                                                                                                                         resource,
-                                                                                                                         resource_params
-                                                                                                                     }) => {
-                    Ok(Self::IndexedResourceDrop {
-                        resource,
-                        resource_params,
-                    })
-                }
             }
         }
     }
@@ -1077,46 +718,6 @@ mod protobuf {
                 }
                 ParsedFunctionReference::RawResourceDrop { resource } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(
                     golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
-                ),
-                ParsedFunctionReference::IndexedResourceConstructor {
-                    resource,
-                    resource_params,
-                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceConstructor(
-                    golem_api_grpc::proto::golem::rib::IndexedResourceConstructorFunctionReference {
-                        resource,
-                        resource_params,
-                    },
-                ),
-                ParsedFunctionReference::IndexedResourceMethod {
-                    resource,
-                    resource_params,
-                    method,
-                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceMethod(
-                    golem_api_grpc::proto::golem::rib::IndexedResourceMethodFunctionReference {
-                        resource,
-                        resource_params,
-                        method,
-                    },
-                ),
-                ParsedFunctionReference::IndexedResourceStaticMethod {
-                    resource,
-                    resource_params,
-                    method,
-                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceStaticMethod(
-                    golem_api_grpc::proto::golem::rib::IndexedResourceStaticMethodFunctionReference {
-                        resource,
-                        resource_params,
-                        method,
-                    },
-                ),
-                ParsedFunctionReference::IndexedResourceDrop {
-                    resource,
-                    resource_params,
-                } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::IndexedResourceDrop(
-                    golem_api_grpc::proto::golem::rib::IndexedResourceDropFunctionReference {
-                        resource,
-                        resource_params,
-                    },
                 ),
             };
             golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
@@ -1179,8 +780,6 @@ mod protobuf {
 #[cfg(test)]
 mod function_name_tests {
     use super::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
-    use golem_wasm_ast::analysis::analysed_type::{field, record, u64};
-    use golem_wasm_rpc::Value;
     use test_r::test;
 
     #[test]
@@ -1327,216 +926,6 @@ mod function_name_tests {
                     resource: "resource1".to_string()
                 },
             }
-        );
-    }
-
-    #[test]
-    fn parse_function_name_indexed_constructor_1() {
-        let parsed = ParsedFunctionName::parse("ns:name/interface.{resource1().new}")
-            .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[constructor]resource1".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(parsed.function().raw_resource_params(), Some(&vec![]));
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceConstructor {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![],
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn parse_function_name_indexed_constructor_2() {
-        let parsed =
-            ParsedFunctionName::parse("ns:name/interface.{resource1(\"hello\", 1, true).new}")
-                .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[constructor]resource1".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(
-            parsed.function().raw_resource_params(),
-            Some(&vec![
-                "\"hello\"".to_string(),
-                "1".to_string(),
-                "true".to_string(),
-            ])
-        );
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceConstructor {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        "\"hello\"".to_string(),
-                        "1".to_string(),
-                        "true".to_string(),
-                    ],
-                },
-            },
-        );
-    }
-
-    #[test]
-    fn parse_function_name_indexed_constructor_3() {
-        let parsed = ParsedFunctionName::parse(
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}",
-        )
-        .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[constructor]resource1".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(
-            parsed.function().raw_resource_params(),
-            Some(&vec![
-                "\"hello\"".to_string(),
-                "{field-a: some(1)}".to_string(),
-            ])
-        );
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceConstructor {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        "\"hello\"".to_string(),
-                        "{field-a: some(1)}".to_string(),
-                    ],
-                },
-            },
-        );
-    }
-
-    #[test]
-    fn parse_function_name_indexed_method() {
-        let parsed = ParsedFunctionName::parse(
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).something}",
-        )
-        .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[method]resource1.something".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(
-            parsed.function().raw_resource_params(),
-            Some(&vec![
-                "\"hello\"".to_string(),
-                "{field-a: some(1)}".to_string(),
-            ])
-        );
-        assert_eq!(
-            parsed.function().resource_method_name(),
-            Some("something".to_string())
-        );
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceMethod {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        "\"hello\"".to_string(),
-                        "{field-a: some(1)}".to_string(),
-                    ],
-                    method: "something".to_string(),
-                },
-            },
-        );
-    }
-
-    #[test]
-    fn parse_function_name_indexed_static_method() {
-        let parsed = ParsedFunctionName::parse(
-            "ns:name/interface.{[static]resource1(\"hello\", { field-a: some(1) }).something}",
-        )
-        .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[static]resource1.something".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(
-            parsed.function().raw_resource_params(),
-            Some(&vec![
-                "\"hello\"".to_string(),
-                "{field-a: some(1)}".to_string(),
-            ])
-        );
-        assert_eq!(
-            parsed.function().resource_method_name(),
-            Some("something".to_string())
-        );
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceStaticMethod {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        "\"hello\"".to_string(),
-                        "{field-a: some(1)}".to_string(),
-                    ],
-                    method: "something".to_string(),
-                },
-            },
         );
     }
 
@@ -1691,122 +1080,6 @@ mod function_name_tests {
     }
 
     #[test]
-    fn parse_function_name_indexed_drop_1() {
-        let parsed = ParsedFunctionName::parse("ns:name/interface.{resource1().drop}")
-            .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[drop]resource1".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(parsed.function().raw_resource_params(), Some(&vec![]));
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceDrop {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![],
-                },
-            }
-        )
-    }
-
-    #[test]
-    fn parse_function_name_indexed_drop_2() {
-        let parsed =
-            ParsedFunctionName::parse("ns:name/interface.{resource1(\"hello\", 1, true).drop}")
-                .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[drop]resource1".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(
-            parsed.function().raw_resource_params(),
-            Some(&vec![
-                "\"hello\"".to_string(),
-                "1".to_string(),
-                "true".to_string(),
-            ])
-        );
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceDrop {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        "\"hello\"".to_string(),
-                        "1".to_string(),
-                        "true".to_string(),
-                    ],
-                },
-            }
-        );
-    }
-
-    #[test]
-    fn parse_function_name_indexed_drop_3() {
-        let parsed = ParsedFunctionName::parse(
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}",
-        )
-        .expect("Parsing failed");
-        assert_eq!(
-            parsed.site().interface_name(),
-            Some("ns:name/interface".to_string())
-        );
-        assert_eq!(
-            parsed.function().function_name(),
-            "[drop]resource1".to_string()
-        );
-        assert!(parsed.function().is_indexed_resource());
-        assert_eq!(
-            parsed.function().raw_resource_params(),
-            Some(&vec![
-                "\"hello\"".to_string(),
-                "{field-a: some(1)}".to_string(),
-            ])
-        );
-        assert_eq!(
-            parsed,
-            ParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: ParsedFunctionReference::IndexedResourceDrop {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        "\"hello\"".to_string(),
-                        "{field-a: some(1)}".to_string(),
-                    ],
-                },
-            },
-        );
-    }
-
-    #[test]
     fn parse_function_name_drop() {
         let parsed = ParsedFunctionName::parse("ns:name/interface.{[drop]resource1}")
             .expect("Parsing failed");
@@ -1849,62 +1122,9 @@ mod function_name_tests {
         round_trip_function_name_parse("wasi:cli/run@0.2.0.{run}");
         round_trip_function_name_parse("ns:name/interface.{resource1.new}");
         round_trip_function_name_parse("ns:name/interface.{[constructor]resource1}");
-        round_trip_function_name_parse("ns:name/interface.{resource1().new}");
-        round_trip_function_name_parse("ns:name/interface.{resource1(\"hello\", 1, true).new}");
-        round_trip_function_name_parse(
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}",
-        );
         round_trip_function_name_parse("ns:name/interface.{resource1.do-something}");
-        round_trip_function_name_parse(
-            "ns:name/interface.{resource1(\"hello\", 1, true).do-something}",
-        );
-        round_trip_function_name_parse(
-            "ns:name/interface.{resource1(\"hello\", 1, { field-a: some(1) }).do-something}",
-        );
         round_trip_function_name_parse("ns:name/interface.{[static]resource1.do-something-static}");
-        round_trip_function_name_parse(
-            "ns:name/interface.{[static]resource1(\"hello\", 1, true).do-something-static}",
-        );
-        round_trip_function_name_parse("ns:name/interface.{[static]resource1(\"hello\", 1, { field-a: some(1) }).do-something-static}");
         round_trip_function_name_parse("ns:name/interface.{resource1.drop}");
-        round_trip_function_name_parse("ns:name/interface.{resource1().drop}");
-        round_trip_function_name_parse("ns:name/interface.{resource1(\"hello\", 1, true).drop}");
-        round_trip_function_name_parse(
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}",
-        );
         round_trip_function_name_parse("ns:name/interface.{[drop]resource1}");
-    }
-
-    #[test]
-    fn test_parsed_function_name_complex_resource_args() {
-        round_trip_function_name_parse(
-            r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ account-id: { value: "-1" } }, { high-bits: 11637111831105389641, low-bits: 11277240687824975272 }, []).process}"#,
-        )
-    }
-
-    #[test]
-    fn test_parsed_function_name_complex_resource_args_large_nums() {
-        let parsed = ParsedFunctionName::parse(r#"golem:api/oplog-processor@1.1.0-rc1.{processor({ high-bits: 18389549593665948372, low-bits: 12287617583649128209 }).process}"#).expect("Input Parsing failed");
-        let args = parsed
-            .function
-            .resource_params(&[record(vec![
-                field("high-bits", u64()),
-                field("low-bits", u64()),
-            ])])
-            .expect("Resource params parsing failed")
-            .expect("Resource params not found");
-        let nums = if let Value::Record(nums) = &args[0].value {
-            nums.clone()
-        } else {
-            panic!("Expected record")
-        };
-
-        assert_eq!(
-            nums,
-            vec![
-                Value::U64(18389549593665948372u64),
-                Value::U64(12287617583649128209u64),
-            ]
-        )
     }
 }

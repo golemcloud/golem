@@ -15,12 +15,13 @@
 use super::dto::HttpApiDefinitionRequest;
 use super::dto::HttpApiDefinitionResponseData;
 use crate::api::common::ApiEndpointError;
+use crate::gateway_api_definition::http::api_oas_convert::OpenApiHttpApiDefinitionResponse;
 use crate::gateway_api_definition::http::HttpApiDefinitionRequest as CoreHttpApiDefinitionRequest;
 use crate::gateway_api_definition::http::OpenApiHttpApiDefinition;
 use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::service::auth::AuthService;
 use crate::service::gateway::api_definition::ApiDefinitionService;
-use futures_util::future::try_join_all;
+use futures::future::try_join_all;
 use golem_common::json_yaml::JsonOrYaml;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
@@ -433,5 +434,73 @@ impl ApiDefinitionApi {
             .map_err(|err| err.into());
 
         record.result(response)
+    }
+
+    /// Export an API definition in OpenAPI format
+    ///
+    /// Exports an API definition by its API definition ID and version in OpenAPI format.
+    #[oai(
+        path = "/:project_id/:id/:version/export",
+        method = "get",
+        operation_id = "export_definition"
+    )]
+    async fn export(
+        &self,
+        project_id: Path<ProjectId>,
+        id: Path<ApiDefinitionId>,
+        version: Path<ApiVersion>,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<OpenApiHttpApiDefinitionResponse>, ApiEndpointError> {
+        let record = recorded_http_api_request!(
+            "export_definition",
+            api_definition_id = id.0.to_string(),
+            version = version.0.to_string(),
+            project_id = project_id.0.to_string()
+        );
+
+        let response = self
+            .export_internal(project_id.0, id.0, version.0, token)
+            .instrument(record.span.clone())
+            .await;
+        record.result(response)
+    }
+
+    async fn export_internal(
+        &self,
+        project_id: ProjectId,
+        api_definition_id: ApiDefinitionId,
+        api_version: ApiVersion,
+        token: GolemSecurityScheme,
+    ) -> Result<Json<OpenApiHttpApiDefinitionResponse>, ApiEndpointError> {
+        let auth_ctx = AuthCtx::new(token.secret());
+        let namespace = self
+            .auth_service
+            .authorize_project_action(&project_id, ProjectAction::ExportApiDefinition, &auth_ctx)
+            .await?;
+
+        let data = self
+            .definition_service
+            .get(&api_definition_id, &api_version, &namespace, &auth_ctx)
+            .await?;
+
+        let compiled_definition = data.ok_or(ApiEndpointError::not_found(safe(format!(
+            "Can't find api definition with id {api_definition_id}, and version {api_version} in project {project_id}"
+        ))))?;
+
+        let conversion_context = self
+            .definition_service
+            .conversion_context(&namespace, &auth_ctx);
+
+        let response = OpenApiHttpApiDefinitionResponse::from_compiled_http_api_definition(
+            &compiled_definition,
+            &conversion_context,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to convert to OpenAPI: {}", e);
+            ApiEndpointError::internal(safe(e.to_string()))
+        })?;
+
+        Ok(Json(response))
     }
 }

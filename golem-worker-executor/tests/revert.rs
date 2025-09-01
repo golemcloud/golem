@@ -20,7 +20,10 @@ use golem_common::model::OplogIndex;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValue, IntoValueAndType};
+use golem_wasm_ast::analysis::{
+    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
+};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use log::info;
 use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
@@ -37,7 +40,7 @@ async fn revert_successful_invocations(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor
@@ -45,11 +48,36 @@ async fn revert_successful_invocations(
         .await;
     executor.log_output(&worker_id).await;
 
+    let counter1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter1".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "rpc:counters-exports/api.{[constructor]counter}",
+            vec!["counter2".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let counter_handle_type = AnalysedType::Handle(TypeHandle {
+        name: None,
+        owner: None,
+        resource_id: AnalysedResourceId(0),
+        mode: AnalysedResourceMode::Borrowed,
+    });
+    let counter_ref1 = ValueAndType::new(counter1[0].clone(), counter_handle_type.clone());
+    let counter_ref2 = ValueAndType::new(counter2[0].clone(), counter_handle_type);
+
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").inc-by}",
-            vec![5u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref1.clone(), 5u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -57,16 +85,16 @@ async fn revert_successful_invocations(
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![1u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref2.clone(), 1u64.into_value_and_type()],
         )
         .await
         .unwrap();
     let _ = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").inc-by}",
-            vec![2u64.into_value_and_type()],
+            "rpc:counters-exports/api.{[method]counter.inc-by}",
+            vec![counter_ref2.clone(), 2u64.into_value_and_type()],
         )
         .await
         .unwrap();
@@ -74,16 +102,16 @@ async fn revert_successful_invocations(
     let result1 = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter_ref1.clone()],
         )
         .await
         .unwrap();
     let result2 = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter_ref2.clone()],
         )
         .await
         .unwrap();
@@ -100,16 +128,16 @@ async fn revert_successful_invocations(
     let result3 = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter1\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter_ref1.clone()],
         )
         .await
         .unwrap();
     let result4 = executor
         .invoke_and_await(
             &worker_id,
-            "rpc:counters-exports/api.{counter(\"counter2\").get-value}",
-            vec![],
+            "rpc:counters-exports/api.{[method]counter.get-value}",
+            vec![counter_ref2.clone()],
         )
         .await
         .unwrap();
@@ -126,9 +154,13 @@ async fn revert_successful_invocations(
 
 #[test]
 #[tracing::instrument]
-async fn revert_failed_worker(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn revert_failed_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -180,9 +212,13 @@ async fn revert_failed_worker(last_unique_id: &LastUniqueId, deps: &Deps, _traci
 
 #[test]
 #[tracing::instrument]
-async fn revert_auto_update(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn revert_auto_update(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -191,7 +227,7 @@ async fn revert_auto_update(last_unique_id: &LastUniqueId, deps: &Deps, _tracing
     let _ = executor.log_output(&worker_id).await;
 
     let target_version = executor
-        .update_component(&component_id, "update-test-v2")
+        .update_component(&component_id, "update-test-v2-11")
         .await;
     info!("Updated component to version {target_version}");
 
@@ -236,22 +272,30 @@ async fn revert_auto_update(last_unique_id: &LastUniqueId, deps: &Deps, _tracing
 
 #[test]
 #[tracing::instrument]
-async fn revert_manual_update(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn revert_manual_update(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let http_server = crate::hot_update::TestHttpServer::start().await;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
-    let component_id = executor.component("update-test-v2").unique().store().await;
+    let component_id = executor
+        .component("update-test-v2-11")
+        .unique()
+        .store()
+        .await;
     let worker_id = executor
-        .start_worker_with(&component_id, "revert_manual_update", vec![], env)
+        .start_worker_with(&component_id, "revert_manual_update", vec![], env, vec![])
         .await;
     let _ = executor.log_output(&worker_id).await;
 
     let target_version = executor
-        .update_component(&component_id, "update-test-v3")
+        .update_component(&component_id, "update-test-v3-11")
         .await;
     info!("Updated component to version {target_version}");
 

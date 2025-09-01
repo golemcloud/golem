@@ -24,7 +24,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
 };
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
+    ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
     WorkerId, WorkerMetadata,
 };
 use golem_common::serialization::{serialize, try_deserialize};
@@ -71,14 +71,14 @@ pub trait OplogService: Debug + Send + Sync {
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static>;
+    ) -> Arc<dyn Oplog>;
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static>;
+    ) -> Arc<dyn Oplog>;
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
 
@@ -100,9 +100,7 @@ pub trait OplogService: Debug + Send + Sync {
     ) -> BTreeMap<OplogIndex, OplogEntry> {
         assert!(
             start_idx <= last_idx,
-            "Invalid range passed to OplogService::read_range: start_idx = {}, last_idx = {}",
-            start_idx,
-            last_idx
+            "Invalid range passed to OplogService::read_range: start_idx = {start_idx}, last_idx = {last_idx}"
         );
 
         self.read(
@@ -130,7 +128,7 @@ pub trait OplogService: Debug + Send + Sync {
     /// Pages can be empty. This operation is slow and is not locking the oplog.
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -250,7 +248,7 @@ pub trait OplogOps: Oplog {
             function_name,
             request: request_payload,
             response: response_payload,
-            wrapped_function_type: function_type,
+            durable_function_type: function_type,
         };
         self.add(entry.clone()).await;
         Ok(entry)
@@ -311,9 +309,6 @@ pub trait OplogOps: Oplog {
 
     async fn get_raw_payload_of_entry(&self, entry: &OplogEntry) -> Result<Option<Bytes>, String> {
         match entry {
-            OplogEntry::ImportedFunctionInvokedV1 { response, .. } => {
-                Ok(Some(self.download_payload(response).await?))
-            }
             OplogEntry::ImportedFunctionInvoked { response, .. } => {
                 Ok(Some(self.download_payload(response).await?))
             }

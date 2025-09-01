@@ -5,6 +5,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
 use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
@@ -16,6 +17,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
@@ -62,14 +64,15 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &get_component_service_config(),
-            &golem_config.project_service,
             &get_component_cache_config(),
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
@@ -98,6 +101,8 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(
             ResourceLimitsDisabledConfig {},
@@ -131,6 +136,8 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
 
@@ -163,10 +170,13 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
         Ok(All::new(
             active_workers,
+            agent_types_service,
             engine,
             linker,
             runtime,
@@ -192,6 +202,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             (),
         ))
     }

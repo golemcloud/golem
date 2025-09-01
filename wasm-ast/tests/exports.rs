@@ -5,10 +5,8 @@ use golem_wasm_ast::analysis::analysed_type::{
 use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
 use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysisContext,
+    AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
 };
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
 use test_r::test;
 
 test_r::enable!();
@@ -16,10 +14,7 @@ test_r::enable!();
 #[test]
 fn exports_shopping_cart_component() {
     let source_bytes = include_bytes!("../wasm/shopping-cart.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -45,7 +40,9 @@ fn exports_shopping_cart_component() {
                         field("name", str()),
                         field("price", f32()),
                         field("quantity", u32()),
-                    ]),
+                    ])
+                    .named("product-item")
+                    .owned("golem:it/api"),
                 }],
                 result: None,
             },
@@ -77,36 +74,43 @@ fn exports_shopping_cart_component() {
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
-                        case("success", record(vec![field("order-id", str())])),
-                    ]),
+                        case(
+                            "success",
+                            record(vec![field("order-id", str())])
+                                .named("order-confirmation")
+                                .owned("golem:it/api"),
+                        ),
+                    ])
+                    .named("checkout-result")
+                    .owned("golem:it/api"),
                 }),
             },
             AnalysedFunction {
                 name: "get-cart-contents".to_string(),
                 parameters: vec![],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("product-id", str()),
-                        field("name", str()),
-                        field("price", f32()),
-                        field("quantity", u32()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ])
+                        .named("product-item")
+                        .owned("golem:it/api"),
+                    ),
                 }),
             },
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_file_service_component() {
     let source_bytes = include_bytes!("../wasm/file-service.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -178,13 +182,19 @@ fn exports_file_service_component() {
                         record(vec![
                             field(
                                 "last-modified",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
                             field(
                                 "last-accessed",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
-                        ]),
+                        ])
+                        .named("file-info")
+                        .owned("golem:it/api"),
                         str(),
                     ),
                 }),
@@ -200,13 +210,19 @@ fn exports_file_service_component() {
                         record(vec![
                             field(
                                 "last-modified",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
                             field(
                                 "last-accessed",
-                                record(vec![field("seconds", u64()), field("nanoseconds", u32())]),
+                                record(vec![field("seconds", u64()), field("nanoseconds", u32())])
+                                    .named("datetime")
+                                    .owned("wasi:clocks@0.2.0/wall-clock"),
                             ),
-                        ]),
+                        ])
+                        .named("file-info")
+                        .owned("golem:it/api"),
                         str(),
                     ),
                 }),
@@ -297,7 +313,9 @@ fn exports_file_service_component() {
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: result(
-                        record(vec![field("lower", u64()), field("upper", u64())]),
+                        record(vec![field("lower", u64()), field("upper", u64())])
+                            .named("metadata-hash-value")
+                            .owned("wasi:filesystem@0.2.0/types"),
                         str(),
                     ),
                 }),
@@ -305,17 +323,13 @@ fn exports_file_service_component() {
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_auction_registry_composed_component() {
     let source_bytes = include_bytes!("../wasm/auction_registry_composed.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
 
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -337,7 +351,9 @@ fn exports_auction_registry_composed_component() {
                     },
                 ],
                 result: Some(AnalysedFunctionResult {
-                    typ: record(vec![field("bidder-id", str())]),
+                    typ: record(vec![field("bidder-id", str())])
+                        .named("bidder-id")
+                        .owned("auction:auction/api"),
                 }),
             },
             AnalysedFunction {
@@ -361,36 +377,42 @@ fn exports_auction_registry_composed_component() {
                     },
                 ],
                 result: Some(AnalysedFunctionResult {
-                    typ: record(vec![field("auction-id", str())]),
+                    typ: record(vec![field("auction-id", str())])
+                        .named("auction-id")
+                        .owned("auction:auction/api"),
                 }),
             },
             AnalysedFunction {
                 name: "get-auctions".to_string(),
                 parameters: vec![],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("auction-id", record(vec![field("auction-id", str())])),
-                        field("name", str()),
-                        field("description", str()),
-                        field("limit-price", f32()),
-                        field("expiration", u64()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field(
+                                "auction-id",
+                                record(vec![field("auction-id", str())])
+                                    .named("auction-id")
+                                    .owned("auction:auction/api"),
+                            ),
+                            field("name", str()),
+                            field("description", str()),
+                            field("limit-price", f32()),
+                            field("expiration", u64()),
+                        ])
+                        .named("auction")
+                        .owned("auction:auction/api"),
+                    ),
                 }),
             },
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_shopping_cart_resource_component() {
     let source_bytes = include_bytes!("../wasm/shopping-cart-resource.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -406,7 +428,9 @@ fn exports_shopping_cart_resource_component() {
                     typ: str(),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned)
+                        .named("cart")
+                        .owned("golem:it/api"),
                 }),
             },
             AnalysedFunction {
@@ -414,7 +438,9 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
@@ -423,7 +449,9 @@ fn exports_shopping_cart_resource_component() {
                             field("name", str()),
                             field("price", f32()),
                             field("quantity", u32()),
-                        ]),
+                        ])
+                        .named("product-item")
+                        .owned("golem:it/api"),
                     },
                 ],
                 result: None,
@@ -433,7 +461,9 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -447,7 +477,9 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -464,28 +496,43 @@ fn exports_shopping_cart_resource_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
-                        case("success", record(vec![field("order-id", str())])),
-                    ]),
+                        case(
+                            "success",
+                            record(vec![field("order-id", str())])
+                                .named("order-confirmation")
+                                .owned("golem:it/api"),
+                        ),
+                    ])
+                    .named("checkout-result")
+                    .owned("golem:it/api"),
                 }),
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("product-id", str()),
-                        field("name", str()),
-                        field("price", f32()),
-                        field("quantity", u32()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ])
+                        .named("product-item")
+                        .owned("golem:it/api"),
+                    ),
                 }),
             },
             AnalysedFunction {
@@ -493,11 +540,15 @@ fn exports_shopping_cart_resource_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it/api"),
                     },
                 ],
                 result: None,
@@ -505,17 +556,12 @@ fn exports_shopping_cart_resource_component() {
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_shopping_cart_resource_versioned_component() {
     let source_bytes = include_bytes!("../wasm/shopping-cart-resource-versioned.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -531,7 +577,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                     typ: str(),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Owned)
+                        .named("cart")
+                        .owned("golem:it@1.2.3/api"),
                 }),
             },
             AnalysedFunction {
@@ -539,7 +587,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "item".to_string(),
@@ -548,7 +598,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                             field("name", str()),
                             field("price", f32()),
                             field("quantity", u32()),
-                        ]),
+                        ])
+                        .named("product-item")
+                        .owned("golem:it@1.2.3/api"),
                     },
                 ],
                 result: None,
@@ -558,7 +610,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -572,7 +626,9 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "product-id".to_string(),
@@ -589,28 +645,43 @@ fn exports_shopping_cart_resource_versioned_component() {
                 name: "[method]cart.checkout".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it@1.2.3/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
                     typ: variant(vec![
                         case("error", str()),
-                        case("success", record(vec![field("order-id", str())])),
-                    ]),
+                        case(
+                            "success",
+                            record(vec![field("order-id", str())])
+                                .named("order-confirmation")
+                                .owned("golem:it@1.2.3/api"),
+                        ),
+                    ])
+                    .named("checkout-result")
+                    .owned("golem:it@1.2.3/api"),
                 }),
             },
             AnalysedFunction {
                 name: "[method]cart.get-cart-contents".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "self".to_string(),
-                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                    typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                        .named("cart")
+                        .owned("golem:it@1.2.3/api"),
                 }],
                 result: Some(AnalysedFunctionResult {
-                    typ: list(record(vec![
-                        field("product-id", str()),
-                        field("name", str()),
-                        field("price", f32()),
-                        field("quantity", u32()),
-                    ])),
+                    typ: list(
+                        record(vec![
+                            field("product-id", str()),
+                            field("name", str()),
+                            field("price", f32()),
+                            field("quantity", u32()),
+                        ])
+                        .named("product-item")
+                        .owned("golem:it@1.2.3/api"),
+                    ),
                 }),
             },
             AnalysedFunction {
@@ -618,11 +689,15 @@ fn exports_shopping_cart_resource_versioned_component() {
                 parameters: vec![
                     AnalysedFunctionParameter {
                         name: "self".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                     AnalysedFunctionParameter {
                         name: "other-cart".to_string(),
-                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed),
+                        typ: handle(AnalysedResourceId(0), AnalysedResourceMode::Borrowed)
+                            .named("cart")
+                            .owned("golem:it@1.2.3/api"),
                     },
                 ],
                 result: None,
@@ -630,17 +705,12 @@ fn exports_shopping_cart_resource_versioned_component() {
         ],
     })];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
 #[test]
 fn exports_caller_composed_component() {
     let source_bytes = include_bytes!("../wasm/caller_composed.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -680,15 +750,18 @@ fn exports_caller_composed_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("root"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("root"),
             }),
         }),
     ];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }
 
@@ -696,10 +769,6 @@ fn exports_caller_composed_component() {
 fn exports_caller_component() {
     // NOTE: Same as caller_composed.wasm but not composed with the generated stub
     let source_bytes = include_bytes!("../wasm/caller.wasm");
-    let component: Component<IgnoreAllButMetadata> = Component::from_bytes(source_bytes).unwrap();
-
-    let state = AnalysisContext::new(component);
-    let metadata = state.get_top_level_exports().unwrap();
     let wit_parser_metadata = WitAnalysisContext::new(source_bytes)
         .unwrap()
         .get_top_level_exports()
@@ -739,10 +808,14 @@ fn exports_caller_component() {
             name: "bug-wasm-rpc-i32".to_string(),
             parameters: vec![AnalysedFunctionParameter {
                 name: "in".to_string(),
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("rpc:counters/api"),
             }],
             result: Some(AnalysedFunctionResult {
-                typ: variant(vec![unit_case("leaf")]),
+                typ: variant(vec![unit_case("leaf")])
+                    .named("timeline-node")
+                    .owned("rpc:counters/api"),
             }),
         }),
         AnalysedExport::Function(AnalysedFunction {
@@ -754,6 +827,5 @@ fn exports_caller_component() {
         }),
     ];
 
-    pretty_assertions::assert_eq!(metadata, expected);
     pretty_assertions::assert_eq!(wit_parser_metadata, expected);
 }

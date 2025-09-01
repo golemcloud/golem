@@ -24,12 +24,12 @@ name = "tests"
 harness = false
 
 [dependencies]
-golem-api-grpc = { path = "../golem-api-grpc", version = "=0.0.0" }
-golem-common = { path = "../golem-common", version = "=0.0.0" }
-golem-rib = { path = "../golem-rib", version = "=0.0.0" }
-golem-service-base = { path = "../golem-service-base", version = "=0.0.0" }
-golem-wasm-ast = { path = "../wasm-ast", version = "=0.0.0" }
-golem-wasm-rpc = { path = "../wasm-rpc", version = "=0.0.0" }
+golem-api-grpc = { workspace = true }
+golem-common = { workspace = true, default-features = true }
+golem-rib = { workspace = true, default-features = true }
+golem-service-base = { workspace = true }
+golem-wasm-ast = { workspace = true, default-features = true }
+golem-wasm-rpc = { workspace = true, default-features = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -39,10 +39,10 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
+dashmap = { workspace = true }
 darling = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }
-futures-util = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 include_dir = { workspace = true }
@@ -59,7 +59,7 @@ prometheus = { workspace = true }
 prost = { workspace = true }
 prost-types = { workspace = true }
 reqwest = { workspace = true }
-sanitize-filename = {workspace = true }
+sanitize-filename = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, features = [

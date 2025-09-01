@@ -12,15 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-use std::fmt::Display;
-use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
-use tracing::Instrument;
-
-use crate::common::{mysql_host, postgres_host, start, TestContext};
-use crate::Deps;
-use crate::{LastUniqueId, Tracing};
+use crate::common::{start, TestContext};
+use crate::{LastUniqueId, Tracing, Deps};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::public_oplog::{
@@ -38,7 +31,12 @@ use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
 use golem_worker_executor::services::rdbms::RdbmsType;
 use serde_json::json;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::time::Duration;
+use test_r::{inherit_test_dep, test, test_dep};
 use tokio::task::JoinSet;
+use tracing::Instrument;
 use try_match::try_match;
 use uuid::Uuid;
 
@@ -168,17 +166,21 @@ impl RdbmsTest {
 }
 
 #[test]
-#[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_postgres_crud(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
-    let postgres = postgres_host(None).await;
+async fn rdbms_postgres_crud(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
+
     let worker_ids3 = start_workers::<PostgresType>(&executor, &component_id, &db_address, 3).await;
 
     let create_table_statement = r#"
@@ -305,7 +307,6 @@ async fn rdbms_postgres_crud(last_unique_id: &LastUniqueId, deps: &Deps, _tracin
 }
 
 #[test]
-#[timeout(300_000)]
 #[tracing::instrument]
 async fn rdbms_postgres_idempotency(
     last_unique_id: &LastUniqueId,
@@ -316,7 +317,7 @@ async fn rdbms_postgres_idempotency(
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<PostgresType>(&executor, &component_id, &db_address, 1).await;
@@ -512,10 +513,13 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
 }
 
 #[test]
-#[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_postgres_select1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
-    let postgres = postgres_host(None).await;
+async fn rdbms_postgres_select1(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    postgres: &DockerPostgresRdb,
+    _tracing: &Tracing,
+) {
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -548,14 +552,17 @@ async fn rdbms_postgres_select1(last_unique_id: &LastUniqueId, deps: &Deps, _tra
 }
 
 #[test]
-#[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_mysql_crud(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
-    let mysql = mysql_host(None).await;
+async fn rdbms_mysql_crud(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids1 = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
@@ -688,14 +695,17 @@ async fn rdbms_mysql_crud(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: 
 }
 
 #[test]
-#[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_mysql_idempotency(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
-    let mysql = mysql_host(None).await;
+async fn rdbms_mysql_idempotency(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
 
     let worker_ids = start_workers::<MysqlType>(&executor, &component_id, &db_address, 1).await;
@@ -873,10 +883,13 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
 }
 
 #[test]
-#[timeout(300_000)]
 #[tracing::instrument]
-async fn rdbms_mysql_select1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
-    let mysql = mysql_host(None).await;
+async fn rdbms_mysql_select1(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    mysql: &DockerMysqlRdb,
+    _tracing: &Tracing,
+) {
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -916,7 +929,7 @@ async fn rdbms_component_test<T: RdbmsType>(
     n_workers: u8,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let component_id = executor.component("rdbms-service").store().await;
     let worker_ids = start_workers::<T>(&executor, &component_id, db_address, n_workers).await;
 
@@ -1085,7 +1098,7 @@ async fn start_workers<T: RdbmsType>(
     for _ in 0..n_workers {
         let worker_name = format!("rdbms-service-{}-{}", db_type, Uuid::new_v4());
         let worker_id = executor
-            .start_worker_with(component_id, &worker_name, vec![], env.clone())
+            .start_worker_with(component_id, &worker_name, vec![], env.clone(), vec![])
             .await;
         worker_ids.push(worker_id.clone());
         let _result = executor
@@ -1214,7 +1227,7 @@ fn check_transaction_oplog_entries<T: RdbmsType>(entries: Vec<PublicOplogEntryWi
                     || v.function_name.starts_with(fn_prefix3.as_str())
             );
             check!(
-                v.wrapped_function_type
+                v.durable_function_type
                     == PublicDurableFunctionType::WriteRemoteBatched(
                         WriteRemoteBatchedParameters {
                             index: Some(end_entry.begin_index)

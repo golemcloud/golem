@@ -34,9 +34,17 @@ static CALLER_COMPONENT_NAME: &str = "caller-ts";
 
 #[test]
 #[tracing::instrument]
-async fn counter_resource_test_2(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn counter_resource_test_2(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
@@ -73,7 +81,7 @@ async fn counter_resource_test_2(last_unique_id: &LastUniqueId, deps: &Deps, _tr
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -107,7 +115,11 @@ async fn counter_resource_test_2_with_restart(
     _tracing: &Tracing,
 ) {
     let context = common::TestContext::new(last_unique_id);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let counters_component_id = executor.component(COUNTER_COMPONENT_NAME).store().await;
     let caller_component_id = executor
@@ -144,7 +156,7 @@ async fn counter_resource_test_2_with_restart(
         counters_component_id.to_string(),
     );
     let caller_worker_id = executor
-        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env)
+        .start_worker_with(&caller_component_id, "rpc-counters-2r", vec![], env, vec![])
         .await;
 
     let result1 = executor
@@ -156,7 +168,11 @@ async fn counter_resource_test_2_with_restart(
         .await;
 
     drop(executor);
-    let executor = common::start(deps, &context).await.unwrap().into_admin();
+    let executor = common::start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin()
+        .await;
 
     let result2 = executor
         .invoke_and_await(

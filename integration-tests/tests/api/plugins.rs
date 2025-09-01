@@ -20,10 +20,12 @@ use axum::routing::post;
 use axum::Router;
 use base64::Engine;
 use golem_api_grpc::proto::golem::worker::{log_event, Log};
-use golem_client::api::PluginClient;
+use golem_client::api::{ComponentClient, PluginClient};
+use golem_client::model::BatchPluginInstallationUpdates;
 use golem_common::model::plugin::{
     AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,
-    OplogProcessorDefinition, PluginTypeSpecificDefinition,
+    OplogProcessorDefinition, PluginInstallationAction, PluginInstallationCreation,
+    PluginInstallationUpdateWithId, PluginTypeSpecificDefinition, PluginUninstallation,
 };
 use golem_common::model::plugin::{PluginScope, ProjectPluginScope};
 use golem_common::model::{ComponentFilePermissions, Empty, ScanCursor};
@@ -31,10 +33,10 @@ use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_test_framework::model::PluginDefinitionCreation;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value};
 use reqwest::StatusCode;
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use test_r::{inherit_test_dep, tag, test};
 use tracing::{debug, info};
 use wac_graph::types::Package;
@@ -106,7 +108,7 @@ async fn component_transformer1(deps: &Deps, _tracing: &Tracing) {
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -237,7 +239,7 @@ async fn component_transformer2(deps: &Deps, _tracing: &Tracing) {
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -286,7 +288,7 @@ async fn component_transformer2(deps: &Deps, _tracing: &Tracing) {
 
     let patched_component_metadata = admin.get_latest_component_metadata(&component_id).await;
 
-    let exports = patched_component_metadata.exports;
+    let exports = patched_component_metadata.exports();
 
     assert_eq!(exports.len(), 1);
     assert!(matches!(
@@ -343,7 +345,7 @@ async fn component_transformer_env_var(deps: &Deps, _tracing: &Tracing) {
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -397,6 +399,7 @@ async fn component_transformer_env_var(deps: &Deps, _tracing: &Tracing) {
             "worker1",
             vec![],
             HashMap::from_iter(vec![("TEST_ENV_VAR_3".to_string(), "value_3".to_string())]),
+            vec![],
         )
         .await;
 
@@ -406,7 +409,7 @@ async fn component_transformer_env_var(deps: &Deps, _tracing: &Tracing) {
         .unwrap();
 
     let response_map = {
-        assert!(response.len() == 1);
+        assert_eq!(response.len(), 1);
 
         let_assert!(Value::Result(Ok(Some(response))) = &response[0]);
         let_assert!(Value::List(response) = response.as_ref());
@@ -473,7 +476,7 @@ async fn component_transformer_ifs(deps: &Deps, _tracing: &Tracing) {
         axum::Json(response)
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -569,7 +572,7 @@ async fn component_transformer_failed(deps: &Deps, _tracing: &Tracing) {
     async fn transform() -> StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
     }
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let app = Router::new().route("/transform", post(transform));
 
@@ -658,12 +661,12 @@ async fn oplog_processor_global_scope(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -672,12 +675,12 @@ async fn oplog_processor_global_scope(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -686,12 +689,12 @@ async fn oplog_processor_global_scope(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -825,12 +828,12 @@ async fn oplog_processor_project_scope(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -839,12 +842,12 @@ async fn oplog_processor_project_scope(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -853,12 +856,12 @@ async fn oplog_processor_project_scope(deps: &Deps, _tracing: &Tracing) {
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -947,7 +950,7 @@ async fn oplog_processor_project_scope(deps: &Deps, _tracing: &Tracing) {
 
 #[test]
 async fn library_plugin(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin
         .component("app_and_library_app")
         .unique()
@@ -989,7 +992,7 @@ async fn library_plugin(deps: &Deps, _tracing: &Tracing) {
 
 #[test]
 async fn app_plugin(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin
         .component("app_and_library_library")
@@ -1033,7 +1036,7 @@ async fn app_plugin(deps: &Deps, _tracing: &Tracing) {
 /// Test that a plugin can be recreated after deleting it
 #[test]
 async fn recreate_plugin(deps: &Deps, _tracing: &Tracing) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     let component_id = admin
         .component("app_and_library_app")
@@ -1125,7 +1128,10 @@ async fn invoke_after_deleting_plugin(deps: &Deps, _tracing: &Tracing) {
 
 #[test]
 #[tag(http_only)]
-async fn querying_plugins_return_only_plugins_valid_in_scope(deps: &Deps, _tracing: &Tracing) {
+async fn querying_plugins_return_only_plugins_valid_in_scope(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let user = deps.user().await;
 
     let project_1 = user.create_project().await;
@@ -1299,7 +1305,10 @@ async fn querying_plugins_return_only_plugins_valid_in_scope(deps: &Deps, _traci
 
 #[test]
 #[tag(http_only)]
-async fn install_global_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing) {
+async fn install_global_plugin_in_shared_project(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     // user 1 defines a project and a global plugin, user 2 installs the plugin to a component in the project
 
     let user_1 = deps.user().await;
@@ -1352,7 +1361,10 @@ async fn install_global_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing
 
 #[test]
 #[tag(http_only)]
-async fn install_project_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing) {
+async fn install_project_plugin_in_shared_project(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
 
     let user_1 = deps.user().await;
@@ -1411,7 +1423,10 @@ async fn install_project_plugin_in_shared_project(deps: &Deps, _tracing: &Tracin
 
 #[test]
 #[tag(http_only)]
-async fn install_component_plugin_in_shared_project(deps: &Deps, _tracing: &Tracing) {
+async fn install_component_plugin_in_shared_project(
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     // user 1 defines a project, user 2 defines and installs the plugin to a component in the project
 
     let user_1 = deps.user().await;
@@ -1465,4 +1480,143 @@ async fn install_component_plugin_in_shared_project(deps: &Deps, _tracing: &Trac
         .await;
 
     assert_eq!(response, Ok(vec![Value::U64(2)]))
+}
+
+#[test]
+async fn batch_update_plugin_installations(deps: &Deps, _tracing: &Tracing) {
+    let user = deps.user().await;
+    let component_id = user.component("app_and_library_app").unique().store().await;
+
+    let plugin_wasm_key = user.add_plugin_wasm("app_and_library_library").await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-1".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key.clone(),
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-2".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key.clone(),
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-3".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key.clone(),
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
+
+    user.create_plugin(PluginDefinitionCreation {
+        name: "library-plugin-4".to_string(),
+        version: "v1".to_string(),
+        description: "A test".to_string(),
+        icon: vec![],
+        homepage: "none".to_string(),
+        specs: PluginTypeSpecificDefinition::Library(LibraryPluginDefinition {
+            blob_storage_key: plugin_wasm_key,
+        }),
+        scope: PluginScope::Global(Empty {}),
+    })
+    .await;
+
+    let installation_id_1 = user
+        .install_plugin_to_component(&component_id, "library-plugin-1", "v1", 0, HashMap::new())
+        .await;
+
+    let installation_id_2 = user
+        .install_plugin_to_component(&component_id, "library-plugin-2", "v1", 1, HashMap::new())
+        .await;
+
+    let installation_id_3 = user
+        .install_plugin_to_component(&component_id, "library-plugin-3", "v1", 2, HashMap::new())
+        .await;
+
+    deps.component_service()
+        .component_http_client(&user.token)
+        .await
+        .batch_update_installed_plugins(
+            &component_id.0,
+            &BatchPluginInstallationUpdates {
+                actions: vec![
+                    PluginInstallationAction::Uninstall(PluginUninstallation {
+                        installation_id: installation_id_2.clone(),
+                    }),
+                    PluginInstallationAction::Update(PluginInstallationUpdateWithId {
+                        installation_id: installation_id_3.clone(),
+                        priority: 3,
+                        parameters: HashMap::from_iter(vec![(
+                            "foo".to_string(),
+                            "bar".to_string(),
+                        )]),
+                    }),
+                    PluginInstallationAction::Install(PluginInstallationCreation {
+                        name: "library-plugin-4".to_string(),
+                        version: "v1".to_string(),
+                        priority: 4,
+                        parameters: HashMap::new(),
+                    }),
+                ],
+            },
+        )
+        .await
+        .unwrap();
+
+    let latest_version = deps
+        .component_service()
+        .component_http_client(&user.token)
+        .await
+        .get_latest_component_metadata(&component_id.0)
+        .await
+        .unwrap()
+        .versioned_component_id
+        .version;
+
+    let installed_plugins = deps
+        .component_service()
+        .component_http_client(&user.token)
+        .await
+        .get_installed_plugins(&component_id.0, &latest_version.to_string())
+        .await
+        .unwrap();
+
+    assert_eq!(installed_plugins.len(), 3);
+    {
+        let mut priorities = installed_plugins
+            .iter()
+            .map(|ip| ip.priority)
+            .collect::<Vec<_>>();
+        priorities.sort();
+        assert_eq!(priorities, vec![0, 3, 4]);
+    }
+    {
+        let installation_ids = installed_plugins
+            .iter()
+            .map(|ip| ip.id)
+            .collect::<HashSet<_>>();
+        assert!(installation_ids.contains(&installation_id_1.0)); // untouched
+        assert!(!installation_ids.contains(&installation_id_2.0)); // uninstalled
+        assert!(installation_ids.contains(&installation_id_3.0)); // updated
+    }
 }

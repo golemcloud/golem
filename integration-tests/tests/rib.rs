@@ -17,7 +17,7 @@ use test_r::test;
 use crate::{Deps, Tracing};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, TargetWorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
@@ -71,7 +71,7 @@ async fn test_rib_with_resource_methods_with_worker_param(deps: &Deps) {
 }
 
 async fn test_simple_rib(deps: &Deps, worker_name: Option<&str>) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let metadata = admin.get_latest_component_metadata(&component_id).await;
@@ -79,11 +79,12 @@ async fn test_simple_rib(deps: &Deps, worker_name: Option<&str>) {
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
-        root_package_name: metadata.root_package_name,
-        root_package_version: metadata.root_package_version,
+        root_package_name: metadata.root_package_name().clone(),
+        root_package_version: metadata.root_package_version().clone(),
     };
 
-    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+    let component_dependency =
+        ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
@@ -142,19 +143,23 @@ async fn test_simple_rib(deps: &Deps, worker_name: Option<&str>) {
                 Value::String("item1".to_string()),
                 Value::F32(10.0),
                 Value::U32(2),
-            ]),]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            ])]),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         ))
     );
 }
 
 async fn test_rib_for_loop(deps: &Deps, worker_name: Option<&str>) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
     let metadata = admin.get_latest_component_metadata(&component_id).await;
@@ -162,11 +167,12 @@ async fn test_rib_for_loop(deps: &Deps, worker_name: Option<&str>) {
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
-        root_package_name: metadata.root_package_name,
-        root_package_version: metadata.root_package_version,
+        root_package_name: metadata.root_package_name().clone(),
+        root_package_version: metadata.root_package_version().clone(),
     };
 
-    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+    let component_dependency =
+        ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
@@ -242,18 +248,25 @@ async fn test_rib_for_loop(deps: &Deps, worker_name: Option<&str>) {
                     Value::U32(2),
                 ]),
             ]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         ))
     );
 }
 
-async fn test_rib_with_resource_methods(deps: &Deps, worker_name: Option<&str>) {
-    let admin = deps.admin();
+async fn test_rib_with_resource_methods(
+    deps: &Deps,
+    worker_name: Option<&str>,
+) {
+    let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart-resource").store().await;
 
     let metadata = admin.get_latest_component_metadata(&component_id).await;
@@ -261,11 +274,12 @@ async fn test_rib_with_resource_methods(deps: &Deps, worker_name: Option<&str>) 
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
-        root_package_name: metadata.root_package_name,
-        root_package_version: metadata.root_package_version,
+        root_package_name: metadata.root_package_name().clone(),
+        root_package_version: metadata.root_package_version().clone(),
     };
 
-    let component_dependency = ComponentDependency::new(component_dependency_key, metadata.exports);
+    let component_dependency =
+        ComponentDependency::new(component_dependency_key, metadata.exports().to_vec());
 
     let compiler_config = RibCompilerConfig::new(vec![component_dependency], vec![]);
 
@@ -341,22 +355,26 @@ async fn test_rib_with_resource_methods(deps: &Deps, worker_name: Option<&str>) 
                     Value::U32(2),
                 ])
             ]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         ))
     );
 }
 
 struct TestRibFunctionInvoke {
-    dependencies: Deps,
+    dependencies: EnvBasedTestDependencies,
 }
 
 impl TestRibFunctionInvoke {
-    fn new(dependencies: Deps) -> Self {
+    fn new(dependencies: EnvBasedTestDependencies) -> Self {
         Self { dependencies }
     }
 }
@@ -367,25 +385,21 @@ impl RibComponentFunctionInvoke for TestRibFunctionInvoke {
         &self,
         component_dependency_key: ComponentDependencyKey,
         _instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
+        worker_name: EvaluatedWorkerName,
         function_name: EvaluatedFqFn,
         args: EvaluatedFnArgs,
         _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let target_worker_id = worker_name
-            .map(|w| TargetWorkerId {
-                component_id: ComponentId(component_dependency_key.component_id),
-                worker_name: Some(w.0),
-            })
-            .unwrap_or_else(|| TargetWorkerId {
-                component_id: ComponentId(component_dependency_key.component_id),
-                worker_name: None,
-            });
+        let worker_id = WorkerId {
+            component_id: ComponentId(component_dependency_key.component_id),
+            worker_name: worker_name.0,
+        };
 
         let result = self
             .dependencies
             .admin()
-            .invoke_and_await_typed(target_worker_id, function_name.0.as_str(), args.0)
+            .await
+            .invoke_and_await_typed(&worker_id, function_name.0.as_str(), args.0)
             .await;
 
         Ok(result.map_err(|err| {

@@ -39,6 +39,7 @@ CARGO_INCREMENTAL = "false"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
 JUNIT_OPTS = "--nocapture --report-time --format junit --logfile target/report.xml"
 JUNIT_OPTS_WIN = "--color=never --test-threads=1 --report-time --format junit"
+CI = "true"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -61,17 +62,16 @@ dependencies = [
 # WIT DEPENDENCIES
 [tasks.wit]
 description = "Fetches the WIT dependencies based on wit/deps.toml"
-condition = { files_modified = { input = [
-    "wit/deps.toml",
-], output = [
-    "wit/deps.done",
-] } }
 run_task = [
     { name = [
         "remove-wit-deps",
-        "wit-host",
         "wit-wasm-rpc",
-        "wit-done",
+        "wit-golem-common",
+        "wit-golem-cli",
+        "wit-template-golem-agent-ts",
+        "wit-test-components",
+        "wit-golem-templates",
+        "wit-sdks"
     ] },
 ]
 
@@ -81,30 +81,89 @@ script_runner = "@duckscript"
 script = """
 rm -r wasm-rpc/wit/deps
 mkdir wasm-rpc/wit/deps
-cp -v wit/deps/io wasm-rpc/wit/deps
-cp -v wit/deps/clocks wasm-rpc/wit/deps
-cp -v wit/deps/golem-1.x wasm-rpc/wit/deps
-cp -v wit/deps/golem-rpc wasm-rpc/wit/deps
+cp wit/deps/io wasm-rpc/wit/deps
+cp wit/deps/clocks wasm-rpc/wit/deps
+cp wit/deps/golem-1.x wasm-rpc/wit/deps
+cp wit/deps/golem-rpc wasm-rpc/wit/deps
 """
 
-[tasks.wit-host]
-private = true
-install_crate = { crate_name = "wit-deps-cli", binary = "wit-deps", test_arg = "--help" }
-command = "wit-deps"
-args = ["update"]
-
-[tasks.wit-done]
+[tasks.wit-golem-common]
 private = true
 script_runner = "@duckscript"
-script = "touch wit/deps.done"
+script = """
+rm -r golem-common/wit/deps
+mkdir golem-common/wit/deps
+cp wit/deps/io golem-common/wit/deps
+cp wit/deps/clocks golem-common/wit/deps
+cp wit/deps/golem-1.x golem-common/wit/deps
+cp wit/deps/golem-rpc golem-common/wit/deps
+cp wit/deps/golem-agent golem-common/wit/deps
+"""
+
+[tasks.wit-golem-templates]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/golem-templates/wit/deps
+mkdir cli/golem-templates/wit/deps
+glob_cp wit/deps/**/* cli/golem-templates/wit/deps
+"""
+
+[tasks.wit-sdks]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r sdks/rust/golem-rust/wit/deps
+rm -r sdks/ts/wit/deps
+mkdir sdks/rust/golem-rust/wit/deps
+mkdir sdks/ts/wit/deps
+glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
+glob_cp wit/deps/**/* sdks/ts/wit/deps
+"""
+
+[tasks.wit-golem-cli]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/golem-cli/wit/deps
+mkdir cli/golem-cli/wit/deps
+cp wit/deps/clocks cli/golem-cli/wit/deps
+cp wit/deps/io cli/golem-cli/wit/deps
+cp wit/deps/golem-1.x cli/golem-cli/wit/deps
+cp wit/deps/golem-rpc cli/golem-cli/wit/deps
+cp wit/deps/golem-agent cli/golem-cli/wit/deps
+"""
+
+[tasks.wit-template-golem-agent-ts]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r cli/template-golem-agent-ts/wit/deps
+mkdir cli/template-golem-agent-ts/wit/deps
+glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
+"""
+
+[tasks.wit-test-components]
+private = true
+script_runner = "@duckscript"
+script = """
+components = array blob-store-service component-resolve component-transformer-example1/adapter custom-durability file-service high-volume-logging http-client ifs-update ifs-update-inside-exported-function invocation-context js-1 js-4 key-value-service networking oplog-processor promise python-http-client rdbms-service rpc runtime-service scheduled-invocation shopping-cart tinygo-wasi tinygo-wasi-http ts-rpc update-test-env-var update-test-v2-11 update-test-v3-11 update-test-v3-sdk update-test-v4 wasi-config wasi-http-incoming-request-handler wasi-http-incoming-request-handler-echo wasi-http-incoming-request-handler-state low-level-agent
+
+for component in ${components}
+    echo "Updating wit directory for test component ${component}"
+    rm -r test-components/${component}/wit/deps
+    mkdir test-components/${component}/wit/deps
+    glob_cp wit/deps/**/* test-components/${component}/wit/deps
+end
+"""
 
 [tasks.remove-wit-deps]
 private = true
 script_runner = "@duckscript"
 script = """
-rm -rf wit/deps.done
-rm -rf wit/deps
 rm -rf wasm-rpc/wit/deps
+rm -rf golem-common/wit/deps
+rm -rf cli/golem-cli/wit/deps
 """
 
 [tasks.diff-wit]
@@ -128,11 +187,21 @@ description = "Builds all executables in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 
+[tasks.build-bins-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-bins"] }]
+
 [tasks.build-worker-service]
 dependencies = ["wit"]
 description = "Builds the worker-service"
 command = "cargo"
 args = ["build", "-p", "golem-worker-service"]
+
+[tasks.build-worker-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-worker-service"] }]
 
 [tasks.build-component-service]
 dependencies = ["wit"]
@@ -140,10 +209,20 @@ description = "Builds the component-service"
 command = "cargo"
 args = ["build", "-p", "golem-component-service"]
 
+[tasks.build-component-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-component-service"] }]
+
 [tasks.build-cloud-service]
 description = "Builds cloud service"
 command = "cargo"
 args = ["build", "-p", "cloud-service"]
+
+[tasks.build-cloud-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-cloud-service"] }]
 
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
@@ -283,6 +362,13 @@ $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
 cargo test --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $additional_params
 '''
 
+[tasks.worker-executor-tests-rdbms-service]
+dependencies = ["wit"]
+description = "Runs only untagged worker-executor-tests"
+env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
+script = '''
+cargo test --package golem-worker-executor --test integration :tag:rdbms-service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+'''
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
 description = "Runs worker executor tests only (group 1/8)"
@@ -368,57 +454,6 @@ $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
 cargo test --package golem-worker-executor --test integration :tag:group5 -- --report-time --nocapture $additional_params
 '''
 
-[tasks.worker-executor-tests-group6]
-dependencies = ["wit"]
-description = "Runs worker executor tests only (group 6/8)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:group6 -- --report-time --nocapture $JUNIT_OPTS
-'''
-
-[tasks.worker-executor-tests-group6.windows]
-script_runner = "pwsh"
-script_extension = "ps1"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package golem-worker-executor --test integration :tag:group6 -- --report-time --nocapture $additional_params
-'''
-
-[tasks.worker-executor-tests-group7]
-dependencies = ["wit"]
-description = "Runs worker executor tests only (group 7/8)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:group7 -- --report-time --nocapture $JUNIT_OPTS
-'''
-
-[tasks.worker-executor-tests-group7.windows]
-script_runner = "pwsh"
-script_extension = "ps1"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package golem-worker-executor --test integration :tag:group7 -- --report-time --nocapture $additional_params
-'''
-
-[tasks.worker-executor-tests-group8]
-dependencies = ["wit"]
-description = "Runs worker executor tests only (group 8/8)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:group8 -- --report-time --nocapture $JUNIT_OPTS
-'''
-
-[tasks.worker-executor-tests-group8.windows]
-script_runner = "pwsh"
-script_extension = "ps1"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package golem-worker-executor --test integration :tag:group8 -- --report-time --nocapture $additional_params
-'''
-
 [tasks.integration-tests]
 description = "Runs all integration tests"
 dependencies = [
@@ -427,6 +462,8 @@ dependencies = [
     "integration-tests-group3",
     "integration-tests-group4",
     "integration-tests-group5",
+    # "cli-integration-tests",
+    # "template-integration-tests"
 ]
 
 [tasks.integration-tests-group1]
@@ -470,6 +507,7 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-worker-service --test services_tests -- $JUNIT_OPTS
 cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $JUNIT_OPTS
+cargo test --package golem-worker-service --test api_oas_convert_tests -- --nocapture 
 '''
 
 [tasks.integration-tests-group3.windows]
@@ -480,6 +518,7 @@ script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
 cargo test --package golem-worker-service --test services_tests -- $additional_params
 cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $additional_params
+cargo test --package golem-worker-service --test api_oas_convert_tests -- --nocapture $additional_params
 '''
 
 [tasks.integration-tests-group4]
@@ -488,7 +527,6 @@ dependencies = ["wit"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-service-base --test integration -- $JUNIT_OPTS
-cargo test --package golem-worker-service --test '*' -- $JUNIT_OPTS
 cargo test --package cloud-service --test '*' -- $JUNIT_OPTS
 cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
 '''
@@ -500,7 +538,6 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
 cargo test --package golem-service-base --test integration -- $additional_params
-cargo test --package golem-worker-service --test '*' -- $additional_params
 cargo test --package cloud-service --test '*' -- $additional_params
 cargo test --package golem-debugging-service --test 'integration' -- --report-time $additional_params
 '''
@@ -513,20 +550,29 @@ script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
 '''
 
-[tasks.integration-tests-group5.windows]
-script_runner = "pwsh"
-script_extension = "ps1"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+[tasks.cli-integration-tests]
+dependencies = ["build"]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
 script = '''
-$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package integration-tests --test sharding -- --report-time $additional_params
+exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.template-integration-tests]
+dependencies = ["build"]
+description = "Run template integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins"]
 script = '''
 rm -rf logs data
-mkdir -p logs data
+mkdir -pv logs data
 
 export RUST_LOG=info,golem_test_framework::components=WARN
 export RUST_BACKTRACE=1
@@ -694,17 +740,17 @@ description = "Generates openapi spec from the code and saves it to the openapi 
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
-dependencies = [ "build-worker-service" ]
+dependencies = ["build-worker-service-non-ci"]
 cwd = "./target/debug"
 script = '''
-mkdir -p ../data
+mkdir -pv ../data
 ./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
 '''
 
 [tasks.generate-worker-service-openapi.windows]
 script_runner = "pwsh"
 script_extension = "ps1"
-dependencies = [ "build-worker-service" ]
+dependencies = [ "build-worker-service-non-ci" ]
 cwd = "./target/debug"
 script = '''
 New-Item -ItemType Directory -Force -Path "..\data"
@@ -713,17 +759,17 @@ New-Item -ItemType Directory -Force -Path "..\data"
 
 [tasks.generate-component-service-openapi]
 description = "Generates openapi spec for component service"
-dependencies = [ "build-component-service" ]
+dependencies = ["build-component-service-non-ci"]
 cwd = "./target/debug"
 script = '''
-mkdir -p ../data
+mkdir -pv ../data
 ./golem-component-service --dump-openapi-yaml > ../golem-component-service.yaml
 '''
 
 [tasks.generate-component-service-openapi.windows]
 script_runner = "pwsh"
 script_extension = "ps1"
-dependencies = [ "build-component-service" ]
+dependencies = [ "build-component-service-non-ci" ]
 cwd = "./target/debug"
 script = '''
 New-Item -ItemType Directory -Force -Path "..\data"
@@ -732,17 +778,17 @@ New-Item -ItemType Directory -Force -Path "..\data"
 
 [tasks.generate-cloud-service-openapi]
 description = "Generates openapi spec for cloud service"
-dependencies = [ "build-cloud-service" ]
+dependencies = ["build-cloud-service-non-ci"]
 cwd = "./target/debug"
 script = '''
-mkdir -p ../data
+mkdir -pv ../data
 ./cloud-service --dump-openapi-yaml > ../cloud-spec.yaml
 '''
 
 [tasks.generate-cloud-service-openapi.windows]
 script_runner = "pwsh"
 script_extension = "ps1"
-dependencies = [ "build-cloud-service" ]
+dependencies = [ "build-cloud-service-non-ci" ]
 cwd = "./target/debug"
 script = '''
 New-Item -ItemType Directory -Force -Path "..\data"
@@ -791,7 +837,8 @@ dependencies = [
     "publish-golem-client",
     "publish-golem-service-base",
     "publish-golem-test-framework",
-    "publish-golem-rib-repl"
+    "publish-golem-rib-repl",
+    "publish-golem-cli"
 ]
 
 [tasks.set-version]
@@ -927,6 +974,33 @@ description = "Publishes golem-rib package to crates.io"
 command = "cargo"
 args = ["publish", "-p", "golem-rib-repl", "--allow-dirty", "--no-verify"]
 
+[tasks.publish-golem-templates]
+description = "Publishes golem-templates package to crates.io"
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-templates",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
+[tasks.publish-golem-cli]
+description = "Publishes golem-cli package to crates.io"
+dependencies = [
+    "publish-golem-templates",
+]
+command = "cargo"
+args = [
+    "publish",
+    "-p",
+    "golem-cli",
+    "--all-features",
+    "--allow-dirty",
+    "--no-verify",
+]
+
 ## ** PACKAGE RELEASE **
 
 # There are three variants of package-release, and only one of them will run based on the value of
@@ -1000,7 +1074,7 @@ script = { file = "./local-run/start.sh" }
 description = "Runs all the services locally with the oauth2 login system enabled"
 dependencies = ["build"]
 
-condition = { env_set = [ "GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
+condition = { env_set = ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
 
 condition_script = [
     "nginx -v",
@@ -1017,7 +1091,7 @@ script = { file = "./local-run/start.sh" }
 
 [tasks.generate-configs]
 description = "Generates default and exmaple config files"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 
 script = '''
 export RUST_BACKTRACE=1
@@ -1125,4 +1199,112 @@ docker compose --project-directory log-tools/elastic stop
 description = "Stops and removes the elastic environment, including all data"
 script = '''
 docker compose --project-directory log-tools/elastic down --volumes
+'''
+
+## ** INSTALL - DEBUG **
+[tasks.install-debug]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-debug", "install-golem-debug"]
+
+[tasks.install-golem-cli-debug]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --debug --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-debug]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --debug --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** INSTALL - RELEASE **
+
+[tasks.install-release]
+description = "Install bins in debug mode"
+dependencies = ["install-golem-cli-release", "install-golem-release"]
+
+[tasks.install-golem-cli-release]
+description = "Install golem-cli (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path cli/golem-cli --bin golem-cli --target-dir target --locked --offline
+'''
+
+[tasks.install-golem-release]
+description = "Install golem (debug)"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo install --path cli/golem --bin golem --target-dir target --locked --offline
+'''
+
+## ** DESKTOP APP **
+[tasks.desktop]
+description = "Builds the desktop application"
+dependencies = ["npm-install"]
+command = "npm"
+args = ["run", "tauri", "build"]
+cwd = ".cli//desktop-app"
+
+[tasks.dev-desktop]
+description = "Run the desktop application"
+dependencies = ["npm-install"]
+command = "npm"
+args = ["run", "tauri", "dev"]
+cwd = "./cli/desktop-app"
+
+[tasks.npm-install]
+description = "Install npm dependencies"
+command = "npm"
+args = ["install"]
+cwd = "./cli/desktop-app"
+
+## ** APP MANIFEST SCHEMA **
+[tasks.publish-app-manifest-json-schema]
+description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
+command = "aws"
+args = [
+    "s3",
+    "sync",
+    "cli/schema.golem.cloud",
+    "s3://schema.golem.cloud",
+]
+
+[tasks.serve-app-manifest-json-schema]
+description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
+install_crate = "miniserve"
+command = "miniserve"
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
+
+## Agent template management
+[tasks.rebuild-ts-agent-template]
+description = "Rebuilds the TypeScript agent template WASM"
+script_runner = "@duckscript"
+script = '''
+cd cli/template-golem-agent-ts
+exec --fail-on-error npm update
+exec --fail-on-error npm install
+exec --fail-on-error npm run generate
+exec --fail-on-error npm run build
+cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
+'''
+
+## Cleanup
+[tasks.clear-v8]
+description = "Removes the v8 crate from the target directories"
+script_runner = "@duckscript"
+script = '''
+handle = glob_array ./target/**/build/v8*
+
+for path in ${handle}
+    rm -r ${path}
+end
+
+handle = glob_array ./target/**/deps/libv8*
+
+for path in ${handle}
+    rm -r ${path}
+end
 '''

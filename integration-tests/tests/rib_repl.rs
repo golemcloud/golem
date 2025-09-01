@@ -17,7 +17,7 @@ use test_r::test;
 use crate::{Deps, Tracing};
 use anyhow::anyhow;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, TargetWorkerId};
+use golem_common::model::{ComponentId, WorkerId};
 use golem_rib_repl::{ComponentSource, RibRepl};
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
@@ -122,12 +122,16 @@ async fn test_repl_invoking_functions(deps: &Deps, worker_name: Option<&str>) {
         result,
         Some(RibResult::Val(ValueAndType::new(
             Value::List(vec![]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         )))
     );
 
@@ -154,17 +158,24 @@ async fn test_repl_invoking_functions(deps: &Deps, worker_name: Option<&str>) {
                 Value::F32(10.0),
                 Value::U32(2),
             ])]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],)),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         )))
     );
 }
 
-async fn test_repl_invoking_resource_methods(deps: &Deps, worker_name: Option<&str>) {
+async fn test_repl_invoking_resource_methods(
+    deps: &Deps,
+    worker_name: Option<&str>,
+) {
     let mut rib_repl = RibRepl::bootstrap(RibReplConfig {
         history_file: None,
         dependency_manager: Arc::new(TestRibReplDependencyManager::new(deps.clone())),
@@ -232,12 +243,16 @@ async fn test_repl_invoking_resource_methods(deps: &Deps, worker_name: Option<&s
         result,
         Some(RibResult::Val(ValueAndType::new(
             Value::List(vec![]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],),),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         )))
     );
 
@@ -264,22 +279,26 @@ async fn test_repl_invoking_resource_methods(deps: &Deps, worker_name: Option<&s
                 Value::F32(10.0),
                 Value::U32(2),
             ])]),
-            list(record(vec![
-                field("product-id", str()),
-                field("name", str()),
-                field("price", f32()),
-                field("quantity", u32()),
-            ],)),
+            list(
+                record(vec![
+                    field("product-id", str()),
+                    field("name", str()),
+                    field("price", f32()),
+                    field("quantity", u32()),
+                ])
+                .named("product-item")
+                .owned("golem:it/api")
+            ),
         )))
     )
 }
 
 struct TestRibReplDependencyManager {
-    dependencies: Deps,
+    dependencies: EnvBasedTestDependencies,
 }
 
 impl TestRibReplDependencyManager {
-    fn new(dependencies: Deps) -> Self {
+    fn new(dependencies: EnvBasedTestDependencies) -> Self {
         Self { dependencies }
     }
 }
@@ -300,6 +319,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_id = self
             .dependencies
             .admin()
+            .await
             .component(component_name.as_str())
             .store()
             .await;
@@ -307,30 +327,31 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let metadata = self
             .dependencies
             .admin()
+            .await
             .get_latest_component_metadata(&component_id)
             .await;
 
         let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
-            root_package_name: metadata.root_package_name,
-            root_package_version: metadata.root_package_version,
+            root_package_name: metadata.root_package_name().clone(),
+            root_package_version: metadata.root_package_version().clone(),
         };
 
         Ok(ComponentDependency::new(
             component_dependency_key,
-            metadata.exports,
+            metadata.exports().to_vec(),
         ))
     }
 }
 
 // Embedded RibFunctionInvoke implementation
 pub struct TestRibReplWorkerFunctionInvoke {
-    embedded_worker_executor: Deps,
+    embedded_worker_executor: EnvBasedTestDependencies,
 }
 
 impl TestRibReplWorkerFunctionInvoke {
-    pub fn new(embedded_worker_executor: Deps) -> Self {
+    pub fn new(embedded_worker_executor: EnvBasedTestDependencies) -> Self {
         Self {
             embedded_worker_executor,
         }
@@ -343,25 +364,21 @@ impl WorkerFunctionInvoke for TestRibReplWorkerFunctionInvoke {
         &self,
         component_id: Uuid,
         _component_name: &str,
-        worker_name: Option<String>,
+        worker_name: &str,
         function_name: &str,
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let target_worker_id = worker_name
-            .map(|w| TargetWorkerId {
-                component_id: ComponentId(component_id),
-                worker_name: Some(w),
-            })
-            .unwrap_or_else(|| TargetWorkerId {
-                component_id: ComponentId(component_id),
-                worker_name: None,
-            });
+        let worker_id = WorkerId {
+            component_id: ComponentId(component_id),
+            worker_name: worker_name.to_string(),
+        };
 
         let result = self
             .embedded_worker_executor
             .admin()
-            .invoke_and_await_typed(target_worker_id, function_name, args)
+            .await
+            .invoke_and_await_typed(&worker_id, function_name, args)
             .await;
 
         Ok(result.map_err(|err| {

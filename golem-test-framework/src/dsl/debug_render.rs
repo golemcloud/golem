@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
 use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{print_type_annotated_value, ValueAndType};
+use golem_wasm_rpc::{print_value_and_type, ValueAndType};
 use std::fmt::Write;
 
 // backported from golem-cli to help debugging worker executor issues
@@ -257,16 +257,6 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}resource id:       {}", &params.id);
         }
-        PublicOplogEntry::DescribeResource(params) => {
-            let _ = writeln!(result, "DESCRIBE RESOURCE");
-            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
-            let _ = writeln!(result, "{pad}resource id:       {}", &params.id);
-            let _ = writeln!(result, "{pad}resource name:     {}", &params.resource_name,);
-            let _ = writeln!(result, "{pad}resource parameters:");
-            for value in &params.resource_params {
-                let _ = writeln!(result, "{pad}  - {}", value_to_string(value));
-            }
-        }
         PublicOplogEntry::Log(params) => {
             let _ = writeln!(result, "LOG");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
@@ -383,6 +373,52 @@ fn log_plugin_description(output: &mut String, pad: &str, value: &PluginInstalla
 }
 
 fn value_to_string(value: &ValueAndType) -> String {
-    let tav: TypeAnnotatedValue = value.try_into().expect("Failed to convert value to string");
-    print_type_annotated_value(&tav).expect("Failed to convert value to string")
+    print_value_and_type(value).unwrap_or_else(|_| format!("{value:?}"))
+}
+
+#[allow(dead_code)]
+fn log_data_value(output: &mut String, pad: &str, value: &DataValue) {
+    match value {
+        DataValue::Tuple(values) => {
+            let _ = writeln!(output, "{pad}  tuple:");
+            for value in &values.elements {
+                log_element_value(output, &format!("{pad}    "), value);
+            }
+        }
+        DataValue::Multimodal(values) => {
+            let _ = writeln!(output, "{pad}  multi-modal:");
+            for value in &values.elements {
+                log_element_value(output, &format!("{pad}    "), &value.value);
+            }
+        }
+    }
+}
+
+#[allow(dead_code)]
+fn log_element_value(output: &mut String, pad: &str, value: &ElementValue) {
+    match value {
+        ElementValue::ComponentModel(value) => {
+            let _ = writeln!(output, "{pad}- {}", value_to_string(value));
+        }
+        ElementValue::UnstructuredText(value) => match value {
+            TextReference::Url(url) => {
+                let _ = writeln!(output, "{pad}- URL: {}", url.value);
+            }
+            TextReference::Inline(inline) => {
+                let _ = writeln!(output, "{pad}- Inline: {}", inline.data);
+                if let Some(text_type) = &inline.text_type {
+                    let _ = writeln!(output, "{pad}  Language code: {}", text_type.language_code);
+                }
+            }
+        },
+        ElementValue::UnstructuredBinary(value) => match value {
+            BinaryReference::Url(url) => {
+                let _ = writeln!(output, "{pad}- URL: {}", url.value);
+            }
+            BinaryReference::Inline(inline) => {
+                let _ = writeln!(output, "{pad}- Inline: {} bytes", inline.data.len());
+                let _ = writeln!(output, "{pad}  MIME type: {}", inline.binary_type.mime_type);
+            }
+        },
+    }
 }

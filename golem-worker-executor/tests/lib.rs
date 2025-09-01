@@ -33,23 +33,21 @@ use golem_test_framework::config::{
 };
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
-use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
+use tracing::Level;
 use uuid::Uuid;
 
 mod common;
 
+pub mod agent;
 pub mod api;
 pub mod blobstore;
 pub mod compatibility;
 pub mod durability;
-pub mod guest_languages1;
-pub mod guest_languages2;
-pub mod guest_languages3;
 pub mod hot_update;
 pub mod http;
 pub mod indexed_storage;
@@ -74,30 +72,26 @@ tag_suite!(api, group1);
 tag_suite!(blobstore, group1);
 tag_suite!(keyvalue, group1);
 tag_suite!(http, group1);
-
 tag_suite!(rdbms, group1);
+tag_suite!(agent, group1);
 
-tag_suite!(guest_languages1, group2);
+tag_suite!(transactions, group2);
+tag_suite!(wasi, group2);
+tag_suite!(revert, group2);
+tag_suite!(durability, group2);
 
-tag_suite!(transactions, group3);
-tag_suite!(wasi, group3);
-tag_suite!(revert, group3);
-tag_suite!(durability, group3);
+tag_suite!(scalability, group3);
+tag_suite!(hot_update, group3);
+tag_suite!(rust_rpc, group3);
+tag_suite!(rust_rpc_stubless, group3);
 
-tag_suite!(scalability, group4);
-tag_suite!(hot_update, group4);
-tag_suite!(rust_rpc, group4);
-tag_suite!(rust_rpc_stubless, group4);
+tag_suite!(ts_rpc1, group4);
+tag_suite!(ts_rpc1_stubless, group4);
 
-tag_suite!(guest_languages2, group5);
+tag_suite!(ts_rpc2, group5);
+tag_suite!(ts_rpc2_stubless, group5);
 
-tag_suite!(ts_rpc1, group6);
-tag_suite!(ts_rpc1_stubless, group6);
-
-tag_suite!(guest_languages3, group7);
-
-tag_suite!(ts_rpc2, group8);
-tag_suite!(ts_rpc2_stubless, group8);
+tag_suite!(rdbms_service, rdbms_service);
 
 pub struct Deps(pub TestDependenciesDsl<WorkerExecutorTestDependencies>);
 
@@ -169,6 +163,7 @@ impl WorkerExecutorTestDependencies {
         let component_directory = Path::new("../test-components").to_path_buf();
         let account_id = AccountId::generate();
         let project_id = ProjectId::new_v4();
+        let project_name = "default".to_string();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
             FileSystemComponentService::new(
@@ -181,7 +176,10 @@ impl WorkerExecutorTestDependencies {
         );
 
         let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
-            account_id, token, project_id,
+            account_id,
+            token,
+            project_id,
+            project_name,
         ));
 
         Self {

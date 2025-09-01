@@ -15,8 +15,8 @@
 use test_r::test;
 
 use crate::model::public_oplog::{
-    ChangeRetryPolicyParameters, CreateParameters, DescribeResourceParameters, EndRegionParameters,
-    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ChangeRetryPolicyParameters, CreateParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
     ExportedFunctionParameters, FailedUpdateParameters, GrowMemoryParameters,
     ImportedFunctionInvokedParameters, JumpParameters, LogParameters, PendingUpdateParameters,
     PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
@@ -26,7 +26,8 @@ use crate::model::public_oplog::{
     SuccessfulUpdateParameters, TimestampParameter,
 };
 use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, ProjectId, Timestamp,
+    WorkerId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -59,9 +60,11 @@ fn create_serialization_poem_serde_equivalence() {
         env: vec![("x".to_string(), "y".to_string())]
             .into_iter()
             .collect(),
-        account_id: AccountId {
+        created_by: AccountId {
             value: "account_id".to_string(),
         },
+        wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
+        project_id: ProjectId::new_v4(),
         parent: Some(WorkerId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
@@ -99,7 +102,7 @@ fn imported_function_invoked_serialization_poem_serde_equivalence() {
             value: Value::List(vec![Value::U64(1)]),
             typ: list(u64()),
         },
-        wrapped_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
+        durable_function_type: PublicDurableFunctionType::ReadRemote(Empty {}),
     });
     let serialized = entry.to_json_string();
     let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
@@ -429,6 +432,8 @@ fn create_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::CreateResource(ResourceParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
         id: WorkerResourceId(100),
+        name: "test".to_string(),
+        owner: "owner".to_string(),
     });
 
     let serialized = entry.to_json_string();
@@ -442,30 +447,8 @@ fn drop_resource_serialization_poem_serde_equivalence() {
     let entry = PublicOplogEntry::DropResource(ResourceParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
         id: WorkerResourceId(100),
-    });
-
-    let serialized = entry.to_json_string();
-    let deserialized: PublicOplogEntry = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(entry, deserialized);
-}
-
-#[test]
-#[cfg(feature = "poem")]
-fn describe_resource_serialization_poem_serde_equivalence() {
-    let entry = PublicOplogEntry::DescribeResource(DescribeResourceParameters {
-        timestamp: rounded_ts(Timestamp::now_utc()),
-        id: WorkerResourceId(100),
-        resource_name: "test".to_string(),
-        resource_params: vec![
-            ValueAndType {
-                value: Value::String("test".to_string()),
-                typ: str(),
-            },
-            ValueAndType {
-                value: Value::Record(vec![Value::S16(1), Value::S16(-1)]),
-                typ: record(vec![field("x", s16()), field("y", s16())]),
-            },
-        ],
+        name: "test".to_string(),
+        owner: "owner".to_string(),
     });
 
     let serialized = entry.to_json_string();

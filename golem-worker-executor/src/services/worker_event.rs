@@ -15,8 +15,8 @@
 use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
-use futures_util::{stream, StreamExt};
-use golem_common::model::{IdempotencyKey, LogLevel};
+use futures::{stream, StreamExt};
+use golem_common::model::IdempotencyKey;
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
@@ -42,21 +42,6 @@ pub trait WorkerEventService: Send + Sync {
     /// N elements and may be further truncated by guest language specific matchers. The stream is
     /// guaranteed to contain information only emitted during the _last_ invocation.
     fn get_last_invocation_errors(&self) -> String;
-
-    fn emit_stdout(&self, bytes: Vec<u8>, is_live: bool) {
-        self.emit_event(InternalWorkerEvent::stdout(bytes), is_live)
-    }
-
-    fn emit_stderr(&self, bytes: Vec<u8>, is_live: bool) {
-        self.emit_event(InternalWorkerEvent::stderr(bytes), is_live)
-    }
-
-    fn emit_log(&self, log_level: LogLevel, context: &str, message: &str, is_live: bool) {
-        self.emit_event(
-            InternalWorkerEvent::log(log_level, context, message),
-            is_live,
-        )
-    }
 
     fn emit_invocation_start(
         &self,
@@ -187,7 +172,7 @@ fn label(event: &InternalWorkerEvent) -> &'static str {
 mod tests {
     use crate::model::event::InternalWorkerEvent;
     use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
-    use futures_util::StreamExt;
+    use futures::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
     use test_r::{test, timeout};

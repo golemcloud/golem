@@ -24,26 +24,19 @@ use goldenfile::differs::Differ;
 use goldenfile::Mint;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, OplogPayload,
-    PayloadId, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
+    DurableFunctionType, LogLevel, OplogIndex, OplogPayload, PayloadId,
+    TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, PromiseId,
-    ScheduledAction, ShardId, SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerResourceDescription, WorkerStatus,
+    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, PromiseId, ShardId,
+    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_ast::analysis::{
-    AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
-    TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
-    TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16,
-    TypeU32, TypeU64, TypeU8, TypeVariant,
-};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::{TypeAnnotatedValueConstructors, Value, WitValue};
+use golem_wasm_rpc::{Value, WitValue};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
     SerializableResponse, SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,
@@ -60,7 +53,7 @@ use golem_worker_executor::services::worker_proxy::WorkerProxyError;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 use test_r::test;
 use uuid::Uuid;
@@ -130,10 +123,7 @@ pub fn worker_status() {
     let ws6 = WorkerStatus::Failed;
     let ws7 = WorkerStatus::Exited;
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_status_running", &mut mint, ws1);
     backward_compatible("worker_status_idle", &mut mint, ws2);
     backward_compatible("worker_status_suspended", &mut mint, ws3);
@@ -157,10 +147,7 @@ pub fn deleted_regions() {
         },
     ]);
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("deleted_regions_empty", &mut mint, dr1);
     backward_compatible("deleted_regions_nonempty", &mut mint, dr2);
 }
@@ -183,10 +170,7 @@ pub fn retry_config() {
         max_jitter_factor: Some(0.1),
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("retry_config_default", &mut mint, rc1);
     backward_compatible("retry_config_custom1", &mut mint, rc2);
     backward_compatible("retry_config_custom2", &mut mint, rc3);
@@ -235,10 +219,7 @@ pub fn wasm_rpc_value() {
         resource_id: 123,
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("wasm_rpc_value_bool", &mut mint, v1);
     backward_compatible("wasm_rpc_value_u8", &mut mint, v2);
     backward_compatible("wasm_rpc_value_u16", &mut mint, v3);
@@ -315,10 +296,7 @@ pub fn timestamped_worker_invocation() {
         },
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible_custom(
         "timestamped_worker_invocation_exported_function",
         &mut mint,
@@ -350,10 +328,7 @@ pub fn timestamped_update_description() {
             payload: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
         },
     };
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("timestamped_update_description_automatic", &mut mint, tud1);
     backward_compatible(
         "timestamped_update_description_snapshot_based",
@@ -368,10 +343,7 @@ pub fn successful_update_record() {
         timestamp: Timestamp::from(1724701938466),
         target_version: 123,
     };
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("successful_update_record", &mut mint, sur1);
 }
 
@@ -387,38 +359,26 @@ pub fn failed_update_record() {
         target_version: 123,
         details: Some("details".to_string()),
     };
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("failed_update_record_no_details", &mut mint, fur1);
     backward_compatible("failed_update_record_with_details", &mut mint, fur2);
 }
 
 #[test]
 pub fn worker_resource_id() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_resource_id", &mut mint, WorkerResourceId(1));
 }
 
 #[test]
 pub fn oplog_index() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("oplog_index", &mut mint, OplogIndex::from_u64(1));
 }
 
 #[test]
 pub fn idempotency_key() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "idempotency_key",
         &mut mint,
@@ -430,32 +390,8 @@ pub fn idempotency_key() {
 
 #[test]
 pub fn timestamp() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("timestamp", &mut mint, Timestamp::from(1724701938466));
-}
-
-#[test]
-pub fn worker_resource_description() {
-    let wrd1 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: None,
-    };
-    let wrd2 = WorkerResourceDescription {
-        created_at: Timestamp::from(1724701938466),
-        indexed_resource_key: Some(IndexedResourceKey {
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
-        }),
-    };
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
-    backward_compatible("worker_resource_description", &mut mint, wrd1);
-    backward_compatible("worker_resource_description_indexed", &mut mint, wrd2);
 }
 
 #[test]
@@ -465,10 +401,7 @@ pub fn oplog_payload() {
         payload_id: PayloadId(Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap()),
         md5_hash: vec![1, 2, 3, 4],
     };
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("oplog_payload_inline", &mut mint, op1);
     backward_compatible("oplog_payload_external", &mut mint, op2);
 }
@@ -478,10 +411,7 @@ pub fn redis_promise_state() {
     let s1 = RedisPromiseState::Pending;
     let s2 = RedisPromiseState::Complete(vec![]);
     let s3 = RedisPromiseState::Complete(vec![1, 2, 3, 4]);
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("redis_promise_state_pending", &mut mint, s1);
     backward_compatible("redis_promise_state_complete_empty", &mut mint, s2);
     backward_compatible("redis_promise_state_complete_nonempty", &mut mint, s3);
@@ -489,10 +419,7 @@ pub fn redis_promise_state() {
 
 #[test]
 pub fn account_id() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "account_id",
         &mut mint,
@@ -504,10 +431,7 @@ pub fn account_id() {
 
 #[test]
 pub fn component_id() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "component_id",
         &mut mint,
@@ -517,10 +441,7 @@ pub fn component_id() {
 
 #[test]
 pub fn worker_id() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "worker_id",
         &mut mint,
@@ -545,59 +466,13 @@ pub fn promise_id() {
         oplog_idx: OplogIndex::from_u64(100),
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("promise_id", &mut mint, pid1);
 }
 
 #[test]
-pub fn scheduled_action() {
-    let sa1 = ScheduledAction::CompletePromise {
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        promise_id: PromiseId {
-            worker_id: WorkerId {
-                component_id: ComponentId(
-                    Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-                ),
-                worker_name: "worker_name".to_string(),
-            },
-            oplog_idx: OplogIndex::from_u64(100),
-        },
-    };
-    let sa2 = ScheduledAction::ArchiveOplog {
-        owned_worker_id: OwnedWorkerId {
-            account_id: AccountId {
-                value: "account_id".to_string(),
-            },
-            worker_id: WorkerId {
-                component_id: ComponentId(
-                    Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-                ),
-                worker_name: "worker_name".to_string(),
-            },
-        },
-        last_oplog_index: OplogIndex::from_u64(100),
-        next_after: Duration::from_secs(10),
-    };
-
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
-    backward_compatible("scheduled_action_complete_promise", &mut mint, sa1);
-    backward_compatible("scheduled_action_archive_oplog", &mut mint, sa2);
-}
-
-#[test]
 pub fn wrapped_function_type() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "wrapped_function_type_read_local",
         &mut mint,
@@ -637,10 +512,7 @@ pub fn worker_error() {
     let we3 = WorkerError::StackOverflow;
     let we4 = WorkerError::Unknown("unknown".to_string());
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_error_out_of_memory", &mut mint, we1);
     backward_compatible("worker_error_invalid_request", &mut mint, we2);
     backward_compatible("worker_error_stack_overflow", &mut mint, we3);
@@ -649,10 +521,7 @@ pub fn worker_error() {
 
 #[test]
 pub fn log_level() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("log_level_error", &mut mint, LogLevel::Error);
     backward_compatible("log_level_debug", &mut mint, LogLevel::Debug);
     backward_compatible("log_level_warn", &mut mint, LogLevel::Warn);
@@ -664,270 +533,6 @@ pub fn log_level() {
 }
 
 #[test]
-pub fn oplog_entry() {
-    // Special differ ignoring the invocation_context field
-    fn is_deserializable_ignoring_invocation_context(old: &Path, new: &Path) {
-        let old = std::fs::read(old).unwrap();
-        let new = std::fs::read(new).unwrap();
-
-        // Both the old and the latest binary can be deserialized
-        let mut old_decoded: OplogEntry = deserialize(&old).unwrap();
-        let new_decoded: OplogEntry = deserialize(&new).unwrap();
-
-        if let (
-            OplogEntry::PendingWorkerInvocation {
-                invocation:
-                    WorkerInvocation::ExportedFunction {
-                        invocation_context: old,
-                        ..
-                    },
-                ..
-            },
-            OplogEntry::PendingWorkerInvocation {
-                invocation:
-                    WorkerInvocation::ExportedFunction {
-                        invocation_context: new,
-                        ..
-                    },
-                ..
-            },
-        ) = (&mut old_decoded, &new_decoded)
-        {
-            *old = new.clone();
-        }
-
-        // And they represent the same value
-        assert_eq!(old_decoded, new_decoded);
-    }
-
-    let oe1a = OplogEntry::CreateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
-            worker_name: "worker_name".to_string(),
-        },
-        component_version: 0,
-        args: vec!["hello".to_string(), "world".to_string()],
-        env: vec![
-            ("key1".to_string(), "value1".to_string()),
-            ("key2".to_string(), "value2".to_string()),
-        ],
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        parent: None,
-        component_size: 100_000_000,
-        initial_total_linear_memory_size: 100_000_000,
-    };
-    let oe1b = OplogEntry::CreateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
-            worker_name: "worker_name".to_string(),
-        },
-        component_version: 0,
-        args: vec!["hello".to_string(), "world".to_string()],
-        env: vec![
-            ("key1".to_string(), "value1".to_string()),
-            ("key2".to_string(), "value2".to_string()),
-        ],
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        parent: Some(WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("90BB3957-2C4E-4711-A488-902B7018100F").unwrap(),
-            ),
-            worker_name: "parent_worker_name".to_string(),
-        }),
-        component_size: 100_000_000,
-        initial_total_linear_memory_size: 100_000_000,
-    };
-
-    let oe2 = OplogEntry::ImportedFunctionInvokedV1 {
-        timestamp: Timestamp::from(1724701938466),
-        function_name: "test:pkg/iface.{fn}".to_string(),
-        response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        wrapped_function_type: DurableFunctionType::ReadLocal,
-    };
-
-    let oe3 = OplogEntry::ExportedFunctionInvokedV1 {
-        timestamp: Timestamp::from(1724701938466),
-        function_name: "test:pkg/iface.{fn}".to_string(),
-        request: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        idempotency_key: IdempotencyKey {
-            value: "id1".to_string(),
-        },
-    };
-
-    let oe4 = OplogEntry::ExportedFunctionCompleted {
-        timestamp: Timestamp::from(1724701938466),
-        response: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
-        consumed_fuel: 12345678910,
-    };
-
-    let oe5 = OplogEntry::Suspend {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe6 = OplogEntry::Error {
-        timestamp: Timestamp::from(1724701938466),
-        error: WorkerError::OutOfMemory,
-    };
-
-    let oe7 = OplogEntry::NoOp {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe8 = OplogEntry::Jump {
-        timestamp: Timestamp::from(1724701938466),
-        jump: OplogRegion {
-            start: OplogIndex::from_u64(0),
-            end: OplogIndex::from_u64(10),
-        },
-    };
-
-    let oe9 = OplogEntry::Interrupted {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe10 = OplogEntry::Exited {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe11 = OplogEntry::ChangeRetryPolicy {
-        timestamp: Timestamp::from(1724701938466),
-        new_policy: RetryConfig::default(),
-    };
-
-    let oe12 = OplogEntry::BeginAtomicRegion {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe13 = OplogEntry::EndAtomicRegion {
-        timestamp: Timestamp::from(1724701938466),
-        begin_index: OplogIndex::from_u64(0),
-    };
-
-    let oe14 = OplogEntry::BeginRemoteWrite {
-        timestamp: Timestamp::from(1724701938466),
-    };
-
-    let oe15 = OplogEntry::EndRemoteWrite {
-        timestamp: Timestamp::from(1724701938466),
-        begin_index: OplogIndex::from_u64(0),
-    };
-
-    let oe16 = OplogEntry::PendingWorkerInvocation {
-        timestamp: Timestamp::from(1724701938466),
-        invocation: WorkerInvocation::ExportedFunction {
-            idempotency_key: IdempotencyKey {
-                value: "idempotency_key".to_string(),
-            },
-            full_function_name: "function-name".to_string(),
-            function_input: vec![Value::Bool(true)],
-            invocation_context: InvocationContextStack::fresh(),
-        },
-    };
-
-    let oe17 = OplogEntry::PendingUpdate {
-        timestamp: Timestamp::from(1724701938466),
-        description: UpdateDescription::Automatic {
-            target_version: 100,
-        },
-    };
-
-    let oe18 = OplogEntry::SuccessfulUpdateV1 {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        new_component_size: 1234,
-    };
-
-    let oe19a = OplogEntry::FailedUpdate {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        details: None,
-    };
-
-    let oe19b = OplogEntry::FailedUpdate {
-        timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
-        details: Some("details".to_string()),
-    };
-
-    let oe20 = OplogEntry::GrowMemory {
-        timestamp: Timestamp::from(1724701938466),
-        delta: 100_000_000,
-    };
-
-    let oe21 = OplogEntry::CreateResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-    };
-
-    let oe22 = OplogEntry::DropResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-    };
-
-    let oe23 = OplogEntry::DescribeResource {
-        timestamp: Timestamp::from(1724701938466),
-        id: WorkerResourceId(1),
-        indexed_resource: IndexedResourceKey {
-            resource_name: "r1".to_string(),
-            resource_params: vec!["a".to_string(), "b".to_string()],
-        },
-    };
-
-    let oe24 = OplogEntry::Log {
-        timestamp: Timestamp::from(1724701938466),
-        level: LogLevel::Error,
-        context: "context".to_string(),
-        message: "message".to_string(),
-    };
-
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
-    backward_compatible("oplog_entry_create", &mut mint, oe1a);
-    backward_compatible("oplog_entry_create_with_parent", &mut mint, oe1b);
-    backward_compatible("oplog_entry_imported_function_invoked", &mut mint, oe2);
-    backward_compatible("oplog_entry_exported_function_invoked", &mut mint, oe3);
-    backward_compatible("oplog_entry_exported_function_completed", &mut mint, oe4);
-    backward_compatible("oplog_entry_suspend", &mut mint, oe5);
-    backward_compatible("oplog_entry_error", &mut mint, oe6);
-    backward_compatible("oplog_entry_no_op", &mut mint, oe7);
-    backward_compatible("oplog_entry_jump", &mut mint, oe8);
-    backward_compatible("oplog_entry_interrupted", &mut mint, oe9);
-    backward_compatible("oplog_entry_exited", &mut mint, oe10);
-    backward_compatible("oplog_entry_change_retry_policy", &mut mint, oe11);
-    backward_compatible("oplog_entry_begin_atomic_region", &mut mint, oe12);
-    backward_compatible("oplog_entry_end_atomic_region", &mut mint, oe13);
-    backward_compatible("oplog_entry_begin_remote_write", &mut mint, oe14);
-    backward_compatible("oplog_entry_end_remote_write", &mut mint, oe15);
-    backward_compatible_custom(
-        "oplog_entry_pending_worker_invocation",
-        &mut mint,
-        oe16,
-        Box::new(is_deserializable_ignoring_invocation_context),
-    );
-    backward_compatible("oplog_entry_pending_update", &mut mint, oe17);
-    backward_compatible("oplog_entry_successful_update", &mut mint, oe18);
-    backward_compatible("oplog_entry_failed_update_no_details", &mut mint, oe19a);
-    backward_compatible("oplog_entry_failed_update_with_details", &mut mint, oe19b);
-    backward_compatible("oplog_entry_grow_memory", &mut mint, oe20);
-    backward_compatible("oplog_entry_create_resource", &mut mint, oe21);
-    backward_compatible("oplog_entry_drop_resource", &mut mint, oe22);
-    backward_compatible("oplog_entry_describe_resource", &mut mint, oe23);
-    backward_compatible("oplog_entry_log", &mut mint, oe24);
-}
-
-#[test]
 pub fn blob_store_object_metadata() {
     let om1 = blob_store::ObjectMetadata {
         name: "item".to_string(),
@@ -936,19 +541,13 @@ pub fn blob_store_object_metadata() {
         size: 500_000_000,
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("blob_store_object_metadata", &mut mint, om1);
 }
 
 #[test]
 pub fn interrupt_kind() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "interrupt_kind_interrupt",
         &mut mint,
@@ -961,10 +560,7 @@ pub fn interrupt_kind() {
 
 #[test]
 pub fn shard_id() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("shard_id", &mut mint, ShardId::new(1));
 }
 
@@ -1065,10 +661,7 @@ pub fn golem_error() {
         stderr: "stderr".to_string(),
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("golem_error_invalid_request", &mut mint, g1);
     backward_compatible("golem_error_worker_already_exists", &mut mint, g2);
     backward_compatible("golem_error_worker_not_found", &mut mint, g3);
@@ -1120,10 +713,7 @@ pub fn rpc_error() {
         details: "not working".to_string(),
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("rpc_error_protocol_error", &mut mint, rpc1);
     backward_compatible("rpc_error_denied", &mut mint, rpc2);
     backward_compatible("rpc_error_not_found", &mut mint, rpc3);
@@ -1139,10 +729,7 @@ pub fn worker_proxy_error() {
     let wpe5 = WorkerProxyError::AlreadyExists("already exists".to_string());
     let wpe6 = WorkerProxyError::InternalError(WorkerExecutorError::unknown("internal error"));
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("worker_proxy_error_bad_request", &mut mint, wpe1);
     backward_compatible("worker_proxy_error_unauthorized", &mut mint, wpe2);
     backward_compatible("worker_proxy_error_limit_exceeded", &mut mint, wpe3);
@@ -1172,10 +759,7 @@ pub fn serializable_error() {
         error: WorkerProxyError::AlreadyExists("already exists".to_string()),
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_error_fs_error", &mut mint, se1);
     backward_compatible("serializable_error_generic", &mut mint, se2);
     backward_compatible("serializable_error_golem", &mut mint, se3);
@@ -1194,10 +778,7 @@ pub fn serializable_stream_error() {
         message: "hello world".to_string(),
     });
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_stream_error_closed", &mut mint, sse1);
     backward_compatible(
         "serializable_stream_error_last_operation_failed",
@@ -1216,10 +797,7 @@ pub fn serializable_ip_address() {
         address: [1, 2, 3, 4, 5, 6, 7, 8],
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_ip_address_ipv4", &mut mint, sia1);
     backward_compatible("serializable_ip_address_ipv6", &mut mint, sia2);
 }
@@ -1230,10 +808,7 @@ pub fn serializable_ip_addresses() {
         address: [127, 0, 0, 1],
     }]);
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_ip_addresses", &mut mint, sia1);
 }
 
@@ -1284,10 +859,7 @@ pub fn wit_value() {
     }
     .into();
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible_wit_value("wit_value_bool", &mut mint, wv1);
     backward_compatible_wit_value("wit_value_u8", &mut mint, wv2);
     backward_compatible_wit_value("wit_value_u16", &mut mint, wv3);
@@ -1328,10 +900,7 @@ pub fn serializable_dns_error_payload() {
         info_code: None,
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_dns_error_payload_some", &mut mint, sd1);
     backward_compatible("serializable_dns_error_payload_none", &mut mint, sd2);
 }
@@ -1347,10 +916,7 @@ pub fn serializable_tls_alert_received_payload() {
         alert_message: None,
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "serializable_tls_alert_received_payload_some",
         &mut mint,
@@ -1374,20 +940,14 @@ pub fn serializable_field_size_payload() {
         field_name: None,
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_field_size_payload_some", &mut mint, sf1);
     backward_compatible("serializable_field_size_payload_none", &mut mint, sf2);
 }
 
 #[test]
 pub fn serializable_error_code() {
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible(
         "serializable_error_code_dns_timeout",
         &mut mint,
@@ -1666,10 +1226,7 @@ pub fn serializable_response() {
         message: "hello world".to_string(),
     }));
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_response_pending", &mut mint, sr1);
     backward_compatible("serializable_response_headers_received", &mut mint, sr2);
     backward_compatible("serializable_response_http_error", &mut mint, sr3);
@@ -1689,10 +1246,7 @@ pub fn serializable_invoke_result() {
         details: "not now".to_string(),
     }));
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_invoke_result_pending", &mut mint, sir1);
     backward_compatible("serializable_invoke_result_failed", &mut mint, sir2);
     backward_compatible("serializable_invoke_result_completed_ok", &mut mint, sir3);
@@ -1716,10 +1270,7 @@ pub fn serializable_file_times() {
         data_modification_timestamp: None,
     };
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("serializable_file_times_some", &mut mint, sft1);
     backward_compatible("serializable_file_times_none", &mut mint, sft2);
 }
@@ -1776,10 +1327,7 @@ pub fn proto_val() {
     }
     .into();
 
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
+    let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("proto_val_bool", &mut mint, pv1);
     backward_compatible("proto_val_u8", &mut mint, pv2);
     backward_compatible("proto_val_u16", &mut mint, pv3);
@@ -1807,218 +1355,4 @@ pub fn proto_val() {
     backward_compatible("proto_val_result_ok_none", &mut mint, pv21c);
     backward_compatible("proto_val_result_err_none", &mut mint, pv21d);
     backward_compatible("proto_val_handle", &mut mint, pv22);
-}
-
-#[test]
-pub fn type_annotated_value() {
-    let tav1 =
-        TypeAnnotatedValue::create(&Value::Bool(true), &AnalysedType::Bool(TypeBool)).unwrap();
-    let tav2 = TypeAnnotatedValue::create(&Value::U8(1), &AnalysedType::U8(TypeU8)).unwrap();
-    let tav3 = TypeAnnotatedValue::create(&Value::U16(12345), &AnalysedType::U16(TypeU16)).unwrap();
-    let tav4 =
-        TypeAnnotatedValue::create(&Value::U32(123456789), &AnalysedType::U32(TypeU32)).unwrap();
-    let tav5 = TypeAnnotatedValue::create(
-        &Value::U64(12345678901234567890),
-        &AnalysedType::U64(TypeU64),
-    )
-    .unwrap();
-    let tav6 = TypeAnnotatedValue::create(&Value::S8(-1), &AnalysedType::S8(TypeS8)).unwrap();
-    let tav7 =
-        TypeAnnotatedValue::create(&Value::S16(-12345), &AnalysedType::S16(TypeS16)).unwrap();
-    let tav8 =
-        TypeAnnotatedValue::create(&Value::S32(-123456789), &AnalysedType::S32(TypeS32)).unwrap();
-    let tav9 = TypeAnnotatedValue::create(
-        &Value::S64(-1234567890123456789),
-        &AnalysedType::S64(TypeS64),
-    )
-    .unwrap();
-    let tav10 =
-        TypeAnnotatedValue::create(&Value::F32(1.234), &AnalysedType::F32(TypeF32)).unwrap();
-    let tav11 = TypeAnnotatedValue::create(
-        &Value::F64(1.234_567_890_123_456_7),
-        &AnalysedType::F64(TypeF64),
-    )
-    .unwrap();
-    let tav12 = TypeAnnotatedValue::create(&Value::Char('a'), &AnalysedType::Chr(TypeChr)).unwrap();
-    let tav13 = TypeAnnotatedValue::create(
-        &Value::String("hello world".to_string()),
-        &AnalysedType::Str(TypeStr),
-    )
-    .unwrap();
-    let tav14 = TypeAnnotatedValue::create(
-        &Value::List(vec![Value::Bool(true), Value::Bool(false)]),
-        &AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::Bool(TypeBool)),
-        }),
-    )
-    .unwrap();
-    let tav15 = TypeAnnotatedValue::create(
-        &Value::Tuple(vec![Value::Bool(true), Value::Char('x')]),
-        &AnalysedType::Tuple(TypeTuple {
-            items: vec![AnalysedType::Bool(TypeBool), AnalysedType::Chr(TypeChr)],
-        }),
-    )
-    .unwrap();
-    let tav16 = TypeAnnotatedValue::create(
-        &Value::Record(vec![
-            Value::Bool(true),
-            Value::Char('x'),
-            Value::List(vec![]),
-        ]),
-        &AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "a".to_string(),
-                    typ: AnalysedType::Bool(TypeBool),
-                },
-                NameTypePair {
-                    name: "b".to_string(),
-                    typ: AnalysedType::Chr(TypeChr),
-                },
-                NameTypePair {
-                    name: "c".to_string(),
-                    typ: AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::Bool(TypeBool)),
-                    }),
-                },
-            ],
-        }),
-    )
-    .unwrap();
-    let tav17a = TypeAnnotatedValue::create(
-        &Value::Variant {
-            case_idx: 0,
-            case_value: Some(Box::new(Value::Record(vec![Value::Option(None)]))),
-        },
-        &AnalysedType::Variant(TypeVariant {
-            cases: vec![NameOptionTypePair {
-                name: "a".to_string(),
-                typ: Some(AnalysedType::Record(TypeRecord {
-                    fields: vec![NameTypePair {
-                        name: "a".to_string(),
-                        typ: AnalysedType::Option(TypeOption {
-                            inner: Box::new(AnalysedType::Bool(TypeBool)),
-                        }),
-                    }],
-                })),
-            }],
-        }),
-    )
-    .unwrap();
-    let tav17b = TypeAnnotatedValue::create(
-        &Value::Variant {
-            case_idx: 0,
-            case_value: None,
-        },
-        &AnalysedType::Variant(TypeVariant {
-            cases: vec![NameOptionTypePair {
-                name: "a".to_string(),
-                typ: None,
-            }],
-        }),
-    )
-    .unwrap();
-    let tav18 = TypeAnnotatedValue::create(
-        &Value::Enum(1),
-        &AnalysedType::Enum(TypeEnum {
-            cases: vec!["a".to_string(), "b".to_string()],
-        }),
-    )
-    .unwrap();
-    let tav19 = TypeAnnotatedValue::create(
-        &Value::Flags(vec![true, false, true]),
-        &AnalysedType::Flags(TypeFlags {
-            names: vec!["a".to_string(), "b".to_string(), "c".to_string()],
-        }),
-    )
-    .unwrap();
-    let tav20a = TypeAnnotatedValue::create(
-        &Value::Option(Some(Box::new(Value::Bool(true)))),
-        &AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::Bool(TypeBool)),
-        }),
-    )
-    .unwrap();
-    let tav20b = TypeAnnotatedValue::create(
-        &Value::Option(None),
-        &AnalysedType::Option(TypeOption {
-            inner: Box::new(AnalysedType::Bool(TypeBool)),
-        }),
-    )
-    .unwrap();
-    let tav21a = TypeAnnotatedValue::create(
-        &Value::Result(Ok(Some(Box::new(Value::Bool(true))))),
-        &AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(AnalysedType::Bool(TypeBool))),
-            err: Some(Box::new(AnalysedType::Bool(TypeBool))),
-        }),
-    )
-    .unwrap();
-    let tav21b = TypeAnnotatedValue::create(
-        &Value::Result(Err(Some(Box::new(Value::Bool(true))))),
-        &AnalysedType::Result(TypeResult {
-            ok: Some(Box::new(AnalysedType::Bool(TypeBool))),
-            err: Some(Box::new(AnalysedType::Bool(TypeBool))),
-        }),
-    )
-    .unwrap();
-    let tav21c = TypeAnnotatedValue::create(
-        &Value::Result(Ok(None)),
-        &AnalysedType::Result(TypeResult {
-            ok: None,
-            err: None,
-        }),
-    )
-    .unwrap();
-    let tav21d = TypeAnnotatedValue::create(
-        &Value::Result(Err(None)),
-        &AnalysedType::Result(TypeResult {
-            ok: None,
-            err: None,
-        }),
-    )
-    .unwrap();
-    let tav22 = TypeAnnotatedValue::create(
-        &Value::Handle {
-            uri: "uri".to_string(),
-            resource_id: 123,
-        },
-        &AnalysedType::Handle(TypeHandle {
-            resource_id: AnalysedResourceId(1),
-            mode: AnalysedResourceMode::Borrowed,
-        }),
-    )
-    .unwrap();
-
-    let mut mint = Mint::new(PathBuf::from_iter([
-        env!("CARGO_MANIFEST_DIR"),
-        "tests/goldenfiles",
-    ]));
-    backward_compatible("type_annotated_value_bool", &mut mint, tav1);
-    backward_compatible("type_annotated_value_u8", &mut mint, tav2);
-    backward_compatible("type_annotated_value_u16", &mut mint, tav3);
-    backward_compatible("type_annotated_value_u32", &mut mint, tav4);
-    backward_compatible("type_annotated_value_u64", &mut mint, tav5);
-    backward_compatible("type_annotated_value_s8", &mut mint, tav6);
-    backward_compatible("type_annotated_value_s16", &mut mint, tav7);
-    backward_compatible("type_annotated_value_s32", &mut mint, tav8);
-    backward_compatible("type_annotated_value_s64", &mut mint, tav9);
-    backward_compatible("type_annotated_value_f32", &mut mint, tav10);
-    backward_compatible("type_annotated_value_f64", &mut mint, tav11);
-    backward_compatible("type_annotated_value_char", &mut mint, tav12);
-    backward_compatible("type_annotated_value_string", &mut mint, tav13);
-    backward_compatible("type_annotated_value_list", &mut mint, tav14);
-    backward_compatible("type_annotated_value_tuple", &mut mint, tav15);
-    backward_compatible("type_annotated_value_record", &mut mint, tav16);
-    backward_compatible("type_annotated_value_variant_some", &mut mint, tav17a);
-    backward_compatible("type_annotated_value_variant_none", &mut mint, tav17b);
-    backward_compatible("type_annotated_value_enum", &mut mint, tav18);
-    backward_compatible("type_annotated_value_flags", &mut mint, tav19);
-    backward_compatible("type_annotated_value_option_some", &mut mint, tav20a);
-    backward_compatible("type_annotated_value_option_none", &mut mint, tav20b);
-    backward_compatible("type_annotated_value_result_ok_some", &mut mint, tav21a);
-    backward_compatible("type_annotated_value_result_err_some", &mut mint, tav21b);
-    backward_compatible("type_annotated_value_result_ok_none", &mut mint, tav21c);
-    backward_compatible("type_annotated_value_result_err_none", &mut mint, tav21d);
-    backward_compatible("type_annotated_value_handle", &mut mint, tav22);
 }

@@ -30,7 +30,7 @@ async fn create_api_security_scheme(deps: &Deps) {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await.unwrap();
     let security_scheme = new_security_scheme();
 
@@ -50,7 +50,7 @@ async fn get_api_security_scheme(deps: &Deps) {
         return assert!(false, "Test requires to select HTTP golem client protocol");
     }
 
-    let admin = deps.admin();
+    let admin = deps.admin().await;
     let project = admin.default_project().await.unwrap();
     let security_scheme = new_security_scheme();
 

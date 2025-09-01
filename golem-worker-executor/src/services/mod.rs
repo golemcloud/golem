@@ -15,6 +15,7 @@
 use crate::services::worker_activator::WorkerActivator;
 use std::sync::Arc;
 
+use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::plugins::Plugins;
 use crate::workerctx::WorkerCtx;
@@ -22,6 +23,7 @@ use file_loader::FileLoader;
 use tokio::runtime::Handle;
 
 pub mod active_workers;
+pub mod agent_types;
 pub mod blob_store;
 pub mod compiled_component;
 pub mod component;
@@ -31,6 +33,7 @@ pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
 pub mod plugins;
+pub mod projects;
 pub mod promise;
 pub mod rdbms;
 pub mod resource_limits;
@@ -63,6 +66,10 @@ impl NoAdditionalDeps {
 // HasXXX traits for fine-grained control of which dependencies a function needs
 pub trait HasActiveWorkers<Ctx: WorkerCtx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>>;
+}
+
+pub trait HasAgentTypesService {
+    fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService>;
 }
 
 pub trait HasComponentService {
@@ -173,9 +180,14 @@ pub trait HasResourceLimits {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits>;
 }
 
+pub trait HasProjectService {
+    fn project_service(&self) -> Arc<dyn projects::ProjectService>;
+}
+
 /// HasAll is a shortcut for requiring all available service dependencies
 pub trait HasAll<Ctx: WorkerCtx>:
     HasActiveWorkers<Ctx>
+    + HasAgentTypesService
     + HasComponentService
     + HasConfig
     + HasWorkerForkService
@@ -199,6 +211,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
     + HasPlugins
     + HasOplogProcessorPlugin
     + HasResourceLimits
+    + HasProjectService
     + HasExtraDeps<Ctx>
     + Clone
     + Sync
@@ -208,6 +221,7 @@ pub trait HasAll<Ctx: WorkerCtx>:
 impl<
         Ctx: WorkerCtx,
         T: HasActiveWorkers<Ctx>
+            + HasAgentTypesService
             + HasComponentService
             + HasConfig
             + HasWorkerForkService
@@ -231,6 +245,7 @@ impl<
             + HasPlugins
             + HasOplogProcessorPlugin
             + HasResourceLimits
+            + HasProjectService
             + HasExtraDeps<Ctx>
             + Clone
             + Sync,
@@ -242,6 +257,7 @@ impl<
 /// To be used as a convenient struct member for services that need access to all dependencies
 pub struct All<Ctx: WorkerCtx> {
     active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+    agent_types: Arc<dyn agent_types::AgentTypesService>,
     engine: Arc<wasmtime::Engine>,
     linker: Arc<wasmtime::component::Linker<Ctx>>,
     runtime: Handle,
@@ -268,6 +284,7 @@ pub struct All<Ctx: WorkerCtx> {
     plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
+    project_service: Arc<dyn projects::ProjectService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -275,6 +292,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
     fn clone(&self) -> Self {
         Self {
             active_workers: self.active_workers.clone(),
+            agent_types: self.agent_types.clone(),
             engine: self.engine.clone(),
             linker: self.linker.clone(),
             runtime: self.runtime.clone(),
@@ -300,6 +318,7 @@ impl<Ctx: WorkerCtx> Clone for All<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -309,6 +328,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         active_workers: Arc<active_workers::ActiveWorkers<Ctx>>,
+        agent_types: Arc<dyn agent_types::AgentTypesService>,
         engine: Arc<wasmtime::Engine>,
         linker: Arc<wasmtime::component::Linker<Ctx>>,
         runtime: Handle,
@@ -336,10 +356,12 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
+        project_service: Arc<dyn projects::ProjectService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
             active_workers,
+            agent_types,
             engine,
             linker,
             runtime,
@@ -365,6 +387,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             extra_deps,
         }
     }
@@ -372,6 +395,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
     pub fn from_other<T: HasAll<Ctx>>(this: &T) -> All<Ctx> {
         All::new(
             this.active_workers(),
+            this.agent_types(),
             this.engine(),
             this.linker(),
             this.runtime(),
@@ -397,6 +421,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
             this.plugins(),
             this.oplog_processor_plugin(),
             this.resource_limits(),
+            this.project_service(),
             this.extra_deps(),
         )
     }
@@ -419,6 +444,12 @@ impl<Ctx: WorkerCtx> UsesAllDeps for All<Ctx> {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasActiveWorkers<Ctx> for T {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
         self.all().active_workers.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasAgentTypesService for T {
+    fn agent_types(&self) -> Arc<dyn AgentTypesService> {
+        self.all().agent_types.clone()
     }
 }
 
@@ -567,6 +598,12 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasOplogProcessorPlugin for T {
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasResourceLimits for T {
     fn resource_limits(&self) -> Arc<dyn resource_limits::ResourceLimits> {
         self.all().resource_limits.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasProjectService for T {
+    fn project_service(&self) -> Arc<dyn projects::ProjectService> {
+        self.all().project_service.clone()
     }
 }
 

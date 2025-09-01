@@ -34,11 +34,11 @@ use golem_worker_service::gateway_security::{Provider, SecurityScheme, SecurityS
 use golem_worker_service::service::gateway::api_definition_validator::ValidationErrors;
 use golem_worker_service::service::gateway::{ComponentView, ConversionContext};
 use golem_worker_service::{api, gateway_api_definition};
-use http::header::{LOCATION, ORIGIN};
+use http::header::{HOST, LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
-use serde_json::{Number, Value};
+use serde_json::{Number, Value as JsonValue};
 use std::sync::Arc;
 use test_r::test;
 use url::Url;
@@ -65,6 +65,7 @@ async fn execute(
         api_specification,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .expect("Failed to compile API definition");
 
@@ -73,6 +74,7 @@ async fn execute(
         internal::get_test_file_server_binding_handler(),
         Arc::new(DefaultAuthCallBack),
         internal::get_test_http_handler_binding_handler(),
+        internal::get_test_swagger_binding_handler(),
         Arc::new(internal::TestApiDefinitionLookup::new(compiled)),
         Arc::clone(session_store),
         Arc::new(test_identity_provider.clone()),
@@ -96,8 +98,15 @@ impl ConversionContext for TestConversionContext {
             Err("component not found".to_string())
         }
     }
-    async fn component_by_id(&self, _component_id: &ComponentId) -> Result<ComponentView, String> {
-        unimplemented!()
+    async fn component_by_id(&self, component_id: &ComponentId) -> Result<ComponentView, String> {
+        match component_id.to_string().as_str() {
+            "0b6d9cd8-f373-4e29-8a5a-548e61b868a5" => Ok(ComponentView {
+                id: component_id.clone(),
+                name: ComponentName("test-component".to_string()),
+                latest_version: 0,
+            }),
+            _ => Err("component not found".to_string()),
+        }
     }
 }
 
@@ -124,7 +133,7 @@ fn test_namespace() -> Namespace {
 
 #[test]
 async fn test_api_def_with_resource_1() {
-    let api_request = get_gateway_request("/foo/mystore", None, &HeaderMap::new(), Value::Null);
+    let api_request = get_gateway_request("/foo/mystore", None, &HeaderMap::new(), JsonValue::Null);
 
     // These functions get-user-name and get-currency produce the same result
     let response_mapping = r#"
@@ -169,7 +178,8 @@ async fn test_api_def_with_resource_1() {
 
 #[test]
 async fn test_api_def_with_single_query_param() {
-    let api_request = get_gateway_request("/foo?userid=jon", None, &HeaderMap::new(), Value::Null);
+    let api_request =
+        get_gateway_request("/foo?userid=jon", None, &HeaderMap::new(), JsonValue::Null);
 
     let response_mapping = r#"
        let user_id = request.query.userid;
@@ -198,9 +208,9 @@ async fn test_api_def_with_single_query_param() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("jon".to_string()),
-            Value::String("bar".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("jon".to_string()),
+            JsonValue::String("bar".to_string()),
         ]),
     );
 
@@ -213,7 +223,7 @@ async fn test_api_def_with_multiple_query_params() {
         "/foo?userid=jon&country=usa",
         None,
         &HeaderMap::new(),
-        Value::Null,
+        JsonValue::Null,
     );
 
     let response_mapping = r#"
@@ -244,9 +254,9 @@ async fn test_api_def_with_multiple_query_params() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("jon".to_string()),
-            Value::String("usa".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("jon".to_string()),
+            JsonValue::String("usa".to_string()),
         ]),
     );
 
@@ -255,8 +265,12 @@ async fn test_api_def_with_multiple_query_params() {
 
 #[test]
 async fn test_api_def_with_query_and_path_params() {
-    let api_request =
-        get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
+    let api_request = get_gateway_request(
+        "/foo/jon?country=usa",
+        None,
+        &HeaderMap::new(),
+        JsonValue::Null,
+    );
 
     let response_mapping = r#"
        let user_id = request.path.user-id;
@@ -286,9 +300,9 @@ async fn test_api_def_with_query_and_path_params() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("jon".to_string()),
-            Value::String("usa".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("jon".to_string()),
+            JsonValue::String("usa".to_string()),
         ]),
     );
 
@@ -312,6 +326,7 @@ async fn test_api_def_with_invalid_path_lookup() {
         &api_specification,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -342,6 +357,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         &api_specification1,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -363,6 +379,7 @@ async fn test_api_def_with_invalid_query_and_path_lookup() {
         &api_specification2,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -385,8 +402,12 @@ async fn test_api_def_with_path_parameters_in_space() {
         get_api_def_with_worker_binding("/foo/{ user-id   }?{    country }", response_mapping)
             .await;
 
-    let api_request =
-        get_gateway_request("/foo/jon?country=usa", None, &HeaderMap::new(), Value::Null);
+    let api_request = get_gateway_request(
+        "/foo/jon?country=usa",
+        None,
+        &HeaderMap::new(),
+        JsonValue::Null,
+    );
 
     let session_store: Arc<dyn GatewaySession + Sync + Send> = internal::get_session_store();
 
@@ -404,9 +425,9 @@ async fn test_api_def_with_path_parameters_in_space() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("jon".to_string()),
-            Value::String("usa".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("jon".to_string()),
+            JsonValue::String("usa".to_string()),
         ]),
     );
 
@@ -430,6 +451,7 @@ async fn test_api_def_with_invalid_query_lookup() {
         &api_specification,
         &internal::get_component_metadata(),
         &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     )
     .unwrap_err();
 
@@ -446,7 +468,8 @@ async fn test_api_def_with_invalid_query_lookup() {
 async fn test_api_def_with_request_path_0() {
     let empty_headers = HeaderMap::new();
 
-    let api_request = get_gateway_request("/foo/foo_value/1", None, &empty_headers, Value::Null);
+    let api_request =
+        get_gateway_request("/foo/foo_value/1", None, &empty_headers, JsonValue::Null);
 
     let response_mapping = r#"
          let bar-value: u32 = request.path.bar;
@@ -479,9 +502,9 @@ async fn test_api_def_with_request_path_0() {
     let expected = (
         "foo_value".to_string(),
         "golem:it/api.{add-item}".to_string(),
-        Value::Array(vec![
-            Value::Number(1.into()),
-            Value::String("bar".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::Number(1.into()),
+            JsonValue::String("bar".to_string()),
         ]),
     );
 
@@ -491,7 +514,7 @@ async fn test_api_def_with_request_path_0() {
 // A test where the input path is a number, and the rib script refers to request.path.* as a u64
 #[test]
 async fn test_api_def_with_request_path_only_1() {
-    let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), Value::Null);
+    let api_request = get_gateway_request("/foo/1", None, &HeaderMap::new(), JsonValue::Null);
 
     let response_mapping = r#"
        let id: u64 = request.path.user-id;
@@ -520,9 +543,9 @@ async fn test_api_def_with_request_path_only_1() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("a".to_string()),
+            JsonValue::String("b".to_string()),
         ]),
     );
 
@@ -536,7 +559,8 @@ async fn test_api_def_with_request_path_only_2() {
     let mut header_map = HeaderMap::new();
     header_map.insert("project-id", HeaderValue::from_static("4"));
 
-    let api_request = get_gateway_request("/foo/1/2?account-id=3", None, &header_map, Value::Null);
+    let api_request =
+        get_gateway_request("/foo/1/2?account-id=3", None, &header_map, JsonValue::Null);
 
     let response_mapping = r#"
        let user-id = request.path.user-id;
@@ -570,9 +594,9 @@ async fn test_api_def_with_request_path_only_2() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("1-2-3-4".to_string()),
-            Value::String("b".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("1-2-3-4".to_string()),
+            JsonValue::String("b".to_string()),
         ]),
     );
 
@@ -647,20 +671,20 @@ async fn test_api_def_with_invalid_input_1() {
 async fn test_api_def_with_request_body_0() {
     let empty_headers = HeaderMap::new();
 
-    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut request_body: serde_json::Map<String, JsonValue> = serde_json::Map::new();
 
-    request_body.insert("foo_key".to_string(), Value::Number(Number::from(1)));
+    request_body.insert("foo_key".to_string(), JsonValue::Number(Number::from(1)));
 
     request_body.insert(
         "bar_key".to_string(),
-        Value::String("bar_value".to_string()),
+        JsonValue::String("bar_value".to_string()),
     );
 
     let api_request = get_gateway_request(
         "/foo/john",
         None,
         &empty_headers,
-        Value::Object(request_body),
+        JsonValue::Object(request_body),
     );
 
     let response_mapping = r#"
@@ -693,9 +717,9 @@ async fn test_api_def_with_request_body_0() {
     let expected = (
         "bar_value".to_string(),
         "golem:it/api.{add-item}".to_string(),
-        Value::Array(vec![
-            Value::Number(1.into()),
-            Value::String("bar".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::Number(1.into()),
+            JsonValue::String("bar".to_string()),
         ]),
     );
 
@@ -706,20 +730,20 @@ async fn test_api_def_with_request_body_0() {
 async fn test_api_def_with_request_body_1() {
     let empty_headers = HeaderMap::new();
 
-    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut request_body: serde_json::Map<String, JsonValue> = serde_json::Map::new();
 
-    request_body.insert("foo_key".to_string(), Value::Number(Number::from(1)));
+    request_body.insert("foo_key".to_string(), JsonValue::Number(Number::from(1)));
 
     request_body.insert(
         "bar_key".to_string(),
-        Value::String("bar_value".to_string()),
+        JsonValue::String("bar_value".to_string()),
     );
 
     let api_request = get_gateway_request(
         "/foo/john",
         None,
         &empty_headers,
-        Value::Object(request_body),
+        JsonValue::Object(request_body),
     );
 
     let response_mapping = r#"
@@ -757,9 +781,9 @@ async fn test_api_def_with_request_body_1() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{add-item}".to_string(),
-        Value::Array(vec![
-            Value::Number(1.into()),
-            Value::String("bar_value".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::Number(1.into()),
+            JsonValue::String("bar_value".to_string()),
         ]),
     );
 
@@ -774,7 +798,7 @@ async fn test_api_def_with_request_body_2() {
         "/foo/2",
         None,
         &empty_headers,
-        Value::String("address".to_string()),
+        JsonValue::String("address".to_string()),
     );
 
     let response_mapping = r#"
@@ -813,9 +837,9 @@ async fn test_api_def_with_request_body_2() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("address".to_string()),
-            Value::String("address".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("address".to_string()),
+            JsonValue::String("address".to_string()),
         ]),
     );
 
@@ -828,20 +852,20 @@ async fn test_api_def_with_request_body_2() {
 async fn test_api_def_with_invalid_request_body() {
     let empty_headers = HeaderMap::new();
 
-    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut request_body: serde_json::Map<String, JsonValue> = serde_json::Map::new();
 
-    request_body.insert("foo_key".to_string(), Value::String("1".to_string()));
+    request_body.insert("foo_key".to_string(), JsonValue::String("1".to_string()));
 
     request_body.insert(
         "bar_key".to_string(),
-        Value::String("bar_value".to_string()),
+        JsonValue::String("bar_value".to_string()),
     );
 
     let api_request = get_gateway_request(
         "/foo/john",
         None,
         &empty_headers,
-        Value::Object(request_body),
+        JsonValue::Object(request_body),
     );
 
     let response_mapping = r#"
@@ -987,9 +1011,9 @@ async fn test_api_def_with_security() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("a".to_string()),
+            JsonValue::String("b".to_string()),
         ]),
         Some("bob@example.com".to_string()),
     );
@@ -1388,9 +1412,9 @@ async fn test_api_def_with_security_with_relative_callback() {
 
     let expected = (
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("a".to_string()),
+            JsonValue::String("b".to_string()),
         ]),
         Some("bob@example.com".to_string()),
     );
@@ -1659,8 +1683,12 @@ async fn test_api_def_with_custom_cors_preflight_3() {
 #[test]
 async fn test_api_def_with_path_and_query_1() {
     let empty_headers = HeaderMap::new();
-    let api_request =
-        get_gateway_request("/foo/1", Some("token-id=jon"), &empty_headers, Value::Null);
+    let api_request = get_gateway_request(
+        "/foo/1",
+        Some("token-id=jon"),
+        &empty_headers,
+        JsonValue::Null,
+    );
 
     let response_mapping = r#"
         let x: u64 = request.path.user-id;
@@ -1693,9 +1721,9 @@ async fn test_api_def_with_path_and_query_1() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("jon".to_string()),
-            Value::String("jon".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("jon".to_string()),
+            JsonValue::String("jon".to_string()),
         ]),
     );
 
@@ -1706,8 +1734,12 @@ async fn test_api_def_with_path_and_query_1() {
 #[test]
 async fn test_api_def_with_path_and_query_2() {
     let empty_headers = HeaderMap::new();
-    let api_request =
-        get_gateway_request("/foo/1", Some("token-id=2"), &empty_headers, Value::Null);
+    let api_request = get_gateway_request(
+        "/foo/1",
+        Some("token-id=2"),
+        &empty_headers,
+        JsonValue::Null,
+    );
 
     // Default types for path and query parameters are string
     let response_mapping = r#"
@@ -1742,9 +1774,9 @@ async fn test_api_def_with_path_and_query_2() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("1".to_string()),
-            Value::String("2".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("1".to_string()),
+            JsonValue::String("2".to_string()),
         ]),
     );
 
@@ -1758,9 +1790,9 @@ async fn test_api_def_with_path_and_query_3() {
         "/foo/1",
         None,
         &empty_headers,
-        Value::Object(serde_json::Map::from_iter(vec![(
+        JsonValue::Object(serde_json::Map::from_iter(vec![(
             "age".to_string(),
-            Value::Number(serde_json::Number::from(10)),
+            JsonValue::Number(serde_json::Number::from(10)),
         )])),
     );
 
@@ -1798,9 +1830,9 @@ async fn test_api_def_with_path_and_query_3() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("a".to_string()),
-            Value::String("b".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("a".to_string()),
+            JsonValue::String("b".to_string()),
         ]),
     );
 
@@ -1811,23 +1843,23 @@ async fn test_api_def_with_path_and_query_3() {
 async fn test_api_def_with_path_and_request_body_1() {
     let empty_headers = HeaderMap::new();
 
-    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut request_body: serde_json::Map<String, JsonValue> = serde_json::Map::new();
 
     request_body.insert(
         "foo_key".to_string(),
-        Value::String("foo_value".to_string()),
+        JsonValue::String("foo_value".to_string()),
     );
 
     request_body.insert(
         "bar_key".to_string(),
-        Value::Array(vec![Value::String("bar_value".to_string())]),
+        JsonValue::Array(vec![JsonValue::String("bar_value".to_string())]),
     );
 
     let api_request = get_gateway_request(
         "/foo/bar",
         None,
         &empty_headers,
-        Value::Object(request_body),
+        JsonValue::Object(request_body),
     );
 
     let response_mapping = r#"
@@ -1865,9 +1897,9 @@ async fn test_api_def_with_path_and_request_body_1() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("foo_value".to_string()),
-            Value::String("bar_value".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("foo_value".to_string()),
+            JsonValue::String("bar_value".to_string()),
         ]),
     );
 
@@ -1878,23 +1910,23 @@ async fn test_api_def_with_path_and_request_body_1() {
 async fn test_api_def_with_path_and_request_body_2() {
     let empty_headers = HeaderMap::new();
 
-    let mut request_body: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut request_body: serde_json::Map<String, JsonValue> = serde_json::Map::new();
 
     request_body.insert(
         "foo_key".to_string(),
-        Value::String("foo_value".to_string()),
+        JsonValue::String("foo_value".to_string()),
     );
 
     request_body.insert(
         "bar_key".to_string(),
-        Value::Array(vec![Value::String("bar_value".to_string())]),
+        JsonValue::Array(vec![JsonValue::String("bar_value".to_string())]),
     );
 
     let api_request = get_gateway_request(
         "/foo/2",
         None,
         &empty_headers,
-        Value::Object(request_body.clone()),
+        JsonValue::Object(request_body.clone()),
     );
 
     let response_mapping = r#"
@@ -1930,9 +1962,9 @@ async fn test_api_def_with_path_and_request_body_2() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("foo_value".to_string()),
-            Value::String("bar_value".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("foo_value".to_string()),
+            JsonValue::String("bar_value".to_string()),
         ]),
     );
 
@@ -1992,9 +2024,9 @@ async fn test_api_def_with_path_and_query_and_header_and_body() {
     let expected = (
         "shopping-cart-1".to_string(),
         "golem:it/api.{get-cart-contents}".to_string(),
-        Value::Array(vec![
-            Value::String("1-2".to_string()),
-            Value::String("42-qux_value-quux_value".to_string()),
+        JsonValue::Array(vec![
+            JsonValue::String("1-2".to_string()),
+            JsonValue::String("42-qux_value-quux_value".to_string()),
         ]),
     );
 
@@ -2004,7 +2036,8 @@ async fn test_api_def_with_path_and_query_and_header_and_body() {
 #[test]
 async fn test_api_def_with_idempotency_key() {
     async fn test_key(header_map: &HeaderMap, idempotency_key: Option<IdempotencyKey>) {
-        let api_request = get_gateway_request("/getcartcontent/1", None, header_map, Value::Null);
+        let api_request =
+            get_gateway_request("/getcartcontent/1", None, header_map, JsonValue::Null);
 
         let expression = r#"
             let x: u64 = request.path.cart-id;
@@ -2081,7 +2114,7 @@ fn get_preflight_gateway_request(
     base_path: &str,
     query_path: Option<&str>,
     headers: &HeaderMap,
-    req_body: Value,
+    req_body: JsonValue,
 ) -> Request {
     let full_uri = match query_path {
         Some(query) => format!("{}?{}", base_path.trim_end_matches('/'), query),
@@ -2441,13 +2474,12 @@ mod internal {
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
     };
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-    use golem_wasm_rpc::protobuf::{NameTypePair, NameValuePair, Type, TypedRecord, TypedTuple};
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_service::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentDetails, ComponentMetadataDictionary,
     };
     use golem_worker_service::gateway_api_deployment::ApiSiteString;
+    use golem_worker_service::gateway_binding::SwaggerUiBinding;
     use golem_worker_service::gateway_execution::api_definition_lookup::{
         ApiDefinitionLookupError, HttpApiDefinitionsLookup,
     };
@@ -2460,6 +2492,9 @@ mod internal {
     use golem_worker_service::gateway_execution::http_handler_binding_handler::{
         HttpHandlerBindingHandler, HttpHandlerBindingResult,
     };
+    use golem_worker_service::gateway_execution::swagger_binding_handler::{
+        SwaggerBindingHandler, SwaggerBindingResult, SwaggerBindingSuccess,
+    };
     use golem_worker_service::gateway_execution::WorkerDetails;
     use golem_worker_service::gateway_execution::{
         GatewayResolvedWorkerRequest, GatewayWorkerRequestExecutor, WorkerRequestExecutorError,
@@ -2467,7 +2502,7 @@ mod internal {
     };
     use golem_worker_service::gateway_middleware::HttpCors;
     use golem_worker_service::gateway_rib_interpreter::{
-        DefaultRibInterpreter, RibRuntimeError, WorkerServiceRibInterpreter,
+        DefaultRibInterpreter, WorkerServiceRibInterpreter,
     };
     use http::header::{
         ACCESS_CONTROL_ALLOW_CREDENTIALS, ACCESS_CONTROL_ALLOW_HEADERS,
@@ -2476,7 +2511,7 @@ mod internal {
     };
     use poem::Response;
     use rib::{ComponentDependencyKey, RibResult};
-    use serde_json::Value;
+    use serde_json::Value as JsonValue;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
@@ -2520,7 +2555,7 @@ mod internal {
             if function_name == "bigw:shopping/api.{store.new}" {
                 let uri = format!(
                     "urn:worker:71a31a33-28a5-4978-8a58-83424a149c8b/{}",
-                    resolved_worker_request.worker_name.unwrap_or_default()
+                    resolved_worker_request.worker_name
                 );
                 let handle = golem_wasm_rpc::Value::Handle {
                     uri,
@@ -2530,46 +2565,42 @@ mod internal {
                 let handle_type = AnalysedType::Handle(TypeHandle {
                     resource_id: AnalysedResourceId(0),
                     mode: AnalysedResourceMode::Owned,
+                    name: None,
+                    owner: None,
                 });
 
                 let value_and_type = ValueAndType::new(handle, handle_type);
 
-                let type_annotated_value = TypeAnnotatedValue::try_from(value_and_type).unwrap();
-                return Ok(WorkerResponse::new(Some(type_annotated_value)));
+                return Ok(WorkerResponse::new(Some(value_and_type)));
             }
 
             if function_name.clone() == "bigw:shopping/api.{get-user-name}" {
-                let x = ValueAndType::new(
+                let value_and_type = ValueAndType::new(
                     golem_wasm_rpc::Value::String("test-user".to_string()),
                     str(),
                 );
 
-                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
-                return Ok(WorkerResponse::new(Some(type_annotated_value)));
+                return Ok(WorkerResponse::new(Some(value_and_type)));
             }
 
             if function_name == "bigw:shopping/api.{store.get-currency}" {
-                let x = ValueAndType::new(
+                let value_and_type = ValueAndType::new(
                     golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
                         golem_wasm_rpc::Value::String("USD".to_string()),
                     )))),
                     result(str(), str()),
                 );
 
-                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
-
-                return Ok(WorkerResponse::new(Some(type_annotated_value)));
+                return Ok(WorkerResponse::new(Some(value_and_type)));
             }
 
             if function_name == "bigw:shopping/api.{store.add-user}" {
-                let x = ValueAndType::new(
+                let value_and_type = ValueAndType::new(
                     golem_wasm_rpc::Value::String("test-user-generated".to_string()),
                     str(),
                 );
 
-                let type_annotated_value = TypeAnnotatedValue::try_from(x).unwrap();
-
-                return Ok(WorkerResponse::new(Some(type_annotated_value)));
+                return Ok(WorkerResponse::new(Some(value_and_type)));
             }
 
             let type_annotated_value = convert_to_worker_response(&resolved_worker_request);
@@ -2584,7 +2615,7 @@ mod internal {
         async fn handle_file_server_binding_result(
             &self,
             _namespace: Namespace,
-            _worker_name: Option<&str>,
+            _worker_name: &str,
             _component_id: &ComponentId,
             _original_result: RibResult,
         ) -> FileServerBindingResult {
@@ -2610,7 +2641,7 @@ mod internal {
     pub struct DefaultResult {
         pub worker_name: String,
         pub function_name: String,
-        pub function_params: Value,
+        pub function_params: JsonValue,
         pub user_email: Option<String>,
         pub cors_middleware_headers: Option<CorsMiddlewareHeadersInResponse>, // if binding has cors middleware configured,
         pub idempotency_key: Option<IdempotencyKey>,
@@ -2623,86 +2654,68 @@ mod internal {
         pub cors_header_expose_headers: Option<String>,  // If cors middleware is applied
     }
 
-    pub fn create_tuple(type_annotated_value: Vec<TypeAnnotatedValue>) -> TypeAnnotatedValue {
-        let root = type_annotated_value
-            .iter()
-            .map(|x| golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                type_annotated_value: Some(x.clone()),
-            })
-            .collect::<Vec<_>>();
-
-        let types = type_annotated_value
-            .iter()
-            .map(|x| golem_wasm_rpc::protobuf::Type::try_from(x).unwrap())
-            .collect::<Vec<_>>();
-
-        TypeAnnotatedValue::Tuple(TypedTuple {
-            value: root,
-            typ: types,
-        })
+    pub fn create_tuple(items: Vec<ValueAndType>) -> ValueAndType {
+        ValueAndType::new(
+            Value::Tuple(items.iter().map(|item| item.value.clone()).collect()),
+            tuple(
+                items
+                    .iter()
+                    .map(|item| item.typ.clone())
+                    .collect::<Vec<AnalysedType>>(),
+            ),
+        )
     }
 
-    pub fn create_record(
-        values: Vec<(String, TypeAnnotatedValue)>,
-    ) -> Result<TypeAnnotatedValue, RibRuntimeError> {
-        let mut name_type_pairs = vec![];
-        let mut name_value_pairs = vec![];
-
-        for (key, value) in values.iter() {
-            let typ = Type::try_from(value)
-                .map_err(|_| RibRuntimeError("Failed to get type".to_string()))?;
-            name_type_pairs.push(NameTypePair {
-                name: key.to_string(),
-                typ: Some(typ),
-            });
-
-            name_value_pairs.push(NameValuePair {
-                name: key.to_string(),
-                value: Some(golem_wasm_rpc::protobuf::TypeAnnotatedValue {
-                    type_annotated_value: Some(value.clone()),
-                }),
-            });
-        }
-
-        Ok(TypeAnnotatedValue::Record(TypedRecord {
-            typ: name_type_pairs,
-            value: name_value_pairs,
-        }))
+    pub fn create_record(values: Vec<(&str, ValueAndType)>) -> ValueAndType {
+        ValueAndType::new(
+            Value::Record(values.iter().map(|(_, vnt)| vnt.value.clone()).collect()),
+            record(
+                values
+                    .iter()
+                    .map(|(name, vnt)| field(name, vnt.typ.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+        )
     }
 
     pub fn convert_to_worker_response(
         worker_request: &GatewayResolvedWorkerRequest,
-    ) -> TypeAnnotatedValue {
+    ) -> ValueAndType {
         let mut record_elems = vec![
             (
-                "component_id".to_string(),
-                TypeAnnotatedValue::Str(worker_request.component_id.0.to_string()),
+                "component_id",
+                worker_request
+                    .component_id
+                    .0
+                    .to_string()
+                    .into_value_and_type(),
             ),
             (
-                "function_name".to_string(),
-                TypeAnnotatedValue::Str(worker_request.function_name.to_string()),
+                "function_name",
+                worker_request
+                    .function_name
+                    .to_string()
+                    .into_value_and_type(),
             ),
             (
-                "function_params".to_string(),
+                "function_params",
                 create_tuple(worker_request.function_params.clone()),
             ),
         ];
 
-        if let Some(worker_name) = worker_request.clone().worker_name {
-            record_elems.push((
-                "worker_name".to_string(),
-                TypeAnnotatedValue::Str(worker_name),
-            ))
-        };
+        record_elems.push((
+            "worker_name",
+            worker_request.worker_name.clone().into_value_and_type(),
+        ));
 
         if let Some(idempotency_key) = worker_request.clone().idempotency_key {
             record_elems.push((
-                "idempotency_key".to_string(),
-                TypeAnnotatedValue::Str(idempotency_key.to_string()),
+                "idempotency_key",
+                idempotency_key.to_string().into_value_and_type(),
             ))
         };
 
-        create_record(record_elems).unwrap()
+        create_record(record_elems)
     }
 
     pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
@@ -2917,7 +2930,7 @@ mod internal {
             .await
             .expect("TestResponse for worker-binding expects a response body");
 
-        let body_json: Value =
+        let body_json: JsonValue =
             serde_json::from_slice(&bytes).expect("Failed to read the response body");
 
         let worker_name = body_json
@@ -2959,7 +2972,7 @@ mod internal {
             .await
             .expect("TestResponse for worker-binding expects a response body");
 
-        let body_json: Value =
+        let body_json: JsonValue =
             serde_json::from_slice(&bytes).expect("Failed to read the response body");
 
         let worker_name = body_json
@@ -3109,6 +3122,25 @@ mod internal {
 
     pub fn get_session_store_with_zero_ttl() -> GatewaySessionStore {
         Arc::new(NoopTestSessionBackend)
+    }
+
+    struct TestSwaggerBindingHandler {}
+    // Create a test swagger binding handler which outputs a static html page
+    #[async_trait]
+    impl SwaggerBindingHandler for TestSwaggerBindingHandler {
+        async fn handle_swagger_binding_request(
+            &self,
+            _authority: &str,
+            _swagger_binding: &SwaggerUiBinding,
+        ) -> SwaggerBindingResult {
+            Ok(SwaggerBindingSuccess {
+                html_content: "<html><body>Test Swagger UI</body></html>".to_string(),
+            })
+        }
+    }
+
+    pub fn get_test_swagger_binding_handler() -> Arc<dyn SwaggerBindingHandler + Sync + Send> {
+        Arc::new(TestSwaggerBindingHandler {})
     }
 }
 
@@ -3756,4 +3788,80 @@ nUhg4edJVHjqxYyoQT+YSPLlHl6AkLZt9/n1NJ+bft0=
 
         cookies
     }
+}
+
+#[test]
+async fn test_swagger_ui_binding() {
+    // Create a Swagger UI API definition
+    let api_specification = get_api_def_with_swagger_ui("/swagger-ui").await;
+
+    // Create a request to the Swagger UI endpoint
+    let mut headers = HeaderMap::new();
+    headers.insert(HOST, HeaderValue::from_static("localhost:8080"));
+    let api_request = get_gateway_request("/swagger-ui", None, &headers, JsonValue::Null);
+
+    // Create a session store
+    let session_store = internal::get_session_store();
+
+    // Execute the request
+    let response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    // Verify response status code
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Get response body
+    let body = match response.into_body().into_bytes().await {
+        Ok(b) => b,
+        Err(_) => panic!("Failed to read body"),
+    };
+    let html_content = String::from_utf8(body.to_vec()).unwrap();
+
+    // Verify the HTML contains the expected Swagger UI content
+    // The test checks whether the static html page
+    // is properly returned by the swagger binding handler
+    assert!(html_content.contains("<html><body>Test Swagger UI</body></html>"));
+}
+
+// Helper function to create an API definition with a Swagger UI binding
+async fn get_api_def_with_swagger_ui(path_pattern: &str) -> HttpApiDefinition {
+    let yaml_string = format!(
+        r#"
+          id: api-docs
+          version: 0.0.1
+          createdAt: 2024-08-21T07:42:15.696Z
+          routes:
+          - method: Get
+            path: {path_pattern}
+            binding:
+              bindingType: swagger-ui
+        "#,
+    );
+
+    // Parse the YAML into an API definition request
+    let http_api_definition_request: api::dto::HttpApiDefinitionRequest =
+        serde_yaml::from_str(yaml_string.as_str()).unwrap();
+
+    // Convert to core request
+    let core_request: gateway_api_definition::http::HttpApiDefinitionRequest =
+        http_api_definition_request
+            .into_core(&TestConversionContext.boxed())
+            .await
+            .unwrap();
+
+    // Create the API definition
+    let create_at: DateTime<Utc> = "2024-08-21T07:42:15.696Z".parse().unwrap();
+    HttpApiDefinition::from_http_api_definition_request(
+        &test_namespace(),
+        core_request,
+        create_at,
+        &security::get_test_security_scheme_service(TestIdentityProvider::default()),
+    )
+    .await
+    .unwrap()
 }

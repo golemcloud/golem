@@ -32,13 +32,14 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_shopping_cart_example(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -57,13 +58,14 @@ async fn recover_shopping_cart_example(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_shopping_cart_resource_example(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -82,13 +84,14 @@ async fn recover_shopping_cart_resource_example(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_environment_example(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -107,9 +110,14 @@ async fn recover_environment_example(
 
 #[test]
 #[tracing::instrument]
-async fn recover_read_stdin(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
+async fn recover_read_stdin(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id =
         restore_from_recovery_golden_file(&executor, &context, "read_stdin_fails", &["read-stdin"])
@@ -124,9 +132,14 @@ async fn recover_read_stdin(last_unique_id: &LastUniqueId, deps: &Deps, _tracing
 
 #[test]
 #[tracing::instrument]
-async fn recover_jump(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
+async fn recover_jump(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id =
         restore_from_recovery_golden_file(&executor, &context, "jump", &["runtime-service"]).await;
@@ -140,9 +153,14 @@ async fn recover_jump(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tra
 
 #[test]
 #[tracing::instrument]
-async fn recover_js_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
+async fn recover_js_example_1(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id =
         restore_from_recovery_golden_file(&executor, &context, "js_example_1", &["js-1"]).await;
@@ -156,13 +174,14 @@ async fn recover_js_example_1(last_unique_id: &LastUniqueId, deps: &Deps, _traci
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_auto_update_on_running(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let worker_id = restore_from_recovery_golden_file(
         &executor,
@@ -181,13 +200,14 @@ async fn recover_auto_update_on_running(
 
 #[test]
 #[tracing::instrument]
+#[ignore] // TODO: 1.3 breaks worker recovery compatibility. to be regenerated once 1.3 is final
 async fn recover_counter_resource_test_2(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let caller_worker_id = restore_from_recovery_golden_file(
         &executor,

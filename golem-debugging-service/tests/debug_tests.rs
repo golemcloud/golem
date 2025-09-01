@@ -1,4 +1,4 @@
-use crate::debug_mode::debug_worker_executor::DebugWorkerExecutorClient;
+use crate::debug_mode::debug_worker_executor::{DebugWorkerExecutorClient, UntypedJrpcMessage};
 use crate::regular_mode::regular_worker_executor::TestRegularWorkerExecutor;
 use crate::*;
 use golem_common::model::oplog::OplogIndex;
@@ -9,7 +9,7 @@ use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm_ast::analysis::analysed_type::{record, str, variant};
 use golem_wasm_ast::analysis::{NameOptionTypePair, NameTypePair};
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(RegularWorkerExecutorTestDependencies);
@@ -24,8 +24,12 @@ async fn test_connect_non_invoked_worker(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
 
@@ -59,8 +63,12 @@ async fn test_connect_invoked_worker(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -78,7 +86,7 @@ async fn test_connect_invoked_worker(
 
     let _ = regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
@@ -86,14 +94,14 @@ async fn test_connect_invoked_worker(
 
     let _ = regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -115,8 +123,12 @@ async fn test_connect_and_playback(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -146,7 +158,7 @@ async fn test_connect_and_playback(
     let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
 
     let playback_result = debug_executor
-        .playback(first_invocation_boundary, None, 3)
+        .playback(first_invocation_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -159,13 +171,171 @@ async fn test_connect_and_playback(
 
 #[test]
 #[tracing::instrument]
+async fn test_connect_and_playback_raw(
+    last_unique_id: &LastUniqueId,
+    deps: &RegularWorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
+
+    let debug_context = DebugExecutorTestContext::from(&context);
+    let mut debug_executor = start_debug_executor(deps, &debug_context).await;
+
+    let component = regular_worker_executor
+        .component("shopping-cart")
+        .store()
+        .await;
+
+    let worker_id = regular_worker_executor
+        .start_worker(&component, "shopping-cart")
+        .await
+        .unwrap();
+
+    run_shopping_cart_initialize_and_add(&regular_worker_executor, &worker_id).await;
+
+    regular_worker_executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{add-item}",
+            vec![Record(vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem T-Shirt L".into_value_and_type()),
+                ("price", 120.0f32.into_value_and_type()),
+                ("quantity", 5u32.into_value_and_type()),
+            ])
+            .into_value_and_type()],
+        )
+        .await
+        .unwrap()
+        .expect("Failed to invoke and await");
+
+    regular_worker_executor
+        .invoke_and_await(&worker_id, "golem:it/api.{checkout}", vec![])
+        .await
+        .unwrap()
+        .expect("Failed to invoke and await");
+
+    let oplogs = regular_worker_executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await
+        .unwrap();
+
+    debug_executor
+        .connect(&worker_id)
+        .await
+        .expect("Failed to connect to the worker in debug mode");
+
+    let first_invocation_boundary = nth_invocation_boundary(&oplogs, 1);
+    let fourth_invocation_boundary = nth_invocation_boundary(&oplogs, 4);
+
+    let playback_result_1 = debug_executor
+        .playback(fourth_invocation_boundary, None)
+        .await
+        .expect("Failed to playback the worker in debug mode");
+
+    assert!(!playback_result_1.incremental_playback);
+
+    debug_executor
+        .rewind(first_invocation_boundary)
+        .await
+        .expect("Failed to rewind the worker in debug mode");
+
+    let playback_result_2 = debug_executor
+        .playback(fourth_invocation_boundary, None)
+        .await
+        .expect("Failed to playback the worker in debug mode");
+
+    assert!(playback_result_2.incremental_playback);
+
+    let all_messages = debug_executor.all_read_messages();
+
+    assert!(matches!(
+        &all_messages[..],
+        [
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                method: Some(_),
+                ..
+            },
+            UntypedJrpcMessage {
+                result: Some(_),
+                ..
+            },
+        ]
+    ));
+
+    for id in [1, 2, 3, 4, 6, 8, 9, 10] {
+        assert_eq!(all_messages[id].method, Some("emit-logs".to_string()))
+    }
+
+    assert_eq!(
+        all_messages[1].params.clone().unwrap().as_array().unwrap()[0]
+            .as_object()
+            .unwrap()
+            .get("message")
+            .unwrap(),
+        &serde_json::json!("Initializing cart for user test-user-1\n")
+    )
+}
+
+#[test]
+#[tracing::instrument]
 async fn test_connect_and_playback_to_middle_of_invocation(
     last_unique_id: &LastUniqueId,
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -197,7 +367,7 @@ async fn test_connect_and_playback_to_middle_of_invocation(
     let index_in_middle = previous_index(first_invocation_boundary);
 
     let playback_result = debug_executor
-        .playback(index_in_middle, None, 3)
+        .playback(index_in_middle, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -216,8 +386,12 @@ async fn test_playback_from_breakpoint(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -250,7 +424,7 @@ async fn test_playback_from_breakpoint(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result1 = debug_executor
-        .playback(initialize_boundary, None, 3)
+        .playback(initialize_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -266,7 +440,7 @@ async fn test_playback_from_breakpoint(
     assert_eq!(current_index, initialize_boundary);
 
     let playback_result2 = debug_executor
-        .playback(add_item_boundary, None, 3)
+        .playback(add_item_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -280,7 +454,9 @@ async fn test_playback_from_breakpoint(
     assert_eq!(connect_result.worker_id, worker_id);
     assert_eq!(playback_result1.worker_id, worker_id);
     assert_eq!(playback_result1.current_index, initialize_boundary);
+    assert!(!playback_result1.incremental_playback);
     assert_eq!(playback_result2.worker_id, worker_id);
+    assert!(playback_result2.incremental_playback);
 }
 
 #[test]
@@ -290,8 +466,12 @@ async fn test_playback_and_rewind(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -324,12 +504,12 @@ async fn test_playback_and_rewind(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result = debug_executor
-        .playback(second_boundary, None, 3)
+        .playback(second_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
     let rewind_result = debug_executor
-        .rewind(first_boundary, 3)
+        .rewind(first_boundary)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -349,8 +529,12 @@ async fn test_playback_and_fork(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -381,7 +565,7 @@ async fn test_playback_and_fork(
         .expect("Failed to connect to the worker in debug mode");
 
     let playback_result = debug_executor
-        .playback(first_boundary, None, 3)
+        .playback(first_boundary, None)
         .await
         .expect("Failed to playback the worker in debug mode");
 
@@ -407,14 +591,14 @@ async fn test_playback_and_fork(
     // invoke the forked worker with second invocation
     let _ = regular_worker_executor
         .invoke_and_await(
-            target_worker_id.clone(),
+            &target_worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -441,8 +625,12 @@ async fn test_playback_with_overrides(
     deps: &RegularWorkerExecutorTestDependencies,
     _tracing: &Tracing,
 ) {
-    let context = RegularExecutorTestContext::new(last_unique_id);
-    let regular_worker_executor = start_regular_executor(deps, &context).await.into_admin();
+    let context =
+        RegularExecutorTestContext::new(last_unique_id, &deps.admin().await.default_project_id);
+    let regular_worker_executor = start_regular_executor(deps, &context)
+        .await
+        .into_admin()
+        .await;
 
     let debug_context = DebugExecutorTestContext::from(&context);
     let mut debug_executor = start_debug_executor(deps, &debug_context).await;
@@ -486,7 +674,6 @@ async fn test_playback_with_overrides(
         .playback(
             shopping_cart_execution_result.last_add_item_boundary,
             Some(vec![oplog_overrides]),
-            3,
         )
         .await
         .expect("Failed to playback the worker in debug mode");
@@ -614,7 +801,7 @@ async fn run_shopping_cart_initialize_and_add(
 ) {
     regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            worker_id,
             "golem:it/api.{initialize-cart}",
             vec!["test-user-1".into_value_and_type()],
         )
@@ -624,14 +811,14 @@ async fn run_shopping_cart_initialize_and_add(
 
     regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await
@@ -648,21 +835,21 @@ async fn run_shopping_cart_workflow(
 
     // Checkout
     let _ = regular_worker_executor
-        .invoke_and_await(worker_id.clone(), "golem:it/api.{checkout}", vec![])
+        .invoke_and_await(worker_id, "golem:it/api.{checkout}", vec![])
         .await
         .expect("Failed to invoke and await");
 
     // Add Item again
     let _ = regular_worker_executor
         .invoke_and_await(
-            worker_id.clone(),
+            worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;

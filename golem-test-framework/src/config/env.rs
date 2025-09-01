@@ -236,12 +236,12 @@ impl EnvBasedTestDependencies {
                 config.redis_monitor_stderr_level(),
             ))
         } else {
-            Arc::new(SpawnedRedisMonitor::new(
-                redis,
-                config.redis_monitor_stdout_level(),
-                config.redis_monitor_stderr_level(),
-            ))
-        }
+        Arc::new(SpawnedRedisMonitor::new(
+            redis,
+            config.redis_monitor_stdout_level(),
+            config.redis_monitor_stderr_level(),
+        ))
+    }
     }
 
     async fn make_cloud_service(

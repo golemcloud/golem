@@ -268,7 +268,7 @@ async fn get_components_many_versions(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn get_component_latest_version(deps: &Deps) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     // Create component
     let (component_id, _) = admin
@@ -301,7 +301,7 @@ async fn get_component_latest_version(deps: &Deps) {
 #[test]
 #[tracing::instrument]
 async fn get_component_metadata_all_versions(deps: &Deps) {
-    let admin = deps.admin();
+    let admin = deps.admin().await;
 
     // Create component
     let (component_id, component_name) = admin

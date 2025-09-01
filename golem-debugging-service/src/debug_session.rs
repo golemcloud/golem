@@ -22,11 +22,11 @@ use async_trait::async_trait;
 use bincode::Encode;
 use golem_common::model::auth::Namespace;
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, OplogEntry, OplogIndex, OplogPayload, WorkerError,
+    DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, WorkerError,
 };
 use golem_common::model::public_oplog::{
-    CreateParameters, DescribeResourceParameters, ExportedFunctionCompletedParameters,
-    FailedUpdateParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, LogParameters,
+    CreateParameters, ExportedFunctionCompletedParameters, FailedUpdateParameters,
+    GrowMemoryParameters, ImportedFunctionInvokedParameters, LogParameters,
     PublicDurableFunctionType, PublicOplogEntry, ResourceParameters,
 };
 use golem_common::model::{
@@ -34,7 +34,7 @@ use golem_common::model::{
     WorkerMetadata,
 };
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableErrorCode, SerializableHttpRequest, SerializableResponse,
@@ -52,7 +52,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
 use std::ops::Deref;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use uuid::Uuid;
 
 // A shared debug session which will be internally used by the custom oplog service
@@ -150,9 +150,9 @@ impl DebugSessions for DebugSessionsDefault {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct DebugSessionData {
-    pub worker_metadata: Option<WorkerMetadata>,
+    pub worker_metadata: WorkerMetadata,
     pub target_oplog_index: Option<OplogIndex>,
     pub playback_overrides: PlaybackOverridesInternal,
     // The current status of the oplog index being replayed and possibly
@@ -173,10 +173,17 @@ impl PlaybackOverridesInternal {
     }
     pub fn from_playback_override(
         playback_overrides: Vec<PlaybackOverride>,
+        current_index: OplogIndex,
     ) -> Result<Self, String> {
         let mut overrides = HashMap::new();
         for override_data in playback_overrides {
             let oplog_index = override_data.index;
+            if oplog_index <= current_index {
+                return Err(
+                    "Cannot create overrides for oplog indices that are in the past".to_string(),
+                );
+            }
+
             let public_oplog_entry: PublicOplogEntry = override_data.oplog;
             let oplog_entry = get_oplog_entry_from_public_oplog_entry(public_oplog_entry)?;
             overrides.insert(oplog_index, oplog_entry);
@@ -227,24 +234,6 @@ impl ActiveSessionData {
     }
 }
 
-#[derive(Default)]
-pub struct ActiveSession {
-    pub active_session: Arc<RwLock<Option<ActiveSessionData>>>,
-}
-
-impl ActiveSession {
-    pub async fn set_active_session(&self, worker_id: WorkerId, cloud_namespace: Namespace) {
-        let mut active_session = self.active_session.write().unwrap();
-        *active_session = Some(ActiveSessionData::new(cloud_namespace, worker_id));
-    }
-
-    pub async fn get_active_session(&self) -> Option<ActiveSessionData> {
-        let active_session = &self.active_session.read().unwrap();
-        let active_session = active_session.as_ref();
-        active_session.cloned()
-    }
-}
-
 fn get_oplog_entry_from_public_oplog_entry(
     public_oplog_entry: PublicOplogEntry,
 ) -> Result<OplogEntry, String> {
@@ -270,7 +259,9 @@ fn get_oplog_entry_from_public_oplog_entry(
             component_version,
             args,
             env,
-            account_id,
+            project_id,
+            created_by,
+            wasi_config_vars,
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -281,7 +272,9 @@ fn get_oplog_entry_from_public_oplog_entry(
             component_version,
             args,
             env: env.into_iter().collect(),
-            account_id,
+            project_id,
+            created_by,
+            wasi_config_vars: wasi_config_vars.into(),
             parent,
             component_size,
             initial_total_linear_memory_size,
@@ -294,7 +287,7 @@ fn get_oplog_entry_from_public_oplog_entry(
             timestamp,
             function_name,
             response,
-            wrapped_function_type,
+            durable_function_type: wrapped_function_type,
             request,
         }) => {
             let response: OplogPayload = convert_response_value_and_type_to_oplog_payload(
@@ -320,7 +313,7 @@ fn get_oplog_entry_from_public_oplog_entry(
                 function_name,
                 request,
                 response,
-                wrapped_function_type: durable_function_type,
+                durable_function_type,
             })
         }
         PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked_parameters) => {
@@ -422,32 +415,26 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
             Ok(OplogEntry::GrowMemory { timestamp, delta })
         }
-        PublicOplogEntry::CreateResource(ResourceParameters { timestamp, id }) => {
-            Ok(OplogEntry::CreateResource { timestamp, id })
-        }
-        PublicOplogEntry::DropResource(ResourceParameters { timestamp, id }) => {
-            Ok(OplogEntry::DropResource { timestamp, id })
-        }
-        PublicOplogEntry::DescribeResource(DescribeResourceParameters {
+        PublicOplogEntry::CreateResource(ResourceParameters {
             timestamp,
             id,
-            resource_name,
-            resource_params,
-        }) => {
-            let resource_params = resource_params
-                .iter()
-                .map(|value_and_type| value_and_type.to_string()) // This will call to_string of wasm wave
-                .collect::<Vec<_>>();
-
-            Ok(OplogEntry::DescribeResource {
-                timestamp,
-                id,
-                indexed_resource: IndexedResourceKey {
-                    resource_name,
-                    resource_params,
-                },
-            })
-        }
+            owner,
+            name,
+        }) => Ok(OplogEntry::CreateResource {
+            timestamp,
+            id,
+            resource_type_id: ResourceTypeId { owner, name },
+        }),
+        PublicOplogEntry::DropResource(ResourceParameters {
+            timestamp,
+            id,
+            owner,
+            name,
+        }) => Ok(OplogEntry::DropResource {
+            timestamp,
+            id,
+            resource_type_id: ResourceTypeId { owner, name },
+        }),
         PublicOplogEntry::Log(LogParameters {
             timestamp,
             level,
@@ -1050,7 +1037,7 @@ fn convert_response_value_and_type_to_oplog_payload(
 
 fn get_invoke_and_await_result(
     value_and_type: &ValueAndType,
-) -> Result<Result<TypeAnnotatedValue, SerializableError>, String> {
+) -> Result<Result<ValueAndType, SerializableError>, String> {
     match &value_and_type.value {
         Value::Result(Ok(Some(value))) => match &value_and_type.typ {
             AnalysedType::Result(type_result) => {
@@ -1062,9 +1049,7 @@ fn get_invoke_and_await_result(
                     .clone();
                 let value = value.deref().clone();
                 let value_and_type = ValueAndType::new(value, typ);
-                let type_annotated_value =
-                    TypeAnnotatedValue::try_from(value_and_type).map_err(|err| err.join(", "))?;
-                Ok(Ok(type_annotated_value))
+                Ok(Ok(value_and_type))
             }
 
             _ => Err("Failed to obtain type annotated value".to_string()),

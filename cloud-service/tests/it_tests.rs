@@ -581,7 +581,7 @@ impl Drop for SqliteDb {
     fn drop(&mut self) {
         while std::fs::remove_file(&self.db_path).is_err() {
             std::thread::sleep(std::time::Duration::from_millis(100));
-        }
+    }
     }
 }
 

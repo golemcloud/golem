@@ -16,8 +16,9 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use crate::oplog::debug_oplog_constructor::CreateDebugOplogConstructor;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::base_model::ProjectId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AccountId, ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
+use golem_common::model::{ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
@@ -51,25 +52,12 @@ impl Debug for DebugOplogService {
 impl OplogService for DebugOplogService {
     async fn create(
         &self,
-        owned_worker_id: &OwnedWorkerId,
-        initial_entry: OplogEntry,
-        initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static> {
-        self.oplogs
-            .get_or_open(
-                &owned_worker_id.worker_id,
-                CreateDebugOplogConstructor::new(
-                    owned_worker_id.clone(),
-                    Some(initial_entry),
-                    OplogIndex::INITIAL,
-                    self.inner.clone(),
-                    self.debug_session.clone(),
-                    execution_status,
-                    initial_worker_metadata,
-                ),
-            )
-            .await
+        _owned_worker_id: &OwnedWorkerId,
+        _initial_entry: OplogEntry,
+        _initial_worker_metadata: WorkerMetadata,
+        _execution_status: Arc<RwLock<ExecutionStatus>>,
+    ) -> Arc<dyn Oplog> {
+        panic!("Cannot create a new oplog when debugging")
     }
 
     async fn open(
@@ -78,7 +66,7 @@ impl OplogService for DebugOplogService {
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
         execution_status: Arc<RwLock<ExecutionStatus>>,
-    ) -> Arc<dyn Oplog + 'static> {
+    ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
                 &owned_worker_id.worker_id,
@@ -135,13 +123,13 @@ impl OplogService for DebugOplogService {
 
     async fn scan_for_component(
         &self,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(account_id, component_id, cursor, count)
+            .scan_for_component(project_id, component_id, cursor, count)
             .await
     }
 

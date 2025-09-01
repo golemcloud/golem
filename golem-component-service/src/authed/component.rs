@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::authed::{
+    is_authorized_by_component, is_authorized_by_project, is_authorized_by_project_or_default,
+};
 use crate::error::ComponentError;
 use crate::model::InitialComponentFilesArchiveAndPermissions;
 use crate::model::{Component, ComponentByNameAndVersion, ComponentConstraints};
 use crate::service::component::ComponentService;
 use bytes::Bytes;
-use futures_util::stream::BoxStream;
+use futures::stream::BoxStream;
+use golem_common::model::agent::AgentType;
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
-use golem_common::model::component::ComponentOwner;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::FunctionConstraints;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
@@ -57,61 +60,6 @@ impl AuthedComponentService {
         }
     }
 
-    async fn is_authorized_by_project(
-        &self,
-        auth: &AuthCtx,
-        project_id: &ProjectId,
-        action: &ProjectAction,
-    ) -> Result<ComponentOwner, ComponentError> {
-        let namespace = self
-            .auth_service
-            .authorize_project_action(project_id, action.clone(), auth)
-            .await?;
-
-        Ok(ComponentOwner {
-            account_id: namespace.account_id,
-            project_id: namespace.project_id,
-        })
-    }
-
-    async fn is_authorized_by_project_or_default(
-        &self,
-        auth: &AuthCtx,
-        project_id: Option<ProjectId>,
-        action: &ProjectAction,
-    ) -> Result<ComponentOwner, ComponentError> {
-        if let Some(project_id) = project_id.clone() {
-            self.is_authorized_by_project(auth, &project_id, action)
-                .await
-        } else {
-            let project = self.project_service.get_default(&auth.token_secret).await?;
-            Ok(ComponentOwner {
-                account_id: project.owner_account_id,
-                project_id: project.id,
-            })
-        }
-    }
-
-    async fn is_authorized_by_component(
-        &self,
-        auth: &AuthCtx,
-        component_id: &ComponentId,
-        action: &ProjectAction,
-    ) -> Result<ComponentOwner, ComponentError> {
-        let owner = self.component_service.get_owner(component_id).await?;
-
-        match owner {
-            Some(owner) => {
-                self.is_authorized_by_project(auth, &owner.project_id, action)
-                    .await
-            }
-            None => Err(ComponentError::Unauthorized(format!(
-                "Account unauthorized to perform action on component {}: {}",
-                component_id.0, action
-            ))),
-        }
-    }
-
     pub async fn create(
         &self,
         project_id: Option<ProjectId>,
@@ -122,11 +70,17 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let component_id = ComponentId::new_v4();
-        let owner = self
-            .is_authorized_by_project_or_default(auth, project_id, &ProjectAction::CreateComponent)
-            .await?;
+        let owner = is_authorized_by_project_or_default(
+            &self.auth_service,
+            &self.project_service,
+            auth,
+            project_id,
+            &ProjectAction::CreateComponent,
+        )
+        .await?;
 
         let component = self
             .component_service
@@ -140,6 +94,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -156,11 +111,17 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
         let component_id = ComponentId::new_v4();
-        let owner = self
-            .is_authorized_by_project_or_default(auth, project_id, &ProjectAction::CreateComponent)
-            .await?;
+        let owner = is_authorized_by_project_or_default(
+            &self.auth_service,
+            &self.project_service,
+            auth,
+            project_id,
+            &ProjectAction::CreateComponent,
+        )
+        .await?;
 
         let component = self
             .component_service
@@ -174,6 +135,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -189,10 +151,16 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         let component = self
             .component_service
@@ -204,6 +172,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -219,10 +188,16 @@ impl AuthedComponentService {
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         auth: &AuthCtx,
         env: HashMap<String, String>,
+        agent_types: Vec<AgentType>,
     ) -> Result<Component, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         let component = self
             .component_service
@@ -234,6 +209,7 @@ impl AuthedComponentService {
                 dynamic_linking,
                 &owner,
                 env,
+                agent_types,
             )
             .await?;
 
@@ -246,9 +222,14 @@ impl AuthedComponentService {
         version: Option<u64>,
         auth: &AuthCtx,
     ) -> Result<Vec<u8>, ComponentError> {
-        let namespace = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
-            .await?;
+        let namespace = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let data = self
             .component_service
@@ -264,9 +245,14 @@ impl AuthedComponentService {
         version: Option<u64>,
         auth: &AuthCtx,
     ) -> Result<BoxStream<'static, Result<Vec<u8>, anyhow::Error>>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let stream = self
             .component_service
@@ -281,9 +267,14 @@ impl AuthedComponentService {
         component_name: Option<ComponentName>,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
-        let owner = self
-            .is_authorized_by_project_or_default(auth, project_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_project_or_default(
+            &self.auth_service,
+            &self.project_service,
+            auth,
+            project_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let result = self
             .component_service
@@ -299,9 +290,14 @@ impl AuthedComponentService {
         component_names: Vec<ComponentByNameAndVersion>,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
-        let owner = self
-            .is_authorized_by_project_or_default(auth, project_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_project_or_default(
+            &self.auth_service,
+            &self.project_service,
+            auth,
+            project_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let result = self
             .component_service
@@ -316,9 +312,13 @@ impl AuthedComponentService {
         project_id: &ProjectId,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
-        let owner = self
-            .is_authorized_by_project(auth, project_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_project(
+            &self.auth_service,
+            auth,
+            project_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let result = self.component_service.find_by_name(None, &owner).await?;
         Ok(result)
@@ -329,13 +329,14 @@ impl AuthedComponentService {
         component_id: &VersionedComponentId,
         auth: &AuthCtx,
     ) -> Result<Option<Component>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(
-                auth,
-                &component_id.component_id,
-                &ProjectAction::ViewComponent,
-            )
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            &component_id.component_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let result = self
             .component_service
@@ -350,9 +351,14 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         auth: &AuthCtx,
     ) -> Result<Option<Component>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let result = self
             .component_service
@@ -366,12 +372,16 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         let result = self.component_service.get(component_id, &owner).await?;
-
         Ok(result)
     }
 
@@ -381,9 +391,14 @@ impl AuthedComponentService {
         constraints: FunctionConstraints,
         auth: &AuthCtx,
     ) -> Result<ComponentConstraints, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, &component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            &component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         let component_constraints = ComponentConstraints {
             owner,
@@ -405,9 +420,14 @@ impl AuthedComponentService {
         constraints: FunctionConstraints,
         auth: &AuthCtx,
     ) -> Result<ComponentConstraints, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, &component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            &component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         let constraints = ComponentConstraints {
             owner: owner.clone(),
@@ -433,9 +453,14 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<Vec<PluginInstallation>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         let installations = self
             .component_service
@@ -451,9 +476,14 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         installation: PluginInstallationCreation,
     ) -> Result<PluginInstallation, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         let installation = self
             .component_service
@@ -470,9 +500,14 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         update: PluginInstallationUpdate,
     ) -> Result<(), ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         self.component_service
             .update_plugin_installation_for_component(&owner, installation_id, component_id, update)
@@ -485,9 +520,14 @@ impl AuthedComponentService {
         installation_id: &PluginInstallationId,
         component_id: &ComponentId,
     ) -> Result<(), ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         self.component_service
             .delete_plugin_installation_for_component(&owner, installation_id, component_id)
@@ -500,9 +540,14 @@ impl AuthedComponentService {
         component_id: &ComponentId,
         actions: &[PluginInstallationAction],
     ) -> Result<Vec<Option<PluginInstallation>>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::UpdateComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::UpdateComponent,
+        )
+        .await?;
 
         self.component_service
             .batch_update_plugin_installations_for_component(&owner, component_id, actions)
@@ -516,9 +561,14 @@ impl AuthedComponentService {
         version: ComponentVersion,
         path: &str,
     ) -> Result<BoxStream<'static, Result<Bytes, ComponentError>>, ComponentError> {
-        let owner = self
-            .is_authorized_by_component(auth, component_id, &ProjectAction::ViewComponent)
-            .await?;
+        let owner = is_authorized_by_component(
+            &self.auth_service,
+            &self.component_service,
+            auth,
+            component_id,
+            &ProjectAction::ViewComponent,
+        )
+        .await?;
 
         self.component_service
             .get_file_contents(component_id, version, path, &owner)

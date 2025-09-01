@@ -132,7 +132,7 @@ impl GolemComponentCompilationServiceImage {
 
 impl Image for GolemComponentCompilationServiceImage {
     fn name(&self) -> &str {
-        "parvit/golem-component-compilation-service"
+        "golemservices/golem-component-compilation-service"
     }
 
     fn tag(&self) -> &str {

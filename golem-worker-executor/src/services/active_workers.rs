@@ -12,17 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
+
+use tracing::{debug, Instrument};
+
 use crate::services::golem_config::MemoryConfig;
 use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::{AccountId, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore, TryAcquireError};
-use tracing::{debug, Instrument};
 
 /// Holds the metadata and wasmtime structures of currently active Golem workers
 pub struct ActiveWorkers<Ctx: WorkerCtx> {
@@ -52,10 +56,13 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         &self,
         deps: &T,
         owned_worker_id: &OwnedWorkerId,
+        account_id: &AccountId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -63,18 +70,23 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         let worker_id = owned_worker_id.worker_id();
 
         let owned_worker_id = owned_worker_id.clone();
+        let account_id = account_id.clone();
         let deps = deps.clone();
+        let invocation_context_stack = invocation_context_stack.clone();
         self.workers
             .get_or_insert_simple(&worker_id, || {
                 Box::pin(async move {
                     Ok(Arc::new(
                         Worker::new(
                             &deps,
+                            &account_id,
                             owned_worker_id,
                             worker_args,
                             worker_env,
+                            worker_wasi_config_vars,
                             component_version,
                             parent,
+                            &invocation_context_stack,
                         )
                         .in_current_span()
                         .await?,

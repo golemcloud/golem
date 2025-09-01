@@ -1,0 +1,11 @@
+{
+  "description": "Composable App Common template for TypeScript",
+  "appCommonGroup": "generic",
+  "appCommonSkipIfExists": "common-ts/golem.yaml",
+  "requiresGolemHostWIT": true,
+  "requiresWASI": true,
+  "witDepsPaths": [
+    "wit/deps"
+  ],
+  "transform": false
+}

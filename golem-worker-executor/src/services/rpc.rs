@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
 use std::sync::Arc;
 
@@ -20,34 +20,45 @@ use super::file_loader::FileLoader;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use crate::services::{
-    active_workers, blob_store, component, golem_config, key_value, oplog, promise, rdbms,
-    scheduler, shard, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
-    HasActiveWorkers, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps,
-    HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService, HasPlugins,
-    HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    active_workers, agent_types, blob_store, component, golem_config, key_value, oplog, promise,
+    rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
+    HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
+    HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
+    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
+    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{IdempotencyKey, OwnedWorkerId, TargetWorkerId, WorkerId};
+use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
+use rib::ParsedFunctionName;
 use tokio::runtime::Handle;
 use tracing::debug;
 
 #[async_trait]
 pub trait Rpc: Send + Sync {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand>;
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        self_created_by: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<Box<dyn RpcDemand>, RpcError>;
 
     async fn invoke_and_await(
         &self,
@@ -55,9 +66,11 @@ pub trait Rpc: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError>;
 
@@ -67,16 +80,13 @@ pub trait Rpc: Send + Sync {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError>;
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoValue)]
@@ -169,14 +179,14 @@ pub trait RpcDemand: Send + Sync {}
 
 pub struct RemoteInvocationRpc {
     worker_proxy: Arc<dyn WorkerProxy>,
-    shard_service: Arc<dyn ShardService>,
+    _shard_service: Arc<dyn ShardService>,
 }
 
 impl RemoteInvocationRpc {
     pub fn new(worker_proxy: Arc<dyn WorkerProxy>, shard_service: Arc<dyn ShardService>) -> Self {
         Self {
             worker_proxy,
-            shard_service,
+            _shard_service: shard_service,
         }
     }
 }
@@ -203,9 +213,30 @@ impl Drop for LoggingDemand {
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
 impl Rpc for RemoteInvocationRpc {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        _self_created_by: &AccountId,
+        _self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        _self_stack: InvocationContextStack, // TODO: make invocation context propagating through the worker start API
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        debug!("Ensuring remote target worker exists");
+
         let demand = LoggingDemand::new(owned_worker_id.worker_id());
-        Box::new(demand)
+
+        self.worker_proxy
+            .start(
+                owned_worker_id,
+                self_args.to_vec(),
+                HashMap::from_iter(self_env.to_vec()),
+                self_config,
+            )
+            .await?;
+
+        Ok(Box::new(demand))
     }
 
     async fn invoke_and_await(
@@ -214,9 +245,11 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        _self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError> {
         Ok(self
@@ -229,6 +262,7 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                self_config,
                 self_stack,
             )
             .await?)
@@ -240,9 +274,11 @@ impl Rpc for RemoteInvocationRpc {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        _self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         Ok(self
@@ -255,20 +291,10 @@ impl Rpc for RemoteInvocationRpc {
                 self_worker_id.clone(),
                 self_args.to_vec(),
                 HashMap::from_iter(self_env.to_vec()),
+                self_config,
                 self_stack,
             )
             .await?)
-    }
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        let current_assignment = self.shard_service.current_assignment()?;
-        Ok(target_worker_id.into_worker_id(
-            &current_assignment.shard_ids,
-            current_assignment.number_of_shards,
-        ))
     }
 }
 
@@ -287,7 +313,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
         Arc<dyn worker_enumeration::RunningWorkerEnumerationService>,
     promise_service: Arc<dyn promise::PromiseService>,
     golem_config: Arc<golem_config::GolemConfig>,
-    shard_service: Arc<dyn shard::ShardService>,
+    shard_service: Arc<dyn ShardService>,
     key_value_service: Arc<dyn key_value::KeyValueService>,
     blob_store_service: Arc<dyn blob_store::BlobStoreService>,
     rdbms_service: Arc<dyn rdbms::RdbmsService>,
@@ -299,6 +325,8 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     plugins: Arc<dyn Plugins>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
+    project_service: Arc<dyn ProjectService>,
+    agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     extra_deps: Ctx::ExtraDeps,
 }
 
@@ -330,6 +358,8 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
+            project_service: self.project_service.clone(),
+            agent_types_service: self.agent_types_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -344,6 +374,12 @@ impl<Ctx: WorkerCtx> HasEvents for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasActiveWorkers<Ctx> for DirectWorkerInvocationRpc<Ctx> {
     fn active_workers(&self) -> Arc<active_workers::ActiveWorkers<Ctx>> {
         self.active_workers.clone()
+    }
+}
+
+impl<Ctx: WorkerCtx> HasAgentTypesService for DirectWorkerInvocationRpc<Ctx> {
+    fn agent_types(&self) -> Arc<dyn agent_types::AgentTypesService> {
+        self.agent_types_service.clone()
     }
 }
 
@@ -442,7 +478,7 @@ impl<Ctx: WorkerCtx> HasExtraDeps<Ctx> for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasShardService for DirectWorkerInvocationRpc<Ctx> {
-    fn shard_service(&self) -> Arc<dyn shard::ShardService> {
+    fn shard_service(&self) -> Arc<dyn ShardService> {
         self.shard_service.clone()
     }
 }
@@ -495,6 +531,12 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
+impl<Ctx: WorkerCtx> HasProjectService for DirectWorkerInvocationRpc<Ctx> {
+    fn project_service(&self) -> Arc<dyn ProjectService> {
+        self.project_service.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -513,7 +555,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         >,
         promise_service: Arc<dyn promise::PromiseService>,
         golem_config: Arc<golem_config::GolemConfig>,
-        shard_service: Arc<dyn shard::ShardService>,
+        shard_service: Arc<dyn ShardService>,
         shard_manager_service: Arc<dyn shard_manager::ShardManagerService>,
         key_value_service: Arc<dyn key_value::KeyValueService>,
         blob_store_service: Arc<dyn blob_store::BlobStoreService>,
@@ -526,6 +568,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
         Self {
@@ -554,16 +598,134 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
+            agent_types_service,
             extra_deps,
         }
+    }
+
+    /// As we know the target component's metadata, and it includes the root package name, we can
+    /// accept function names which are not fully qualified by falling back to use this root package
+    /// when the package part is missing.
+    async fn enrich_function_name(
+        &self,
+        target_worker_id: &OwnedWorkerId,
+        function_name: String,
+    ) -> String {
+        let parsed_function_name: Option<ParsedFunctionName> =
+            ParsedFunctionName::parse(&function_name).ok();
+        if parsed_function_name.is_some() {
+            // already valid function name, doing nothing
+            function_name
+        } else if let Ok(target_component) = self
+            .component_service
+            .get_metadata(
+                &target_worker_id.project_id,
+                &target_worker_id.worker_id.component_id,
+                None,
+            )
+            .await
+        {
+            enrich_function_name_by_target_information(
+                function_name,
+                target_component.metadata.root_package_name().clone(),
+                target_component.metadata.root_package_version().clone(),
+            )
+        } else {
+            // If we cannot get the target metadata, we just go with the original function name
+            // and let it fail on that.
+            function_name
+        }
+    }
+}
+
+fn enrich_function_name_by_target_information(
+    function_name: String,
+    root_package_name: Option<String>,
+    root_package_version: Option<String>,
+) -> String {
+    if let Some(root_package_name) = root_package_name {
+        if let Some(root_package_version) = root_package_version {
+            // The target root package is versioned, and the version has to be put _after_ the interface
+            // name which we assume to be the first section (before a dot) of the provided string:
+
+            if let Some((interface_name, rest)) = function_name.split_once('.') {
+                let enriched_function_name =
+                    format!("{root_package_name}/{interface_name}@{root_package_version}.{rest}");
+                if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
+                    enriched_function_name
+                } else {
+                    // If the enriched function name is still not valid, we just return the original function name
+                    function_name
+                }
+            } else {
+                // Unexpected format, we just return the original function name
+                function_name
+            }
+        } else {
+            // The target root package is not versioned, so we can just simply prefix the root package name
+            // to the provided function name and see if it is valid:
+            let enriched_function_name = format!("{root_package_name}/{function_name}");
+            if ParsedFunctionName::parse(&enriched_function_name).is_ok() {
+                enriched_function_name
+            } else {
+                // If the enriched function name is still not valid, we just return the original function name
+                function_name
+            }
+        }
+    } else {
+        // No root package information in the target, we can't do anything
+        function_name
     }
 }
 
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn create_demand(&self, owned_worker_id: &OwnedWorkerId) -> Box<dyn RpcDemand> {
-        let demand = LoggingDemand::new(owned_worker_id.worker_id());
-        Box::new(demand)
+    async fn create_demand(
+        &self,
+        owned_worker_id: &OwnedWorkerId,
+        self_created_by: &AccountId,
+        self_worker_id: &WorkerId,
+        self_args: &[String],
+        self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
+        self_stack: InvocationContextStack,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        if self
+            .shard_service()
+            .check_worker(&owned_worker_id.worker_id)
+            .is_ok()
+        {
+            debug!("Ensuring local target worker exists");
+
+            let _worker = Worker::get_or_create_running(
+                self,
+                self_created_by,
+                owned_worker_id,
+                Some(self_args.to_vec()),
+                Some(self_env.to_vec()),
+                Some(self_config),
+                None,
+                Some(self_worker_id.clone()),
+                &self_stack,
+            )
+            .await?;
+
+            let demand = LoggingDemand::new(owned_worker_id.worker_id());
+            Ok(Box::new(demand))
+        } else {
+            self.remote_rpc
+                .create_demand(
+                    owned_worker_id,
+                    self_created_by,
+                    self_worker_id,
+                    self_args,
+                    self_env,
+                    self_config,
+                    self_stack,
+                )
+                .await
+        }
     }
 
     async fn invoke_and_await(
@@ -572,12 +734,17 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<Option<ValueAndType>, RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let function_name = self
+            .enrich_function_name(owned_worker_id, function_name)
+            .await;
 
         if self
             .shard_service()
@@ -593,11 +760,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let worker = Worker::get_or_create_running(
                 self,
+                self_created_by,
                 owned_worker_id,
                 Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
+                Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack,
             )
             .await?;
 
@@ -613,9 +783,11 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self_created_by,
                     self_worker_id,
                     self_args,
                     self_env,
+                    self_config,
                     self_stack,
                 )
                 .await
@@ -628,12 +800,17 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         function_params: Vec<WitValue>,
+        self_created_by: &AccountId,
         self_worker_id: &WorkerId,
         self_args: &[String],
         self_env: &[(String, String)],
+        self_config: BTreeMap<String, String>,
         self_stack: InvocationContextStack,
     ) -> Result<(), RpcError> {
         let idempotency_key = idempotency_key.unwrap_or(IdempotencyKey::fresh());
+        let function_name = self
+            .enrich_function_name(owned_worker_id, function_name)
+            .await;
 
         if self
             .shard_service()
@@ -649,11 +826,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
             let worker = Worker::get_or_create_running(
                 self,
+                self_created_by,
                 owned_worker_id,
                 Some(self_args.to_vec()),
                 Some(self_env.to_vec()),
+                Some(self_config),
                 None,
                 Some(self_worker_id.clone()),
+                &self_stack,
             )
             .await?;
 
@@ -668,23 +848,54 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self_created_by,
                     self_worker_id,
                     self_args,
                     self_env,
+                    self_config,
                     self_stack,
                 )
                 .await
         }
     }
-
-    async fn generate_unique_local_worker_id(
-        &self,
-        target_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.remote_rpc
-            .generate_unique_local_worker_id(target_worker_id)
-            .await
-    }
 }
 
 impl RpcDemand for () {}
+
+#[cfg(test)]
+mod tests {
+    use crate::services::rpc::enrich_function_name_by_target_information;
+    use test_r::test;
+
+    #[test]
+    fn test_enrich_function_name_by_target_information() {
+        assert_eq!(
+            enrich_function_name_by_target_information("api.{x}".to_string(), None, None),
+            "api.{x}".to_string()
+        );
+        assert_eq!(
+            enrich_function_name_by_target_information(
+                "api.{x}".to_string(),
+                Some("test:pkg".to_string()),
+                None
+            ),
+            "test:pkg/api.{x}".to_string()
+        );
+        assert_eq!(
+            enrich_function_name_by_target_information(
+                "api.{x}".to_string(),
+                Some("test:pkg".to_string()),
+                Some("1.0.0".to_string())
+            ),
+            "test:pkg/api@1.0.0.{x}".to_string()
+        );
+        assert_eq!(
+            enrich_function_name_by_target_information(
+                "run".to_string(),
+                Some("test:pkg".to_string()),
+                Some("1.0.0".to_string())
+            ),
+            "run".to_string()
+        );
+    }
+}

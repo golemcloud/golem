@@ -16,48 +16,47 @@ pub mod invocation;
 mod invocation_loop;
 pub mod status;
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::mem;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crate::durable_host::recover_stderr_logs;
-use crate::model::{
-    ExecutionStatus, ListDirectoryResult, LookupResult, ReadFileResult, TrapType, WorkerConfig,
-};
+use crate::model::{ExecutionStatus, LookupResult, ReadFileResult, TrapType, WorkerConfig};
 use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
-    HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins,
-    HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService,
-    HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy,
-    HasWorkerService, UsesAllDeps,
+    All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
+    HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
+    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
+    HasResourceLimits, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, RetryConfig};
 use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
 use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
-    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
 };
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -118,11 +117,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker, but does not start it
     pub async fn get_or_create_suspended<T>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -131,10 +133,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .get_or_add(
                 deps,
                 owned_worker_id,
+                account_id,
                 worker_args,
                 worker_env,
+                worker_wasi_config_vars,
                 component_version,
                 parent,
+                invocation_context_stack,
             )
             .await
     }
@@ -142,22 +147,28 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Gets or creates a worker and makes sure it is running
     pub async fn get_or_create_running<T>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         let worker = Self::get_or_create_suspended(
             deps,
+            account_id,
             owned_worker_id,
             worker_args,
             worker_env,
+            worker_wasi_config_vars,
             component_version,
             parent,
+            invocation_context_stack,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -189,26 +200,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn new<T: HasAll<Ctx>>(
         deps: &T,
+        account_id: &AccountId,
         owned_worker_id: OwnedWorkerId,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
         let (worker_metadata, execution_status) = Self::get_or_create_worker_metadata(
             deps,
+            account_id,
             &owned_worker_id,
             component_version,
             worker_args,
             worker_env,
+            worker_config,
             parent,
+            invocation_context_stack,
         )
         .await?;
 
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(worker_metadata.last_known_status.component_version),
             )
@@ -357,7 +374,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Here we first acquire the `instance` lock. This means the worker cannot be started/stopped while we
     /// are processing this method.
     /// If it was not running, then we don't have to stop it.
-    /// If it was running then we recheck the conditions and then stop the worker.
+    /// If it was running, then we recheck the conditions and then stop the worker.
     ///
     /// We know that the conditions remain true because:
     /// - the invocation queue is empty, so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
@@ -879,10 +896,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .expect("update_metadata failed");
     }
 
-    pub async fn list_directory(
+    pub async fn get_file_system_node(
         &self,
         path: ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
         let (sender, receiver) = oneshot::channel();
 
         let mutex = self.instance.lock().await;
@@ -890,7 +907,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.queue
             .write()
             .await
-            .push_back(QueuedWorkerInvocation::ListDirectory { path, sender });
+            .push_back(QueuedWorkerInvocation::GetFileSystemNode { path, sender });
 
         // Two cases here:
         // - Worker is running, we can send the invocation command and the worker will look at the queue immediately
@@ -1226,10 +1243,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                                 }
                             }
                         }
-                        QueuedWorkerInvocation::ListDirectory { sender, .. } => {
+                        QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
                         }
                         QueuedWorkerInvocation::ReadFile { sender, .. } => {
+                            let _ = sender.send(Err(fail_pending_invocations.clone()));
+                        }
+                        QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
                             let _ = sender.send(Err(fail_pending_invocations.clone()));
                         }
                     }
@@ -1267,47 +1287,84 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         T: HasWorkerService + HasComponentService + HasConfig + HasOplogService + Sync,
     >(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         component_version: Option<ComponentVersion>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
+        worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
+        invocation_context: &InvocationContextStack,
     ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
     {
         let component_id = owned_worker_id.component_id();
-        let component_metadata = this
+        let component = this
             .component_service()
             .get_metadata(
-                &owned_worker_id.account_id,
+                &owned_worker_id.project_id,
                 &component_id,
                 component_version,
             )
             .await?;
 
-        let worker_env = merge_worker_env_with_component_env(worker_env, component_metadata.env);
+        let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
 
         match this.worker_service().get(owned_worker_id).await {
             None => {
-                let initial_status =
+                let mut initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
+
+                let created_at = Timestamp::now_utc();
+                if component.metadata.is_agent() {
+                    let agent_id =
+                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
+                            .await
+                            .map_err(|err| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Invalid agent id: {}",
+                                    err
+                                ))
+                            })?;
+
+                    info!(
+                        "Enqueuing agent initialization for agent type {} with parameters {}",
+                        agent_id.agent_type, agent_id.parameters
+                    );
+
+                    initial_status
+                        .pending_invocations
+                        .push(TimestampedWorkerInvocation {
+                            timestamp: created_at,
+                            invocation: WorkerInvocation::ExportedFunction {
+                                idempotency_key: IdempotencyKey::fresh(),
+                                full_function_name: "golem:agent/guest.{initialize}".to_string(),
+                                function_input: vec![agent_id.parameters.into_value()],
+                                invocation_context: invocation_context.clone(),
+                            },
+                        });
+                }
+
                 let worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
-                    account_id: owned_worker_id.account_id(),
-                    created_at: Timestamp::now_utc(),
+                    wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
+                    project_id: owned_worker_id.project_id(),
+                    created_by: account_id.clone(),
+                    created_at,
                     parent,
                     last_known_status: WorkerStatusRecord {
-                        component_version: component_metadata.version,
-                        component_version_for_replay: component_metadata.version,
-                        component_size: component_metadata.size,
-                        total_linear_memory_size: component_metadata
-                            .memories
+                        component_version: component.versioned_component_id.version,
+                        component_version_for_replay: component.versioned_component_id.version,
+                        component_size: component.component_size,
+                        total_linear_memory_size: component
+                            .metadata
+                            .memories()
                             .iter()
                             .map(|m| m.initial)
                             .sum(),
-                        active_plugins: component_metadata
-                            .plugin_installations
+                        active_plugins: component
+                            .installed_plugins
                             .iter()
                             .map(|i| i.id.clone())
                             .collect(),
@@ -1316,7 +1373,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 };
                 let execution_status = this
                     .worker_service()
-                    .add(&worker_metadata, component_metadata.component_type)
+                    .add(&worker_metadata, component.component_type)
                     .await?;
                 Ok((worker_metadata, execution_status))
             }
@@ -1333,12 +1390,31 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let execution_status =
                     Arc::new(std::sync::RwLock::new(ExecutionStatus::Suspended {
                         last_known_status: worker_metadata.last_known_status.clone(),
-                        component_type: component_metadata.component_type,
+                        component_type: component.component_type,
                         timestamp: Timestamp::now_utc(),
                     }));
                 Ok((worker_metadata, execution_status))
             }
         }
+    }
+
+    pub async fn await_ready_to_process_commands(&self) -> Result<(), WorkerExecutorError> {
+        let (sender, receiver) = oneshot::channel();
+
+        let mutex = self.instance.lock().await;
+
+        self.queue
+            .write()
+            .await
+            .push_back(QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender });
+
+        if let WorkerInstance::Running(running) = &*mutex {
+            running.sender.send(WorkerCommand::Invocation).unwrap();
+        };
+
+        drop(mutex);
+
+        receiver.await.unwrap()
     }
 }
 
@@ -1555,7 +1631,7 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), WorkerExecutorError> {
-        let account_id = parent.owned_worker_id.account_id();
+        let project_id = parent.owned_worker_id.project_id();
         let component_id = parent.owned_worker_id.component_id();
         let worker_metadata = parent.get_metadata()?;
 
@@ -1584,7 +1660,7 @@ impl RunningWorker {
                 .component_service()
                 .get(
                     &parent.engine(),
-                    &account_id,
+                    &project_id,
                     &component_id,
                     component_version,
                 )
@@ -1601,6 +1677,7 @@ impl RunningWorker {
                         parent.pop_pending_update().await;
                         Ctx::on_worker_update_failed_to_start(
                             &parent.deps,
+                            &parent.initial_worker_metadata.created_by,
                             &parent.owned_worker_id,
                             component_version,
                             Some(error.to_string()),
@@ -1611,7 +1688,7 @@ impl RunningWorker {
                             .component_service()
                             .get(
                                 &parent.engine(),
-                                &account_id,
+                                &project_id,
                                 &component_id,
                                 worker_metadata.last_known_status.component_version,
                             )
@@ -1643,7 +1720,8 @@ impl RunningWorker {
             );
 
         let context = Ctx::create(
-            OwnedWorkerId::new(&worker_metadata.account_id, &worker_metadata.worker_id),
+            worker_metadata.created_by,
+            OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -1663,18 +1741,22 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
-                component_metadata.version,
+                component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions.clone(),
                 worker_metadata.last_known_status.total_linear_memory_size,
                 component_version_for_replay,
+                parent.initial_worker_metadata.created_by.clone(),
+                worker_metadata.wasi_config_vars,
             ),
             parent.execution_status.clone(),
             parent.file_loader(),
             parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
+            parent.project_service(),
+            parent.agent_types(),
         )
         .await?;
 
@@ -1849,14 +1931,20 @@ pub enum QueuedWorkerInvocation {
         invocation: TimestampedWorkerInvocation,
         canceled: bool,
     },
-    ListDirectory {
+    GetFileSystemNode {
         path: ComponentFilePath,
-        sender: oneshot::Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
+        sender: oneshot::Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     },
     // The worker will suspend execution until the stream is dropped, so consume in a timely manner.
     ReadFile {
         path: ComponentFilePath,
         sender: oneshot::Sender<Result<ReadFileResult, WorkerExecutorError>>,
+    },
+    // Waits for the invocation loop to pick up this message, ensuring that the worker is ready to process followup commands.
+    // The sender will be called with Ok if the worker is in a running state.
+    // If the worker initializaiton fails and will not recover without manual intervention it will be called with Err.
+    AwaitReadyToProcessCommands {
+        sender: oneshot::Sender<Result<(), WorkerExecutorError>>,
     },
 }
 

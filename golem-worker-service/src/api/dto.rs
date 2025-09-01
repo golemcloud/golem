@@ -19,7 +19,7 @@ use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 use crate::gateway_api_deployment::ApiSite;
 use crate::gateway_binding::{
     FileServerBinding, FileServerBindingCompiled, GatewayBinding, GatewayBindingCompiled,
-    HttpHandlerBinding, HttpHandlerBindingCompiled, StaticBinding, WorkerBinding,
+    HttpHandlerBinding, HttpHandlerBindingCompiled, StaticBinding, SwaggerUiBinding, WorkerBinding,
     WorkerBindingCompiled,
 };
 use crate::gateway_middleware::{CorsPreflightExpr, HttpCors, HttpMiddleware, HttpMiddlewares};
@@ -456,6 +456,10 @@ impl GatewayBindingData {
                     }
                 }
             }
+
+            Some(GatewayBindingType::SwaggerUi) => {
+                Ok(GatewayBinding::SwaggerUi(SwaggerUiBinding::default()))
+            }
         }
     }
 }
@@ -603,6 +607,19 @@ impl GatewayBindingResponseData {
                     response_mapping_output: None,
                 })
             }
+            GatewayBindingCompiled::SwaggerUi(_) => Ok(GatewayBindingResponseData {
+                component: None,
+                worker_name: None,
+                idempotency_key: None,
+                invocation_context: None,
+                response: None,
+                binding_type: Some(GatewayBindingType::SwaggerUi),
+                response_mapping_input: None,
+                worker_name_input: None,
+                idempotency_key_input: None,
+                cors_preflight: None,
+                response_mapping_output: None,
+            }),
         }
     }
 
@@ -753,7 +770,6 @@ mod tests {
     };
     use assert2::check;
     use async_trait::async_trait;
-    use golem_api_grpc::proto::golem::apidefinition as grpc_apidefinition;
     use golem_common::model::ComponentId;
     use golem_service_base::model::ComponentName;
     use test_r::test;
@@ -779,15 +795,6 @@ mod tests {
             _component_id: &ComponentId,
         ) -> Result<ComponentView, String> {
             unimplemented!()
-        }
-    }
-
-    #[test]
-    fn test_method_pattern() {
-        for method in 0..8 {
-            let method_pattern: MethodPattern = method.try_into().unwrap();
-            let method_grpc: grpc_apidefinition::HttpMethod = method_pattern.into();
-            assert_eq!(method, method_grpc as i32);
         }
     }
 

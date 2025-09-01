@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::oplog::OplogIndex;
+use super::{WorkerResourceDescription, WorkerWasiConfigVarsFilter};
+use crate::model::oplog::{OplogIndex, WorkerResourceId};
 use crate::model::{
     AccountId, ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, GatewayBindingType,
-    IdempotencyKey, InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod,
-    PromiseId, RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator,
-    TargetWorkerId, Timestamp, WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter,
-    WorkerId, WorkerNameFilter, WorkerNotFilter, WorkerStatus, WorkerStatusFilter,
-    WorkerVersionFilter,
+    ComponentFileSystemNodeDetails, ComponentType, FilterComparator, IdempotencyKey,
+    InitialComponentFile, InitialComponentFileKey, LogLevel, NumberOfShards, Pod, PromiseId,
+    RoutingTable, RoutingTableEntry, ScanCursor, ShardId, StringFilterComparator, Timestamp,
+    WorkerCreatedAtFilter, WorkerEnvFilter, WorkerEvent, WorkerFilter, WorkerId, WorkerNameFilter,
+    WorkerNotFilter, WorkerStatus, WorkerStatusFilter, WorkerVersionFilter,
 };
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
@@ -70,29 +70,6 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerId> for WorkerId {
             component_id: value.component_id.unwrap().try_into()?,
             worker_name: value.name,
         })
-    }
-}
-
-impl TryFrom<golem::worker::TargetWorkerId> for TargetWorkerId {
-    type Error = String;
-
-    fn try_from(value: golem::worker::TargetWorkerId) -> Result<Self, Self::Error> {
-        Ok(Self {
-            component_id: value
-                .component_id
-                .ok_or("Missing component_id")?
-                .try_into()?,
-            worker_name: value.name,
-        })
-    }
-}
-
-impl From<TargetWorkerId> for golem::worker::TargetWorkerId {
-    fn from(value: TargetWorkerId) -> Self {
-        Self {
-            component_id: Some(value.component_id.into()),
-            name: value.worker_name,
-        }
     }
 }
 
@@ -239,6 +216,13 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerFilter> for WorkerFilte
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(filter) => Ok(
                     WorkerFilter::new_env(filter.name, filter.comparator.try_into()?, filter.value),
                 ),
+                golem_api_grpc::proto::golem::worker::worker_filter::Filter::WasiConfigVars(
+                    filter,
+                ) => Ok(WorkerFilter::new_wasi_config_vars(
+                    filter.name,
+                    filter.comparator.try_into()?,
+                    filter.value,
+                )),
                 golem_api_grpc::proto::golem::worker::worker_filter::Filter::Not(filter) => {
                     let filter = *filter.filter.ok_or_else(|| "Missing filter".to_string())?;
                     Ok(WorkerFilter::new_not(filter.try_into()?))
@@ -296,6 +280,17 @@ impl From<WorkerFilter> for golem_api_grpc::proto::golem::worker::WorkerFilter {
                 value,
             }) => golem_api_grpc::proto::golem::worker::worker_filter::Filter::Env(
                 golem_api_grpc::proto::golem::worker::WorkerEnvFilter {
+                    name,
+                    comparator: comparator.into(),
+                    value,
+                },
+            ),
+            WorkerFilter::WasiConfigVars(WorkerWasiConfigVarsFilter {
+                name,
+                comparator,
+                value,
+            }) => golem_api_grpc::proto::golem::worker::worker_filter::Filter::WasiConfigVars(
+                golem_api_grpc::proto::golem::worker::WorkerWasiConfigVarsFilter {
                     name,
                     comparator: comparator.into(),
                     value,
@@ -740,43 +735,26 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::FileSystemNode> for Component
     }
 }
 
-impl From<golem_api_grpc::proto::golem::apidefinition::GatewayBindingType> for GatewayBindingType {
-    fn from(value: golem_api_grpc::proto::golem::apidefinition::GatewayBindingType) -> Self {
-        match value {
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default => {
-                GatewayBindingType::Default
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer => {
-                GatewayBindingType::FileServer
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler => {
-                GatewayBindingType::HttpHandler
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight => {
-                GatewayBindingType::CorsPreflight
-            }
-            golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::AuthCallBack => {
-                GatewayBindingType::CorsPreflight
-            }
-        }
+pub fn to_protobuf_resource_description(
+    key: WorkerResourceId,
+    description: WorkerResourceDescription,
+) -> golem::worker::ResourceDescription {
+    golem::worker::ResourceDescription {
+        created_at: Some(description.created_at.into()),
+        resource_id: key.0,
+        resource_owner: description.resource_owner,
+        resource_name: description.resource_name,
     }
 }
 
-impl From<GatewayBindingType> for golem_api_grpc::proto::golem::apidefinition::GatewayBindingType {
-    fn from(value: GatewayBindingType) -> Self {
-        match value {
-            GatewayBindingType::Default => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::Default
-            }
-            GatewayBindingType::FileServer => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::FileServer
-            }
-            GatewayBindingType::HttpHandler => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::HttpHandler
-            }
-            GatewayBindingType::CorsPreflight => {
-                golem_api_grpc::proto::golem::apidefinition::GatewayBindingType::CorsPreflight
-            }
-        }
-    }
+pub fn from_protobuf_resource_description(
+    description: golem::worker::ResourceDescription,
+) -> Result<(WorkerResourceId, WorkerResourceDescription), String> {
+    let key = WorkerResourceId(description.resource_id);
+    let value = WorkerResourceDescription {
+        created_at: description.created_at.ok_or("Missing created_at")?.into(),
+        resource_owner: description.resource_owner,
+        resource_name: description.resource_name,
+    };
+    Ok((key, value))
 }

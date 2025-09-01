@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Deps, LastUniqueId, Tracing};
+use crate::{LastUniqueId, Tracing, Deps};
 use test_r::inherit_test_dep;
 
 pub mod v1;
 pub mod v1_1;
 pub mod v1_2;
+pub mod v1_3;
 pub mod worker_recovery;
 
 inherit_test_dep!(Deps);

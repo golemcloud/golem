@@ -12,15 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod agent_types;
 mod component;
 mod plugin;
 
 use crate::bootstrap::Services;
+use crate::grpcapi::agent_types::AgentTypesGrpcApi;
 use crate::grpcapi::component::ComponentGrpcApi;
 use crate::grpcapi::plugin::PluginGrpcApi;
 use futures::TryFutureExt;
 use golem_api_grpc::proto;
 use golem_api_grpc::proto::golem::common::{ErrorBody, ErrorsBody};
+use golem_api_grpc::proto::golem::component::v1::agent_types_service_server::AgentTypesServiceServer;
 use golem_api_grpc::proto::golem::component::v1::component_service_server::ComponentServiceServer;
 use golem_api_grpc::proto::golem::component::v1::plugin_service_server::PluginServiceServer;
 use golem_api_grpc::proto::golem::component::v1::{component_error, ComponentError};
@@ -41,7 +44,7 @@ pub async fn start_grpc_server(
     services: &Services,
     join_set: &mut JoinSet<Result<(), anyhow::Error>>,
 ) -> anyhow::Result<u16> {
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
 
     let listener = TcpListener::bind(addr).await?;
     let port = listener.local_addr()?.port();
@@ -70,6 +73,13 @@ pub async fn start_grpc_server(
                 PluginServiceServer::new(PluginGrpcApi::new(services.plugin_service.clone()))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip),
+            )
+            .add_service(
+                AgentTypesServiceServer::new(AgentTypesGrpcApi::new(
+                    services.agent_types_service.clone(),
+                ))
+                .send_compressed(CompressionEncoding::Gzip)
+                .accept_compressed(CompressionEncoding::Gzip),
             )
             .serve_with_incoming(TcpListenerStream::new(listener))
             .map_err(anyhow::Error::from)

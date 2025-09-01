@@ -15,10 +15,12 @@
 use golem_common::config::{ConfigExample, ConfigLoader, DbConfig, HasConfigExamples};
 use golem_common::model::{Empty, RetryConfig};
 use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -35,6 +37,47 @@ pub struct ComponentServiceConfig {
     pub blob_storage: BlobStorageConfig,
     pub plugin_transformations: PluginTransformationsConfig,
     pub cors_origin_regex: String,
+}
+
+impl SafeDisplay for ComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "tracing:");
+        let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "environment: {}", self.environment);
+        let _ = writeln!(&mut result, "workspace: {}", self.workspace);
+        let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(&mut result, "gRPC port: {}", self.grpc_port);
+        let _ = writeln!(&mut result, "DB:");
+        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
+        let _ = writeln!(&mut result, "compilation:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.compilation.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "cloud service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.cloud_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "plugin transformations:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.plugin_transformations.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
+
+        result
+    }
 }
 
 impl Default for ComponentServiceConfig {
@@ -72,6 +115,22 @@ pub enum ComponentCompilationConfig {
     Disabled(Empty),
 }
 
+impl SafeDisplay for ComponentCompilationConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            ComponentCompilationConfig::Enabled(inner) => {
+                let _ = writeln!(&mut result, "enabled:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            ComponentCompilationConfig::Disabled(_) => {
+                let _ = writeln!(&mut result, "disabled");
+            }
+        }
+        result
+    }
+}
+
 impl Default for ComponentCompilationConfig {
     fn default() -> Self {
         Self::Enabled(ComponentCompilationEnabledConfig {
@@ -92,6 +151,18 @@ pub struct ComponentCompilationEnabledConfig {
     pub connect_timeout: Duration,
 }
 
+impl SafeDisplay for ComponentCompilationEnabledConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
 impl ComponentCompilationEnabledConfig {
     pub fn uri(&self) -> Uri {
         Uri::builder()
@@ -105,7 +176,16 @@ impl ComponentCompilationEnabledConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct PluginTransformationsConfig {
-    pub(crate) retries: RetryConfig,
+    pub retries: RetryConfig,
+}
+
+impl SafeDisplay for PluginTransformationsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
 }
 
 #[cfg(test)]

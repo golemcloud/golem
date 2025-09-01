@@ -27,22 +27,13 @@ use golem_common::model::{
     ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
     WorkerId,
 };
-use golem_wasm_rpc::json::OptionallyTypeAnnotatedValueJson;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
+use golem_wasm_rpc::ValueAndType;
 use golem_wasm_rpc_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 use std::{collections::HashMap, fmt::Display, fmt::Formatter};
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[oai(rename_all = "camelCase")]
-#[serde(rename_all = "camelCase")]
-pub struct WorkerCreationRequest {
-    pub name: String,
-    pub args: Vec<String>,
-    pub env: HashMap<String, String>,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -83,7 +74,7 @@ impl From<CompleteParameters> for golem_api_grpc::proto::golem::worker::Complete
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvokeParameters {
-    pub params: Vec<OptionallyTypeAnnotatedValueJson>,
+    pub params: Vec<OptionallyValueAndTypeJson>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Object)]
@@ -186,9 +177,7 @@ pub struct PublicOplogEntryWithIndex {
     pub entry: PublicOplogEntry,
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
-    for PublicOplogEntryWithIndex
-{
+impl TryFrom<OplogEntryWithIndex> for PublicOplogEntryWithIndex {
     type Error = String;
 
     fn try_from(value: OplogEntryWithIndex) -> Result<Self, Self::Error> {
@@ -199,9 +188,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntryWithIndex>
     }
 }
 
-impl TryFrom<PublicOplogEntryWithIndex>
-    for golem_api_grpc::proto::golem::worker::OplogEntryWithIndex
-{
+impl TryFrom<PublicOplogEntryWithIndex> for OplogEntryWithIndex {
     type Error = String;
 
     fn try_from(value: PublicOplogEntryWithIndex) -> Result<Self, Self::Error> {
@@ -366,67 +353,11 @@ impl From<UpdateRecord> for golem_api_grpc::proto::golem::worker::UpdateRecord {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ResourceMetadata {
-    pub created_at: Timestamp,
-    pub indexed: Option<IndexedWorkerMetadata>,
-}
-
-impl TryFrom<golem_api_grpc::proto::golem::worker::ResourceMetadata> for ResourceMetadata {
-    type Error = String;
-
-    fn try_from(
-        value: golem_api_grpc::proto::golem::worker::ResourceMetadata,
-    ) -> Result<Self, Self::Error> {
-        Ok(Self {
-            created_at: value.created_at.ok_or("Missing created_at")?.into(),
-            indexed: value.indexed.map(|i| i.into()),
-        })
-    }
-}
-
-impl From<ResourceMetadata> for golem_api_grpc::proto::golem::worker::ResourceMetadata {
-    fn from(value: ResourceMetadata) -> Self {
-        Self {
-            created_at: Some(value.created_at.into()),
-            indexed: value.indexed.map(|i| i.into()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct IndexedWorkerMetadata {
-    pub resource_name: String,
-    pub resource_params: Vec<String>,
-}
-
-impl From<golem_api_grpc::proto::golem::worker::IndexedResourceMetadata> for IndexedWorkerMetadata {
-    fn from(value: golem_api_grpc::proto::golem::worker::IndexedResourceMetadata) -> Self {
-        Self {
-            resource_name: value.resource_name,
-            resource_params: value.resource_params,
-        }
-    }
-}
-
-impl From<IndexedWorkerMetadata> for golem_api_grpc::proto::golem::worker::IndexedResourceMetadata {
-    fn from(value: IndexedWorkerMetadata) -> Self {
-        Self {
-            resource_name: value.resource_name,
-            resource_params: value.resource_params,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvokeResult {
-    pub result: Option<TypeAnnotatedValue>,
+    pub result: Option<ValueAndType>,
 }
 
 #[derive(Debug, Clone)]
@@ -504,6 +435,28 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             installed_plugins,
             env: value.env,
         })
+    }
+}
+
+impl From<Component> for golem_api_grpc::proto::golem::component::Component {
+    fn from(value: Component) -> Self {
+        Self {
+            account_id: Some(value.owner.account_id.into()),
+            project_id: Some(value.owner.project_id.into()),
+            versioned_component_id: Some(value.versioned_component_id.into()),
+            component_name: value.component_name.0,
+            component_size: value.component_size,
+            metadata: Some(value.metadata.into()),
+            created_at: Some(SystemTime::from(value.created_at).into()),
+            component_type: Some(value.component_type as i32),
+            files: value.files.into_iter().map(Into::into).collect(),
+            installed_plugins: value
+                .installed_plugins
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            env: value.env,
+        }
     }
 }
 

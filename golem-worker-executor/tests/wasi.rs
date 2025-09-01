@@ -20,7 +20,7 @@ use axum::response::Response;
 use axum::routing::{get, post};
 use axum::{BoxError, Router};
 use bytes::Bytes;
-use futures_util::stream;
+use futures::stream;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails,
@@ -55,9 +55,13 @@ const LINE_ENDING: &str = "\n";
 
 #[test]
 #[tracing::instrument]
-async fn write_stdout(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn write_stdout(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("write-stdout").store().await;
     let worker_id = executor.start_worker(&component_id, "write-stdout-1").await;
@@ -85,9 +89,13 @@ async fn write_stdout(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tra
 
 #[test]
 #[tracing::instrument]
-async fn write_stderr(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn write_stderr(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("write-stderr").store().await;
     let worker_id = executor.start_worker(&component_id, "write-stderr-1").await;
@@ -115,9 +123,13 @@ async fn write_stderr(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tra
 
 #[test]
 #[tracing::instrument]
-async fn read_stdin(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn read_stdin(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("read-stdin").store().await;
     let worker_id = executor.start_worker(&component_id, "read-stdin-1").await;
@@ -133,9 +145,13 @@ async fn read_stdin(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Traci
 
 #[test]
 #[tracing::instrument]
-async fn clocks(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn clocks(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("clocks").store().await;
     let worker_id = executor.start_worker(&component_id, "clocks-1").await;
@@ -181,15 +197,25 @@ async fn clocks(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) 
 
 #[test]
 #[tracing::instrument]
-async fn file_write_read_delete(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn file_write_read_delete(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-write-read-delete").store().await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "file-write-read-delete-1", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "file-write-read-delete-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -213,9 +239,13 @@ async fn file_write_read_delete(last_unique_id: &LastUniqueId, deps: &Deps, _tra
 
 #[test]
 #[tracing::instrument]
-async fn initial_file_read_write(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn initial_file_read_write(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_files = executor
         .add_initial_component_files(&[
@@ -241,7 +271,13 @@ async fn initial_file_read_write(last_unique_id: &LastUniqueId, deps: &Deps, _tr
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-1", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "initial-file-read-write-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -284,7 +320,7 @@ async fn initial_file_listing_through_api(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let foo_file_size = get_file_size(&executor, "initial-file-read-write/files/foo.txt").await;
     let baz_file_size = get_file_size(&executor, "initial-file-read-write/files/baz.txt").await;
@@ -315,13 +351,12 @@ async fn initial_file_listing_through_api(
         .with_files(&component_files)
         .store()
         .await;
-    let mut env = HashMap::new();
-    env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
+
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-2", vec![], env)
+        .start_worker(&component_id, "initial-file-read-write-1")
         .await;
 
-    let result = executor.list_directory(&worker_id, "/").await;
+    let result = executor.get_file_system_node(&worker_id, "/").await;
 
     let mut result = result
         .into_iter()
@@ -332,10 +367,6 @@ async fn initial_file_listing_through_api(
         .collect::<Vec<_>>();
 
     result.sort_by_key(|e| e.name.clone());
-
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
 
     check!(
         result
@@ -363,6 +394,58 @@ async fn initial_file_listing_through_api(
                 },
             ]
     );
+
+    let result = executor.get_file_system_node(&worker_id, "/bar").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: baz_file_size,
+                }
+            },]
+    );
+
+    let result = executor.get_file_system_node(&worker_id, "/baz.txt").await;
+
+    let mut result = result
+        .into_iter()
+        .map(|e| ComponentFileSystemNode {
+            last_modified: SystemTime::UNIX_EPOCH,
+            ..e
+        })
+        .collect::<Vec<_>>();
+
+    result.sort_by_key(|e| e.name.clone());
+
+    check!(
+        result
+            == vec![ComponentFileSystemNode {
+                name: "baz.txt".to_string(),
+                last_modified: SystemTime::UNIX_EPOCH,
+                details: ComponentFileSystemNodeDetails::File {
+                    permissions: ComponentFilePermissions::ReadWrite,
+                    size: baz_file_size,
+                }
+            },]
+    );
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    drop(executor);
 }
 
 #[test]
@@ -373,7 +456,7 @@ async fn initial_file_reading_through_api(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_files = executor
         .add_initial_component_files(&[
@@ -399,7 +482,13 @@ async fn initial_file_reading_through_api(
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "initial-file-read-write-3", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "initial-file-read-write-3",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     // run the worker so it can update the files.
@@ -426,9 +515,13 @@ async fn initial_file_reading_through_api(
 
 #[test]
 #[tracing::instrument]
-async fn directories(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn directories(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("directories").store().await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
@@ -482,9 +575,13 @@ async fn directories(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
 
 #[test]
 #[tracing::instrument]
-async fn directories_replay(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn directories_replay(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("directories").store().await;
     let worker_id = executor.start_worker(&component_id, "directories-1").await;
@@ -497,7 +594,7 @@ async fn directories_replay(last_unique_id: &LastUniqueId, deps: &Deps, _tracing
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     // NOTE: if the directory listing would not be stable, replay would fail with divergence error
 
@@ -547,9 +644,13 @@ async fn directories_replay(last_unique_id: &LastUniqueId, deps: &Deps, _tracing
 
 #[test]
 #[tracing::instrument]
-async fn file_write_read(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn file_write_read(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-1").await;
@@ -569,7 +670,7 @@ async fn file_write_read(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result = executor
         .invoke_and_await(
@@ -590,9 +691,13 @@ async fn file_write_read(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &
 
 #[test]
 #[tracing::instrument]
-async fn file_update_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn file_update_1(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let foo_data = format!("foo{}", LINE_ENDING);
     let bar_data = format!("bar{}", LINE_ENDING);
@@ -786,16 +891,16 @@ async fn file_update_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tr
     executor.simulated_crash(&worker_id).await;
 
     {
-        // after manual update oplog fails and worker cannot be restarted
         let content_after_crash = executor
             .invoke_and_await(
                 &worker_id,
                 "golem-it:ifs-update-exports/golem-it-ifs-update-api.{get-file-content}",
                 vec![],
             )
-            .await;
+            .await
+            .unwrap();
 
-        check!(content_after_crash.is_err());
+        check!(content_after_crash[0] == Value::String(baz_data.to_string()));
     }
 }
 
@@ -807,7 +912,7 @@ async fn file_update_in_the_middle_of_exported_function(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let (sender, mut latch) = tokio::sync::mpsc::channel::<()>(1);
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
@@ -925,16 +1030,20 @@ async fn file_update_in_the_middle_of_exported_function(
 
 #[test]
 #[tracing::instrument]
-async fn environment_service(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn environment_service(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("environment-service").store().await;
     let args = vec!["test-arg".to_string()];
     let mut env = HashMap::new();
     env.insert("TEST_ENV".to_string(), "test-value".to_string());
     let worker_id = executor
-        .start_worker_with(&component_id, "environment-service-1", args, env)
+        .start_worker_with(&component_id, "environment-service-1", args, env, vec![])
         .await;
 
     let args_result = executor
@@ -988,7 +1097,7 @@ async fn http_client_response_persisted_between_invocations(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -1020,7 +1129,7 @@ async fn http_client_response_persisted_between_invocations(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2", vec![], env)
+        .start_worker_with(&component_id, "http-client-2", vec![], env, vec![])
         .await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -1034,7 +1143,7 @@ async fn http_client_response_persisted_between_invocations(
     drop(executor);
     drop(rx);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let _rx = executor.capture_output(&worker_id).await;
 
     let result = executor
@@ -1059,7 +1168,7 @@ async fn http_client_interrupting_response_stream(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -1107,7 +1216,7 @@ async fn http_client_interrupting_response_stream(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2", vec![], env)
+        .start_worker_with(&component_id, "http-client-2", vec![], env, vec![])
         .await;
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1168,7 +1277,7 @@ async fn http_client_interrupting_response_stream_async(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -1216,7 +1325,7 @@ async fn http_client_interrupting_response_stream_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-2-async", vec![], env)
+        .start_worker_with(&component_id, "http-client-2-async", vec![], env, vec![])
         .await;
     let rx = executor.capture_output_with_termination(&worker_id).await;
 
@@ -1271,9 +1380,13 @@ async fn http_client_interrupting_response_stream_async(
 
 #[test]
 #[tracing::instrument]
-async fn sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
@@ -1292,7 +1405,7 @@ async fn sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let start = Instant::now();
     let _ = executor
@@ -1310,9 +1423,13 @@ async fn sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
-async fn resuming_sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn resuming_sleep(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
@@ -1344,7 +1461,7 @@ async fn resuming_sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &T
 
     info!("Restarting worker...");
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     info!("Worker restarted");
 
@@ -1365,9 +1482,13 @@ async fn resuming_sleep(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &T
 
 #[test]
 #[tracing::instrument]
-async fn failing_worker(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn failing_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -1421,9 +1542,13 @@ async fn failing_worker(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &T
 
 #[test]
 #[tracing::instrument]
-async fn file_service_write_direct(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn file_service_write_direct(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-2").await;
@@ -1443,7 +1568,7 @@ async fn file_service_write_direct(last_unique_id: &LastUniqueId, deps: &Deps, _
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result = executor
         .invoke_and_await(
@@ -1470,7 +1595,7 @@ async fn filesystem_write_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
@@ -1498,7 +1623,7 @@ async fn filesystem_write_replay_restores_file_times(
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times2 = executor
         .invoke_and_await(
@@ -1520,7 +1645,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-4").await;
@@ -1545,7 +1670,7 @@ async fn filesystem_create_dir_replay_restores_file_times(
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times2 = executor
         .invoke_and_await(
@@ -1561,9 +1686,13 @@ async fn filesystem_create_dir_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
-async fn file_hard_link(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn file_hard_link(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-5").await;
@@ -1617,7 +1746,7 @@ async fn filesystem_link_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-6").await;
@@ -1681,7 +1810,7 @@ async fn filesystem_link_replay_restores_file_times(
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times_dir_2 = executor
         .invoke_and_await(
@@ -1712,7 +1841,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-7").await;
@@ -1753,7 +1882,7 @@ async fn filesystem_remove_dir_replay_restores_file_times(
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times2 = executor
         .invoke_and_await(
@@ -1775,7 +1904,7 @@ async fn filesystem_symlink_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-8").await;
@@ -1838,7 +1967,7 @@ async fn filesystem_symlink_replay_restores_file_times(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times_dir_2 = executor
         .invoke_and_await(
@@ -1873,7 +2002,7 @@ async fn filesystem_rename_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-9").await;
@@ -1943,7 +2072,7 @@ async fn filesystem_rename_replay_restores_file_times(
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times_srcdir_2 = executor
         .invoke_and_await(
@@ -1986,7 +2115,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor
@@ -2030,7 +2159,7 @@ async fn filesystem_remove_file_replay_restores_file_times(
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times2 = executor
         .invoke_and_await(
@@ -2055,7 +2184,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
@@ -2081,7 +2210,7 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let times2 = executor
         .invoke_and_await(
@@ -2101,9 +2230,13 @@ async fn filesystem_write_via_stream_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
-async fn filesystem_metadata_hash(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn filesystem_metadata_hash(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("file-service").store().await;
     let worker_id = executor.start_worker(&component_id, "file-service-3").await;
@@ -2129,7 +2262,7 @@ async fn filesystem_metadata_hash(last_unique_id: &LastUniqueId, deps: &Deps, _t
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let hash2 = executor
         .invoke_and_await(
@@ -2149,9 +2282,13 @@ async fn filesystem_metadata_hash(last_unique_id: &LastUniqueId, deps: &Deps, _t
 
 #[test]
 #[tracing::instrument]
-async fn ip_address_resolve(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn ip_address_resolve(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("networking").store().await;
     let worker_id = executor
@@ -2164,7 +2301,7 @@ async fn ip_address_resolve(last_unique_id: &LastUniqueId, deps: &Deps, _tracing
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     // If the recovery succeeds, that means that the replayed IP address resolution produced the same result as expected
 
@@ -2191,7 +2328,7 @@ async fn wasi_incoming_request_handler(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("wasi-http-incoming-request-handler")
@@ -2251,7 +2388,7 @@ async fn wasi_incoming_request_handler_echo(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("wasi-http-incoming-request-handler-echo")
@@ -2396,7 +2533,7 @@ async fn wasi_incoming_request_handler_state(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor
         .component("wasi-http-incoming-request-handler-state")
@@ -2502,7 +2639,7 @@ async fn wasi_incoming_request_handler_state(
     );
 
     // restart executor and check whether we are restoring the state
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let result3 = executor
         .invoke_and_await(
@@ -2535,4 +2672,92 @@ async fn wasi_incoming_request_handler_state(
                 ]))))
             ])
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn wasi_config_initial_worker_config(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("golem_it_wasi_config").store().await;
+
+    let worker_id = executor
+        .start_worker_with(
+            &component_id,
+            "worker-1",
+            Vec::new(),
+            HashMap::new(),
+            vec![
+                ("k1".to_string(), "v1".to_string()),
+                ("k2".to_string(), "v2".to_string()),
+            ],
+        )
+        .await;
+
+    {
+        // get existing key
+
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
+                vec!["k1".into_value_and_type()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            vec![Value::Option(Some(Box::new(Value::String(
+                "v1".to_string()
+            ))))]
+        )
+    }
+
+    {
+        // get non-existent key
+
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get}",
+                vec!["k3".into_value_and_type()],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result, vec![Value::Option(None)])
+    }
+
+    {
+        // get all keys
+
+        let result = executor
+            .invoke_and_await(
+                &worker_id,
+                "golem-it:wasi-config-exports/golem-it-wasi-config-api.{get-all}",
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            result,
+            vec![Value::List(vec![
+                Value::Tuple(vec![
+                    Value::String("k1".to_string()),
+                    Value::String("v1".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("k2".to_string()),
+                    Value::String("v2".to_string())
+                ])
+            ])]
+        )
+    }
 }

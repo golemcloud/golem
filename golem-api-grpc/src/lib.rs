@@ -17,6 +17,7 @@ test_r::enable!();
 
 #[allow(clippy::large_enum_variant)]
 pub mod proto {
+    use self::golem::worker::{WasiConfigVars, WasiConfigVarsEntry};
     use crate::proto::golem::worker::UpdateMode;
     use bincode::de::Decoder;
     use bincode::enc::Encoder;
@@ -26,6 +27,7 @@ pub mod proto {
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance,
     };
+    use std::collections::BTreeMap;
     use uuid::Uuid;
 
     tonic::include_proto!("mod");
@@ -206,32 +208,24 @@ pub mod proto {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use crate::proto::golem;
-        use prost::Message;
-        use test_r::test;
+    impl From<BTreeMap<String, String>> for WasiConfigVars {
+        fn from(value: BTreeMap<String, String>) -> Self {
+            Self {
+                entries: value
+                    .into_iter()
+                    .map(|(key, value)| WasiConfigVarsEntry { key, value })
+                    .collect(),
+            }
+        }
+    }
 
-        #[test]
-        fn target_worker_id_and_worker_id_are_bin_compatible() {
-            let component_id_uuid = uuid::Uuid::new_v4();
-            let component_id_uuid: golem::common::Uuid = component_id_uuid.into();
-            let component_id = golem::component::ComponentId {
-                value: Some(component_id_uuid),
-            };
-            let target_worker_id = golem::worker::TargetWorkerId {
-                component_id: Some(component_id),
-                name: Some("hello".to_string()),
-            };
-            let worker_id = golem::worker::WorkerId {
-                component_id: Some(component_id),
-                name: "hello".to_string(),
-            };
-
-            let target_worker_id_bytes = target_worker_id.encode_to_vec();
-            let worker_id_bytes = worker_id.encode_to_vec();
-
-            assert_eq!(target_worker_id_bytes, worker_id_bytes);
+    impl From<WasiConfigVars> for BTreeMap<String, String> {
+        fn from(value: WasiConfigVars) -> Self {
+            value
+                .entries
+                .into_iter()
+                .map(|e| (e.key, e.value))
+                .collect()
         }
     }
 }

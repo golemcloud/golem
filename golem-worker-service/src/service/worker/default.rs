@@ -32,23 +32,26 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::auth::Namespace;
+use golem_common::model::auth::{Namespace, TokenSecret};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
     ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator,
-    IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, TargetWorkerId, WorkerFilter,
-    WorkerId, WorkerStatus,
+    IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, WorkerFilter, WorkerId,
+    WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
+use golem_service_base::clients::project::ProjectService;
+use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
+use golem_wasm_rpc::ValueAndType;
+use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
@@ -64,6 +67,8 @@ pub trait WorkerService: Send + Sync {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
+        ignore_already_existing: bool,
         namespace: Namespace,
     ) -> WorkerResult<WorkerId>;
 
@@ -75,22 +80,19 @@ pub trait WorkerService: Send + Sync {
 
     async fn delete(&self, worker_id: &WorkerId, namespace: Namespace) -> WorkerResult<()>;
 
-    fn validate_typed_parameters(
-        &self,
-        params: Vec<TypeAnnotatedValue>,
-    ) -> WorkerResult<Vec<ProtoVal>>;
+    fn validate_typed_parameters(&self, params: Vec<ValueAndType>) -> WorkerResult<Vec<ProtoVal>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then
     /// invokes the worker and waits its results, returning it as a `TypeAnnotatedValue`.
     async fn validate_and_invoke_and_await_typed(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ValueAndType>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
+    ) -> WorkerResult<Option<ValueAndType>> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
             worker_id,
@@ -107,19 +109,19 @@ pub trait WorkerService: Send + Sync {
     /// it as a `TypeAnnotatedValue`.
     async fn invoke_and_await_typed(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>>;
+    ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
     /// a `Val` values (without type information)
     async fn invoke_and_await(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -132,22 +134,22 @@ pub trait WorkerService: Send + Sync {
     /// without type information so they get forwarded to the executor.
     async fn invoke_and_await_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>>;
+    ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
     /// an invocation for the worker without awaiting its results.
     async fn validate_and_invoke(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
-        params: Vec<TypeAnnotatedValue>,
+        params: Vec<ValueAndType>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
     ) -> WorkerResult<()> {
@@ -167,7 +169,7 @@ pub trait WorkerService: Send + Sync {
     /// parameters.
     async fn invoke(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -180,7 +182,7 @@ pub trait WorkerService: Send + Sync {
     /// be converted to `Val` so they get forwarded as-is to the executor.
     async fn invoke_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
@@ -252,16 +254,16 @@ pub trait WorkerService: Send + Sync {
         namespace: Namespace,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
@@ -304,7 +306,7 @@ pub trait WorkerService: Send + Sync {
 }
 
 pub struct TypedResult {
-    pub result: TypeAnnotatedValue,
+    pub result: ValueAndType,
     pub function_result_types: Vec<AnalysedFunctionResult>,
 }
 
@@ -317,6 +319,8 @@ pub struct WorkerServiceDefault {
     worker_executor_retries: RetryConfig,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     limit_service: Arc<dyn LimitService>,
+    project_service: Arc<dyn ProjectService + Send + Sync>,
+    cloud_service_config: RemoteServiceConfig,
 }
 
 impl WorkerServiceDefault {
@@ -325,19 +329,32 @@ impl WorkerServiceDefault {
         worker_executor_retries: RetryConfig,
         routing_table_service: Arc<dyn RoutingTableService>,
         limit_service: Arc<dyn LimitService>,
+        project_service: Arc<dyn ProjectService + Send + Sync>,
+        cloud_service_config: RemoteServiceConfig,
     ) -> Self {
         Self {
             worker_executor_clients,
             worker_executor_retries,
             routing_table_service,
             limit_service,
+            project_service,
+            cloud_service_config,
         }
     }
 
     async fn get_resource_limits(&self, namespace: &Namespace) -> WorkerResult<ResourceLimits> {
+        // TODO: cache this?
+        let project_owner = self
+            .project_service
+            .get(
+                &namespace.project_id,
+                &TokenSecret::new(self.cloud_service_config.access_token),
+            )
+            .await?
+            .owner_account_id;
         let resource_limits = self
             .limit_service
-            .get_resource_limits(&namespace.account_id)
+            .get_resource_limits(&project_owner)
             .await?;
 
         Ok(resource_limits)
@@ -416,6 +433,7 @@ impl WorkerServiceDefault {
                             count,
                             precise,
                             account_id: Some(namespace.account_id.clone().into()),
+                            project_id: Some(namespace.project_id.clone().into()),
                         },
                     ))
                 },
@@ -482,6 +500,8 @@ impl WorkerService for WorkerServiceDefault {
         component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
+        wasi_config_vars: BTreeMap<String, String>,
+        ignore_already_existing: bool,
         namespace: Namespace,
     ) -> WorkerResult<WorkerId> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
@@ -499,7 +519,10 @@ impl WorkerService for WorkerServiceDefault {
                     args: arguments.clone(),
                     env: environment_variables.clone(),
                     account_id: Some(account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                     account_limits: Some(resource_limits.clone().into()),
+                    wasi_config_vars: Some(wasi_config_vars.clone().into()),
+                    ignore_already_existing,
                 }))
             },
             |response| match response.into_inner() {
@@ -530,6 +553,7 @@ impl WorkerService for WorkerServiceDefault {
         let resource_limits = self.get_resource_limits(&namespace).await?;
 
         let account_id = namespace.account_id.clone();
+        let project_id = namespace.project_id.clone();
         let worker_id_clone = worker_id.clone();
         let worker_id_err = worker_id.clone();
         let stream = self
@@ -541,6 +565,7 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(worker_id_clone.clone().into()),
                         account_id: Some(account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
+                        project_id: Some(project_id.clone().into()),
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
@@ -581,6 +606,7 @@ impl WorkerService for WorkerServiceDefault {
                             worker_id_clone.clone(),
                         )),
                         account_id: Some(account_id_clone.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     },
                 ))
             },
@@ -604,14 +630,10 @@ impl WorkerService for WorkerServiceDefault {
         Ok(())
     }
 
-    fn validate_typed_parameters(
-        &self,
-        params: Vec<TypeAnnotatedValue>,
-    ) -> WorkerResult<Vec<ProtoVal>> {
+    fn validate_typed_parameters(&self, params: Vec<ValueAndType>) -> WorkerResult<Vec<ProtoVal>> {
         let mut result = Vec::new();
         for param in params {
-            let val =
-                golem_wasm_rpc::Value::try_from(param).map_err(WorkerServiceError::TypeChecker)?;
+            let val = param.value;
             result.push(golem_wasm_rpc::protobuf::Val::from(val));
         }
         Ok(result)
@@ -619,13 +641,13 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await_typed(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
+    ) -> WorkerResult<Option<ValueAndType>> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -643,6 +665,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 )
                 )
@@ -657,7 +680,10 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        Ok(output.and_then(|tav| tav.type_annotated_value))
+                        match output {
+                            Some(vnt) => ValueAndType::try_from(vnt).map(Some).map_err(|err| WorkerExecutorError::unknown(err).into()),
+                            None => Ok(None),
+                        }
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
@@ -678,7 +704,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -702,6 +728,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 )
                 )
@@ -737,13 +764,13 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_and_await_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
         namespace: Namespace,
-    ) -> WorkerResult<Option<TypeAnnotatedValue>> {
+    ) -> WorkerResult<Option<ValueAndType>> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -761,6 +788,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 )
                 )
@@ -775,7 +803,12 @@ impl WorkerService for WorkerServiceDefault {
                                  },
                              )),
                     } => {
-                        Ok(output.and_then(|tav| tav.type_annotated_value))
+                        match output {
+                            Some(vnt) => {
+                                ValueAndType::try_from(vnt).map(Some).map_err(|err| WorkerExecutorError::unknown(err).into())
+                            }
+                            None => Ok(None),
+                        }
                     }
                     workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result:
@@ -796,7 +829,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<ProtoVal>,
@@ -819,6 +852,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     },
                 ))
             },
@@ -839,7 +873,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn invoke_json(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         idempotency_key: Option<IdempotencyKey>,
         function_name: String,
         params: Vec<String>,
@@ -862,6 +896,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     },
                 ))
             },
@@ -904,8 +939,9 @@ impl WorkerService for WorkerServiceDefault {
                             .complete_promise(CompletePromiseRequest {
                                 promise_id: Some(promise_id.into()),
                                 data,
-                                account_id: Some(namespace.account_id.clone().into())
-                        })
+                                account_id: Some(namespace.account_id.clone().into()),
+                                project_id: Some(namespace.project_id.clone().into()),
+                            })
                     )
                 },
                 |response| {
@@ -950,6 +986,7 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(worker_id.into()),
                         recover_immediately,
                         account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -984,7 +1021,7 @@ impl WorkerService for WorkerServiceDefault {
                 Box::pin(worker_executor_client.get_worker_metadata(
                     workerexecutor::v1::GetWorkerMetadataRequest {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(worker_id)),
-                        account_id: Some(namespace.account_id.clone().into())
+                        project_id: Some(namespace.project_id.clone().into()),
                     }
                 ))
             },
@@ -1050,6 +1087,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     account_id: Some(namespace.account_id.clone().into()),
                     force: Some(force),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1085,6 +1123,7 @@ impl WorkerService for WorkerServiceDefault {
                     mode: update_mode.into(),
                     target_version,
                     account_id: Some(namespace.account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1122,7 +1161,7 @@ impl WorkerService for WorkerServiceDefault {
                         from_oplog_index: from_oplog_index.into(),
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1194,7 +1233,7 @@ impl WorkerService for WorkerServiceDefault {
                         query: query_clone,
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
-                        account_id: Some(namespace.account_id.clone().into())
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1214,7 +1253,7 @@ impl WorkerService for WorkerServiceDefault {
                         .map(|e| e.try_into())
                         .collect::<Result<Vec<_>, _>>()
                         .map_err(|err| WorkerExecutorError::unknown(format!("Unexpected oplog entries in error: {err}")))?;
-                    let first_index_in_chunk =  entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
+                    let first_index_in_chunk = entries.first().map(|entry| entry.oplog_index).unwrap_or(OplogIndex::INITIAL).into();
                     Ok(GetOplogResponse {
                         entries,
                         next: next.map(|c| c.into()),
@@ -1232,9 +1271,9 @@ impl WorkerService for WorkerServiceDefault {
             .await
     }
 
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
@@ -1243,41 +1282,48 @@ impl WorkerService for WorkerServiceDefault {
         let path_clone = path.clone();
         self.call_worker_executor(
             worker_id.clone(),
-            "list_directory",
+            "get_file_system_node",
             move |worker_executor_client| {
                 let worker_id = worker_id.clone();
                 Box::pin(
-                    worker_executor_client.list_directory(workerexecutor::v1::ListDirectoryRequest {
+                    worker_executor_client.get_file_system_node(workerexecutor::v1::GetFileSystemNodeRequest {
                         worker_id: Some(worker_id.into()),
                         account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
-                        path: path_clone.to_string()
+                        path: path_clone.to_string(),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
             |response| match response.into_inner() {
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::list_directory_response::Result::Success(success)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(golem_api_grpc::proto::golem::workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(success)),
                 } => {
                     success.nodes
                         .into_iter()
                         .map(|v|
                             v
-                            .try_into()
-                            .map_err(|_| "Failed to convert node".into())
+                                .try_into()
+                                .map_err(|_| "Failed to convert node".into())
                         )
                         .collect::<Result<Vec<_>, _>>()
                 }
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::Failure(err)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(err)),
                 } => Err(err.into()),
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::NotFound(_)),
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)),
                 } => Err(WorkerServiceError::FileNotFound(path.clone()).into()),
-                workerexecutor::v1::ListDirectoryResponse {
-                    result: Some(workerexecutor::v1::list_directory_response::Result::NotADirectory(_)),
-                } => Err(WorkerServiceError::BadFileType(path.clone()).into()),
-                workerexecutor::v1::ListDirectoryResponse {
+                workerexecutor::v1::GetFileSystemNodeResponse {
+                    result: Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(file_response)),
+                } => {
+                    let file_node = file_response.file
+                        .ok_or(WorkerServiceError::Internal("Missing file data in response".to_string()))?
+                        .try_into()
+                        .map_err(|_| WorkerServiceError::Internal("Failed to convert file node".to_string()))?;
+                    Ok(vec![file_node])
+                },
+                workerexecutor::v1::GetFileSystemNodeResponse {
                     result: None
                 } => Err("Empty response".into()),
             },
@@ -1288,7 +1334,7 @@ impl WorkerService for WorkerServiceDefault {
 
     async fn get_file_contents(
         &self,
-        worker_id: &TargetWorkerId,
+        worker_id: &WorkerId,
         path: ComponentFilePath,
         namespace: Namespace,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
@@ -1306,6 +1352,7 @@ impl WorkerService for WorkerServiceDefault {
                             account_id: Some(namespace.account_id.clone().into()),
                             account_limits: Some(resource_limits.clone().into()),
                             file_path: path_clone.to_string(),
+                            project_id: Some(namespace.project_id.clone().into()),
                         },
                     ))
                 },
@@ -1395,7 +1442,8 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.activate_plugin(ActivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: Some(namespace.account_id.clone().into())
+                        account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1433,7 +1481,8 @@ impl WorkerService for WorkerServiceDefault {
                     worker_executor_client.deactivate_plugin(DeactivatePluginRequest {
                         worker_id: Some(worker_id.into()),
                         installation_id: Some(plugin_installation_id.clone().into()),
-                        account_id: Some(namespace.account_id.clone().into())
+                        account_id: Some(namespace.account_id.clone().into()),
+                        project_id: Some(namespace.project_id.clone().into()),
                     }),
                 )
             },
@@ -1474,6 +1523,7 @@ impl WorkerService for WorkerServiceDefault {
                     target_worker_id: Some(target_worker_id.into()),
                     account_id: Some(namespace.account_id.clone().into()),
                     oplog_index_cutoff: oplog_index_cut_off.into(),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1508,6 +1558,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     target: Some(target.into()),
                     account_id: Some(namespace.account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1543,6 +1594,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     idempotency_key: Some(idempotency_key.into()),
                     account_id: Some(namespace.account_id.clone().into()),
+                    project_id: Some(namespace.project_id.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1556,7 +1608,7 @@ impl WorkerService for WorkerServiceDefault {
             },
             WorkerServiceError::InternalCallError,
         )
-        .await?;
+            .await?;
         Ok(canceled)
     }
 }

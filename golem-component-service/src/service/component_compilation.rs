@@ -18,7 +18,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     ComponentCompilationRequest,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{ComponentId, RetryConfig};
+use golem_common::model::{ComponentId, ProjectId, RetryConfig};
 use http::Uri;
 use std::fmt::{Debug, Formatter};
 use std::sync::atomic::{AtomicU16, Ordering};
@@ -28,7 +28,12 @@ use tonic::transport::Channel;
 
 #[async_trait]
 pub trait ComponentCompilationService: Debug + Send + Sync {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64);
+    async fn enqueue_compilation(
+        &self,
+        project_id: &ProjectId,
+        component_id: &ComponentId,
+        component_version: u64,
+    );
 
     fn set_self_grpc_port(&self, grpc_port: u16);
 }
@@ -69,8 +74,14 @@ impl Debug for ComponentCompilationServiceDefault {
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDefault {
-    async fn enqueue_compilation(&self, component_id: &ComponentId, component_version: u64) {
+    async fn enqueue_compilation(
+        &self,
+        project_id: &ProjectId,
+        component_id: &ComponentId,
+        component_version: u64,
+    ) {
         let component_id_clone = component_id.clone();
+        let project_id_clone = project_id.clone();
 
         let component_service_port = match self.component_service_port.load(Ordering::Acquire) {
             0 => None,
@@ -81,11 +92,13 @@ impl ComponentCompilationService for ComponentCompilationServiceDefault {
             .client
             .call("enqueue-compilation", move |client| {
                 let component_id_clone = component_id_clone.clone();
+                let project_id_clone = project_id_clone.clone();
                 Box::pin(async move {
                     let request = ComponentCompilationRequest {
                         component_id: Some(component_id_clone.into()),
                         component_version,
                         component_service_port,
+                        project_id: Some(project_id_clone.into()),
                     };
 
                     client.enqueue_compilation(request).await
@@ -123,7 +136,7 @@ impl Debug for ComponentCompilationServiceDisabled {
 
 #[async_trait]
 impl ComponentCompilationService for ComponentCompilationServiceDisabled {
-    async fn enqueue_compilation(&self, _: &ComponentId, _: u64) {}
+    async fn enqueue_compilation(&self, _: &ProjectId, _: &ComponentId, _: u64) {}
 
     fn set_self_grpc_port(&self, _grpc_port: u16) {}
 }

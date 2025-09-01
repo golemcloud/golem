@@ -1,4 +1,12 @@
+pub mod debug_mode;
+pub mod debug_tests;
+pub mod regular_mode;
+pub mod services;
+
 use async_trait::async_trait;
+pub use debug_mode::context::DebugExecutorTestContext;
+pub use debug_mode::dsl::TestDslDebugMode;
+pub use debug_mode::start_debug_worker_executor;
 use golem_common::config::RedisConfig;
 use golem_common::model::{AccountId, ProjectId, RetryConfig};
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
@@ -31,6 +39,8 @@ use golem_worker_executor::services::golem_config::{
     ProjectServiceDisabledConfig, ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
     WorkerServiceGrpcConfig,
 };
+pub use regular_mode::context::RegularExecutorTestContext;
+pub use regular_mode::start_regular_worker_executor;
 use std::env::var;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -41,19 +51,6 @@ use tempfile::TempDir;
 use test_r::test_dep;
 use tracing::Level;
 use uuid::Uuid;
-
-pub mod debug_mode;
-pub mod debug_tests;
-pub mod regular_mode;
-pub mod services;
-
-pub use debug_mode::context::DebugExecutorTestContext;
-pub use debug_mode::dsl::TestDslDebugMode;
-pub use debug_mode::start_debug_worker_executor;
-use golem_test_framework::components::redis::docker::DockerRedis;
-use golem_test_framework::components::redis_monitor::docker::DockerRedisMonitor;
-pub use regular_mode::context::RegularExecutorTestContext;
-pub use regular_mode::start_regular_worker_executor;
 
 test_r::enable!();
 
@@ -92,6 +89,9 @@ pub fn get_golem_config(
     redis_prefix: String,
     grpc_port: u16,
     http_port: u16,
+    account_id: AccountId,
+    default_project_id: ProjectId,
+    default_project_name: String,
 ) -> GolemConfig {
     GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
@@ -119,7 +119,11 @@ pub fn get_golem_config(
             connect_timeout: Duration::from_secs(120),
         },
         memory: MemoryConfig::default(),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
+            account_id,
+            project_id: default_project_id,
+            project_name: default_project_name,
+        }),
         ..Default::default()
     }
 }
@@ -235,19 +239,19 @@ impl RegularWorkerExecutorTestDependencies {
 
         let redis: Arc<dyn Redis + Send + Sync + 'static> = if !docker_active {
             Arc::new(SpawnedRedis::new(
-                6379,
-                "".to_string(),
-                Level::INFO,
-                Level::ERROR,
+            6379,
+            "".to_string(),
+            Level::INFO,
+            Level::ERROR,
             ))
         } else {
             Arc::new(DockerRedis::new("test_network", "".to_string()).await)
         };
         let redis_monitor: Arc<dyn RedisMonitor + Send + Sync + 'static> = if !docker_active {
             Arc::new(SpawnedRedisMonitor::new(
-                redis.clone(),
-                Level::DEBUG,
-                Level::ERROR,
+            redis.clone(),
+            Level::DEBUG,
+            Level::ERROR,
             ))
         } else {
             Arc::new(DockerRedisMonitor::new(
@@ -270,6 +274,7 @@ impl RegularWorkerExecutorTestDependencies {
             Path::new("../golem-debugging-service/test-components").to_path_buf();
         let account_id = AccountId::generate();
         let project_id = ProjectId::new_v4();
+        let project_name = "default".to_string();
         let token = Uuid::new_v4();
         let component_service: Arc<dyn ComponentService> = Arc::new(
             FileSystemComponentService::new(
@@ -282,7 +287,10 @@ impl RegularWorkerExecutorTestDependencies {
         );
 
         let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
-            account_id, token, project_id,
+            account_id,
+            token,
+            project_id,
+            project_name,
         ));
 
         Self {
@@ -396,6 +404,6 @@ impl TestDependencies for RegularWorkerExecutorTestDependencies {
     }
 
     fn cloud_service(&self) -> Arc<dyn CloudService> {
-        panic!("Not supported")
+        self.cloud_service.clone()
     }
 }

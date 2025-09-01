@@ -15,6 +15,7 @@
 use super::auth_call_back_binding_handler::{AuthorisationError, AuthorisationSuccess};
 use super::file_server_binding_handler::FileServerBindingSuccess;
 use super::http_handler_binding_handler::{HttpHandlerBindingError, HttpHandlerBindingSuccess};
+use super::swagger_binding_handler::{SwaggerBindingError, SwaggerBindingSuccess};
 use super::RibInputTypeMismatch;
 use crate::api::common::ApiEndpointError;
 use crate::gateway_execution::file_server_binding_handler::FileServerBindingError;
@@ -283,6 +284,30 @@ impl ToHttpResponse for AuthorisationError {
     }
 }
 
+#[async_trait]
+impl ToHttpResponse for SwaggerBindingSuccess {
+    async fn to_response(
+        self,
+        _request_details: &RichRequest,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        poem::Response::builder()
+            .content_type("text/html")
+            .body(Body::from_string(self.html_content))
+    }
+}
+
+#[async_trait]
+impl ToHttpResponse for SwaggerBindingError {
+    async fn to_response(
+        self,
+        _request_details: &RichRequest,
+        _session_store: &GatewaySessionStore,
+    ) -> poem::Response {
+        self.into()
+    }
+}
+
 mod internal {
     use crate::gateway_execution::http_content_type_mapper::{
         ContentTypeHeaders, HttpContentTypeResponseMapper,
@@ -295,13 +320,13 @@ mod internal {
     use crate::path::Path;
 
     use crate::headers::ResolvedResponseHeaders;
-    use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+    use golem_wasm_rpc::ValueAndType;
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
 
     #[derive(Debug)]
     pub(crate) struct IntermediateHttpResponse {
-        body: Option<TypeAnnotatedValue>,
+        body: Option<ValueAndType>,
         status: StatusCode,
         headers: ResolvedResponseHeaders,
     }
@@ -317,14 +342,9 @@ mod internal {
                     let headers =
                         get_response_headers_or_default(rib_result).map_err(RibRuntimeError)?;
 
-                    let tav: TypeAnnotatedValue = rib_result
-                        .clone()
-                        .try_into()
-                        .map_err(|errs: Vec<String>| RibRuntimeError(errs.join(", ")))?;
-
-                    let body = tav
+                    let body = rib_result
                         .get_optional(&Path::from_key("body"))
-                        .unwrap_or(tav.clone());
+                        .unwrap_or(rib_result.clone());
 
                     Ok(IntermediateHttpResponse {
                         body: Some(body),

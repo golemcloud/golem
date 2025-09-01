@@ -35,7 +35,7 @@ impl WasmType for AnalysedType {
     }
 
     fn list_element_type(&self) -> Option<Self> {
-        if let AnalysedType::List(TypeList { inner: ty }) = self {
+        if let AnalysedType::List(TypeList { inner: ty, .. }) = self {
             Some(*ty.clone())
         } else {
             None
@@ -43,7 +43,7 @@ impl WasmType for AnalysedType {
     }
 
     fn record_fields(&self) -> Box<dyn Iterator<Item = (Cow<'_, str>, Self)> + '_> {
-        if let AnalysedType::Record(TypeRecord { fields }) = self {
+        if let AnalysedType::Record(TypeRecord { fields, .. }) = self {
             Box::new(
                 fields
                     .iter()
@@ -55,7 +55,7 @@ impl WasmType for AnalysedType {
     }
 
     fn tuple_element_types(&self) -> Box<dyn Iterator<Item = Self> + '_> {
-        if let AnalysedType::Tuple(TypeTuple { items }) = self {
+        if let AnalysedType::Tuple(TypeTuple { items, .. }) = self {
             Box::new(items.clone().into_iter())
         } else {
             Box::new(std::iter::empty())
@@ -63,7 +63,7 @@ impl WasmType for AnalysedType {
     }
 
     fn variant_cases(&self) -> Box<dyn Iterator<Item = (Cow<'_, str>, Option<Self>)> + '_> {
-        if let AnalysedType::Variant(TypeVariant { cases }) = self {
+        if let AnalysedType::Variant(TypeVariant { cases, .. }) = self {
             Box::new(
                 cases
                     .iter()
@@ -75,7 +75,7 @@ impl WasmType for AnalysedType {
     }
 
     fn enum_cases(&self) -> Box<dyn Iterator<Item = Cow<'_, str>> + '_> {
-        if let AnalysedType::Enum(TypeEnum { cases }) = self {
+        if let AnalysedType::Enum(TypeEnum { cases, .. }) = self {
             Box::new(cases.iter().map(|name| Cow::Borrowed(name.as_str())))
         } else {
             Box::new(std::iter::empty())
@@ -83,7 +83,7 @@ impl WasmType for AnalysedType {
     }
 
     fn option_some_type(&self) -> Option<Self> {
-        if let AnalysedType::Option(TypeOption { inner }) = self {
+        if let AnalysedType::Option(TypeOption { inner, .. }) = self {
             Some(*inner.clone())
         } else {
             None
@@ -91,7 +91,7 @@ impl WasmType for AnalysedType {
     }
 
     fn result_types(&self) -> Option<(Option<Self>, Option<Self>)> {
-        if let AnalysedType::Result(TypeResult { ok, err }) = self {
+        if let AnalysedType::Result(TypeResult { ok, err, .. }) = self {
             Some((
                 ok.as_ref().map(|t| *t.clone()),
                 err.as_ref().map(|t| *t.clone()),
@@ -102,7 +102,7 @@ impl WasmType for AnalysedType {
     }
 
     fn flags_names(&self) -> Box<dyn Iterator<Item = Cow<'_, str>> + '_> {
-        if let AnalysedType::Flags(TypeFlags { names }) = self {
+        if let AnalysedType::Flags(TypeFlags { names, .. }) = self {
             Box::new(names.iter().map(|name| Cow::Borrowed(name.as_str())))
         } else {
             Box::new(std::iter::empty())

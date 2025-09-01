@@ -1,0 +1,15 @@
+package pack:name;
+
+// See https://component-model.bytecodealliance.org/design/wit.html for more details about the WIT syntax
+
+interface component-name-api {
+  add: func(value: u64);
+  get: func() -> u64;
+}
+
+world component-name {
+  export component-name-api;
+
+  export golem:api/save-snapshot@1.1.7;
+  export golem:api/load-snapshot@1.1.7;
+}

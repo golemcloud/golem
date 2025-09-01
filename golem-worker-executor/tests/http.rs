@@ -37,9 +37,13 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-async fn http_client(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn http_client(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -66,7 +70,7 @@ async fn http_client(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-1", vec![], env)
+        .start_worker_with(&component_id, "http-client-1", vec![], env, vec![])
         .await;
     let rx = executor.capture_output(&worker_id).await;
 
@@ -90,9 +94,13 @@ async fn http_client(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
 
 #[test]
 #[tracing::instrument]
-async fn http_client_using_reqwest(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn http_client_using_reqwest(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -129,7 +137,7 @@ async fn http_client_using_reqwest(last_unique_id: &LastUniqueId, deps: &Deps, _
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env)
+        .start_worker_with(&component_id, "http-client-reqwest-1", vec![], env, vec![])
         .await;
 
     let result = executor
@@ -159,7 +167,7 @@ async fn http_client_using_reqwest_async(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -196,7 +204,13 @@ async fn http_client_using_reqwest_async(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-async-1", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "http-client-reqwest-async-1",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -226,7 +240,7 @@ async fn http_client_using_reqwest_async_parallel(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
 
@@ -263,7 +277,13 @@ async fn http_client_using_reqwest_async_parallel(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "http-client-reqwest-async-2", vec![], env)
+        .start_worker_with(
+            &component_id,
+            "http-client-reqwest-async-2",
+            vec![],
+            env,
+            vec![],
+        )
         .await;
 
     let result = executor
@@ -331,7 +351,7 @@ async fn outgoing_http_contains_idempotency_key(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -368,6 +388,7 @@ async fn outgoing_http_contains_idempotency_key(
             "outgoing-http-contains-idempotency-key",
             vec![],
             env,
+            vec![],
         )
         .await;
 
@@ -401,14 +422,15 @@ async fn http_response_request_chaining(
     let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries()))
         .await
         .unwrap()
-        .into_admin();
+        .into_admin()
+        .await;
 
     let component_id = executor.component("fetch").store().await;
     let mut env = HashMap::new();
     env.insert("RUST_BACKTRACE".to_string(), "full".to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "fetch-test-4", vec![], env)
+        .start_worker_with(&component_id, "fetch-test-4", vec![], env, vec![])
         .await;
     let rx = executor.capture_output(&worker_id).await;
 

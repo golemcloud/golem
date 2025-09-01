@@ -35,8 +35,9 @@ use async_trait::async_trait;
 use golem_service_base::clients::auth::AuthService as BaseAuthService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_worker_executor::durable_host::DurableWorkerCtx;
-use golem_worker_executor::preview2::{golem_api_1_x, golem_durability};
+use golem_worker_executor::preview2::{golem_agent, golem_api_1_x, golem_durability};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
@@ -46,6 +47,7 @@ use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::OplogService;
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use golem_worker_executor::services::scheduler::SchedulerService;
@@ -96,14 +98,15 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugins: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &golem_config.component_service,
-            &golem_config.project_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugins,
+            project_service,
         )
     }
 
@@ -150,6 +153,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<DebugContext>> {
         let remote_cloud_service_config = self.debug_config.cloud_service.clone();
 
@@ -201,6 +206,8 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_types_service.clone(),
             addition_deps.clone(),
         ));
 
@@ -233,11 +240,14 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_types_service.clone(),
             addition_deps.clone(),
         ));
 
         Ok(All::new(
             active_workers,
+            agent_types_service,
             engine,
             linker,
             runtime.clone(),
@@ -263,6 +273,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
+            project_service.clone(),
             addition_deps,
         ))
     }
@@ -276,7 +287,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
         golem_config: GolemConfig,
         prometheus_registry: Registry,
         runtime: Handle,
-        join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+        join_set: &mut JoinSet<Result<(), Error>>,
     ) -> anyhow::Result<RunDetails> {
         run_debug_worker_executor(
             self,
@@ -296,7 +307,7 @@ pub async fn run_debug_worker_executor<T: Bootstrap<DebugContext> + ?Sized>(
     cors_origin_regex: &str,
     prometheus_registry: Registry,
     runtime: Handle,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
+    join_set: &mut JoinSet<Result<(), Error>>,
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing debug worker executor");
 
@@ -347,6 +358,7 @@ pub fn create_debug_wasmtime_linker(engine: &Engine) -> anyhow::Result<Linker<De
     golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+    golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
     Ok(linker)
 }
@@ -356,8 +368,8 @@ async fn start_http_server(
     http_port: u16,
     cors_origin_regex: &str,
     prometheus_registry: &Registry,
-    join_set: &mut JoinSet<Result<(), anyhow::Error>>,
-) -> Result<u16, anyhow::Error> {
+    join_set: &mut JoinSet<Result<(), Error>>,
+) -> Result<u16, Error> {
     let open_api_service = api::make_open_api_service(services);
 
     let ui = open_api_service.swagger_ui();

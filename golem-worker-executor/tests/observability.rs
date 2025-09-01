@@ -26,7 +26,7 @@ use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, Publi
 use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm_rpc::{IntoValueAndType, Record, Value};
 use http::HeaderMap;
 use log::info;
 use std::collections::HashMap;
@@ -40,9 +40,13 @@ inherit_test_dep!(Tracing);
 
 #[test]
 #[tracing::instrument]
-async fn get_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn get_oplog_1(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -56,7 +60,7 @@ async fn get_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
 
     let _ = executor
         .invoke_and_await(
-            worker_id.clone(),
+            &worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
@@ -64,7 +68,7 @@ async fn get_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
         .unwrap();
     let _ = executor
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key1,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -73,7 +77,7 @@ async fn get_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
         .unwrap();
     let _ = executor
         .invoke_and_await_with_key(
-            worker_id.clone(),
+            &worker_id,
             &idempotency_key2,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
@@ -111,9 +115,13 @@ async fn get_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Trac
 
 #[test]
 #[tracing::instrument]
-async fn search_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn search_oplog_1(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("shopping-cart").store().await;
 
@@ -134,12 +142,12 @@ async fn search_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &T
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1000".into_value_and_type()),
                 ("name", "Golem T-Shirt M".into_value_and_type()),
                 ("price", 100.0f32.into_value_and_type()),
                 ("quantity", 5u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -148,12 +156,12 @@ async fn search_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &T
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1001".into_value_and_type()),
                 ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
                 ("price", 999999.0f32.into_value_and_type()),
                 ("quantity", 1u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -162,12 +170,12 @@ async fn search_oplog_1(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &T
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{add-item}",
-            vec![vec![
+            vec![Record(vec![
                 ("product-id", "G1002".into_value_and_type()),
                 ("name", "Mud Golem".into_value_and_type()),
                 ("price", 11.0f32.into_value_and_type()),
                 ("quantity", 10u32.into_value_and_type()),
-            ]
+            ])
             .into_value_and_type()],
         )
         .await;
@@ -213,7 +221,7 @@ async fn get_oplog_with_api_changing_updates(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor
@@ -263,7 +271,7 @@ async fn get_oplog_starting_with_updated_component(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let target_version = executor
@@ -288,9 +296,13 @@ async fn get_oplog_starting_with_updated_component(
 #[test]
 #[tracing::instrument]
 #[allow(clippy::await_holding_lock)]
-async fn invocation_context_test(last_unique_id: &LastUniqueId, deps: &Deps, _tracing: &Tracing) {
+async fn invocation_context_test(
+    last_unique_id: &LastUniqueId,
+    deps: &Deps,
+    _tracing: &Tracing,
+) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin();
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -343,7 +355,7 @@ async fn invocation_context_test(last_unique_id: &LastUniqueId, deps: &Deps, _tr
         .store()
         .await;
     let worker_id = executor
-        .start_worker_with(&component_id, "w1", vec![], env.clone())
+        .start_worker_with(&component_id, "w1", vec![], env.clone(), vec![])
         .await;
 
     let result = executor

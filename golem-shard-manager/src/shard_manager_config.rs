@@ -17,7 +17,9 @@ use crate::shard_manager_config::HealthCheckMode::K8s;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -31,6 +33,41 @@ pub struct ShardManagerConfig {
     pub grpc_port: u16,
     pub number_of_shards: usize,
     pub rebalance_threshold: f64,
+}
+
+impl SafeDisplay for ShardManagerConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "tracing:");
+        let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "persistence:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.persistence.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "worker executors:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.worker_executors.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "healthcheck:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.health_check.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "HTTP port: {}", self.http_port);
+        let _ = writeln!(&mut result, "gRPC port: {}", self.grpc_port);
+        let _ = writeln!(&mut result, "number of shards: {}", self.number_of_shards);
+        let _ = writeln!(
+            &mut result,
+            "rebalance threshold: {}",
+            self.rebalance_threshold
+        );
+        result
+    }
 }
 
 impl Default for ShardManagerConfig {
@@ -79,6 +116,31 @@ pub struct WorkerExecutorServiceConfig {
     pub connect_timeout: Duration,
 }
 
+impl SafeDisplay for WorkerExecutorServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "assign shards timeout: {:?}",
+            self.assign_shards_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "health check timeout: {:?}",
+            self.health_check_timeout
+        );
+        let _ = writeln!(
+            &mut result,
+            "revoke shards timeout: {:?}",
+            self.revoke_shards_timeout
+        );
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
 impl Default for WorkerExecutorServiceConfig {
     fn default() -> Self {
         Self {
@@ -99,6 +161,17 @@ pub struct HealthCheckConfig {
     pub silent: bool,
 }
 
+impl SafeDisplay for HealthCheckConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "delay: {:?}", self.delay);
+        let _ = writeln!(&mut result, "mode:");
+        let _ = writeln!(&mut result, "{}", self.mode.to_safe_string_indented());
+        let _ = writeln!(&mut result, "silent: {}", self.silent);
+        result
+    }
+}
+
 impl Default for HealthCheckConfig {
     fn default() -> Self {
         Self {
@@ -117,6 +190,23 @@ pub enum HealthCheckMode {
     K8s(HealthCheckK8sConfig),
 }
 
+impl SafeDisplay for HealthCheckMode {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            HealthCheckMode::Grpc(_) => {
+                let _ = writeln!(&mut result, "gRPC");
+            }
+            #[cfg(feature = "kubernetes")]
+            HealthCheckMode::K8s(inner) => {
+                let _ = writeln!(&mut result, "k8s:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
 impl Default for HealthCheckMode {
     fn default() -> Self {
         Self::Grpc(Empty {})
@@ -128,11 +218,36 @@ pub struct HealthCheckK8sConfig {
     pub namespace: String,
 }
 
+impl SafeDisplay for HealthCheckK8sConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "namespace: {}", self.namespace);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
 pub enum PersistenceConfig {
     Redis(RedisConfig),
     FileSystem(FileSystemPersistenceConfig),
+}
+
+impl SafeDisplay for PersistenceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            PersistenceConfig::Redis(inner) => {
+                let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            PersistenceConfig::FileSystem(inner) => {
+                let _ = writeln!(&mut result, "filesystem:");
+                let _ = writeln!(&mut result, "path: {:?}", inner.path);
+            }
+        }
+        result
+    }
 }
 
 impl Default for PersistenceConfig {

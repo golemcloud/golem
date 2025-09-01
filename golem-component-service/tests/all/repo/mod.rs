@@ -28,7 +28,6 @@ use golem_component_service::repo::plugin::PluginRepo;
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::RepoError;
 use std::collections::HashMap;
-use std::slice::from_ref;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, sequential_suite};
 use tracing::info;
@@ -83,6 +82,7 @@ async fn test_repo_component_id_unique(component_repo: Arc<dyn ComponentRepo>) {
         HashMap::new(),
         owner1.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -128,6 +128,7 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
         HashMap::new(),
         owner1.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
     let component2 = Component::new(
@@ -140,6 +141,7 @@ async fn test_repo_component_name_unique_in_namespace(component_repo: Arc<dyn Co
         HashMap::new(),
         owner2.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -190,6 +192,7 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
         HashMap::new(),
         test_component_owner(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -211,6 +214,7 @@ async fn test_repo_component_find_by_names(component_repo: Arc<dyn ComponentRepo
         HashMap::new(),
         test_component_owner(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -440,6 +444,7 @@ async fn test_repo_component_delete(component_repo: Arc<dyn ComponentRepo>) {
         HashMap::new(),
         test_component_owner(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -499,6 +504,7 @@ async fn test_repo_component_constraints(component_repo: Arc<dyn ComponentRepo>)
         HashMap::new(),
         owner1.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -595,6 +601,7 @@ async fn test_default_plugin_repo(
         HashMap::new(),
         owner.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
     let component2 = Component::new(
@@ -607,6 +614,7 @@ async fn test_default_plugin_repo(
         HashMap::new(),
         owner.clone(),
         HashMap::new(),
+        vec![],
     )
     .unwrap();
 
@@ -619,7 +627,7 @@ async fn test_default_plugin_repo(
 
     let all1 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped1 = plugin_repo
-        .get_for_scope(&plugin_owner_row, from_ref(&scope1))
+        .get_for_scope(&plugin_owner_row, std::slice::from_ref(&scope1))
         .await?;
     let named1 = plugin_repo
         .get_all_with_name(&plugin_owner_row, "plugin1")
@@ -668,7 +676,7 @@ async fn test_default_plugin_repo(
 
     let all2 = plugin_repo.get_all(&plugin_owner_row).await?;
     let scoped2 = plugin_repo
-        .get_for_scope(&plugin_owner_row, from_ref(&scope1))
+        .get_for_scope(&plugin_owner_row, std::slice::from_ref(&scope1))
         .await?;
     let named2 = plugin_repo
         .get_all_with_name(&plugin_owner_row, "plugin1")

@@ -15,8 +15,9 @@
 use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::{TargetWorkerId, WorkerId};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
+use golem_common::model::WorkerId;
+use golem_wasm_rpc::ValueAndType;
+use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
 use tracing::debug;
@@ -32,11 +33,11 @@ pub trait GatewayWorkerRequestExecutor: Send + Sync {
 // The result of a worker execution from worker-bridge,
 // which is a combination of function metadata and the type-annotated-value representing the actual result
 pub struct WorkerResponse {
-    pub result: Option<TypeAnnotatedValue>,
+    pub result: Option<ValueAndType>,
 }
 
 impl WorkerResponse {
-    pub fn new(result: Option<TypeAnnotatedValue>) -> Self {
+    pub fn new(result: Option<ValueAndType>) -> Self {
         WorkerResponse { result }
     }
 }
@@ -74,21 +75,17 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
         &self,
         resolved_worker_request: GatewayResolvedWorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        let worker_name_opt_validated = resolved_worker_request
-            .worker_name
-            .map(|w| WorkerId::validate_worker_name(w.as_str()).map(|_| w))
-            .transpose()?;
-
+        WorkerId::validate_worker_name(&resolved_worker_request.worker_name)?;
         debug!(
             component_id = resolved_worker_request.component_id.to_string(),
             function_name = resolved_worker_request.function_name,
-            worker_name_opt_validated,
+            worker_name = resolved_worker_request.worker_name,
             "Executing invocation",
         );
 
-        let worker_id = TargetWorkerId {
+        let worker_id = WorkerId {
             component_id: resolved_worker_request.component_id.clone(),
-            worker_name: worker_name_opt_validated.clone(),
+            worker_name: resolved_worker_request.worker_name.clone(),
         };
 
         let type_annotated_value = self
@@ -102,6 +99,7 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
                     parent: None,
                     args: vec![],
                     env: Default::default(),
+                    wasi_config_vars: Some(BTreeMap::new().into()),
                     tracing: Some(resolved_worker_request.invocation_context.into()),
                 }),
                 resolved_worker_request.namespace,

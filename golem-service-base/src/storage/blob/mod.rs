@@ -17,7 +17,7 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
 use futures::stream::BoxStream;
-use golem_common::model::{AccountId, ComponentId, Timestamp, WorkerId};
+use golem_common::model::{AccountId, ComponentId, ProjectId, Timestamp, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -366,22 +366,27 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BlobStorageNamespace {
-    CompilationCache,
-    InitialComponentFiles {
-        account_id: AccountId,
+    CompilationCache {
+        project_id: ProjectId,
     },
-    CustomStorage(AccountId),
+    InitialComponentFiles {
+        project_id: ProjectId,
+    },
+    CustomStorage {
+        project_id: ProjectId,
+    },
     OplogPayload {
-        account_id: AccountId,
+        project_id: ProjectId,
         worker_id: WorkerId,
     },
     CompressedOplog {
-        account_id: AccountId,
+        project_id: ProjectId,
         component_id: ComponentId,
         level: usize,
     },
-    // TODO: prefix with account_id and move existing data
-    Components,
+    Components {
+        project_id: ProjectId,
+    },
     PluginWasmFiles {
         account_id: AccountId,
     },

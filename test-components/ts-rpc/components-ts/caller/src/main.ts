@@ -3,8 +3,8 @@
 import type * as World from 'rpc:caller/caller';
 
 import { Counter } from "rpc:counters-client/counters-client";
-import { getEnvironment } from "wasi:cli/environment@0.2.0";
-import { parseUuid } from "golem:rpc/types@0.2.0";
+import { getEnvironment } from "wasi:cli/environment@0.2.3";
+import { parseUuid } from "golem:rpc/types@0.2.2";
 
 let globalCounter: Counter | undefined = undefined;
 
@@ -35,21 +35,21 @@ function createGlobalCounter(workerName: string): Counter {
   return counter;
 }
 
-async function test1(): Promise<bigint> {
+function test1(): bigint {
   const counter = globalCounter ?? createGlobalCounter("counters_test2");
   counter.blockingIncBy(BigInt(1));
   const value = counter.blockingGetValue();
   return value;
 }
 
-async function test2(): Promise<bigint> {
+function test2(): bigint {
   const counter = globalCounter ?? createGlobalCounter("counters_test3");
   counter.blockingIncBy(BigInt(1));
   const value = counter.blockingGetValue();
   return value;
 }
 
-async function test3(): Promise<[string[], [string, string][]]> {
+function test3(): [string[], [string, string][]] {
   const counter = globalCounter ?? createGlobalCounter("counters_test4");
   const args = counter.blockingGetArgs();
   const env = counter.blockingGetEnv();

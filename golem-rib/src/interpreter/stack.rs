@@ -204,6 +204,8 @@ impl InterpreterStack {
             Value::Enum(idx),
             AnalysedType::Enum(TypeEnum {
                 cases: cases.into_iter().collect(),
+                name: None,
+                owner: None,
             }),
         ));
 
@@ -238,6 +240,8 @@ impl InterpreterStack {
             typ: AnalysedType::Result(TypeResult {
                 ok: ok_type.map(|x| Box::new(x.clone())),
                 err: err_type.map(|x| Box::new(x.clone())),
+                name: None,
+                owner: None,
             }),
         });
     }
@@ -253,6 +257,8 @@ impl InterpreterStack {
             typ: AnalysedType::Result(TypeResult {
                 ok: ok_type.map(|x| Box::new(x.clone())),
                 err: err_type.map(|x| Box::new(x.clone())),
+                name: None,
+                owner: None,
             }),
         });
     }

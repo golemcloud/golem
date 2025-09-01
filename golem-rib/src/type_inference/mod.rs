@@ -68,8 +68,7 @@ mod tests {
     use crate::type_checker::Path;
     use crate::type_inference::global_variable_type_binding::GlobalVariableTypeSpec;
     use crate::type_inference::tests::test_utils::{
-        call, concat, cond, equal_to, expr_block, get_analysed_type_enum,
-        get_analysed_type_variant, get_test_rib_compiler_with, greater_than,
+        call, concat, cond, equal_to, expr_block, get_test_rib_compiler_with, greater_than,
         greater_than_or_equal_to, identifier, less_than, less_than_or_equal_to, let_binding,
         number, option, pattern_match, plus, record, result, select_dynamic, select_field,
         sequence, tuple,
@@ -81,8 +80,11 @@ mod tests {
         RibCompilerConfig, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
-    use golem_wasm_ast::analysis::analysed_type::{list, str, u64};
+    use golem_wasm_ast::analysis::analysed_type::{
+        case, field, list, r#enum, str, u64, unit_case, variant,
+    };
 
+    use golem_wasm_ast::analysis::analysed_type;
     use test_r::test;
 
     #[test]
@@ -751,9 +753,8 @@ mod tests {
 
     #[test]
     async fn test_inference_enum_construction_and_pattern_match() {
-        let input_enum_type = get_analysed_type_enum(vec!["foo", "bar", "foo-bar"]);
-
-        let output_enum_type = get_analysed_type_enum(vec!["success", "failure", "in-progress"]);
+        let input_enum_type = r#enum(&["foo", "bar", "foo-bar"]);
+        let output_enum_type = r#enum(&["success", "failure", "in-progress"]);
 
         let rib_compiler = get_test_rib_compiler_with(
             "process",
@@ -808,16 +809,16 @@ mod tests {
 
     #[test]
     async fn test_inference_variant_construction_and_pattern_match() {
-        let input_variant_type = get_analysed_type_variant(vec![
-            ("foo", Some(u64())),
-            ("bar-baz", Some(str())),
-            ("foo-bar", None),
+        let input_variant_type = variant(vec![
+            case("foo", u64()),
+            case("bar-baz", str()),
+            unit_case("foo-bar"),
         ]);
 
-        let output_variant_type = get_analysed_type_variant(vec![
-            ("success", Some(u64())),
-            ("in-progress", Some(str())),
-            ("failure", None),
+        let output_variant_type = variant(vec![
+            case("success", u64()),
+            case("in-progress", str()),
+            unit_case("failure"),
         ]);
 
         let rib_compiler = get_test_rib_compiler_with(
@@ -2182,27 +2183,20 @@ mod tests {
 
     #[test]
     fn test_inference_record_select_with_function_call() {
-        let request_body_type = test_utils::get_analysed_type_record(vec![
-            ("id".to_string(), str()),
-            ("name".to_string(), str()),
-            ("titles".to_string(), list(str())),
-            (
-                "address".to_string(),
-                test_utils::get_analysed_type_record(vec![
-                    ("street".to_string(), str()),
-                    ("city".to_string(), str()),
-                ]),
+        let request_body_type = analysed_type::record(vec![
+            field("id", str()),
+            field("name", str()),
+            field("titles", list(str())),
+            field(
+                "address",
+                analysed_type::record(vec![field("street", str()), field("city", str())]),
             ),
         ]);
 
         let worker_response = test_utils::create_none(&str());
 
-        let request_type = test_utils::get_analysed_type_record(vec![(
-            "body".to_string(),
-            request_body_type.clone(),
-        )]);
-
-        let return_type = golem_wasm_ast::analysis::analysed_type::option(worker_response.typ);
+        let request_type = analysed_type::record(vec![field("body", request_body_type.clone())]);
+        let return_type = analysed_type::option(worker_response.typ);
 
         let rib_compiler =
             get_test_rib_compiler_with("foo", vec![request_type.clone()], return_type);
@@ -2468,10 +2462,9 @@ mod tests {
         };
         use bigdecimal::BigDecimal;
         use golem_wasm_ast::analysis::analysed_type::u64;
-        use golem_wasm_ast::analysis::TypeVariant;
         use golem_wasm_ast::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
-            AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeU32,
+            AnalysedType, TypeU32,
         };
         use golem_wasm_rpc::{Value, ValueAndType};
         use uuid::Uuid;
@@ -2767,42 +2760,6 @@ mod tests {
                 )],
                 vec![],
             ))
-        }
-
-        pub(crate) fn get_analysed_type_enum(cases: Vec<&str>) -> AnalysedType {
-            let type_enum = TypeEnum {
-                cases: cases.into_iter().map(|s| s.to_string()).collect(),
-            };
-
-            AnalysedType::Enum(type_enum)
-        }
-
-        pub(crate) fn get_analysed_type_variant(
-            variants: Vec<(&str, Option<AnalysedType>)>,
-        ) -> AnalysedType {
-            let name_option_pairs = variants
-                .into_iter()
-                .map(|(name, typ)| NameOptionTypePair {
-                    name: name.to_string(),
-                    typ,
-                })
-                .collect::<Vec<_>>();
-
-            AnalysedType::Variant(TypeVariant {
-                cases: name_option_pairs,
-            })
-        }
-
-        pub(crate) fn get_analysed_type_record(
-            record_type: Vec<(String, AnalysedType)>,
-        ) -> AnalysedType {
-            let record = TypeRecord {
-                fields: record_type
-                    .into_iter()
-                    .map(|(name, typ)| NameTypePair { name, typ })
-                    .collect(),
-            };
-            AnalysedType::Record(record)
         }
 
         pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {

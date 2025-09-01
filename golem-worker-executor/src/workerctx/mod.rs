@@ -12,20 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod cloud;
+pub mod default;
 
 use crate::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
-    TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
-use crate::services::component::{ComponentMetadata, ComponentService};
+use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::Plugins;
+use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -44,16 +45,15 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, TargetWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
+    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -71,20 +71,23 @@ pub trait WorkerCtx:
     + InvocationHooks
     + ExternalOperations<Self>
     + ResourceStore
-    + IndexedResourceStore
     + UpdateManagement
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
+    + HasWasiConfigVars
     + Send
     + Sync
     + Sized
     + 'static
 {
-    /// PublicState is a subset of the worker context which is accessible outside the worker
+    /// PublicState is a subset of the worker context that is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
+
+    /// Static log event behaviour configuration for workers
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour;
 
     /// Creates a new worker context
     ///
@@ -102,7 +105,7 @@ pub trait WorkerCtx:
     /// - `scheduler_service`: The scheduler implementation responsible for waking up suspended workers
     /// - `recovery_management`: The service for deciding if a worker should be recovered
     /// - `rpc`: The RPC implementation used for worker to worker communication
-    /// - `worker_proyx`: Access to the worker proxy above the worker executor cluster
+    /// - `worker_proxy`: Access to the worker proxy above the worker executor cluster
     /// - `extra_deps`: Extra dependencies that are required by this specific worker context
     /// - `config`: The shared worker configuration
     /// - `worker_config`: Configuration for this specific worker
@@ -110,6 +113,7 @@ pub trait WorkerCtx:
     /// - `file_loader`: The service for loading files and making them available to workers
     #[allow(clippy::too_many_arguments)]
     async fn create(
+        account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -134,6 +138,8 @@ pub trait WorkerCtx:
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -154,7 +160,10 @@ pub trait WorkerCtx:
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
 
-    fn component_metadata(&self) -> &ComponentMetadata;
+    /// Gets the account created this worker
+    fn created_by(&self) -> &AccountId;
+
+    fn component_metadata(&self) -> &golem_service_base::model::Component;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -171,11 +180,6 @@ pub trait WorkerCtx:
     fn component_service(&self) -> Arc<dyn ComponentService>;
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
@@ -332,30 +336,6 @@ pub trait UpdateManagement {
     );
 }
 
-/// Stores resources created within the worker indexed by their constructor parameters
-///
-/// This is a secondary mapping on top of `ResourceStore`, which handles the mapping between
-/// resource identifiers to actual wasmtime `ResourceAny` instances.
-///
-/// Note that the parameters are passed as unparsed WAVE strings instead of their parsed `Value`
-/// representation - the string representation is easier to hash and allows us to reduce the number
-/// of times we need to parse the parameters.
-#[async_trait]
-pub trait IndexedResourceStore {
-    fn get_indexed_resource(
-        &self,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId>;
-    async fn store_indexed_resource(
-        &mut self,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    );
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]);
-}
-
 /// Operations not requiring an active worker context, but still depending on the
 /// worker context implementation.
 #[async_trait]
@@ -385,6 +365,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
@@ -400,7 +381,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError>;
 
@@ -418,6 +399,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Called when an update attempt has failed before the worker context has been created
     async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
@@ -438,11 +420,10 @@ pub trait PublicWorkerIo {
 /// so not locking is needed in the implementation.
 #[async_trait]
 pub trait FileSystemReading {
-    // List the contents of a directory. Will return an error if the path is not a directory.
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError>;
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError>;
     async fn read_file(
         &self,
         path: &ComponentFilePath,
@@ -474,6 +455,10 @@ pub trait InvocationContextManagement {
         key: &str,
         value: AttributeValue,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Clones every element of the stack belonging to the given current span id, and sets
+    /// the inherited flag to true on them, without changing the spans in this invocation context.
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
 }
 
 #[async_trait]
@@ -483,6 +468,17 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()>;
+}
+
+pub trait HasWasiConfigVars {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String>;
+}
+
+pub enum LogEventEmitBehaviour {
+    /// Always emit all log event
+    Always,
+    /// Emit log events only during live mode
+    LiveOnly,
 }

@@ -19,7 +19,6 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
 use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
@@ -130,25 +129,19 @@ impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
         &self,
         component_dependency_key: ComponentDependencyKey,
         _instruction_id: &InstructionId,
-        worker_name: Option<EvaluatedWorkerName>,
+        worker_name: EvaluatedWorkerName,
         function_name: EvaluatedFqFn,
         parameters: EvaluatedFnArgs,
         _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let worker_name: Option<String> = worker_name.map(|x| x.0);
+        let worker_name: String = worker_name.0;
         let idempotency_key = self.idempotency_key.clone();
         let invocation_context = self.invocation_context.clone();
         let executor = self.executor.clone();
         let namespace = self.namespace.clone();
 
         let function_name = function_name.0;
-
-        let function_params: Vec<TypeAnnotatedValue> = parameters
-            .0
-            .into_iter()
-            .map(TypeAnnotatedValue::try_from)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|errs: Vec<String>| errs.join(", "))?;
+        let function_params: Vec<ValueAndType> = parameters.0;
 
         let worker_request = GatewayResolvedWorkerRequest {
             component_id: ComponentId(component_dependency_key.component_id),
@@ -160,10 +153,7 @@ impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
             namespace,
         };
 
-        let tav_opt = executor.execute(worker_request).await.map(|v| v.result)?;
-
-        tav_opt
-            .map(|tav| ValueAndType::try_from(tav).map_err(|x| x.into()))
-            .transpose()
+        let opt_vnt = executor.execute(worker_request).await.map(|v| v.result)?;
+        Ok(opt_vnt)
     }
 }

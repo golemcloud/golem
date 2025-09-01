@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use bytes::Bytes;
+use golem_wasm_ast::analysis::analysed_type::{
+    case, field, list, option, record, str, tuple, u16, u8, unit_case, variant,
+};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
-use golem_wasm_rpc::protobuf::type_annotated_value::TypeAnnotatedValue;
-use golem_wasm_rpc::Value;
+use golem_wasm_rpc::{Value, ValueAndType};
 use std::sync::LazyLock;
-
 // The following wit is modelled here:
 //
 // type fields = list<tuple<string, list<u8>>>;
@@ -154,23 +155,12 @@ pub enum HttpScheme {
 
 impl HttpScheme {
     pub fn analyzed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "HTTP".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "HTTPS".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "custom".to_string(),
-                    typ: Some(AnalysedType::Str(TypeStr)),
-                },
-            ],
-        })
+        variant(vec![
+            unit_case("HTTP"),
+            unit_case("HTTPS"),
+            case("custom", str()),
+        ])
+        .named("HttpScheme")
     }
 
     pub fn from_value(value: &Value) -> Result<Self, String> {
@@ -240,51 +230,19 @@ pub enum HttpMethod {
 
 impl HttpMethod {
     pub fn analyzed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-        AnalysedType::Variant(TypeVariant {
-            cases: vec![
-                NameOptionTypePair {
-                    name: "GET".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "HEAD".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "POST".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "PUT".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "DELETE".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "CONNECT".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "OPTIONS".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "TRACE".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "PATCH".to_string(),
-                    typ: None,
-                },
-                NameOptionTypePair {
-                    name: "custom".to_string(),
-                    typ: Some(AnalysedType::Str(TypeStr)),
-                },
-            ],
-        })
+        variant(vec![
+            unit_case("GET"),
+            unit_case("HEAD"),
+            unit_case("POST"),
+            unit_case("PUT"),
+            unit_case("DELETE"),
+            unit_case("CONNECT"),
+            unit_case("OPTIONS"),
+            unit_case("TRACE"),
+            unit_case("PATCH"),
+            case("custom", str()),
+        ])
+        .named("HttpMethod")
     }
 
     pub fn from_value(value: &Value) -> Result<Self, String> {
@@ -404,17 +362,7 @@ pub struct HttpFields(pub Vec<(String, Bytes)>);
 
 impl HttpFields {
     pub fn analyzed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::Tuple(TypeTuple {
-                items: vec![
-                    AnalysedType::Str(TypeStr),
-                    AnalysedType::List(TypeList {
-                        inner: Box::new(AnalysedType::U8(TypeU8)),
-                    }),
-                ],
-            })),
-        })
+        list(tuple(vec![str(), list(u8())])).named("HttpFields")
     }
 
     pub fn from_value(value: &Value) -> Result<Self, String> {
@@ -464,10 +412,7 @@ pub struct HttpBodyContent(pub Bytes);
 
 impl HttpBodyContent {
     pub fn analyzed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-        AnalysedType::List(TypeList {
-            inner: Box::new(AnalysedType::U8(TypeU8)),
-        })
+        list(u8()).named("HttpBodyContent")
     }
 
     pub fn from_value(value: &Value) -> Result<Self, String> {
@@ -496,22 +441,11 @@ pub struct HttpBodyAndTrailers {
 
 impl HttpBodyAndTrailers {
     pub fn analysed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-
-        AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "content".to_string(),
-                    typ: HttpBodyContent::analyzed_type(),
-                },
-                NameTypePair {
-                    name: "trailers".to_string(),
-                    typ: AnalysedType::Option(TypeOption {
-                        inner: Box::new(HttpFields::analyzed_type()),
-                    }),
-                },
-            ],
-        })
+        record(vec![
+            field("content", HttpBodyContent::analyzed_type()),
+            field("trailers", option(HttpFields::analyzed_type())),
+        ])
+        .named("HttpBodyAndTrailers")
     }
 
     pub fn from_value(value: &Value) -> Result<Self, String> {
@@ -553,38 +487,18 @@ pub struct IncomingHttpRequest {
 
 impl IncomingHttpRequest {
     pub fn analysed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-
-        AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "method".to_string(),
-                    typ: HttpMethod::analyzed_type(),
-                },
-                NameTypePair {
-                    name: "scheme".to_string(),
-                    typ: HttpScheme::analyzed_type(),
-                },
-                NameTypePair {
-                    name: "authority".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                },
-                NameTypePair {
-                    name: "path-and-query".to_string(),
-                    typ: AnalysedType::Str(TypeStr),
-                },
-                NameTypePair {
-                    name: "headers".to_string(),
-                    typ: HttpFields::analyzed_type(),
-                },
-                NameTypePair {
-                    name: "body-and-trailers".to_string(),
-                    typ: AnalysedType::Option(TypeOption {
-                        inner: Box::new(HttpBodyAndTrailers::analysed_type()),
-                    }),
-                },
-            ],
-        })
+        record(vec![
+            field("method", HttpMethod::analyzed_type()),
+            field("scheme", HttpScheme::analyzed_type()),
+            field("authority", str()),
+            field("path-and-query", str()),
+            field("headers", HttpFields::analyzed_type()),
+            field(
+                "body-and-trailers",
+                option(HttpBodyAndTrailers::analysed_type()),
+            ),
+        ])
+        .named("IncomingHttpRequest")
     }
 
     pub fn from_function_input(inputs: &[Value]) -> Result<Self, String> {
@@ -657,26 +571,15 @@ pub struct HttpResponse {
 
 impl HttpResponse {
     pub fn analysed_type() -> AnalysedType {
-        use golem_wasm_ast::analysis::*;
-
-        AnalysedType::Record(TypeRecord {
-            fields: vec![
-                NameTypePair {
-                    name: "status".to_string(),
-                    typ: AnalysedType::U16(TypeU16),
-                },
-                NameTypePair {
-                    name: "headers".to_string(),
-                    typ: HttpFields::analyzed_type(),
-                },
-                NameTypePair {
-                    name: "body-and-trailers".to_string(),
-                    typ: AnalysedType::Option(TypeOption {
-                        inner: Box::new(HttpBodyAndTrailers::analysed_type()),
-                    }),
-                },
-            ],
-        })
+        record(vec![
+            field("status", u16()),
+            field("headers", HttpFields::analyzed_type()),
+            field(
+                "body-and-trailers",
+                option(HttpBodyAndTrailers::analysed_type()),
+            ),
+        ])
+        .named("HttpResponse")
     }
 
     pub fn from_value(value: Value) -> Result<Self, String> {
@@ -714,11 +617,8 @@ impl HttpResponse {
         })
     }
 
-    pub fn from_function_output(output: Option<TypeAnnotatedValue>) -> Result<Self, String> {
-        let value: Value = output
-            .map(|tav| tav.try_into())
-            .transpose()?
-            .unwrap_or(Value::Record(vec![]));
+    pub fn from_function_output(output: Option<ValueAndType>) -> Result<Self, String> {
+        let value: Value = output.map(|vnt| vnt.value).unwrap_or(Value::Record(vec![]));
 
         let mut tuple_values = extract!(value, Value::Tuple(inner), inner, "not a tuple")?;
 

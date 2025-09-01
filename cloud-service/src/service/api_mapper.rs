@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures::{stream, StreamExt, TryStreamExt};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::plugin::PluginInstallation;
 use golem_service_base::clients::plugin::{PluginError, PluginServiceClient};

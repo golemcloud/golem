@@ -245,7 +245,7 @@ pub enum ProjectAction {
     UpdateApiDefinition = 13,
     DeleteApiDefinition = 14,
     DeleteProject = 15,
-    ViewProject = 161,
+    ViewProject = 16,
     ViewPluginInstallations = 17,
     CreatePluginInstallation = 18,
     UpdatePluginInstallation = 19,
@@ -261,6 +261,7 @@ pub enum ProjectAction {
     CreatePluginDefinition = 29,
     UpdatePluginDefinition = 30,
     DeletePluginDefinition = 31,
+    ExportApiDefinition = 32,
 }
 
 impl From<ProjectAction> for i32 {
@@ -311,6 +312,7 @@ impl Display for ProjectAction {
             Self::CreatePluginDefinition => write!(f, "CreatePluginDefinition"),
             Self::UpdatePluginDefinition => write!(f, "UpdatePluginDefinition"),
             Self::DeletePluginDefinition => write!(f, "DeletePluginDefinition"),
+            Self::ExportApiDefinition => write!(f, "ExportApiDefinition"),
         }
     }
 }
@@ -359,6 +361,7 @@ pub enum ProjectPermission {
     CreatePluginDefinition,
     UpdatePluginDefinition,
     DeletePluginDefinition,
+    ExportApiDefinition,
 }
 
 impl TryFrom<ProjectAction> for ProjectPermission {
@@ -399,6 +402,7 @@ impl TryFrom<ProjectAction> for ProjectPermission {
             ProjectAction::ViewProject | ProjectAction::BatchUpdatePluginInstallations => {
                 Err(format!("Unknown project permission: {value:?}"))
             }
+            ProjectAction::ExportApiDefinition => Ok(Self::ExportApiDefinition),
         }
     }
 }
@@ -442,6 +446,7 @@ impl Display for ProjectPermission {
             Self::CreatePluginDefinition => write!(f, "CreatePluginDefinition"),
             Self::UpdatePluginDefinition => write!(f, "UpdatePluginDefinition"),
             Self::DeletePluginDefinition => write!(f, "DeletePluginDefinition"),
+            Self::ExportApiDefinition => write!(f, "ExportApiDefinition"),
         }
     }
 }
@@ -481,6 +486,7 @@ impl FromStr for ProjectPermission {
             "CreatePluginDefinition" => Ok(Self::CreatePluginDefinition),
             "UpdatePluginDefinition" => Ok(Self::UpdatePluginDefinition),
             "DeletePluginDefinition" => Ok(Self::DeletePluginDefinition),
+            "ExportApiDefinition" => Ok(Self::ExportApiDefinition),
             _ => Err(format!("Unknown project permission: {s}")),
         }
     }
@@ -518,7 +524,7 @@ pub struct ProjectAuthorisedActions {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use super::AccountAction;
-    use super::ProjectAction;
+
     use super::TokenSecret;
 
     impl TryFrom<golem_api_grpc::proto::golem::token::TokenSecret> for TokenSecret {
@@ -554,22 +560,6 @@ mod protobuf {
     impl From<AccountAction> for golem_api_grpc::proto::golem::auth::AccountAction {
         fn from(value: AccountAction) -> Self {
             Self::try_from(value as i32).expect("Encoding AccountAction as protobuf")
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::projectpolicy::ProjectAction> for ProjectAction {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::projectpolicy::ProjectAction,
-        ) -> Result<Self, Self::Error> {
-            Self::try_from(value as i32)
-        }
-    }
-
-    impl From<ProjectAction> for golem_api_grpc::proto::golem::projectpolicy::ProjectAction {
-        fn from(value: ProjectAction) -> Self {
-            Self::try_from(value as i32).expect("Encoding ProjectAction as protobuf")
         }
     }
 }

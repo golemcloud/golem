@@ -17,7 +17,12 @@ use std::collections::HashMap;
 use golem_wasm_ast::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
-use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory};
+use crate::model::{Component, ComponentName};
+use golem_common::model::agent::AgentType;
+use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, DynamicLinkedInstance, LinearMemory,
+};
 use golem_common::model::{
     AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
 };
@@ -42,4 +47,36 @@ pub struct LocalFileSystemComponentMetadata {
 
     #[serde(default)]
     pub env: HashMap<String, String>,
+
+    pub agent_types: Vec<AgentType>,
+}
+
+impl From<LocalFileSystemComponentMetadata> for Component {
+    fn from(value: LocalFileSystemComponentMetadata) -> Self {
+        Self {
+            owner: ComponentOwner {
+                account_id: value.account_id,
+                project_id: value.project_id,
+            },
+            versioned_component_id: VersionedComponentId {
+                component_id: value.component_id,
+                version: value.version,
+            },
+            component_name: ComponentName(value.component_name),
+            component_size: value.size,
+            metadata: ComponentMetadata::from_parts(
+                value.exports,
+                value.memories,
+                value.dynamic_linking,
+                None,
+                None,
+                value.agent_types,
+            ),
+            created_at: Default::default(),
+            component_type: value.component_type,
+            files: value.files,
+            installed_plugins: vec![],
+            env: value.env,
+        }
+    }
 }

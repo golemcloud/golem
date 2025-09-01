@@ -19,6 +19,7 @@ mod protobuf;
 mod tests;
 
 use super::plugin::PluginDefinition;
+use super::worker::WasiConfigVars;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
 use crate::model::lucene::{LeafQuery, Query};
 use crate::model::oplog::{
@@ -26,10 +27,10 @@ use crate::model::oplog::{
 };
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
-use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
+use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
@@ -235,7 +236,9 @@ pub struct CreateParameters {
     pub component_version: ComponentVersion,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
-    pub account_id: AccountId,
+    pub project_id: ProjectId,
+    pub created_by: AccountId,
+    pub wasi_config_vars: WasiConfigVars,
     pub parent: Option<WorkerId>,
     pub component_size: u64,
     pub initial_total_linear_memory_size: u64,
@@ -253,7 +256,7 @@ pub struct ImportedFunctionInvokedParameters {
     pub request: ValueAndType,
     #[wit_field(convert = WitValue)]
     pub response: ValueAndType,
-    pub wrapped_function_type: PublicDurableFunctionType, // TODO: rename in Golem 2.0
+    pub durable_function_type: PublicDurableFunctionType,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, IntoValue)]
@@ -469,6 +472,8 @@ pub struct GrowMemoryParameters {
 pub struct ResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
+    pub name: String,
+    pub owner: String,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -478,9 +483,8 @@ pub struct ResourceParameters {
 pub struct DescribeResourceParameters {
     pub timestamp: Timestamp,
     pub id: WorkerResourceId,
+    pub resource_owner: String,
     pub resource_name: String,
-    #[wit_field(convert_vec = WitValue)]
-    pub resource_params: Vec<ValueAndType>,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
@@ -655,8 +659,6 @@ pub enum PublicOplogEntry {
     CreateResource(ResourceParameters),
     /// Dropped a resource instance
     DropResource(ResourceParameters),
-    /// Adds additional information for a created resource instance
-    DescribeResource(DescribeResourceParameters),
     /// The worker emitted a log message
     Log(LogParameters),
     /// Marks the point where the worker was restarted from clean initial state
@@ -900,15 +902,6 @@ impl PublicOplogEntry {
             PublicOplogEntry::DropResource(_params) => {
                 Self::string_match("dropresource", &[], query_path, query)
                     || Self::string_match("drop-resource", &[], query_path, query)
-            }
-            PublicOplogEntry::DescribeResource(params) => {
-                Self::string_match("describeresource", &[], query_path, query)
-                    || Self::string_match("describe-resource", &[], query_path, query)
-                    || Self::string_match(&params.resource_name, &[], query_path, query)
-                    || params
-                        .resource_params
-                        .iter()
-                        .any(|v| Self::match_value(v, &[], query_path, query))
             }
             PublicOplogEntry::Log(params) => {
                 Self::string_match("log", &[], query_path, query)

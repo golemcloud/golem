@@ -16,7 +16,6 @@ use async_trait::async_trait;
 use chrono::Utc;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig, RedisConfig};
 use golem_common::model::auth::{AuthCtx, Namespace, ProjectAction, TokenSecret};
-use golem_common::model::base64::Base64;
 use golem_common::model::component::{ComponentOwner, VersionedComponentId};
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::{AccountId, ComponentId, ComponentType, ProjectId, RetryConfig};
@@ -410,15 +409,14 @@ impl TestComponentService {
             versioned_component_id: id.clone(),
             component_name: ComponentName("test".to_string()),
             component_size: 0,
-            metadata: ComponentMetadata {
-                exports: Self::get_metadata(),
-                producers: vec![],
-                memories: vec![],
-                binary_wit: Base64(vec![]),
-                root_package_name: Some("golem:it".to_string()),
-                root_package_version: None,
-                dynamic_linking: HashMap::new(),
-            },
+            metadata: ComponentMetadata::from_parts(
+                Self::get_metadata(),
+                vec![],
+                HashMap::new(),
+                Some("golem:it".to_string()),
+                None,
+                vec![],
+            ),
             created_at: Utc::now(),
             component_type: ComponentType::Durable,
             files: vec![],
@@ -705,8 +703,8 @@ pub async fn test_gateway_session_with_sqlite_expired() {
         db.db_pool.clone(),
         SqliteGatewaySession::current_time() + 10,
     )
-    .await
-    .expect("Failed to cleanup expired sessions");
+        .await
+        .expect("Failed to cleanup expired sessions");
 
     let result = session_store.get(&session_id, &data_key).await;
 

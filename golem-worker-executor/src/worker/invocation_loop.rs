@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::{ListDirectoryResult, ReadFileResult, TrapType};
+use crate::model::{ReadFileResult, TrapType};
 use crate::services::events::Event;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::{HasEvents, HasOplog, HasWorker};
-use crate::worker::invocation::{
-    find_first_available_function, invoke_observed_and_traced, InvokeResult,
-};
+use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::{
     interpret_function_result, QueuedWorkerInvocation, RetryDecision, RunningWorker, Worker,
     WorkerCommand,
@@ -29,10 +27,13 @@ use async_mutex::Mutex;
 use drop_stream::DropStream;
 use futures::channel::oneshot;
 use futures::channel::oneshot::Sender;
-use golem_common::model::invocation_context::{AttributeValue, InvocationContextStack};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
-    exports, ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
+    invocation_context::{AttributeValue, InvocationContextStack},
+    GetFileSystemNodeResult,
+};
+use golem_common::model::{
+    ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
 };
 use golem_common::retries::get_delay;
@@ -304,7 +305,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     async fn resume_replay(&self) -> CommandOutcome {
         let mut store = self.store.lock().await;
 
-        let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance).await;
+        let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
         match resume_replay_result {
             Ok(RetryDecision::None) => CommandOutcome::Continue,
@@ -376,12 +377,16 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     CommandOutcome::Continue
                 }
             }
-            QueuedWorkerInvocation::ListDirectory { path, sender } => {
-                self.list_directory(path, sender).await;
+            QueuedWorkerInvocation::GetFileSystemNode { path, sender } => {
+                self.get_file_system_node(path, sender).await;
                 CommandOutcome::Continue
             }
             QueuedWorkerInvocation::ReadFile { path, sender } => {
                 self.read_file(path, sender).await;
+                CommandOutcome::Continue
+            }
+            QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                let _ = sender.send(Ok(()));
                 CommandOutcome::Continue
             }
         }
@@ -498,6 +503,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             .set_current_idempotency_key(idempotency_key.clone())
             .await;
 
+        let component_metadata = self.store.data().component_metadata().metadata.clone();
+
         Self::extend_invocation_context(
             &mut invocation_context,
             &idempotency_key,
@@ -529,6 +536,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             function_input.to_owned(),
             self.store,
             self.instance,
+            &component_metadata,
         )
         .await;
 
@@ -560,12 +568,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let component_metadata = self.store.as_context().data().component_metadata();
 
-        let function_results =
-            exports::function_by_name(&component_metadata.exports, &full_function_name);
+        let function_results = component_metadata
+            .metadata
+            .find_function(&full_function_name)
+            .await;
 
         match function_results {
-            Ok(Some(export_function)) => {
-                let function_results = export_function.result.clone();
+            Ok(Some(invokable_function)) => {
+                let function_results = invokable_function.analysed_export.result.clone();
 
                 match self
                     .exported_function_invocation_finished_with_type(
@@ -704,105 +714,118 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .await;
             idempotency_key
         };
+        let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        if let Some(save_snapshot) = find_first_available_function(
-            self.store,
-            self.instance,
-            vec![
-                "golem:api/save-snapshot@1.1.0.{save}".to_string(),
-                "golem:api/save-snapshot@0.2.0.{save}".to_string(),
-            ],
-        ) {
-            self.store.data_mut().begin_call_snapshotting_function();
+        match component_metadata.save_snapshot().await {
+            Ok(Some(save_snapshot)) => {
+                self.store.data_mut().begin_call_snapshotting_function();
 
-            let result =
-                invoke_observed_and_traced(save_snapshot, vec![], self.store, self.instance).await;
-            self.store.data_mut().end_call_snapshotting_function();
+                let result = invoke_observed_and_traced(
+                    save_snapshot.name.to_string(),
+                    vec![],
+                    self.store,
+                    self.instance,
+                    &component_metadata,
+                )
+                .await;
+                self.store.data_mut().end_call_snapshotting_function();
 
-            match result {
-                Ok(InvokeResult::Succeeded { output, .. }) => {
-                    if let Some(bytes) = Self::decode_snapshot_result(output) {
-                        match self
+                match result {
+                    Ok(InvokeResult::Succeeded { output, .. }) => {
+                        if let Some(bytes) = Self::decode_snapshot_result(output) {
+                            match self
+                                .store
+                                .data()
+                                .get_public_state()
+                                .oplog()
+                                .create_snapshot_based_update_description(target_version, &bytes)
+                                .await
+                            {
+                                Ok(update_description) => {
+                                    // Enqueue the update
+                                    self.parent.enqueue_update(update_description).await;
+
+                                    // Make sure to update the pending updates queue
+                                    self.store.data().update_pending_updates().await;
+
+                                    // Reactivate the worker
+                                    CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
+                                    // Stop processing the queue to avoid race conditions
+                                }
+                                Err(error) => {
+                                    self.fail_update(
+                                        target_version,
+                                        format!(
+                                            "failed to store the snapshot for manual update: {error}"
+                                        ),
+                                    )
+                                        .await
+                                }
+                            }
+                        } else {
+                            self.fail_update(
+                                target_version,
+                                "failed to get a snapshot for manual update: invalid snapshot result"
+                                    .to_string(),
+                            )
+                                .await
+                        }
+                    }
+                    Ok(InvokeResult::Failed { error, .. }) => {
+                        let stderr = self
                             .store
                             .data()
                             .get_public_state()
-                            .oplog()
-                            .create_snapshot_based_update_description(target_version, &bytes)
-                            .await
-                        {
-                            Ok(update_description) => {
-                                // Enqueue the update
-                                self.parent.enqueue_update(update_description).await;
-
-                                // Make sure to update the pending updates queue
-                                self.store.data().update_pending_updates().await;
-
-                                // Reactivate the worker
-                                CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)
-                                // Stop processing the queue to avoid race conditions
-                            }
-                            Err(error) => {
-                                self.fail_update(
-                                    target_version,
-                                    format!(
-                                        "failed to store the snapshot for manual update: {error}"
-                                    ),
-                                )
-                                .await
-                            }
-                        }
-                    } else {
+                            .event_service()
+                            .get_last_invocation_errors();
+                        let error = error.to_string(&stderr);
                         self.fail_update(
                             target_version,
-                            "failed to get a snapshot for manual update: invalid snapshot result"
+                            format!("failed to get a snapshot for manual update: {error}"),
+                        )
+                        .await
+                    }
+                    Ok(InvokeResult::Exited { .. }) => {
+                        self.fail_update(
+                            target_version,
+                            "failed to get a snapshot for manual update: it called exit"
                                 .to_string(),
                         )
                         .await
                     }
-                }
-                Ok(InvokeResult::Failed { error, .. }) => {
-                    let stderr = self
-                        .store
-                        .data()
-                        .get_public_state()
-                        .event_service()
-                        .get_last_invocation_errors();
-                    let error = error.to_string(&stderr);
-                    self.fail_update(
-                        target_version,
-                        format!("failed to get a snapshot for manual update: {error}"),
-                    )
-                    .await
-                }
-                Ok(InvokeResult::Exited { .. }) => {
-                    self.fail_update(
-                        target_version,
-                        "failed to get a snapshot for manual update: it called exit".to_string(),
-                    )
-                    .await
-                }
-                Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
-                    self.fail_update(
-                        target_version,
-                        format!("failed to get a snapshot for manual update: {interrupt_kind:?}"),
-                    )
-                    .await
-                }
-                Err(error) => {
-                    self.fail_update(
-                        target_version,
-                        format!("failed to get a snapshot for manual update: {error:?}"),
-                    )
-                    .await
+                    Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
+                        self.fail_update(
+                            target_version,
+                            format!(
+                                "failed to get a snapshot for manual update: {interrupt_kind:?}"
+                            ),
+                        )
+                        .await
+                    }
+                    Err(error) => {
+                        self.fail_update(
+                            target_version,
+                            format!("failed to get a snapshot for manual update: {error:?}"),
+                        )
+                        .await
+                    }
                 }
             }
-        } else {
-            self.fail_update(
-                target_version,
-                "failed to get a snapshot for manual update: save-snapshot is not exported"
-                    .to_string(),
-            )
-            .await
+            Ok(None) => {
+                self.fail_update(
+                    target_version,
+                    "failed to get a snapshot for manual update: save-snapshot is not exported"
+                        .to_string(),
+                )
+                .await
+            }
+            Err(error) => {
+                self.fail_update(
+                    target_version,
+                    format!("failed to get a snapshot for manual update: error while finding the exported save-snapshot function: {error}"),
+                )
+                .await
+            }
         }
     }
 
@@ -810,12 +833,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ///
     /// These are threaded through the invocation loop to make sure they are not accessing the file system concurrently with invocations
     /// that may modify them.
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: ComponentFilePath,
-        sender: Sender<Result<ListDirectoryResult, WorkerExecutorError>>,
+        sender: Sender<Result<GetFileSystemNodeResult, WorkerExecutorError>>,
     ) {
-        let result = self.store.data().list_directory(&path).await;
+        let result = self.store.data().get_file_system_node(&path).await;
         let _ = sender.send(result);
     }
 

@@ -25,16 +25,17 @@ use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
-use crate::workerctx::{InvocationContextManagement, InvocationManagement, WorkerCtx};
+use crate::workerctx::{
+    HasWasiConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
+};
 use anyhow::anyhow;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use golem_common::model::exports::function_by_name;
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
 use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction,
-    TargetWorkerId, WorkerId,
+    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ProjectId, ScheduledAction,
+    WorkerId,
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -48,6 +49,7 @@ use golem_wasm_rpc::{
     ValueAndType, WasmRpcEntry, WitType, WitValue,
 };
 use std::any::Any;
+use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use tracing::{error, Instrument};
@@ -64,25 +66,13 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
-        let worker_id: WorkerId = worker_id.into();
-        let remote_worker_id = worker_id.into_target_worker_id();
+        let args = self.get_arguments().await?;
+        let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
-        construct_wasm_rpc_resource(self, remote_worker_id).await
-    }
+        let remote_worker_id: WorkerId = worker_id.into();
 
-    async fn ephemeral(
-        &mut self,
-        component_id: golem_wasm_rpc::golem_rpc_0_2_x::types::ComponentId,
-    ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-        self.observe_function_call("golem::rpc::wasm-rpc", "ephemeral");
-
-        let component_id: ComponentId = component_id.into();
-        let remote_worker_id = TargetWorkerId {
-            component_id,
-            worker_name: None,
-        };
-
-        construct_wasm_rpc_resource(self, remote_worker_id).await
+        construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
     }
 
     async fn invoke_and_await(
@@ -93,6 +83,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -147,7 +138,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.account_id,
+                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -165,9 +156,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self.created_by(),
                     self.worker_id(),
                     &args,
                     &env,
+                    wasi_config_vars,
                     stack,
                 )
                 .await;
@@ -227,6 +220,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -282,7 +276,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.account_id,
+                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -300,9 +294,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     Some(idempotency_key),
                     function_name,
                     function_params,
+                    self.created_by(),
                     self.worker_id(),
                     &args,
                     &env,
+                    wasi_config_vars,
                     stack,
                 )
                 .await;
@@ -330,6 +326,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     ) -> anyhow::Result<Resource<FutureInvokeResult>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
+        let wasi_config_vars = self.wasi_config_vars();
 
         let begin_index = self
             .state
@@ -376,13 +373,14 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .await?;
 
         let worker_id = self.worker_id().clone();
+        let created_by = self.created_by().clone();
         let request = SerializableInvokeRequest {
             remote_worker_id: remote_worker_id.worker_id(),
             idempotency_key: idempotency_key.clone(),
             function_name: function_name.clone(),
             function_params: try_get_typed_parameters(
                 self.state.component_service.clone(),
-                &remote_worker_id.account_id,
+                &remote_worker_id.project_id,
                 &remote_worker_id.worker_id.component_id,
                 &function_name,
                 &function_params,
@@ -404,9 +402,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                             Some(idempotency_key),
                             function_name,
                             function_params,
+                            &created_by,
                             &worker_id,
                             &args,
                             &env,
+                            wasi_config_vars,
                             stack,
                         )
                         .await)
@@ -428,8 +428,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 payload: Box::new(FutureInvokeResultState::Deferred {
                     remote_worker_id,
                     self_worker_id: worker_id,
+                    self_created_by: created_by,
                     args,
                     env,
+                    wasi_config_vars,
                     function_name,
                     function_params,
                     idempotency_key,
@@ -500,7 +502,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 function_name: function_name.clone(),
                 function_params: try_get_typed_parameters(
                     self.state.component_service.clone(),
-                    &remote_worker_id.account_id,
+                    &remote_worker_id.project_id,
                     &remote_worker_id.worker_id.component_id,
                     &function_name,
                     &function_params,
@@ -514,6 +516,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .invocation_context
                 .clone_as_inherited_stack(&self.state.current_span_id);
             let action = ScheduledAction::Invoke {
+                account_id: self.created_by().clone(),
                 owned_worker_id: remote_worker_id,
                 idempotency_key,
                 full_function_name: function_name,
@@ -619,8 +622,10 @@ enum FutureInvokeResultState {
     Deferred {
         remote_worker_id: OwnedWorkerId,
         self_worker_id: WorkerId,
+        self_created_by: AccountId,
         args: Vec<String>,
         env: Vec<(String, String)>,
+        wasi_config_vars: BTreeMap<String, String>,
         function_name: String,
         function_params: Vec<WitValue>,
         idempotency_key: IdempotencyKey,
@@ -807,8 +812,10 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                 let FutureInvokeResultState::Deferred {
                                     remote_worker_id,
                                     self_worker_id,
+                                    self_created_by,
                                     args,
                                     env,
+                                    wasi_config_vars,
                                     function_name,
                                     function_params,
                                     idempotency_key,
@@ -825,9 +832,11 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                                         Some(idempotency_key),
                                         function_name,
                                         function_params,
+                                        &self_created_by,
                                         &self_worker_id,
                                         &args,
                                         &env,
+                                        wasi_config_vars,
                                         stack,
                                     )
                                     .await)
@@ -851,7 +860,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                             function_name: function_name.clone(),
                             function_params: try_get_typed_parameters(
                                 component_service,
-                                &remote_worker_id.account_id,
+                                &remote_worker_id.project_id,
                                 &remote_worker_id.worker_id.component_id,
                                 function_name,
                                 function_params,
@@ -1106,18 +1115,32 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
     }
 }
 
-async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
+pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-    remote_worker_id: TargetWorkerId,
+    remote_worker_id: WorkerId,
+    args: &[String],
+    env: &[(String, String)],
+    config: BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
-    let remote_worker_id = ctx
-        .generate_unique_local_worker_id(remote_worker_id)
-        .await?;
-
     let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+    let stack = ctx
+        .state
+        .invocation_context
+        .clone_as_inherited_stack(span.span_id());
 
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.account_id, &remote_worker_id);
-    let demand = ctx.rpc().create_demand(&remote_worker_id).await;
+    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
+    let demand = ctx
+        .rpc()
+        .create_demand(
+            &remote_worker_id,
+            ctx.created_by(),
+            ctx.worker_id(),
+            args,
+            env,
+            config,
+            stack,
+        )
+        .await?;
     let entry = ctx.table().push(WasmRpcEntry {
         payload: Box::new(WasmRpcEntryPayload::Interface {
             demand,
@@ -1136,20 +1159,20 @@ async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
 /// This should only be used for generating "debug information" for the stored oplog entries.
 async fn try_get_typed_parameters(
     components: Arc<dyn ComponentService>,
-    account_id: &AccountId,
+    project_id: &ProjectId,
     component_id: &ComponentId,
     function_name: &str,
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
-    if let Ok(metadata) = components
-        .get_metadata(account_id, component_id, None)
+    if let Ok(component) = components
+        .get_metadata(project_id, component_id, None)
         .await
     {
-        if let Ok(Some(function)) = function_by_name(&metadata.exports, function_name) {
-            if function.parameters.len() == params.len() {
+        if let Ok(Some(function)) = component.metadata.find_function(function_name).await {
+            if function.analysed_export.parameters.len() == params.len() {
                 return params
                     .iter()
-                    .zip(function.parameters)
+                    .zip(function.analysed_export.parameters)
                     .map(|(value, def)| ValueAndType::new(value.clone().into(), def.typ.clone()))
                     .collect();
             }

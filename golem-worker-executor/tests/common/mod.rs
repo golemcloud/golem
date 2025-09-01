@@ -1,5 +1,5 @@
 use crate::Deps;
-use crate::{LastUniqueId, WorkerExecutorPerTestDependencies};
+use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorPerTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -12,11 +12,10 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    PluginInstallationId, RetryConfig, TargetWorkerId, WorkerFilter, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
+    IdempotencyKey, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -38,33 +37,34 @@ use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::to_worker_metadata;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
-use golem_wasm_rpc::wasmtime::ResourceStore;
+use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
 use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
 use golem_worker_executor::model::{
-    CurrentResourceLimits, ExecutionStatus, LastError, ListDirectoryResult, ReadFileResult,
-    TrapType, WorkerConfig,
+    CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use golem_worker_executor::preview2::golem::durability;
-use golem_worker_executor::preview2::golem_api_1_x;
+use golem_worker_executor::preview2::{golem_agent, golem_api_1_x};
 use golem_worker_executor::services::active_workers::ActiveWorkers;
+use golem_worker_executor::services::agent_types::AgentTypesService;
 use golem_worker_executor::services::blob_store::BlobStoreService;
-use golem_worker_executor::services::component::{ComponentMetadata, ComponentService};
+use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentServiceConfig,
-    ComponentServiceLocalConfig, GolemConfig, IndexedStorageConfig,
-    IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig,
-    ProjectServiceDisabledConfig, RdbmsConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig,
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, CompiledComponentServiceConfig,
+    CompiledComponentServiceEnabledConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
+    GolemConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
+    MemoryConfig, ProjectServiceConfig, ProjectServiceDisabledConfig, ShardManagerServiceConfig,
+    ShardManagerServiceSingleShardConfig, RdbmsConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{Oplog, OplogService};
 use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
+use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::{types as mysql_types, MysqlType};
 use golem_worker_executor::services::rdbms::postgres::{types as postgres_types, PostgresType};
@@ -88,13 +88,14 @@ use golem_worker_executor::services::{
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
-    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
-    UpdateManagement, WorkerCtx,
+    DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    StatusManagement, UpdateManagement, WorkerCtx,
 };
 use golem_worker_executor::{Bootstrap, RunDetails};
 use prometheus::Registry;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::future::Future;
 use std::env::var;
 use std::path::Path;
 use std::sync::atomic::Ordering;
@@ -243,7 +244,10 @@ impl TestContext {
     }
 }
 
-pub async fn start(deps: &Deps, context: &TestContext) -> anyhow::Result<TestWorkerExecutor> {
+pub async fn start(
+    deps: &Deps,
+    context: &TestContext,
+) -> anyhow::Result<TestWorkerExecutor> {
     start_customized(deps, context, None, None).await
 }
 
@@ -260,6 +264,15 @@ pub async fn start_customized(
     info!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor::metrics::register_all();
+    let admin_account_id = deps.cloud_service.admin_account_id();
+    let admin_project_id = deps
+        .cloud_service
+        .get_default_project(&deps.cloud_service.admin_token())
+        .await?;
+    let admin_project_name = deps
+        .cloud_service
+        .get_project_name(&admin_project_id)
+        .await?;
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),
@@ -285,7 +298,12 @@ pub async fn start_customized(
         component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
             root: Path::new("data/components").to_path_buf(),
         }),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {}),
+        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
+            account_id: admin_account_id,
+            project_id: admin_project_id,
+            project_name: admin_project_name,
+        }),
+        agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
         ..Default::default()
     };
     if let Some(retry) = retry_override {
@@ -342,6 +360,28 @@ impl DurableWorkerCtxView<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
+impl HasWasiConfigVars for TestWorkerCtx {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+        self.durable_ctx.wasi_config_vars()
+    }
+}
+
+impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
+    fn get_environment(
+        &mut self,
+    ) -> impl Future<Output = anyhow::Result<Vec<(String, String)>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_environment(&mut self.durable_ctx)
+    }
+
+    fn get_arguments(&mut self) -> impl Future<Output = anyhow::Result<Vec<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::get_arguments(&mut self.durable_ctx)
+    }
+
+    fn initial_cwd(&mut self) -> impl Future<Output = anyhow::Result<Option<String>>> + Send {
+        wasmtime_wasi::p2::bindings::cli::environment::Host::initial_cwd(&mut self.durable_ctx)
+    }
+}
+
 #[async_trait]
 impl FuelManagement for TestWorkerCtx {
     fn is_out_of_fuel(&self, _current_level: i64) -> bool {
@@ -356,34 +396,6 @@ impl FuelManagement for TestWorkerCtx {
 
     async fn return_fuel(&mut self, _current_level: i64) -> Result<i64, WorkerExecutorError> {
         Ok(0)
-    }
-}
-
-#[async_trait]
-impl IndexedResourceStore for TestWorkerCtx {
-    fn get_indexed_resource(
-        &self,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        self.durable_ctx
-            .get_indexed_resource(resource_name, resource_params)
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        self.durable_ctx
-            .store_indexed_resource(resource_name, resource_params, resource)
-            .await
-    }
-
-    fn drop_indexed_resource(&mut self, resource_name: &str, resource_params: &[String]) {
-        self.durable_ctx
-            .drop_indexed_resource(resource_name, resource_params)
     }
 }
 
@@ -420,8 +432,10 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
         instance: &Instance,
+        refresh_replay_target: bool,
     ) -> Result<RetryDecision, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance).await
+        DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance, refresh_replay_target)
+            .await
     }
 
     async fn prepare_instance(
@@ -434,12 +448,12 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn record_last_known_limits<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
-        account_id: &AccountId,
+        project_id: &ProjectId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::record_last_known_limits(
             this,
-            account_id,
+            project_id,
             last_known_limits,
         )
         .await
@@ -460,12 +474,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
 
     async fn on_worker_update_failed_to_start<T: HasAll<TestWorkerCtx> + Send + Sync>(
         this: &T,
+        account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
         target_version: ComponentVersion,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::on_worker_update_failed_to_start(
             this,
+            account_id,
             owned_worker_id,
             target_version,
             details,
@@ -572,15 +588,15 @@ impl ResourceStore for TestWorkerCtx {
         self.durable_ctx.self_uri()
     }
 
-    async fn add(&mut self, resource: ResourceAny) -> u64 {
-        self.durable_ctx.add(resource).await
+    async fn add(&mut self, resource: ResourceAny, name: ResourceTypeId) -> u64 {
+        self.durable_ctx.add(resource, name).await
     }
 
-    async fn get(&mut self, resource_id: u64) -> Option<ResourceAny> {
+    async fn get(&mut self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         ResourceStore::get(&mut self.durable_ctx, resource_id).await
     }
 
-    async fn borrow(&self, resource_id: u64) -> Option<ResourceAny> {
+    async fn borrow(&self, resource_id: u64) -> Option<(ResourceTypeId, ResourceAny)> {
         self.durable_ctx.borrow(resource_id).await
     }
 }
@@ -623,7 +639,10 @@ struct ServerBootstrap {}
 impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
+    const LOG_EVENT_EMIT_BEHAVIOUR: LogEventEmitBehaviour = LogEventEmitBehaviour::LiveOnly;
+
     async fn create(
+        _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
@@ -648,6 +667,8 @@ impl WorkerCtx for TestWorkerCtx {
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -671,6 +692,8 @@ impl WorkerCtx for TestWorkerCtx {
             file_loader,
             plugins,
             worker_fork,
+            project_service,
+            agent_types_service,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -700,7 +723,11 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
-    fn component_metadata(&self) -> &ComponentMetadata {
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
+    }
+
+    fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
 
@@ -722,15 +749,6 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.durable_ctx.worker_fork()
-    }
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        self.durable_ctx
-            .generate_unique_local_worker_id(remote_worker_id)
-            .await
     }
 }
 
@@ -776,11 +794,11 @@ impl ResourceLimiterAsync for TestWorkerCtx {
 
 #[async_trait]
 impl FileSystemReading for TestWorkerCtx {
-    async fn list_directory(
+    async fn get_file_system_node(
         &self,
         path: &ComponentFilePath,
-    ) -> Result<ListDirectoryResult, WorkerExecutorError> {
-        self.durable_ctx.list_directory(path).await
+    ) -> Result<GetFileSystemNodeResult, WorkerExecutorError> {
+        self.durable_ctx.get_file_system_node(path).await
     }
 
     async fn read_file(
@@ -797,13 +815,6 @@ impl HostWasmRpc for TestWorkerCtx {
         worker_id: golem_wasm_rpc::WorkerId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
-    }
-
-    async fn ephemeral(
-        &mut self,
-        component_id: golem_wasm_rpc::ComponentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
-        self.durable_ctx.ephemeral(component_id).await
     }
 
     async fn invoke_and_await(
@@ -895,7 +906,7 @@ impl DynamicLinking<TestWorkerCtx> for TestWorkerCtx {
         engine: &Engine,
         linker: &mut Linker<TestWorkerCtx>,
         component: &Component,
-        component_metadata: &ComponentMetadata,
+        component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -939,6 +950,10 @@ impl InvocationContextManagement for TestWorkerCtx {
             .set_span_attribute(span_id, key, value)
             .await
     }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.durable_ctx.clone_as_inherited_stack(current_span_id)
+    }
 }
 
 #[async_trait]
@@ -964,14 +979,15 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
+        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         golem_worker_executor::services::component::configured(
             &golem_config.component_service,
-            &golem_config.project_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
             plugin_observations,
+            project_service,
         )
     }
 
@@ -1000,6 +1016,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
+        project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
         let worker_fork = Arc::new(DefaultWorkerFork::new(
@@ -1031,6 +1049,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
 
@@ -1063,10 +1083,13 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
+            project_service.clone(),
+            agent_types_service.clone(),
             (),
         ));
         Ok(All::new(
             active_workers,
+            agent_types_service,
             engine,
             linker,
             runtime,
@@ -1092,6 +1115,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
             plugins,
             oplog_processor_plugin,
             resource_limits,
+            project_service,
             (),
         ))
     }
@@ -1102,6 +1126,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
+        golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,
