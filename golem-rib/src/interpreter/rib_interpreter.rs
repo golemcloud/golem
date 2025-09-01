@@ -1247,8 +1247,6 @@ mod internal {
                             internal_corrupted_state!("failed to get a worker name for variable")
                         })?;
 
-                dbg!(&worker_id_string);
-
                 let result = interpreter_env
                     .invoke_worker_function_async(
                         component_info,
