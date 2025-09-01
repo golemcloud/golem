@@ -203,7 +203,7 @@ fn get_instance_creation_details(
 
                             let type_parameter = custom_instance_spec
                                 .interface_name
-                                .map(|interface_name| TypeParameter::Interface(interface_name));
+                                .map(TypeParameter::Interface);
 
                             let instance_creation = component_dependency.get_worker_instance_type(
                                 type_parameter,
