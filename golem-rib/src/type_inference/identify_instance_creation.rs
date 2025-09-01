@@ -177,10 +177,11 @@ fn get_instance_creation_details(
                 ParsedFunctionReference::Function { function } => {
                     let custom_instance_spec =
                         resolve_custom_instance_spec(custom_instance_spec, &function)?;
+
                     match custom_instance_spec {
                         None => Ok(None),
                         Some(custom_instance_spec) => {
-                            let optional_worker_name_expression = if !args.is_empty() {
+                            let optional_worker_name_expression = if args.is_empty() {
                                 None
                             } else {
                                 let new_worker_name_prefix =
@@ -190,7 +191,18 @@ fn get_instance_creation_details(
                                 let mut iter = args.iter().cloned().peekable();
 
                                 while let Some(arg) = iter.next() {
-                                    exprs.push(arg);
+                                    match arg {
+                                        Expr::Literal { .. } => {
+                                            exprs.push(Expr::literal("\""));
+                                            exprs.push(arg);
+                                            exprs.push(Expr::literal("\""));
+                                        }
+
+                                        _ => {
+                                            exprs.push(arg);
+                                        }
+                                    }
+
                                     if iter.peek().is_some() {
                                         exprs.push(Expr::literal(","));
                                     }

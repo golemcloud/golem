@@ -14,7 +14,7 @@
 
 use crate::{InferredType, InterfaceName};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct CustomInstanceSpec {
     pub instance_name: String,
     pub parameter_types: Vec<InferredType>,

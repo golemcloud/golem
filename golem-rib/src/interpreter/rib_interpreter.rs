@@ -1247,6 +1247,8 @@ mod internal {
                             internal_corrupted_state!("failed to get a worker name for variable")
                         })?;
 
+                dbg!(&worker_id_string);
+
                 let result = interpreter_env
                     .invoke_worker_function_async(
                         component_info,
@@ -4735,16 +4737,21 @@ mod tests {
     #[test]
     async fn test_interpreter_custom_instance() {
         let expr = r#"
-                let weather-agent = weather-agent("united");
+                let city = "nyc";
+                let country = "usa";
+                let weather-agent = weather-agent("united", 1,  {city: city, country: country});
                 let first-result = weather-agent.get-weather("bar");
                 let assistant-agent = assistant-agent("my assistant");
                 let second-result = assistant-agent.ask("foo", "bar");
-                "first-result: ${first-result}, second-result: ${second-result}"
+                {weather: first-result, assistant: second-result}
             "#;
 
         let custom_spec1 = CustomInstanceSpec {
             instance_name: "weather-agent".to_string(),
-            parameter_types: vec![InferredType::from(&str())],
+            parameter_types: vec![
+                InferredType::from(&str()),
+                InferredType::from(&record(vec![field("city", str()), field("country", str())])),
+            ],
             interface_name: Some(InterfaceName {
                 name: "weather-agent".to_string(),
                 version: None,
@@ -4775,10 +4782,28 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        assert_eq!(
-            result.get_val().unwrap().value,
-            Value::String("first-result: weather-result, second-result: ask-result".to_string())
-        );
+        let expected = Value::Record(vec![
+            Value::Record(vec![
+                // worker-name
+                Value::String(
+                    "weather-agent(\"united\",1,{city: \"nyc\", country: \"usa\"})".to_string(),
+                ),
+                // function-name
+                Value::String("my:agent/weather-agent.{get-weather}".to_string()),
+                // args concatenated
+                Value::String("\"bar\"".to_string()),
+            ]),
+            Value::Record(vec![
+                // worker-name
+                Value::String("assistant-agent(\"my assistant\")".to_string()),
+                // function-name
+                Value::String("my:agent/assistant-agent.{ask}".to_string()),
+                // args concatenated
+                Value::String("\"foo\"\"bar\"".to_string()),
+            ]),
+        ]);
+
+        assert_eq!(result.get_val().unwrap().value, expected);
     }
 
     mod test_utils {
@@ -4799,7 +4824,7 @@ mod tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };
-        use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+        use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
 
@@ -5486,32 +5511,42 @@ mod tests {
             }
         }
 
-        struct SimpleMultiInterface;
+        struct CustomInstanceFunctionInvoke;
         #[async_trait]
-        impl RibComponentFunctionInvoke for SimpleMultiInterface {
+        impl RibComponentFunctionInvoke for CustomInstanceFunctionInvoke {
             async fn invoke(
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: EvaluatedWorkerName,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
-                _args: EvaluatedFnArgs,
+                args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
+                let mut arguments_concatenated = String::new();
+
+                for arg in args.0 {
+                    let arg_str = print_value_and_type(&arg)?;
+                    arguments_concatenated.push_str(arg_str.as_str());
+                }
+
+                let result_value = ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(worker_name.0),
+                        Value::String(function_name.0.clone()),
+                        Value::String(arguments_concatenated),
+                    ]),
+                    record(vec![
+                        field("worker-name", str()),
+                        field("function-name", str()),
+                        field("args", str()),
+                    ]),
+                );
+
                 match function_name.0.as_str() {
-                    "my:agent/weather-agent.{get-weather}" => {
-                        let result_value =
-                            ValueAndType::new(Value::String("weather-result".to_string()), str());
+                    "my:agent/weather-agent.{get-weather}" => Ok(Some(result_value)),
 
-                        Ok(Some(result_value))
-                    }
-
-                    "my:agent/assistant-agent.{ask}" => {
-                        let result_value =
-                            ValueAndType::new(Value::String("ask-result".to_string()), str());
-
-                        Ok(Some(result_value))
-                    }
+                    "my:agent/assistant-agent.{ask}" => Ok(Some(result_value)),
 
                     _ => Err(format!("unexpected function name: {}", function_name.0).into()),
                 }
@@ -5686,7 +5721,7 @@ mod tests {
                 let component_dependencies = get_metadata_with_multiple_interfaces_simple();
                 let interpreter = Interpreter::new(
                     rib_input.unwrap_or_default(),
-                    Arc::new(SimpleMultiInterface),
+                    Arc::new(CustomInstanceFunctionInvoke),
                     Arc::new(StaticWorkerNameGenerator),
                 );
 

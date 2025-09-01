@@ -631,7 +631,10 @@ impl AgentId {
                 Err("Unexpected agent-id format - missing closing )".to_string())
             }
         } else {
-            Err("Unexpected agent-id format - must be agent-type(...)".to_string())
+            Err(format!(
+                "Invalid agent-id {}. Unexpected agent-id format - must be agent-type(...)",
+                s
+            ))
         }
     }
 

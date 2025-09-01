@@ -554,9 +554,13 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::WitWorker { .. } => {
-                                for expr in args.iter().rev() {
-                                    stack.push(ExprState::from_expr(expr));
+                            InstanceCreationType::WitWorker { worker_name, .. } => {
+                                if let Some(worker_name) = worker_name {
+                                    stack.push(ExprState::from_expr(worker_name));
+                                } else {
+                                    for expr in args.iter().rev() {
+                                        stack.push(ExprState::from_expr(expr));
+                                    }
                                 }
                             }
 
