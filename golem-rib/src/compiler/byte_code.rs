@@ -554,9 +554,13 @@ mod internal {
                     // we need to push a place holder in the stack that does nothing
                     CallType::InstanceCreation(instance_creation_type) => {
                         match instance_creation_type {
-                            InstanceCreationType::WitWorker { .. } => {
-                                for expr in args.iter().rev() {
-                                    stack.push(ExprState::from_expr(expr));
+                            InstanceCreationType::WitWorker { worker_name, .. } => {
+                                if let Some(worker_name) = worker_name {
+                                    stack.push(ExprState::from_expr(worker_name));
+                                } else {
+                                    for expr in args.iter().rev() {
+                                        stack.push(ExprState::from_expr(expr));
+                                    }
                                 }
                             }
 
@@ -1490,7 +1494,7 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![], vec![]);
 
             let compiler = RibCompiler::new(compiler_config);
 
@@ -1512,7 +1516,7 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![], vec![]);
 
             let compiler = RibCompiler::new(compiler_config);
 
@@ -1535,7 +1539,7 @@ mod compiler_tests {
 
             let expr = Expr::from_text(expr).unwrap();
 
-            let compiler_config = RibCompilerConfig::new(metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(metadata, vec![], vec![]);
 
             let compiler = RibCompiler::new(compiler_config);
 
@@ -1581,7 +1585,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1612,7 +1617,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1652,7 +1658,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1688,7 +1695,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1724,7 +1732,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1760,7 +1769,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1801,7 +1811,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1836,7 +1847,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);
@@ -1871,7 +1883,8 @@ mod compiler_tests {
             "#;
 
             let expr = Expr::from_text(expr).unwrap();
-            let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+            let compiler =
+                RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
             let compiled = compiler.compile(expr).unwrap();
             let expected_type_info =
                 internal::rib_input_type_info(vec![("request", request_value_type)]);

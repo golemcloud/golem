@@ -2756,6 +2756,7 @@ mod internal {
                 root_package_version: None,
             },
             metadata: exports,
+            agent_types: vec![],
         };
 
         metadata_dict.insert(versioned_component_id, component_details);
