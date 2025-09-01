@@ -38,7 +38,7 @@ impl CustomInstanceSpec {
         CustomInstanceSpec {
             instance_name,
             parameter_types,
-            interface_name: None,
+            interface_name,
         }
     }
 }
