@@ -31,12 +31,15 @@ pub fn identify_instance_creation(
 }
 
 mod internal {
-    use combine::stream::Range;
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::instance_type::InstanceType;
     use crate::rib_type_error::RibTypeErrorInternal;
     use crate::type_parameter::TypeParameter;
-    use crate::{ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, InterfaceName, ParsedFunctionReference, TypeInternal, TypeOrigin};
+    use crate::{
+        ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
+        InterfaceName, ParsedFunctionReference, TypeInternal, TypeOrigin,
+    };
+    use combine::stream::Range;
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
@@ -119,7 +122,7 @@ mod internal {
                 .map_err(|err| {
                     RibTypeErrorInternal::from(CustomError::new(
                         source_span.clone(),
-                        format!("failed to get instance creation details: {err}"),
+                        format!("failed to create instance: {err}"),
                     ))
                 })?;
 
@@ -174,7 +177,9 @@ mod internal {
                         Ok(Some(instance_creation))
                     }
 
-                    ParsedFunctionReference::Function { function } if function == "weather-agent" => {
+                    ParsedFunctionReference::Function { function }
+                        if function == "weather-agent" =>
+                    {
                         let optional_worker_name_expression = if !args.is_empty() {
                             None
                         } else {
@@ -198,7 +203,7 @@ mod internal {
                                 name: "weather-agent".to_string(),
                                 version: None,
                             })),
-                            optional_worker_name_expression
+                            optional_worker_name_expression,
                         )?;
 
                         Ok(Some(instance_creation))

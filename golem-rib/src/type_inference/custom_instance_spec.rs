@@ -21,7 +21,6 @@ pub struct CustomInstanceSpec {
 }
 
 impl CustomInstanceSpec {
-
     // Constructs a new `CustomInstanceSpec`, which allows users to create instances other than the key word
     // `instance` that takes specific types of arguments and not just optional string
     //

@@ -1937,7 +1937,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec, vec![]));
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
@@ -2001,7 +2001,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec, vec![]));
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2049,6 +2049,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -2104,6 +2105,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -2274,7 +2276,7 @@ mod tests {
 
         let expr = Expr::from_text(rib).unwrap();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2306,7 +2308,7 @@ mod tests {
 
         let expr = Expr::from_text(rib).unwrap();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2331,7 +2333,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![], vec![]));
         let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
@@ -2350,7 +2352,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![], vec![]));
         let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
@@ -2576,7 +2578,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2607,7 +2609,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2644,7 +2646,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2683,7 +2685,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2704,7 +2706,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2729,7 +2731,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2760,7 +2762,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2795,7 +2797,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2828,7 +2830,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2856,7 +2858,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2888,7 +2890,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2920,7 +2922,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2949,7 +2951,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2975,7 +2977,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -3004,7 +3006,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -3036,7 +3038,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3542,7 +3544,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_for_pass_through_function();
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3579,6 +3581,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr);
@@ -3597,6 +3600,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -3617,6 +3621,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr);
@@ -3634,7 +3639,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let error = compiler.compile(expr).unwrap_err();
 
@@ -3656,6 +3661,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
@@ -3675,6 +3681,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -3702,7 +3709,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3725,7 +3732,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_for_pass_through_function();
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3755,7 +3762,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3777,7 +3784,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3802,7 +3809,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3830,6 +3837,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies,
             vec![],
+            vec![],
         ));
 
         let compilation_error = compiler.compile(expr).unwrap_err().to_string();
@@ -3851,7 +3859,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3876,7 +3884,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3900,7 +3908,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(test_deps.component_dependencies, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3927,6 +3936,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
@@ -3948,7 +3958,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3973,7 +3983,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4003,7 +4013,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4027,7 +4037,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4053,6 +4063,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr);
@@ -4073,7 +4084,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4095,7 +4106,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(test_deps.component_dependencies, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4120,6 +4132,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
@@ -4140,6 +4153,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -4164,7 +4178,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4190,6 +4204,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -4217,7 +4232,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4243,7 +4258,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4273,7 +4288,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4312,7 +4327,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4355,7 +4370,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4398,7 +4413,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4425,6 +4440,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let error = compiler.compile(expr).unwrap_err().to_string();
@@ -4445,6 +4461,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -4471,7 +4488,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4514,7 +4531,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4567,7 +4584,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4642,7 +4659,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4702,7 +4719,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4726,7 +4743,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces_simple(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4906,16 +4923,13 @@ mod tests {
 
             let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
                 name: "my:agent/weather-agent".to_string(),
-                functions: vec![
-                    get_weather,
-                ],
+                functions: vec![get_weather],
             });
 
             let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
                 name: "my:agent/assistant-agent".to_string(),
                 functions: vec![ask],
             });
-
 
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
@@ -4929,7 +4943,6 @@ mod tests {
                 vec![analysed_export1, analysed_export2],
             )]
         }
-
 
         pub(crate) fn get_metadata_with_multiple_interfaces() -> Vec<ComponentDependency> {
             // Exist in only amazon:shopping-cart/api1
@@ -5495,6 +5508,13 @@ mod tests {
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
+                    "amazon:shopping-cart/api1.{foo}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("foo".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
                     "amazon:shopping-cart/api1.{foo-number}" => {
                         let result_value = ValueAndType::new(Value::S32(1), s32());
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use call_arguments_inference::*;
+pub use custom_instance_spec::*;
 pub use enum_inference::*;
 pub use errors::*;
 pub use expr_visitor::*;
@@ -38,6 +39,7 @@ pub use variant_inference::*;
 pub use worker_function_invocation::*;
 
 mod call_arguments_inference;
+mod custom_instance_spec;
 mod enum_inference;
 mod errors;
 mod expr_visitor;
@@ -61,7 +63,6 @@ mod type_unification;
 mod variable_binding;
 mod variant_inference;
 mod worker_function_invocation;
-mod custom_instance_spec;
 
 #[cfg(test)]
 mod tests {
@@ -258,7 +259,8 @@ mod tests {
             InferredType::string(),
         );
 
-        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+        let rib_compiler =
+            RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec], vec![]));
 
         // by default foo.bar.* will be inferred to be a string (given the above type spec) and
         // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
@@ -284,7 +286,8 @@ mod tests {
         // foo + 1u32 should fail compilation since we are adding string with a u32.
         let invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
 
-        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+        let rib_compiler =
+            RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec], vec![]));
 
         let result = rib_compiler.compile(invalid_rib_expr);
 
@@ -2760,6 +2763,7 @@ mod tests {
                     metadata.clone(),
                 )],
                 vec![],
+                vec![],
             ))
         }
 
@@ -2802,6 +2806,7 @@ mod tests {
                     component_dependency_key.clone(),
                     exports,
                 )],
+                vec![],
                 vec![],
             ))
         }

@@ -20,8 +20,8 @@ pub use worker_functions_in_rib::*;
 
 use crate::rib_type_error::RibTypeError;
 use crate::{
-    ComponentDependencies, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredExpr,
-    RibInputTypeInfo, RibOutputTypeInfo,
+    ComponentDependencies, ComponentDependencyKey, CustomInstanceSpec, Expr,
+    GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo,
 };
 use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 use std::error::Error;
@@ -144,16 +144,19 @@ impl RibCompiler {
 pub struct RibCompilerConfig {
     component_dependencies: Vec<ComponentDependency>,
     input_spec: Vec<GlobalVariableTypeSpec>,
+    custom_instance_spec: Vec<CustomInstanceSpec>,
 }
 
 impl RibCompilerConfig {
     pub fn new(
         component_dependencies: Vec<ComponentDependency>,
         input_spec: Vec<GlobalVariableTypeSpec>,
+        custom_instance_spec: Vec<CustomInstanceSpec>,
     ) -> RibCompilerConfig {
         RibCompilerConfig {
             component_dependencies,
             input_spec,
+            custom_instance_spec,
         }
     }
 }
@@ -285,7 +288,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -312,7 +315,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -339,7 +342,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -367,7 +370,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -398,7 +401,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -424,7 +427,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -449,7 +452,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -474,7 +477,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -499,7 +502,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -527,7 +530,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -551,7 +554,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -575,7 +578,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -600,7 +603,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -625,7 +628,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -650,7 +653,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -674,7 +677,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -697,7 +700,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -720,7 +723,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -744,7 +747,7 @@ mod compiler_error_tests {
 
             let metadata = test_utils::get_metadata();
 
-            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![]));
+            let compiler = RibCompiler::new(RibCompilerConfig::new(metadata, vec![], vec![]));
             let error_msg = compiler.compile(expr).unwrap_err().to_string();
 
             let expected = r#"
@@ -765,7 +768,7 @@ mod compiler_error_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
 
-            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
             let compiler = RibCompiler::new(compiler_config);
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -787,7 +790,7 @@ mod compiler_error_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
 
-            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
             let compiler = RibCompiler::new(compiler_config);
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -811,7 +814,7 @@ mod compiler_error_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
 
-            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
             let compiler = RibCompiler::new(compiler_config);
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -835,7 +838,7 @@ mod compiler_error_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
 
-            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
             let compiler = RibCompiler::new(compiler_config);
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -858,7 +861,7 @@ mod compiler_error_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
 
-            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
             let compiler = RibCompiler::new(compiler_config);
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
@@ -881,7 +884,7 @@ mod compiler_error_tests {
             let expr = Expr::from_text(expr).unwrap();
             let component_metadata = test_utils::get_metadata();
 
-            let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+            let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
             let compiler = RibCompiler::new(compiler_config);
             let error_message = compiler.compile(expr).unwrap_err().to_string();
 
