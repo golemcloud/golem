@@ -79,7 +79,7 @@ pub enum AgentError {
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(ValueAndType),
+    CustomError(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
@@ -403,7 +403,7 @@ impl Display for NamedElementValue {
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum ElementValue {
-    ComponentModel(ValueAndType),
+    ComponentModel(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
     UnstructuredText(TextReference),
     UnstructuredBinary(BinaryReference),
 }
