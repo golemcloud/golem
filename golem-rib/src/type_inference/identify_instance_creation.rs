@@ -31,14 +31,12 @@ pub fn identify_instance_creation(
 }
 
 mod internal {
+    use combine::stream::Range;
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::instance_type::InstanceType;
     use crate::rib_type_error::RibTypeErrorInternal;
     use crate::type_parameter::TypeParameter;
-    use crate::{
-        ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
-        ParsedFunctionReference, TypeInternal, TypeOrigin,
-    };
+    use crate::{ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType, InterfaceName, ParsedFunctionReference, TypeInternal, TypeOrigin};
 
     pub(crate) fn search_for_invalid_instance_declarations(
         expr: &mut Expr,
@@ -171,6 +169,36 @@ mod internal {
                         let instance_creation = component_dependency.get_worker_instance_type(
                             type_parameter,
                             optional_worker_name_expression.cloned(),
+                        )?;
+
+                        Ok(Some(instance_creation))
+                    }
+
+                    ParsedFunctionReference::Function { function } if function == "weather-agent" => {
+                        let optional_worker_name_expression = if !args.is_empty() {
+                            None
+                        } else {
+                            let mut exprs = vec![Expr::literal("weather-agent(")];
+                            let mut iter = args.iter().cloned().peekable();
+
+                            while let Some(arg) = iter.next() {
+                                exprs.push(arg);
+                                if iter.peek().is_some() {
+                                    exprs.push(Expr::literal(","));
+                                }
+                            }
+
+                            exprs.push(Expr::literal(")"));
+
+                            Some(Expr::concat(exprs))
+                        };
+
+                        let instance_creation = component_dependency.get_worker_instance_type(
+                            Some(TypeParameter::Interface(InterfaceName {
+                                name: "weather-agent".to_string(),
+                                version: None,
+                            })),
+                            optional_worker_name_expression
                         )?;
 
                         Ok(Some(instance_creation))

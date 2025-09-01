@@ -4715,6 +4715,31 @@ mod tests {
         assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
     }
 
+    #[test]
+    async fn test_interpreter_custom_instance() {
+        let expr = r#"
+                let inst = weather-agent("my-worker");
+                let result = inst.get-weather("bar");
+                result
+            "#;
+        let expr = Expr::from_text(expr).unwrap();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces_simple(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        assert_eq!(
+            result.get_val().unwrap().value,
+            Value::String("foo".to_string())
+        );
+    }
+
     mod test_utils {
         use crate::interpreter::rib_interpreter::internal::NoopRibFunctionInvoke;
         use crate::interpreter::rib_interpreter::Interpreter;
@@ -4852,6 +4877,59 @@ mod tests {
         pub(crate) fn get_metadata_with_resource_without_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![])
         }
+
+        pub(crate) fn get_metadata_with_multiple_interfaces_simple() -> Vec<ComponentDependency> {
+            // Exist in only amazon:shopping-cart/api1
+            let get_weather = AnalysedFunction {
+                name: "get-weather".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            };
+
+            let ask = AnalysedFunction {
+                name: "ask".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: str(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "arg2".to_string(),
+                        typ: str(),
+                    },
+                ],
+                result: Some(AnalysedFunctionResult { typ: s32() }),
+            };
+
+            let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+                name: "my:agent/weather-agent".to_string(),
+                functions: vec![
+                    get_weather,
+                ],
+            });
+
+            let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
+                name: "my:agent/assistant-agent".to_string(),
+                functions: vec![ask],
+            });
+
+
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(
+                component_info,
+                vec![analysed_export1, analysed_export2],
+            )]
+        }
+
 
         pub(crate) fn get_metadata_with_multiple_interfaces() -> Vec<ComponentDependency> {
             // Exist in only amazon:shopping-cart/api1
@@ -5371,6 +5449,38 @@ mod tests {
             }
         }
 
+        struct SimpleMultiInterface;
+        #[async_trait]
+        impl RibComponentFunctionInvoke for SimpleMultiInterface {
+            async fn invoke(
+                &self,
+                _component_dependency_key: ComponentDependencyKey,
+                _instruction_id: &InstructionId,
+                _worker_name: EvaluatedWorkerName,
+                function_name: EvaluatedFqFn,
+                _args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
+            ) -> RibFunctionInvokeResult {
+                match function_name.0.as_str() {
+                    "my:agent/weather-agent.{get-weather}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("foo".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    "my:agent/assistant-agent.{ask}" => {
+                        let result_value =
+                            ValueAndType::new(Value::String("foo".to_string()), str());
+
+                        Ok(Some(result_value))
+                    }
+
+                    _ => Err(format!("unexpected function name: {}", function_name.0).into()),
+                }
+            }
+        }
+
         struct MultiplePackageFunctionInvoke;
 
         #[async_trait]
@@ -5385,13 +5495,6 @@ mod tests {
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
-                    "amazon:shopping-cart/api1.{foo}" => {
-                        let result_value =
-                            ValueAndType::new(Value::String("foo".to_string()), str());
-
-                        Ok(Some(result_value))
-                    }
-
                     "amazon:shopping-cart/api1.{foo-number}" => {
                         let result_value = ValueAndType::new(Value::S32(1), s32());
 
@@ -5529,6 +5632,22 @@ mod tests {
 
                 RibTestDeps {
                     component_dependencies: exports,
+                    interpreter,
+                }
+            }
+
+            pub(crate) fn test_deps_with_multiple_interfaces_simple(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_with_multiple_interfaces_simple();
+                let interpreter = Interpreter::new(
+                    rib_input.unwrap_or_default(),
+                    Arc::new(SimpleMultiInterface),
+                    Arc::new(StaticWorkerNameGenerator),
+                );
+
+                RibTestDeps {
+                    component_dependencies,
                     interpreter,
                 }
             }
