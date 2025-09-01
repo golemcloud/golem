@@ -121,7 +121,7 @@ impl SafeDisplay for S3BlobStorageConfig {
         let _ = writeln!(&mut result, "region: {}", self.region);
         let _ = writeln!(&mut result, "object_prefix: {}", self.object_prefix);
         if let Some(endpoint_url) = &self.aws_endpoint_url {
-            let _ = writeln!(&mut result, "aws_endpoint_url: {}", endpoint_url);
+            let _ = writeln!(&mut result, "aws_endpoint_url: {endpoint_url}");
         }
         let _ = writeln!(
             &mut result,

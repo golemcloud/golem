@@ -249,14 +249,12 @@ impl DataValue {
                             })
                         } else {
                             return Err(format!(
-                                "Multimodal value does not end with `)`: {}; expected to be `name(value)`",
-                                s
+                                "Multimodal value does not end with `)`: {s}; expected to be `name(value)`"
                             ));
                         }
                     } else {
                         return Err(format!(
-                            "Invalid multimodal value: {}; expected to be `name(value)`",
-                            s
+                            "Invalid multimodal value: {s}; expected to be `name(value)`"
                         ));
                     }
                 }
@@ -674,6 +672,6 @@ where
 impl AgentTypeResolver for &ComponentMetadata {
     async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
         let result = self.find_agent_type(agent_type).await?;
-        result.ok_or_else(|| format!("Agent type not found: {}", agent_type))
+        result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

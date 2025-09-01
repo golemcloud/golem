@@ -551,7 +551,7 @@ impl SafeDisplay for DbPostgresConfig {
         let _ = writeln!(&mut result, "password: ****");
         let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
         if let Some(schema) = &self.schema {
-            let _ = writeln!(&mut result, "schema: {}", schema);
+            let _ = writeln!(&mut result, "schema: {schema}");
         }
         result
     }
