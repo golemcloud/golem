@@ -48,6 +48,7 @@ use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use Iterator;
+use golem_common::model::agent::AgentType;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -670,6 +671,7 @@ pub struct ComponentMetadataDictionary {
 pub struct ComponentDetails {
     pub component_info: ComponentDependencyKey,
     pub metadata: Vec<AnalysedExport>,
+    pub agent_types: Vec<AgentType>
 }
 
 impl ComponentMetadataDictionary {
@@ -687,6 +689,7 @@ impl ComponentMetadataDictionary {
             let component_details = ComponentDetails {
                 component_info,
                 metadata: component.metadata.exports().to_vec(),
+                agent_types: component.metadata.agent_types().to_vec(),
             };
 
             metadata.insert(component.versioned_component_id.clone(), component_details);

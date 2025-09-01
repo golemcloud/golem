@@ -12,17 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use rib::{
-    CompilerOutput, ComponentDependency, Expr, GlobalVariableTypeSpec, InferredType, Path,
-    RibCompilationError, RibCompiler, RibCompilerConfig,
-};
+use golem_common::model::agent::AgentType;
+use rib::{CompilerOutput, ComponentDependency, Expr, GlobalVariableTypeSpec, InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig};
+
+pub struct ComponentDependencyWithAgentInfo {
+    agent_types: Vec<AgentType>,
+    component_dependency: ComponentDependency
+}
+
+impl ComponentDependencyWithAgentInfo {
+    pub fn new(agent_types: Vec<AgentType>, component_dependency: ComponentDependency) -> Self {
+        Self { agent_types, component_dependency }
+    }
+}
 
 // A wrapper service over original Rib Compiler concerning
 // the details of the worker bridge.
 pub trait WorkerServiceRibCompiler {
     fn compile(
         rib: &Expr,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<CompilerOutput, RibCompilationError>;
 }
 
@@ -31,8 +40,33 @@ pub struct DefaultWorkerServiceRibCompiler;
 impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     fn compile(
         rib: &Expr,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<CompilerOutput, RibCompilationError> {
+
+
+        let agent_types = component_dependency.iter().enumerate()
+            .map(|cd| (cd.0, cd.1.agent_types.clone()))
+            .collect::<Vec<_>>();
+
+        let mut custom_instance_spec = vec![];
+
+        for (_component_index, agent_types) in agent_types {
+            for agent_type in agent_types {
+                custom_instance_spec.push(rib::CustomInstanceSpec {
+                    instance_name:  agent_type.type_name.clone(),
+                    parameter_types: vec![], // TODO; needed for compiler check, otherwise runtime error
+                    interface_name: Some(InterfaceName {
+                        name: agent_type.type_name,
+                        version: None,
+                    })
+                });
+            }
+        }
+
+        let component_dependency =
+            component_dependency.iter().map(|cd| cd.component_dependency.clone()).collect::<Vec<_>>();
+
+
         let rib_input_spec = vec![
             GlobalVariableTypeSpec::new(
                 "request",
@@ -56,7 +90,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             ),
         ];
 
-        let compiler_config = RibCompilerConfig::new(component_dependency.to_vec(), rib_input_spec);
+        let compiler_config = RibCompilerConfig::new(component_dependency, rib_input_spec, custom_instance_spec);
 
         let compiler = RibCompiler::new(compiler_config);
 
