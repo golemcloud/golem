@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::rib_type_error::RibTypeErrorInternal;
-use crate::{ComponentDependencies, Expr};
+use crate::{ComponentDependencies, CustomInstanceSpec, Expr};
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
@@ -25,9 +25,14 @@ use crate::{ComponentDependencies, Expr};
 pub fn identify_instance_creation(
     expr: &mut Expr,
     component_dependencies: &ComponentDependencies,
+    custom_instance_spec: &Vec<CustomInstanceSpec>,
 ) -> Result<(), RibTypeErrorInternal> {
     internal::search_for_invalid_instance_declarations(expr)?;
-    internal::identify_instance_creation_with_worker(expr, component_dependencies)
+    internal::identify_instance_creation_with_worker(
+        expr,
+        component_dependencies,
+        custom_instance_spec,
+    )
 }
 
 mod internal {
@@ -36,8 +41,9 @@ mod internal {
     use crate::rib_type_error::RibTypeErrorInternal;
     use crate::type_parameter::TypeParameter;
     use crate::{
-        ComponentDependencies, CustomError, Expr, ExprVisitor, FunctionCallError, InferredType,
-        InterfaceName, ParsedFunctionReference, TypeInternal, TypeOrigin,
+        ComponentDependencies, CustomError, CustomInstanceSpec, Expr, ExprVisitor,
+        FunctionCallError, InferredType, InterfaceName, ParsedFunctionReference, TypeInternal,
+        TypeOrigin,
     };
     use combine::stream::Range;
 
@@ -87,6 +93,7 @@ mod internal {
     pub(crate) fn identify_instance_creation_with_worker(
         expr: &mut Expr,
         component_dependency: &ComponentDependencies,
+        custom_instance_spec: &Vec<CustomInstanceSpec>,
     ) -> Result<(), RibTypeErrorInternal> {
         let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -118,6 +125,7 @@ mod internal {
                     type_parameter.clone(),
                     args,
                     component_dependency,
+                    custom_instance_spec,
                 )
                 .map_err(|err| {
                     RibTypeErrorInternal::from(CustomError::new(
@@ -161,6 +169,7 @@ mod internal {
         type_parameter: Option<TypeParameter>,
         args: &[Expr],
         component_dependency: &ComponentDependencies,
+        custom_instance_spec: &Vec<CustomInstanceSpec>,
     ) -> Result<Option<InstanceCreationType>, String> {
         match call_type {
             CallType::Function { function_name, .. } => {

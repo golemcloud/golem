@@ -100,13 +100,13 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
+        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec], &vec![]);
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
 
-        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![], &vec![]);
 
         assert!(without_type_spec.is_err())
     }
@@ -127,7 +127,7 @@ mod tests {
         );
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![type_spec],)
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec], &vec![])
             .is_ok());
     }
 
@@ -155,7 +155,7 @@ mod tests {
         ];
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &type_spec,)
+            .infer_types(&ComponentDependencies::default(), &type_spec, &vec![])
             .is_ok());
     }
 
@@ -175,7 +175,7 @@ mod tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![])
+            .infer_types(&ComponentDependencies::default(), &vec![], &vec![])
             .is_ok());
     }
 
@@ -1293,7 +1293,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![], &vec![])
             .unwrap();
 
         let expected = expr_block(

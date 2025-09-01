@@ -343,7 +343,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![], &vec![])
             .unwrap();
         let expected = Expr::expr_block(vec![
             Expr::let_binding_with_variable_id(

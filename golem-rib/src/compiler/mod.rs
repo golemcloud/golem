@@ -37,7 +37,8 @@ mod worker_functions_in_rib;
 #[derive(Default)]
 pub struct RibCompiler {
     component_dependency: ComponentDependencies,
-    input_spec: Vec<GlobalVariableTypeSpec>,
+    global_variable_type_spec: Vec<GlobalVariableTypeSpec>,
+    custom_instance_spec: Vec<CustomInstanceSpec>,
 }
 
 impl RibCompiler {
@@ -51,16 +52,17 @@ impl RibCompiler {
         )
         .unwrap();
 
-        let input_spec = config.input_spec;
+        let global_variable_type_spec = config.input_spec;
 
         RibCompiler {
             component_dependency: component_dependencies,
-            input_spec,
+            global_variable_type_spec,
+            custom_instance_spec: config.custom_instance_spec,
         }
     }
 
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(expr.clone(), &self.component_dependency, &self.input_spec).map_err(
+        InferredExpr::from_expr(expr.clone(), &self.component_dependency, &self.global_variable_type_spec, &self.custom_instance_spec).map_err(
             |err| {
                 let rib_type_error = RibTypeError::from_rib_type_error_internal(err, expr);
                 RibCompilationError::RibTypeError(Box::new(rib_type_error))
@@ -85,7 +87,7 @@ impl RibCompiler {
 
         // allowed_global_variables
         let allowed_global_variables: Vec<String> = self
-            .input_spec
+            .global_variable_type_spec
             .iter()
             .map(|x| x.variable())
             .collect::<Vec<_>>();

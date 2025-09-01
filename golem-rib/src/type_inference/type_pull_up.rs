@@ -895,7 +895,7 @@ mod type_pull_up_tests {
         let mut expr = Expr::from_text(rib).unwrap();
         let component_dependencies = ComponentDependencies::default();
 
-        expr.infer_types_initial_phase(&component_dependencies, &vec![])
+        expr.infer_types_initial_phase(&component_dependencies, &vec![], &vec![])
             .unwrap();
         expr.infer_all_identifiers();
         expr.pull_types_up(&ComponentDependencies::default())
