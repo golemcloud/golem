@@ -49,6 +49,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use Iterator;
 use golem_common::model::agent::AgentType;
+use crate::gateway_rib_compiler::ComponentDependencyWithAgentInfo;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -767,14 +768,15 @@ impl CompiledRoute {
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let component_dependency = vec![ComponentDependency::new(
+                let component_dependency_with_agent_types = vec![ComponentDependencyWithAgentInfo::new(
                     component_details.component_info.clone(),
                     component_details.metadata.clone(),
+                    component_details.agent_types.clone(),
                 )];
 
                 let binding = FileServerBindingCompiled::from_raw_file_server_worker_binding(
                     worker_binding,
-                    &component_dependency,
+                    &component_dependency_with_agent_types,
                 )
                 .map_err(RouteCompilationErrors::RibError)?;
 

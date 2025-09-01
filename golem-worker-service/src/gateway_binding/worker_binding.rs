@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::{IdempotencyKeyCompiled, InvocationContextCompiled, WorkerNameCompiled};
-use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
+use crate::gateway_rib_compiler::{ComponentDependencyWithAgentInfo, DefaultWorkerServiceRibCompiler};
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
 use golem_common::model::component::VersionedComponentId;
 use rib::{
@@ -43,7 +43,7 @@ pub struct FileServerBindingCompiled {
 impl FileServerBindingCompiled {
     pub fn from_raw_file_server_worker_binding(
         gateway_worker_binding: &FileServerBinding,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
@@ -185,7 +185,7 @@ pub struct ResponseMappingCompiled {
 impl ResponseMappingCompiled {
     pub fn from_response_mapping(
         response_mapping: &ResponseMapping,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let response_compiled =
             DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, component_dependency)?;

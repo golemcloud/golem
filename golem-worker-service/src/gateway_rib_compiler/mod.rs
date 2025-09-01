@@ -13,16 +13,24 @@
 // limitations under the License.
 
 use golem_common::model::agent::AgentType;
-use rib::{CompilerOutput, ComponentDependency, Expr, GlobalVariableTypeSpec, InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig};
+use golem_wasm_ast::analysis::AnalysedExport;
+use rib::{CompilerOutput, ComponentDependency, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig};
 
+// A wrapper over ComponentDependency which is coming from rib-module
+// to attach agent types to it.
 pub struct ComponentDependencyWithAgentInfo {
     agent_types: Vec<AgentType>,
     component_dependency: ComponentDependency
 }
 
+
 impl ComponentDependencyWithAgentInfo {
-    pub fn new(agent_types: Vec<AgentType>, component_dependency: ComponentDependency) -> Self {
-        Self { agent_types, component_dependency }
+    pub fn new(component_dependency_key: ComponentDependencyKey,
+               component_exports: Vec<AnalysedExport>, agent_types: Vec<AgentType>,) -> Self {
+        Self { agent_types, component_dependency: ComponentDependency::new(
+            component_dependency_key,
+            component_exports,
+        ) }
     }
 }
 
