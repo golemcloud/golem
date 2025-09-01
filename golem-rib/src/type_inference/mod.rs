@@ -100,13 +100,15 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec], &vec![]);
+        let with_type_spec =
+            expr.infer_types(&ComponentDependencies::default(), &vec![type_spec], &vec![]);
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
 
-        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![], &vec![]);
+        let without_type_spec =
+            new_expr.infer_types(&ComponentDependencies::default(), &vec![], &vec![]);
 
         assert!(without_type_spec.is_err())
     }

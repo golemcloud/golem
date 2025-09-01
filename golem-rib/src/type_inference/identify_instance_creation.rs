@@ -12,8 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::call_type::{CallType, InstanceCreationType};
+use crate::instance_type::InstanceType;
 use crate::rib_type_error::RibTypeErrorInternal;
+use crate::type_parameter::TypeParameter;
 use crate::{ComponentDependencies, CustomInstanceSpec, Expr};
+use crate::{
+    CustomError, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
+    TypeInternal, TypeOrigin,
+};
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
@@ -27,47 +34,31 @@ pub fn identify_instance_creation(
     component_dependencies: &ComponentDependencies,
     custom_instance_spec: &Vec<CustomInstanceSpec>,
 ) -> Result<(), RibTypeErrorInternal> {
-    internal::search_for_invalid_instance_declarations(expr)?;
-    internal::identify_instance_creation_with_worker(
-        expr,
-        component_dependencies,
-        custom_instance_spec,
-    )
+    search_for_invalid_instance_declarations(expr)?;
+    identify_instance_creation_with_worker(expr, component_dependencies, custom_instance_spec)
 }
 
-mod internal {
-    use crate::call_type::{CallType, InstanceCreationType};
-    use crate::instance_type::InstanceType;
-    use crate::rib_type_error::RibTypeErrorInternal;
-    use crate::type_parameter::TypeParameter;
-    use crate::{
-        ComponentDependencies, CustomError, CustomInstanceSpec, Expr, ExprVisitor,
-        FunctionCallError, InferredType, InterfaceName, ParsedFunctionReference, TypeInternal,
-        TypeOrigin,
-    };
-    use combine::stream::Range;
+pub fn search_for_invalid_instance_declarations(
+    expr: &mut Expr,
+) -> Result<(), RibTypeErrorInternal> {
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-    pub(crate) fn search_for_invalid_instance_declarations(
-        expr: &mut Expr,
-    ) -> Result<(), RibTypeErrorInternal> {
-        let mut visitor = ExprVisitor::bottom_up(expr);
-
-        while let Some(expr) = visitor.pop_front() {
-            match expr {
-                Expr::Let {
-                    variable_id, expr, ..
-                } => {
-                    if variable_id.name() == "instance" {
-                        return Err(CustomError::new(
-                            expr.source_span(),
-                            "`instance` is a reserved keyword and cannot be used as a variable.",
-                        )
-                        .into());
-                    }
+    while let Some(expr) = visitor.pop_front() {
+        match expr {
+            Expr::Let {
+                variable_id, expr, ..
+            } => {
+                if variable_id.name() == "instance" {
+                    return Err(CustomError::new(
+                        expr.source_span(),
+                        "`instance` is a reserved keyword and cannot be used as a variable.",
+                    )
+                    .into());
                 }
-                Expr::Identifier { variable_id, .. } => {
-                    if variable_id.name() == "instance" && variable_id.is_global() {
-                        let err = CustomError::new(
+            }
+            Expr::Identifier { variable_id, .. } => {
+                if variable_id.name() == "instance" && variable_id.is_global() {
+                    let err = CustomError::new(
                             expr.source_span(),
                              "`instance` is a reserved keyword"
                         ).with_help_message(
@@ -76,156 +67,170 @@ mod internal {
                             "for a durable worker, use `instance(\"foo\")` where `\"foo\"` is the worker name"
                         );
 
-                        return Err(err.into());
-                    }
+                    return Err(err.into());
                 }
-
-                _ => {}
             }
-        }
 
-        Ok(())
+            _ => {}
+        }
     }
 
-    // Identifying instance creations out of all parsed function calls.
-    // Note that before any global variable related inference stages,
-    // this has to go in first to disambiguate global variables with instance creations
-    pub(crate) fn identify_instance_creation_with_worker(
-        expr: &mut Expr,
-        component_dependency: &ComponentDependencies,
-        custom_instance_spec: &Vec<CustomInstanceSpec>,
-    ) -> Result<(), RibTypeErrorInternal> {
-        let mut visitor = ExprVisitor::bottom_up(expr);
+    Ok(())
+}
 
-        while let Some(expr) = visitor.pop_back() {
-            if let Expr::Call {
-                call_type,
-                generic_type_parameter,
-                args,
-                inferred_type,
-                source_span,
-                ..
-            } = expr
-            {
-                let type_parameter = generic_type_parameter
-                    .as_ref()
-                    .map(|gtp| {
-                        TypeParameter::from_text(&gtp.value).map_err(|err| {
-                            FunctionCallError::invalid_generic_type_parameter(
-                                &gtp.value,
-                                err,
-                                source_span.clone(),
-                            )
-                        })
-                    })
-                    .transpose()?;
+// Identifying instance creations out of all parsed function calls.
+// Note that before any global variable related inference stages,
+// this has to go in first to disambiguate global variables with instance creations
+pub fn identify_instance_creation_with_worker(
+    expr: &mut Expr,
+    component_dependency: &ComponentDependencies,
+    custom_instance_spec: &Vec<CustomInstanceSpec>,
+) -> Result<(), RibTypeErrorInternal> {
+    let mut visitor = ExprVisitor::bottom_up(expr);
 
-                let instance_creation_type = get_instance_creation_details(
-                    call_type,
-                    type_parameter.clone(),
-                    args,
-                    component_dependency,
-                    custom_instance_spec,
-                )
-                .map_err(|err| {
-                    RibTypeErrorInternal::from(CustomError::new(
-                        source_span.clone(),
-                        format!("failed to create instance: {err}"),
-                    ))
-                })?;
-
-                if let Some(instance_creation_type) = instance_creation_type {
-                    let worker_name = instance_creation_type.worker_name();
-
-                    *call_type = CallType::InstanceCreation(instance_creation_type);
-
-                    let new_instance_type = InstanceType::from(
-                        component_dependency,
-                        worker_name.as_ref(),
-                        type_parameter,
-                    )
-                    .map_err(|err| {
-                        RibTypeErrorInternal::from(CustomError::new(
+    while let Some(expr) = visitor.pop_back() {
+        if let Expr::Call {
+            call_type,
+            generic_type_parameter,
+            args,
+            inferred_type,
+            source_span,
+            ..
+        } = expr
+        {
+            let type_parameter = generic_type_parameter
+                .as_ref()
+                .map(|gtp| {
+                    TypeParameter::from_text(&gtp.value).map_err(|err| {
+                        FunctionCallError::invalid_generic_type_parameter(
+                            &gtp.value,
+                            err,
                             source_span.clone(),
-                            format!("failed to create instance: {err}"),
-                        ))
-                    })?;
+                        )
+                    })
+                })
+                .transpose()?;
 
-                    *inferred_type = InferredType::new(
-                        TypeInternal::Instance {
-                            instance_type: Box::new(new_instance_type),
-                        },
-                        TypeOrigin::NoOrigin,
-                    );
-                }
+            let instance_creation_type = get_instance_creation_details(
+                call_type,
+                type_parameter.clone(),
+                args,
+                component_dependency,
+                custom_instance_spec,
+            )
+            .map_err(|err| {
+                RibTypeErrorInternal::from(CustomError::new(
+                    source_span.clone(),
+                    format!("failed to create instance: {err}"),
+                ))
+            })?;
+
+            if let Some(instance_creation_type) = instance_creation_type {
+                let worker_name = instance_creation_type.worker_name();
+
+                *call_type = CallType::InstanceCreation(instance_creation_type);
+
+                let new_instance_type =
+                    InstanceType::from(component_dependency, worker_name.as_ref(), type_parameter)
+                        .map_err(|err| {
+                            RibTypeErrorInternal::from(CustomError::new(
+                                source_span.clone(),
+                                format!("failed to create instance: {err}"),
+                            ))
+                        })?;
+
+                *inferred_type = InferredType::new(
+                    TypeInternal::Instance {
+                        instance_type: Box::new(new_instance_type),
+                    },
+                    TypeOrigin::NoOrigin,
+                );
             }
         }
-
-        Ok(())
     }
 
-    fn get_instance_creation_details(
-        call_type: &CallType,
-        type_parameter: Option<TypeParameter>,
-        args: &[Expr],
-        component_dependency: &ComponentDependencies,
-        custom_instance_spec: &Vec<CustomInstanceSpec>,
-    ) -> Result<Option<InstanceCreationType>, String> {
-        match call_type {
-            CallType::Function { function_name, .. } => {
-                let function_name = function_name.to_parsed_function_name().function;
-                match function_name {
-                    ParsedFunctionReference::Function { function } if function == "instance" => {
-                        let optional_worker_name_expression = args.first();
+    Ok(())
+}
 
-                        let instance_creation = component_dependency.get_worker_instance_type(
-                            type_parameter,
-                            optional_worker_name_expression.cloned(),
-                        )?;
+fn get_instance_creation_details(
+    call_type: &CallType,
+    type_parameter: Option<TypeParameter>,
+    args: &[Expr],
+    component_dependency: &ComponentDependencies,
+    custom_instance_spec: &Vec<CustomInstanceSpec>,
+) -> Result<Option<InstanceCreationType>, String> {
+    match call_type {
+        CallType::Function { function_name, .. } => {
+            let function_name = function_name.to_parsed_function_name().function;
+            match function_name {
+                ParsedFunctionReference::Function { function } if function == "instance" => {
+                    let optional_worker_name_expression = args.first();
 
-                        Ok(Some(instance_creation))
-                    }
+                    let instance_creation = component_dependency.get_worker_instance_type(
+                        type_parameter,
+                        optional_worker_name_expression.cloned(),
+                    )?;
 
-                    ParsedFunctionReference::Function { function }
-                        if function == "weather-agent" =>
-                    {
-                        let optional_worker_name_expression = if !args.is_empty() {
-                            None
-                        } else {
-                            let mut exprs = vec![Expr::literal("weather-agent(")];
-                            let mut iter = args.iter().cloned().peekable();
+                    Ok(Some(instance_creation))
+                }
 
-                            while let Some(arg) = iter.next() {
-                                exprs.push(arg);
-                                if iter.peek().is_some() {
-                                    exprs.push(Expr::literal(","));
-                                }
+                ParsedFunctionReference::Function { function } => {
+                    let custom_instance_spec =
+                        resolve_custom_instance_spec(custom_instance_spec, &function)?;
+
+                    let optional_worker_name_expression = if !args.is_empty() {
+                        None
+                    } else {
+                        let new_worker_name_prefix =
+                            format!("{}(", custom_instance_spec.instance_name);
+
+                        let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
+                        let mut iter = args.iter().cloned().peekable();
+
+                        while let Some(arg) = iter.next() {
+                            exprs.push(arg);
+                            if iter.peek().is_some() {
+                                exprs.push(Expr::literal(","));
                             }
+                        }
 
-                            exprs.push(Expr::literal(")"));
+                        exprs.push(Expr::literal(")"));
 
-                            Some(Expr::concat(exprs))
-                        };
+                        Some(Expr::concat(exprs))
+                    };
 
-                        let instance_creation = component_dependency.get_worker_instance_type(
-                            Some(TypeParameter::Interface(InterfaceName {
-                                name: "weather-agent".to_string(),
-                                version: None,
-                            })),
-                            optional_worker_name_expression,
-                        )?;
+                    let type_parameter = custom_instance_spec
+                        .interface_name
+                        .map(|interface_name| TypeParameter::Interface(interface_name));
 
-                        Ok(Some(instance_creation))
-                    }
+                    let instance_creation = component_dependency.get_worker_instance_type(
+                        type_parameter,
+                        optional_worker_name_expression,
+                    )?;
 
-                    _ => Ok(None),
+                    Ok(Some(instance_creation))
                 }
+
+                _ => Ok(None),
             }
-            CallType::InstanceCreation(instance_creation_type) => {
-                Ok(Some(instance_creation_type.clone()))
-            }
-            CallType::VariantConstructor(_) => Ok(None),
-            CallType::EnumConstructor(_) => Ok(None),
+        }
+        CallType::InstanceCreation(instance_creation_type) => {
+            Ok(Some(instance_creation_type.clone()))
+        }
+        CallType::VariantConstructor(_) => Ok(None),
+        CallType::EnumConstructor(_) => Ok(None),
+    }
+}
+
+fn resolve_custom_instance_spec(
+    custom_instance_spec: &Vec<CustomInstanceSpec>,
+    function_name: &str,
+) -> Result<CustomInstanceSpec, String> {
+    for spec in custom_instance_spec {
+        if spec.instance_name == function_name {
+            return Ok(spec.clone());
         }
     }
+
+    Err(format!("Invalid instantiation with: {}", function_name))
 }

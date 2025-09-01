@@ -62,12 +62,16 @@ impl RibCompiler {
     }
 
     pub fn infer_types(&self, expr: Expr) -> Result<InferredExpr, RibCompilationError> {
-        InferredExpr::from_expr(expr.clone(), &self.component_dependency, &self.global_variable_type_spec, &self.custom_instance_spec).map_err(
-            |err| {
-                let rib_type_error = RibTypeError::from_rib_type_error_internal(err, expr);
-                RibCompilationError::RibTypeError(Box::new(rib_type_error))
-            },
+        InferredExpr::from_expr(
+            expr.clone(),
+            &self.component_dependency,
+            &self.global_variable_type_spec,
+            &self.custom_instance_spec,
         )
+        .map_err(|err| {
+            let rib_type_error = RibTypeError::from_rib_type_error_internal(err, expr);
+            RibCompilationError::RibTypeError(Box::new(rib_type_error))
+        })
     }
 
     // Currently supports only 1 component and hence really only one InstanceType

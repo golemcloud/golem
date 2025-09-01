@@ -1529,8 +1529,8 @@ mod tests {
         get_analysed_type_variant, get_value_and_type, strip_spaces, RibTestDeps,
     };
     use crate::{
-        Expr, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler,
-        RibCompilerConfig, VariableId,
+        CustomInstanceSpec, Expr, GlobalVariableTypeSpec, InferredType, InstructionId,
+        InterfaceName, Path, RibCompiler, RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, f32, field, list, r#enum, record, result, s32, str, tuple, u32, u64, u8,
@@ -4735,15 +4735,39 @@ mod tests {
     #[test]
     async fn test_interpreter_custom_instance() {
         let expr = r#"
-                let inst = weather-agent("my-worker");
-                let result = inst.get-weather("bar");
-                result
+                let weather-agent = weather-agent("united");
+                let first-result = weather-agent.get-weather("bar");
+                let assistant-agent = assistant-agent("my assistant");
+                let second-result = assistant-agent.ask("foo", "bar");
+                "first-result: ${first-result}, second-result: ${second-result}"
             "#;
+
+        let custom_spec1 = CustomInstanceSpec {
+            instance_name: "weather-agent".to_string(),
+            parameter_types: vec![InferredType::from(&str())],
+            interface_name: Some(InterfaceName {
+                name: "weather-agent".to_string(),
+                version: None,
+            }),
+        };
+
+        let custom_spec2 = CustomInstanceSpec {
+            instance_name: "assistant-agent".to_string(),
+            parameter_types: vec![InferredType::from(&str())],
+            interface_name: Some(InterfaceName {
+                name: "assistant-agent".to_string(),
+                version: None,
+            }),
+        };
+
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces_simple(None);
 
-        let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
+        let compiler_config = RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+            vec![custom_spec1, custom_spec2],
+        );
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4753,7 +4777,7 @@ mod tests {
 
         assert_eq!(
             result.get_val().unwrap().value,
-            Value::String("foo".to_string())
+            Value::String("first-result: weather-result, second-result: ask-result".to_string())
         );
     }
 
@@ -5477,14 +5501,14 @@ mod tests {
                 match function_name.0.as_str() {
                     "my:agent/weather-agent.{get-weather}" => {
                         let result_value =
-                            ValueAndType::new(Value::String("foo".to_string()), str());
+                            ValueAndType::new(Value::String("weather-result".to_string()), str());
 
                         Ok(Some(result_value))
                     }
 
                     "my:agent/assistant-agent.{ask}" => {
                         let result_value =
-                            ValueAndType::new(Value::String("foo".to_string()), str());
+                            ValueAndType::new(Value::String("ask-result".to_string()), str());
 
                         Ok(Some(result_value))
                     }
