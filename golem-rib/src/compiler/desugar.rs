@@ -674,6 +674,7 @@ mod desugar_tests {
         RibCompiler::new(RibCompilerConfig::new(
             vec![ComponentDependency::new(component_dependency_key, metadata)],
             vec![],
+            vec![],
         ))
     }
 
