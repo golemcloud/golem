@@ -86,12 +86,29 @@ impl RibReplHandler {
             root_package_version: component.metadata.root_package_version().clone(),
         };
 
+        let custom_instance_spec = component
+            .metadata
+            .agent_types()
+            .iter()
+            .map(|agent_type| {
+                rib::CustomInstanceSpec::new(
+                    agent_type.type_name.to_string(),
+                    vec![],
+                    Some(rib::InterfaceName {
+                        name: agent_type.type_name.to_string(),
+                        version: None,
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+
         self.ctx
             .set_rib_repl_dependencies(ReplComponentDependencies {
                 component_dependencies: vec![ComponentDependency::new(
                     component_dependency_key,
                     component.metadata.exports().to_vec(),
                 )],
+                custom_instance_spec,
             })
             .await;
 
