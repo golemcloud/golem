@@ -27,10 +27,6 @@ pub struct ComponentDependencies {
 }
 
 impl ComponentDependencies {
-    pub fn size(&self) -> usize {
-        self.dependencies.len()
-    }
-
     pub fn get_variants(&self) -> Vec<TypeVariant> {
         let mut variants = vec![];
 

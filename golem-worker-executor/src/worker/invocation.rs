@@ -182,7 +182,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let mut store = store.as_context_mut();
 
     let parsed = ParsedFunctionName::parse(&full_function_name).map_err(|err| {
-        WorkerExecutorError::invalid_request(format!("Invalid function name: {err}"))
+        WorkerExecutorError::invalid_request(format!(
+            "Invalid function name {full_function_name}: {err}"
+        ))
     })?;
 
     let function = find_function(&mut store, instance, &parsed)?;

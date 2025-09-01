@@ -4,6 +4,7 @@ use crate::Command;
 pub trait UntypedCommand {
     fn run(&self, input: &str, repl_context: &mut ReplContext);
     fn command_name(&self) -> String;
+    fn command_args(&self) -> Vec<String>;
 }
 
 impl<T> UntypedCommand for T
@@ -26,5 +27,9 @@ where
 
     fn command_name(&self) -> String {
         T::name(self)
+    }
+
+    fn command_args(&self) -> Vec<String> {
+        T::command_argument_names()
     }
 }

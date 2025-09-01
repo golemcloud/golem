@@ -593,7 +593,7 @@ impl SafeDisplay for RetryConfig {
         let _ = writeln!(&mut result, "max delay: {:?}", self.max_delay);
         let _ = writeln!(&mut result, "multiplier: {}", self.multiplier);
         if let Some(max_jitter_factor) = &self.max_jitter_factor {
-            let _ = writeln!(&mut result, "max jitter factor: {:?}", max_jitter_factor);
+            let _ = writeln!(&mut result, "max jitter factor: {max_jitter_factor:?}");
         }
 
         result
