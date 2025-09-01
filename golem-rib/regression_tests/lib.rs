@@ -476,6 +476,7 @@ async fn test_rib_regression() {
     let compiler = RibCompiler::new(RibCompilerConfig::new(
         component_metadata::component_metadata(),
         vec![],
+        vec![],
     ));
 
     use std::time::Instant;

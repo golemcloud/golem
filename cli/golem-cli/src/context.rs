@@ -437,6 +437,7 @@ impl Context {
         let rib_repl_state = self.rib_repl_state.read().await;
         ReplComponentDependencies {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
+            custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
         }
     }
 
@@ -816,6 +817,7 @@ impl Default for RibReplState {
         Self {
             dependencies: ReplComponentDependencies {
                 component_dependencies: vec![],
+                custom_instance_spec: vec![],
             },
         }
     }

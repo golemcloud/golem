@@ -31,6 +31,7 @@ pub struct RibEdit {
     pub compiler_output: Option<ReplCompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
+    pub custom_instance_names: Vec<String>,
     pub repl_commands: Vec<String>,
 }
 
@@ -62,12 +63,17 @@ impl RibEdit {
                 "let", "if", "else", "match", "for", "in", "true", "false", "yield", "some",
                 "none", "ok", "err",
             ],
+            custom_instance_names: vec![],
             std_function_names: vec!["instance"],
             repl_commands: command_registry.get_commands(),
         }
     }
     pub fn update_progression(&mut self, compiler_output: &ReplCompilerOutput) {
         self.compiler_output = Some(compiler_output.clone());
+    }
+
+    pub fn update_std_function_names(&mut self, std_function_names: Vec<String>) {
+        self.custom_instance_names.extend(std_function_names);
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
@@ -319,6 +325,13 @@ impl Completer for RibEdit {
             }
 
             completions.extend(
+                self.custom_instance_names
+                    .iter()
+                    .filter(|name| name.starts_with(word))
+                    .cloned(),
+            );
+
+            completions.extend(
                 self.key_words
                     .iter()
                     .filter(|&&kw| kw.starts_with(word))
@@ -337,6 +350,10 @@ impl Completer for RibEdit {
                         }
                     }),
             )
+        } else {
+            completions.extend(self.custom_instance_names.clone());
+
+            completions.extend(self.std_function_names.iter().map(|&kw| kw.to_string()));
         }
 
         Ok((start, completions))
