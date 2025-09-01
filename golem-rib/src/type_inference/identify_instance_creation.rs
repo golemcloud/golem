@@ -32,7 +32,7 @@ use crate::{
 pub fn identify_instance_creation(
     expr: &mut Expr,
     component_dependencies: &ComponentDependencies,
-    custom_instance_spec: &Vec<CustomInstanceSpec>,
+    custom_instance_spec: &[CustomInstanceSpec],
 ) -> Result<(), RibTypeErrorInternal> {
     search_for_invalid_instance_declarations(expr)?;
     identify_instance_creation_with_worker(expr, component_dependencies, custom_instance_spec)
@@ -84,7 +84,7 @@ pub fn search_for_invalid_instance_declarations(
 pub fn identify_instance_creation_with_worker(
     expr: &mut Expr,
     component_dependency: &ComponentDependencies,
-    custom_instance_spec: &Vec<CustomInstanceSpec>,
+    custom_instance_spec: &[CustomInstanceSpec],
 ) -> Result<(), RibTypeErrorInternal> {
     let mut visitor = ExprVisitor::bottom_up(expr);
 
@@ -157,7 +157,7 @@ fn get_instance_creation_details(
     type_parameter: Option<TypeParameter>,
     args: &[Expr],
     component_dependency: &ComponentDependencies,
-    custom_instance_spec: &Vec<CustomInstanceSpec>,
+    custom_instance_spec: &[CustomInstanceSpec],
 ) -> Result<Option<InstanceCreationType>, String> {
     match call_type {
         CallType::Function { function_name, .. } => {

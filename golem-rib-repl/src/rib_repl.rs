@@ -111,7 +111,7 @@ impl RibRepl {
 
                 match dependencies {
                     Ok(dependencies) => {
-                        if &dependencies.component_dependencies.is_empty() {
+                        if dependencies.component_dependencies.is_empty() {
                             return Err(ReplBootstrapError::NoComponentsFound);
                         }
 

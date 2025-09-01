@@ -32,7 +32,7 @@ impl InferredExpr {
         expr: Expr,
         component_dependency: &ComponentDependencies,
         global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
-        custom_instance_spec: &Vec<CustomInstanceSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<InferredExpr, RibTypeErrorInternal> {
         let mut mutable_expr = expr;
 

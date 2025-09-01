@@ -1139,7 +1139,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
-        custom_instance_spec: &Vec<CustomInstanceSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
         self.infer_types_initial_phase(
             component_dependency,
@@ -1166,7 +1166,7 @@ impl Expr {
         &mut self,
         component_dependency: &ComponentDependencies,
         global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
-        custom_instance_spec: &Vec<CustomInstanceSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
         self.set_origin();
         self.bind_global_variable_types(global_variable_type_spec);
@@ -1245,7 +1245,7 @@ impl Expr {
     pub fn identify_instance_creation(
         &mut self,
         component_dependency: &ComponentDependencies,
-        custom_instance_spec: &Vec<CustomInstanceSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
         type_inference::identify_instance_creation(self, component_dependency, custom_instance_spec)
     }
