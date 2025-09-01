@@ -20,7 +20,7 @@ use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use anyhow::anyhow;
 use golem_common::model::PlanId;
-use golem_common::model::account::{Account, AccountId, NewAccountData, UpdatedAccountData};
+use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate};
 use golem_common::model::auth::{AccountAction, AccountRole, GlobalAction, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
@@ -83,11 +83,11 @@ impl AccountService {
                 info!("Creating initial account {} with id {}", name, account.id);
                 self.create_internal(
                     account_id.clone(),
-                    NewAccountData {
+                    AccountCreation {
                         name: account.name.clone(),
                         email: account.email.clone(),
                     },
-                    vec![account.role.clone()],
+                    vec![account.role],
                     PlanId(account.plan_id),
                     auth,
                 )
@@ -107,7 +107,7 @@ impl AccountService {
 
     pub async fn create(
         &self,
-        account: NewAccountData,
+        account: AccountCreation,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
         auth.authorize_global_action(GlobalAction::CreateAccount)?;
@@ -122,7 +122,7 @@ impl AccountService {
     pub async fn update(
         &self,
         account_id: &AccountId,
-        update: UpdatedAccountData,
+        update: AccountUpdate,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
         let mut account: Account = self.get(account_id, auth).await?;
@@ -220,7 +220,7 @@ impl AccountService {
     async fn create_internal(
         &self,
         id: AccountId,
-        account: NewAccountData,
+        account: AccountCreation,
         roles: Vec<AccountRole>,
         plan_id: PlanId,
         auth: &AuthCtx,

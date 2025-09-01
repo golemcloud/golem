@@ -123,6 +123,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
             CertificatesApi::new(services.auth_service.clone()),
             ComponentsApi::new(
                 services.component_service.clone(),
+                services.component_write_service.clone(),
                 services.auth_service.clone(),
             ),
             (
@@ -132,6 +133,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 EnvironmentCertificatesApi::new(services.auth_service.clone()),
                 EnvironmentComponentsApi::new(
                     services.component_service.clone(),
+                    services.component_write_service.clone(),
                     services.auth_service.clone(),
                 ),
                 EnvironmentsApi::new(

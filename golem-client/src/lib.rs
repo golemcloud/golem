@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::model::MultipartField;
-use golem_common::model::component::{NewComponentData, UpdatedComponentData};
-use golem_common::model::plugin_registration::NewPluginRegistrationData;
+use golem_common::model::component::{ComponentCreation, ComponentUpdate};
+use golem_common::model::plugin_registration::PluginRegistrationCreation;
 
 include!(concat!(env!("OUT_DIR"), "/src/lib.rs"));
 
 #[cfg(test)]
 test_r::enable!();
 
-impl MultipartField for NewComponentData {
+impl MultipartField for ComponentCreation {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }
@@ -31,7 +31,7 @@ impl MultipartField for NewComponentData {
     }
 }
 
-impl MultipartField for UpdatedComponentData {
+impl MultipartField for ComponentUpdate {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }
@@ -41,7 +41,7 @@ impl MultipartField for UpdatedComponentData {
     }
 }
 
-impl MultipartField for NewPluginRegistrationData {
+impl MultipartField for PluginRegistrationCreation {
     fn to_multipart_field(&self) -> String {
         serde_json::to_string(&self).unwrap()
     }

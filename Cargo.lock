@@ -4017,6 +4017,7 @@ dependencies = [
  "poem-openapi-derive",
  "prometheus 0.13.4",
  "prost 0.14.1",
+ "rayon",
  "reqwest 0.12.23",
  "sanitize-filename",
  "serde",

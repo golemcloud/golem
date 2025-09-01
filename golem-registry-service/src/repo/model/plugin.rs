@@ -17,9 +17,9 @@ use crate::model::plugin_registration::{
     AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
 };
 use anyhow::anyhow;
-use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::plugin::PluginWasmFileKey;
+use golem_common::model::component::ComponentId;
+use golem_common::model::plugin_registration::PluginWasmFileKey;
 use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, OplogProcessorPluginSpec, PluginRegistrationId,
 };

@@ -19,7 +19,6 @@ use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;
 use golem_common::model::component::{ComponentFilePermissions, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::plugin::PluginInstallationAction;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::{
     ComponentFileSystemNode, ComponentFileSystemNodeDetails, ScanCursor, Timestamp, WorkerFilter,
@@ -484,9 +483,4 @@ impl From<RevertLastInvocations> for golem_api_grpc::proto::golem::common::Rever
             number_of_invocations: value.number_of_invocations as i64,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-pub struct BatchPluginInstallationUpdates {
-    pub actions: Vec<PluginInstallationAction>,
 }

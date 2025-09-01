@@ -24,7 +24,7 @@ use crate::repo::plugin::PluginRepo;
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::AccountAction;
 use golem_common::model::plugin_registration::{
-    NewPluginRegistrationData, OplogProcessorPluginSpec, PluginRegistrationId, PluginSpecDto,
+    OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::replayable_stream::ReplayableStream;
@@ -101,7 +101,7 @@ impl PluginRegistrationService {
     pub async fn register_plugin(
         &self,
         account_id: AccountId,
-        data: NewPluginRegistrationData,
+        data: PluginRegistrationCreation,
         wasm_file: Option<NamedTempFile>,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {

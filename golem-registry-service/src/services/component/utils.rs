@@ -40,10 +40,13 @@ pub async fn prepare_component_files_for_upload(
     archive: NamedTempFile,
 ) -> Result<Vec<(ComponentFilePath, ZipEntryStream)>, ComponentError> {
     let archive = Arc::new(archive);
+    let archive_clone = archive.clone();
+    let reopened = tokio::task::spawn_blocking(move || archive_clone.reopen())
+        .await
+        .map_err(anyhow::Error::from)?
+        .map_err(anyhow::Error::from)?;
 
-    let tokio_file = tokio::fs::File::from_std(archive.reopen().map_err(anyhow::Error::from)?);
-
-    let mut buf_reader = BufReader::new(tokio_file);
+    let mut buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
 
     let mut zip_archive = ZipFileReader::with_tokio(&mut buf_reader)
         .await
@@ -93,9 +96,9 @@ impl ReplayableStream for ZipEntryStream {
     async fn make_stream(
         &self,
     ) -> Result<impl Stream<Item = Self::Item> + Send + 'static, Self::Error> {
-        let reopened = self.file.reopen()?;
-        let file = tokio::fs::File::from_std(reopened);
-        let buf_reader = BufReader::new(file);
+        let file = self.file.clone();
+        let reopened = tokio::task::spawn_blocking(move || file.reopen()).await??;
+        let buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
         let zip_archive = ZipFileReader::with_tokio(buf_reader).await?;
         let entry_reader = zip_archive.into_entry(self.index).await?;
         let stream = ReaderStream::new(entry_reader.compat());
@@ -104,9 +107,9 @@ impl ReplayableStream for ZipEntryStream {
     }
 
     async fn length(&self) -> Result<u64, Self::Error> {
-        let reopened = self.file.reopen()?;
-        let file = tokio::fs::File::from_std(reopened);
-        let buf_reader = BufReader::new(file);
+        let file = self.file.clone();
+        let reopened = tokio::task::spawn_blocking(move || file.reopen()).await??;
+        let buf_reader = BufReader::new(tokio::fs::File::from_std(reopened));
         let zip_archive = ZipFileReader::with_tokio(buf_reader).await?;
 
         Ok(zip_archive
@@ -208,7 +211,7 @@ pub fn _find_component_metadata_conflicts(
     }
 }
 
-pub fn _compose_components(socket_bytes: &[u8], plug_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
+pub fn compose_components(socket_bytes: &[u8], plug_bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
     let mut graph = CompositionGraph::new();
 
     let socket = Package::from_bytes("socket", None, socket_bytes, graph.types_mut())?;

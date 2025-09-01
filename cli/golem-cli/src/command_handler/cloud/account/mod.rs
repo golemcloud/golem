@@ -24,7 +24,7 @@ use crate::model::text::account::{AccountGetView, AccountNewView};
 use crate::model::text::fmt::log_error;
 use anyhow::bail;
 use golem_client::api::AccountClient;
-use golem_client::model::{Account, NewAccountData, UpdatedAccountData};
+use golem_client::model::{Account, AccountCreation, AccountUpdate};
 use golem_common::model::account::AccountId;
 use std::sync::Arc;
 
@@ -93,7 +93,7 @@ impl CloudAccountCommandHandler {
             .account
             .update_account(
                 &account.id.0,
-                &UpdatedAccountData {
+                &AccountUpdate {
                     name: account_name.unwrap_or(account.name),
                     email: account_email.unwrap_or(account.email),
                 },
@@ -112,7 +112,7 @@ impl CloudAccountCommandHandler {
             .golem_clients()
             .await?
             .account
-            .create_account(&NewAccountData {
+            .create_account(&AccountCreation {
                 name: account_name,
                 email: account_email,
             })

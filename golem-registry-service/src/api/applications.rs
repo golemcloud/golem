@@ -18,7 +18,7 @@ use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
 use crate::services::environment::EnvironmentService;
 use golem_common::api::Page;
-use golem_common::model::application::{Application, ApplicationId, UpdatedApplicationData};
+use golem_common::model::application::{Application, ApplicationId, ApplicationUpdate};
 use golem_common::model::environment::*;
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
@@ -98,7 +98,7 @@ impl ApplicationsApi {
     pub async fn update_application(
         &self,
         application_id: Path<ApplicationId>,
-        payload: Json<UpdatedApplicationData>,
+        payload: Json<ApplicationUpdate>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Application>> {
         let record = recorded_http_api_request!(
@@ -119,7 +119,7 @@ impl ApplicationsApi {
     async fn update_application_internal(
         &self,
         application_id: ApplicationId,
-        payload: UpdatedApplicationData,
+        payload: ApplicationUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
         let application = self
@@ -218,7 +218,7 @@ impl ApplicationsApi {
     pub async fn create_environment(
         &self,
         application_id: Path<ApplicationId>,
-        data: Json<NewEnvironmentData>,
+        data: Json<EnvironmentCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
         let record = recorded_http_api_request!(
@@ -239,7 +239,7 @@ impl ApplicationsApi {
     async fn create_environment_internal(
         &self,
         application_id: ApplicationId,
-        data: NewEnvironmentData,
+        data: EnvironmentCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
         let result = self

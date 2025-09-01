@@ -18,10 +18,8 @@ use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
 use golem_client::model::AnalysedType;
-use golem_common::base_model::ComponentId;
-use golem_common::model::component::{
-    ComponentName, ComponentType, InitialComponentFile, VersionedComponentId,
-};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentName, ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
@@ -94,7 +92,8 @@ pub struct SelectedComponents {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Component {
-    pub versioned_component_id: VersionedComponentId,
+    pub component_id: ComponentId,
+    pub revision: ComponentRevision,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub component_type: ComponentType,
@@ -105,10 +104,11 @@ pub struct Component {
     pub env: BTreeMap<String, String>,
 }
 
-impl From<golem_client::model::Component> for Component {
-    fn from(value: golem_client::model::Component) -> Self {
+impl From<golem_client::model::ComponentDto> for Component {
+    fn from(value: golem_client::model::ComponentDto) -> Self {
         Component {
-            versioned_component_id: value.versioned_component_id,
+            component_id: value.id,
+            revision: value.revision,
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
@@ -205,10 +205,10 @@ impl ComponentView {
         ComponentView {
             show_sensitive,
             component_name: value.component_name,
-            component_id: value.versioned_component_id.component_id,
+            component_id: value.component_id,
             component_type: value.component_type,
             component_version: value.metadata.root_package_version().clone(),
-            component_revision: value.versioned_component_id.version.0,
+            component_revision: value.revision.0,
             component_size: value.component_size,
             created_at: value.created_at,
             environment_id: value.environment_id,

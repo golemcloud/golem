@@ -30,12 +30,12 @@ declare_structs! {
         pub roles: Vec<EnvironmentRole>
     }
 
-    pub struct NewEnvironmentShareData {
+    pub struct EnvironmentShareCreation {
         pub grantee_account_id: AccountId,
         pub roles: Vec<EnvironmentRole>
     }
 
-    pub struct UpdatedEnvironmentShareData {
+    pub struct EnvironmentShareUpdate {
         pub new_roles: Vec<EnvironmentRole>
     }
 }

@@ -23,7 +23,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, NewEnvironmentShareData, UpdatedEnvironmentShareData,
+    EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
@@ -84,7 +84,7 @@ impl EnvironmentShareService {
     pub async fn create(
         &self,
         environment_id: EnvironmentId,
-        data: NewEnvironmentShareData,
+        data: EnvironmentShareCreation,
         actor: AccountId,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
@@ -119,7 +119,7 @@ impl EnvironmentShareService {
     pub async fn update(
         &self,
         environment_share_id: &EnvironmentShareId,
-        update: UpdatedEnvironmentShareData,
+        update: EnvironmentShareUpdate,
         auth: &AuthCtx,
     ) -> Result<EnvironmentShare, EnvironmentShareError> {
         let mut environment_share: EnvironmentShare = self.get(environment_share_id, auth).await?;

@@ -18,7 +18,7 @@ use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
 use golem_common::api::Page;
 use golem_common::model::account::AccountId;
-use golem_common::model::application::{Application, ApplicationName, NewApplicationData};
+use golem_common::model::application::{Application, ApplicationCreation, ApplicationName};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -140,7 +140,7 @@ impl AccountApplicationsApi {
     pub async fn create_application(
         &self,
         account_id: Path<AccountId>,
-        data: Json<NewApplicationData>,
+        data: Json<ApplicationCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Application>> {
         let record = recorded_http_api_request!(
@@ -161,7 +161,7 @@ impl AccountApplicationsApi {
     async fn create_application_internal(
         &self,
         account_id: AccountId,
-        data: NewApplicationData,
+        data: ApplicationCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<Application>> {
         let result = self

@@ -36,11 +36,9 @@ pub mod invocation_context;
 pub mod login;
 pub mod lucene;
 pub mod oplog;
-pub mod plugin;
 pub mod plugin_registration;
 #[cfg(feature = "poem")]
 pub mod poem;
-pub mod project;
 #[cfg(feature = "protobuf")]
 pub mod protobuf;
 pub mod public_oplog;
@@ -51,7 +49,9 @@ pub mod worker;
 
 pub use crate::base_model::*;
 
-use self::component::{ComponentFilePermissions, ComponentRevision};
+use self::component::{
+    ComponentFilePermissions, ComponentId, ComponentRevision, PluginInstallationId,
+};
 use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};

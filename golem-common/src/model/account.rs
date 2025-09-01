@@ -34,12 +34,12 @@ declare_structs! {
         pub roles: Vec<AccountRole>
     }
 
-    pub struct NewAccountData {
+    pub struct AccountCreation {
         pub name: String,
         pub email: String,
     }
 
-    pub struct UpdatedAccountData {
+    pub struct AccountUpdate {
         pub name: String,
         pub email: String,
     }

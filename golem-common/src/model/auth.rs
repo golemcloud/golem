@@ -38,11 +38,6 @@ declare_structs! {
         pub created_at: chrono::DateTime<Utc>,
         pub expires_at: chrono::DateTime<Utc>,
     }
-
-    pub struct AccountAuthorisation {
-        pub token: Token,
-        pub roles: Vec<AccountRole>,
-    }
 }
 
 impl TokenWithSecret {
@@ -57,14 +52,14 @@ impl TokenWithSecret {
 }
 
 declare_enums! {
-    #[derive(Eq, Hash, FromRepr, EnumIter)]
+    #[derive(Hash, FromRepr, EnumIter)]
     #[repr(i32)]
     pub enum AccountRole {
         Admin = 0,
         MarketingAdmin = 1,
     }
 
-    #[derive(Eq, Hash, FromRepr, EnumIter)]
+    #[derive(Hash, FromRepr, EnumIter)]
     #[repr(i32)]
     pub enum EnvironmentRole {
         Admin = 0,

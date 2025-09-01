@@ -19,8 +19,8 @@ pub mod environment;
 
 use crate::declare_structs;
 use crate::model::api_definition::ApiDefinitionId;
+use crate::model::component::ComponentId;
 use crate::model::component::ComponentRevision;
-use crate::model::ComponentId;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 

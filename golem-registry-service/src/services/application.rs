@@ -19,8 +19,8 @@ use crate::repo::model::application::{ApplicationRepoError, ApplicationRevisionR
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
-    Application, ApplicationId, ApplicationName, ApplicationRevision, NewApplicationData,
-    UpdatedApplicationData,
+    Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
+    ApplicationUpdate,
 };
 use golem_common::model::auth::AccountAction;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -81,7 +81,7 @@ impl ApplicationService {
     pub async fn create(
         &self,
         account_id: AccountId,
-        data: NewApplicationData,
+        data: ApplicationCreation,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
         self.account_service
@@ -124,7 +124,7 @@ impl ApplicationService {
     pub async fn update(
         &self,
         application_id: &ApplicationId,
-        update: UpdatedApplicationData,
+        update: ApplicationUpdate,
         auth: &AuthCtx,
     ) -> Result<Application, ApplicationError> {
         let mut application = self.get(application_id, auth).await?;

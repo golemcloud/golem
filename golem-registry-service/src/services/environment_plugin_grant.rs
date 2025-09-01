@@ -24,7 +24,7 @@ use crate::repo::model::environment_plugin_grant::{
 use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, EnvironmentPluginGrantId, NewEnvironmentPluginGrantData,
+    EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -88,7 +88,7 @@ impl EnvironmentPluginGrantService {
     pub async fn create(
         &self,
         environment_id: EnvironmentId,
-        data: NewEnvironmentPluginGrantData,
+        data: EnvironmentPluginGrantCreation,
         auth: &AuthCtx,
     ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
         let environment = self
