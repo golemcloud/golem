@@ -254,6 +254,10 @@ pub mod service {
                     status_code: 409,
                     message: error.error,
                 },
+                golem_client::api::ComponentError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
                 golem_client::api::ComponentError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
@@ -345,47 +349,14 @@ pub mod service {
                     message: error.error,
                 },
                 golem_client::api::PluginError::Error409(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
+                golem_client::api::PluginError::Error422(error) => ServiceErrorResponse {
                     status_code: 409,
                     message: error.error,
                 },
                 golem_client::api::PluginError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
-    impl HasServiceName for golem_client::api::ProjectError {
-        fn service_name() -> &'static str {
-            "Project"
-        }
-    }
-
-    impl From<golem_client::api::ProjectError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::ProjectError) -> Self {
-            match value {
-                golem_client::api::ProjectError::Error400(errors) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: errors.errors.join("\n"),
-                },
-                golem_client::api::ProjectError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                golem_client::api::ProjectError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                golem_client::api::ProjectError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                golem_client::api::ProjectError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                golem_client::api::ProjectError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
                 },
@@ -422,6 +393,10 @@ pub mod service {
                 },
                 golem_client::api::LoginLoginOauth2Error::Error409(error) => ServiceErrorResponse {
                     status_code: 409,
+                    message: error.error,
+                },
+                golem_client::api::LoginLoginOauth2Error::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
                     message: error.error,
                 },
                 golem_client::api::LoginLoginOauth2Error::Error500(error) => ServiceErrorResponse {
@@ -471,6 +446,12 @@ pub mod service {
                         message: error.error,
                     }
                 }
+                golem_client::api::LoginCurrentLoginTokenError::Error422(error) => {
+                    ServiceErrorResponse {
+                        status_code: 422,
+                        message: error.error,
+                    }
+                }
                 golem_client::api::LoginCurrentLoginTokenError::Error500(error) => {
                     ServiceErrorResponse {
                         status_code: 500,
@@ -481,46 +462,52 @@ pub mod service {
         }
     }
 
-    impl HasServiceName for golem_client::api::LoginStartLoginOauth2Error {
+    impl HasServiceName for golem_client::api::LoginStartOauth2DeviceFlowError {
         fn service_name() -> &'static str {
             "Cloud Login"
         }
     }
 
-    impl From<golem_client::api::LoginStartLoginOauth2Error> for ServiceErrorResponse {
-        fn from(value: golem_client::api::LoginStartLoginOauth2Error) -> Self {
+    impl From<golem_client::api::LoginStartOauth2DeviceFlowError> for ServiceErrorResponse {
+        fn from(value: golem_client::api::LoginStartOauth2DeviceFlowError) -> Self {
             match value {
-                golem_client::api::LoginStartLoginOauth2Error::Error400(errors) => {
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error400(errors) => {
                     ServiceErrorResponse {
                         status_code: 400,
                         message: errors.errors.join("\n"),
                     }
                 }
-                golem_client::api::LoginStartLoginOauth2Error::Error401(error) => {
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error401(error) => {
                     ServiceErrorResponse {
                         status_code: 401,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginStartLoginOauth2Error::Error403(error) => {
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error403(error) => {
                     ServiceErrorResponse {
                         status_code: 403,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginStartLoginOauth2Error::Error404(error) => {
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error404(error) => {
                     ServiceErrorResponse {
                         status_code: 404,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginStartLoginOauth2Error::Error409(error) => {
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error409(error) => {
                     ServiceErrorResponse {
                         status_code: 409,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginStartLoginOauth2Error::Error500(error) => {
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error422(error) => {
+                    ServiceErrorResponse {
+                        status_code: 422,
+                        message: error.error,
+                    }
+                }
+                golem_client::api::LoginStartOauth2DeviceFlowError::Error500(error) => {
                     ServiceErrorResponse {
                         status_code: 500,
                         message: error.error,
@@ -530,46 +517,52 @@ pub mod service {
         }
     }
 
-    impl HasServiceName for golem_client::api::LoginCompleteLoginOauth2Error {
+    impl HasServiceName for golem_client::api::LoginCompleteOauth2DeviceFlowError {
         fn service_name() -> &'static str {
             "Cloud Login"
         }
     }
 
-    impl From<golem_client::api::LoginCompleteLoginOauth2Error> for ServiceErrorResponse {
-        fn from(value: golem_client::api::LoginCompleteLoginOauth2Error) -> Self {
+    impl From<golem_client::api::LoginCompleteOauth2DeviceFlowError> for ServiceErrorResponse {
+        fn from(value: golem_client::api::LoginCompleteOauth2DeviceFlowError) -> Self {
             match value {
-                golem_client::api::LoginCompleteLoginOauth2Error::Error400(errors) => {
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error400(errors) => {
                     ServiceErrorResponse {
                         status_code: 400,
                         message: errors.errors.join("\n"),
                     }
                 }
-                golem_client::api::LoginCompleteLoginOauth2Error::Error401(error) => {
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error401(error) => {
                     ServiceErrorResponse {
                         status_code: 401,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginCompleteLoginOauth2Error::Error403(error) => {
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error403(error) => {
                     ServiceErrorResponse {
                         status_code: 403,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginCompleteLoginOauth2Error::Error404(error) => {
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error404(error) => {
                     ServiceErrorResponse {
                         status_code: 404,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginCompleteLoginOauth2Error::Error409(error) => {
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error409(error) => {
                     ServiceErrorResponse {
                         status_code: 409,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginCompleteLoginOauth2Error::Error500(error) => {
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error422(error) => {
+                    ServiceErrorResponse {
+                        status_code: 422,
+                        message: error.error,
+                    }
+                }
+                golem_client::api::LoginCompleteOauth2DeviceFlowError::Error500(error) => {
                     ServiceErrorResponse {
                         status_code: 500,
                         message: error.error,
@@ -579,46 +572,52 @@ pub mod service {
         }
     }
 
-    impl HasServiceName for golem_client::api::LoginOauth2WebFlowStartError {
+    impl HasServiceName for golem_client::api::LoginStartOauth2WebflowError {
         fn service_name() -> &'static str {
             "Cloud Login"
         }
     }
 
-    impl From<golem_client::api::LoginOauth2WebFlowStartError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::LoginOauth2WebFlowStartError) -> Self {
+    impl From<golem_client::api::LoginStartOauth2WebflowError> for ServiceErrorResponse {
+        fn from(value: golem_client::api::LoginStartOauth2WebflowError) -> Self {
             match value {
-                golem_client::api::LoginOauth2WebFlowStartError::Error400(errors) => {
+                golem_client::api::LoginStartOauth2WebflowError::Error400(errors) => {
                     ServiceErrorResponse {
                         status_code: 400,
                         message: errors.errors.join("\n"),
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowStartError::Error401(error) => {
+                golem_client::api::LoginStartOauth2WebflowError::Error401(error) => {
                     ServiceErrorResponse {
                         status_code: 401,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowStartError::Error403(error) => {
+                golem_client::api::LoginStartOauth2WebflowError::Error403(error) => {
                     ServiceErrorResponse {
                         status_code: 403,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowStartError::Error404(error) => {
+                golem_client::api::LoginStartOauth2WebflowError::Error404(error) => {
                     ServiceErrorResponse {
                         status_code: 404,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowStartError::Error409(error) => {
+                golem_client::api::LoginStartOauth2WebflowError::Error409(error) => {
                     ServiceErrorResponse {
                         status_code: 409,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowStartError::Error500(error) => {
+                golem_client::api::LoginStartOauth2WebflowError::Error422(error) => {
+                    ServiceErrorResponse {
+                        status_code: 422,
+                        message: error.error,
+                    }
+                }
+                golem_client::api::LoginStartOauth2WebflowError::Error500(error) => {
                     ServiceErrorResponse {
                         status_code: 500,
                         message: error.error,
@@ -628,52 +627,58 @@ pub mod service {
         }
     }
 
-    impl HasServiceName for golem_client::api::LoginOauth2WebFlowCallbackGithubError {
+    impl HasServiceName for golem_client::api::LoginSubmitOauth2WebflowCallbackError {
         fn service_name() -> &'static str {
             "Cloud Login"
         }
     }
 
-    impl From<golem_client::api::LoginOauth2WebFlowCallbackGithubError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::LoginOauth2WebFlowCallbackGithubError) -> Self {
+    impl From<golem_client::api::LoginSubmitOauth2WebflowCallbackError> for ServiceErrorResponse {
+        fn from(value: golem_client::api::LoginSubmitOauth2WebflowCallbackError) -> Self {
             match value {
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error302(_) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error302(_) => {
                     ServiceErrorResponse {
                         status_code: 302,
                         message: "WebFlowCallbackSuccessResponse".to_string(),
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error400(errors) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error400(errors) => {
                     ServiceErrorResponse {
                         status_code: 400,
                         message: errors.errors.join("\n"),
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error401(error) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error401(error) => {
                     ServiceErrorResponse {
                         status_code: 401,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error403(error) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error403(error) => {
                     ServiceErrorResponse {
                         status_code: 403,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error404(error) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error404(error) => {
                     ServiceErrorResponse {
                         status_code: 404,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error409(error) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error409(error) => {
                     ServiceErrorResponse {
                         status_code: 409,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowCallbackGithubError::Error500(error) => {
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error422(error) => {
+                    ServiceErrorResponse {
+                        status_code: 422,
+                        message: error.error,
+                    }
+                }
+                golem_client::api::LoginSubmitOauth2WebflowCallbackError::Error500(error) => {
                     ServiceErrorResponse {
                         status_code: 500,
                         message: error.error,
@@ -683,52 +688,58 @@ pub mod service {
         }
     }
 
-    impl HasServiceName for golem_client::api::LoginOauth2WebFlowPollError {
+    impl HasServiceName for golem_client::api::LoginPollOauth2WebflowError {
         fn service_name() -> &'static str {
             "Cloud Login"
         }
     }
 
-    impl From<golem_client::api::LoginOauth2WebFlowPollError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::LoginOauth2WebFlowPollError) -> Self {
+    impl From<golem_client::api::LoginPollOauth2WebflowError> for ServiceErrorResponse {
+        fn from(value: golem_client::api::LoginPollOauth2WebflowError) -> Self {
             match value {
-                golem_client::api::LoginOauth2WebFlowPollError::Error202(_) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error202(_) => {
                     ServiceErrorResponse {
                         status_code: 202,
                         message: "PendingFlowCompletionResponse".to_string(),
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowPollError::Error400(errors) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error400(errors) => {
                     ServiceErrorResponse {
                         status_code: 400,
                         message: errors.errors.join("\n"),
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowPollError::Error401(error) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error401(error) => {
                     ServiceErrorResponse {
                         status_code: 401,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowPollError::Error403(error) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error403(error) => {
                     ServiceErrorResponse {
                         status_code: 403,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowPollError::Error404(error) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error404(error) => {
                     ServiceErrorResponse {
                         status_code: 404,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowPollError::Error409(error) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error409(error) => {
                     ServiceErrorResponse {
                         status_code: 409,
                         message: error.error,
                     }
                 }
-                golem_client::api::LoginOauth2WebFlowPollError::Error500(error) => {
+                golem_client::api::LoginPollOauth2WebflowError::Error422(error) => {
+                    ServiceErrorResponse {
+                        status_code: 422,
+                        message: error.error,
+                    }
+                }
+                golem_client::api::LoginPollOauth2WebflowError::Error500(error) => {
                     ServiceErrorResponse {
                         status_code: 500,
                         message: error.error,
@@ -765,6 +776,10 @@ pub mod service {
                 },
                 golem_client::api::ApiDefinitionError::Error409(error) => ServiceErrorResponse {
                     status_code: 409,
+                    message: error.error,
+                },
+                golem_client::api::ApiDefinitionError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
                     message: error.error,
                 },
                 golem_client::api::ApiDefinitionError::Error500(error) => ServiceErrorResponse {
@@ -804,6 +819,10 @@ pub mod service {
                     status_code: 409,
                     message: error.error,
                 },
+                golem_client::api::ApiDeploymentError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
                 golem_client::api::ApiDeploymentError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
@@ -839,6 +858,10 @@ pub mod service {
                 },
                 golem_client::api::ApiSecurityError::Error409(error) => ServiceErrorResponse {
                     status_code: 409,
+                    message: error.error,
+                },
+                golem_client::api::ApiSecurityError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
                     message: error.error,
                 },
                 golem_client::api::ApiSecurityError::Error500(error) => ServiceErrorResponse {
@@ -878,6 +901,10 @@ pub mod service {
                     status_code: 409,
                     message: error.error,
                 },
+                golem_client::api::TokenError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
                 golem_client::api::TokenError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
@@ -915,118 +942,11 @@ pub mod service {
                     status_code: 409,
                     message: error.error,
                 },
+                golem_client::api::AccountError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
+                    message: error.error,
+                },
                 golem_client::api::AccountError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
-    impl HasServiceName for golem_client::api::GrantError {
-        fn service_name() -> &'static str {
-            "Grant"
-        }
-    }
-
-    impl From<golem_client::api::GrantError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::GrantError) -> Self {
-            match value {
-                golem_client::api::GrantError::Error400(error) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: error.errors.iter().join("\n"),
-                },
-                golem_client::api::GrantError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                golem_client::api::GrantError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                golem_client::api::GrantError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                golem_client::api::GrantError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                golem_client::api::GrantError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
-    impl HasServiceName for golem_client::api::ProjectPolicyError {
-        fn service_name() -> &'static str {
-            "Project Policy"
-        }
-    }
-
-    impl From<golem_client::api::ProjectPolicyError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::ProjectPolicyError) -> Self {
-            match value {
-                golem_client::api::ProjectPolicyError::Error400(error) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: error.errors.iter().join("\n"),
-                },
-                golem_client::api::ProjectPolicyError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                golem_client::api::ProjectPolicyError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                golem_client::api::ProjectPolicyError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                golem_client::api::ProjectPolicyError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                golem_client::api::ProjectPolicyError::Error500(error) => ServiceErrorResponse {
-                    status_code: 500,
-                    message: error.error,
-                },
-            }
-        }
-    }
-
-    impl HasServiceName for golem_client::api::ProjectGrantError {
-        fn service_name() -> &'static str {
-            "Project Grant"
-        }
-    }
-
-    impl From<golem_client::api::ProjectGrantError> for ServiceErrorResponse {
-        fn from(value: golem_client::api::ProjectGrantError) -> Self {
-            match value {
-                golem_client::api::ProjectGrantError::Error400(error) => ServiceErrorResponse {
-                    status_code: 400,
-                    message: error.errors.iter().join("\n"),
-                },
-                golem_client::api::ProjectGrantError::Error401(error) => ServiceErrorResponse {
-                    status_code: 401,
-                    message: error.error,
-                },
-                golem_client::api::ProjectGrantError::Error403(error) => ServiceErrorResponse {
-                    status_code: 403,
-                    message: error.error,
-                },
-                golem_client::api::ProjectGrantError::Error404(error) => ServiceErrorResponse {
-                    status_code: 404,
-                    message: error.error,
-                },
-                golem_client::api::ProjectGrantError::Error409(error) => ServiceErrorResponse {
-                    status_code: 409,
-                    message: error.error,
-                },
-                golem_client::api::ProjectGrantError::Error500(error) => ServiceErrorResponse {
                     status_code: 500,
                     message: error.error,
                 },
@@ -1061,6 +981,10 @@ pub mod service {
                 },
                 golem_client::api::ApiCertificateError::Error409(error) => ServiceErrorResponse {
                     status_code: 404,
+                    message: error.error,
+                },
+                golem_client::api::ApiCertificateError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
                     message: error.error,
                 },
                 golem_client::api::ApiCertificateError::Error500(error) => ServiceErrorResponse {
@@ -1098,6 +1022,10 @@ pub mod service {
                 },
                 golem_client::api::ApiDomainError::Error409(error) => ServiceErrorResponse {
                     status_code: 404,
+                    message: error.error,
+                },
+                golem_client::api::ApiDomainError::Error422(error) => ServiceErrorResponse {
+                    status_code: 422,
                     message: error.error,
                 },
                 golem_client::api::ApiDomainError::Error500(error) => ServiceErrorResponse {

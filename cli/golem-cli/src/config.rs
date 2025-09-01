@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::Format;
+use crate::model::format::Format;
 use anyhow::{anyhow, bail, Context};
 use chrono::{DateTime, Utc};
-use golem_client::model::TokenSecret;
+use golem_client::model::TokenWithSecret;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -307,9 +307,8 @@ impl Config {
 
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
-    pub component_url: Url,
+    pub registry_url: Url,
     pub worker_url: Url,
-    pub cloud_url: Url,
     pub service_http_client_config: HttpClientConfig,
     pub invoke_http_client_config: HttpClientConfig,
     pub health_check_http_client_config: HttpClientConfig,
@@ -319,23 +318,17 @@ pub struct ClientConfig {
 impl From<&Profile> for ClientConfig {
     fn from(profile: &Profile) -> Self {
         let default_cloud_url = Url::parse(CLOUD_URL).unwrap();
-        let component_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
-        let cloud_url = profile
-            .custom_cloud_url
-            .clone()
-            .unwrap_or_else(|| component_url.clone());
-
+        let registry_url = profile.custom_url.clone().unwrap_or(default_cloud_url);
         let worker_url = profile
             .custom_worker_url
             .clone()
-            .unwrap_or_else(|| component_url.clone());
+            .unwrap_or_else(|| registry_url.clone());
 
         let allow_insecure = profile.allow_insecure;
 
         ClientConfig {
-            component_url,
+            registry_url,
             worker_url,
-            cloud_url,
             service_http_client_config: HttpClientConfig::new_for_service_calls(allow_insecure),
             invoke_http_client_config: HttpClientConfig::new_for_invoke(allow_insecure),
             health_check_http_client_config: HttpClientConfig::new_for_health_check(allow_insecure),
@@ -433,6 +426,18 @@ impl AuthenticationConfig {
             secret: AuthSecret(token),
         })
     }
+
+    pub fn from_token_with_secret(token_with_secret: TokenWithSecret) -> Self {
+        Self::OAuth2(OAuth2AuthenticationConfig {
+            data: Some(OAuth2AuthenticationData {
+                id: token_with_secret.id.0,
+                account_id: token_with_secret.account_id.0,
+                created_at: token_with_secret.created_at,
+                expires_at: token_with_secret.expires_at,
+                secret: token_with_secret.secret.0.into(),
+            }),
+        })
+    }
 }
 
 impl Default for AuthenticationConfig {
@@ -451,7 +456,7 @@ pub struct OAuth2AuthenticationConfig {
 #[serde(rename_all = "camelCase")]
 pub struct OAuth2AuthenticationData {
     pub id: Uuid,
-    pub account_id: String,
+    pub account_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub secret: AuthSecret,
@@ -466,6 +471,12 @@ pub struct StaticAuthenticationConfig {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 pub struct AuthSecret(pub Uuid);
 
+impl From<Uuid> for AuthSecret {
+    fn from(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+}
+
 impl Display for AuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_str("*******")
@@ -475,11 +486,5 @@ impl Display for AuthSecret {
 impl Debug for AuthSecret {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("AuthSecret").field(&"*******").finish()
-    }
-}
-
-impl From<AuthSecret> for TokenSecret {
-    fn from(value: AuthSecret) -> Self {
-        Self { value: value.0 }
     }
 }

@@ -21,7 +21,6 @@ use crate::model::AccountId;
 use crate::model::Role;
 
 use crate::log::log_action;
-use golem_client::api::GrantClient;
 use std::sync::Arc;
 
 pub struct CloudAccountGrantCommandHandler {

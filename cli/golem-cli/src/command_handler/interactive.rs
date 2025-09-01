@@ -20,13 +20,14 @@ use crate::model::app::{
     AppComponentName, BinaryComponentSource, DependencyType, HttpApiDeploymentSite,
 };
 use crate::model::component::AppComponentType;
+use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_warn};
-use crate::model::{ComponentName, Format, NewInteractiveApp, WorkerName};
+use crate::model::worker::WorkerName;
+use crate::model::NewInteractiveApp;
 use anyhow::bail;
 use colored::Colorize;
-use golem_client::model::Account;
-use golem_client::model::HttpApiDefinitionRequest;
-use golem_common::model::ComponentVersion;
+use golem_client::model::{Account, CreateHttpApiDefinitionRequest};
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage, PackageName};
 use inquire::error::InquireResult;
 use inquire::validator::{ErrorMessage, Validation};
@@ -132,14 +133,14 @@ impl InteractiveHandler {
         &self,
         component_name: &ComponentName,
         worker_name: &WorkerName,
-        target_version: ComponentVersion,
+        target_revision: ComponentRevision,
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Worker {}/{} will be updated to the latest component version: {}. Do you want to continue?",
+            format!("Worker {}/{} will be updated to the latest component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
-                    target_version.to_string().log_color_highlight()
+                    target_revision.to_string().log_color_highlight()
             ),
             None,
         )
@@ -507,7 +508,7 @@ impl InteractiveHandler {
 
     pub fn select_new_api_definition_version(
         &self,
-        api_definition: &HttpApiDefinitionRequest,
+        api_definition: &CreateHttpApiDefinitionRequest,
     ) -> anyhow::Result<Option<String>> {
         Text::new("Please specify a new API definition version:")
             .with_initial_value(&api_definition.version)

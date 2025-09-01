@@ -16,14 +16,14 @@ use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::logln;
-use crate::model::component::ComponentView;
+use crate::model::component::{ComponentNameMatchKind, ComponentVersionSelection, ComponentView};
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
-use crate::model::{
-    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, IdempotencyKey, WorkerName,
-};
+use crate::model::worker::WorkerName;
 use anyhow::bail;
 use async_trait::async_trait;
+use golem_common::model::component::ComponentName;
+use golem_common::model::IdempotencyKey;
 use golem_rib_repl::{
     ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
@@ -72,7 +72,7 @@ impl RibReplHandler {
             .ctx
             .component_handler()
             .component_by_name_with_auto_deploy(
-                selected_components.project.as_ref(),
+                selected_components.environment.as_ref(),
                 ComponentNameMatchKind::App,
                 &component_name,
                 component_version.map(|v| v.into()),
@@ -81,7 +81,7 @@ impl RibReplHandler {
 
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
-            component_id: component.versioned_component_id.component_id,
+            component_id: component.versioned_component_id.component_id.0,
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };
@@ -180,7 +180,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
                 &worker_name,
                 function_name,
                 arguments,
-                IdempotencyKey::new(),
+                IdempotencyKey::fresh(),
                 false,
                 None,
             )

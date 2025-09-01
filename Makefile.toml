@@ -649,6 +649,7 @@ args = [
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",
+    "./golem-not-yet-ported-temp.yaml",
     "--output-yaml",
     "./target/golem-service.yaml",
 ]

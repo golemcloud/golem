@@ -516,6 +516,30 @@ impl Display for IdempotencyKey {
     }
 }
 
+impl From<&str> for IdempotencyKey {
+    fn from(s: &str) -> Self {
+        IdempotencyKey {
+            value: s.to_string(),
+        }
+    }
+}
+
+impl From<String> for IdempotencyKey {
+    fn from(s: String) -> Self {
+        IdempotencyKey { value: s }
+    }
+}
+
+impl FromStr for IdempotencyKey {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(IdempotencyKey {
+            value: s.to_string(),
+        })
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,

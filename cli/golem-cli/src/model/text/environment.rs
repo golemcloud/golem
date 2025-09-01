@@ -12,6 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// TODO: atomic: port to env
+
+/*
 use crate::model::project::ProjectView;
 use crate::model::text::fmt::*;
 use cli_table::Table;
@@ -185,3 +188,4 @@ impl MessageWithFields for ProjectPolicyGetView {
         project_policy_fields(&self.0)
     }
 }
+*/

@@ -25,21 +25,19 @@ use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, logln, LogColorize, LogIndent, LogOutput, Output};
-use crate::model::api::HttpApiDeployMode;
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::{ComponentName, WorkerUpdateMode};
+use crate::model::worker::WorkerUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
-use golem_client::api::AgentTypesClient;
+use golem_common::model::component::ComponentName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
 };
 use itertools::Itertools;
-use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use strum::IntoEnumIterator;
@@ -64,13 +62,9 @@ impl AppCommandHandler {
                 build: build_args,
             } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
-                component_name,
                 force_build,
                 update_or_redeploy,
-            } => {
-                self.cmd_deploy(component_name, force_build, update_or_redeploy)
-                    .await
-            }
+            } => self.cmd_deploy(force_build, update_or_redeploy).await,
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             AppSubcommand::UpdateWorkers {
                 component_name,
@@ -289,12 +283,10 @@ impl AppCommandHandler {
 
     async fn cmd_deploy(
         &self,
-        component_name: AppOptionalComponentNames,
         force_build: ForceBuildArg,
         update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(component_name, force_build, update_or_redeploy)
-            .await
+        self.deploy(force_build, update_or_redeploy).await
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -383,6 +375,8 @@ impl AppCommandHandler {
     }
 
     async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let project = self
             .ctx
             .cloud_project_handler()
@@ -398,6 +392,8 @@ impl AppCommandHandler {
         self.ctx.log_handler().log_view(&result);
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_diagnose(&self, component_names: AppOptionalComponentNames) -> anyhow::Result<()> {
@@ -410,50 +406,17 @@ impl AppCommandHandler {
 
     async fn deploy(
         &self,
-        component_name: AppOptionalComponentNames,
-        force_build: ForceBuildArg,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        _force_build: ForceBuildArg,
+        _update_or_redeploy: UpdateOrRedeployArgs,
     ) -> anyhow::Result<()> {
-        let is_any_component_explicitly_selected = !component_name.component_name.is_empty();
-
-        let project = self
+        let _environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(None)
+            .environment_handler()
+            .select_environment(None)
             .await?;
 
-        let components = self
-            .ctx
-            .component_handler()
-            .deploy(
-                project.as_ref(),
-                component_name.component_name,
-                Some(force_build),
-                &ApplicationComponentSelectMode::All,
-                &update_or_redeploy,
-            )
-            .await?;
-
-        let components = components
-            .into_iter()
-            .map(|component| (component.component_name.0.clone(), component))
-            .collect::<BTreeMap<_, _>>();
-
-        self.ctx
-            .api_handler()
-            .deploy(
-                project.as_ref(),
-                if is_any_component_explicitly_selected {
-                    HttpApiDeployMode::Matching
-                } else {
-                    HttpApiDeployMode::All
-                },
-                &update_or_redeploy,
-                &components,
-            )
-            .await?;
-
-        Ok(())
+        // TODO: atomic
+        todo!();
     }
 
     pub async fn build(
@@ -494,13 +457,14 @@ impl AppCommandHandler {
         let selected_component_names = app_ctx
             .selected_component_names()
             .iter()
-            .map(|cn| cn.as_str().into())
-            .collect::<Vec<ComponentName>>();
+            .map(|cn| cn.as_str().parse())
+            .collect::<Result<Vec<ComponentName>, _>>()
+            .map_err(|err| anyhow!(err))?;
 
-        let project = self
+        let environment = self
             .ctx
-            .cloud_project_handler()
-            .opt_select_project(None)
+            .environment_handler()
+            .select_environment(None)
             .await?;
 
         let mut components = Vec::with_capacity(selected_component_names.len());
@@ -508,7 +472,7 @@ impl AppCommandHandler {
             match self
                 .ctx
                 .component_handler()
-                .component(project.as_ref(), component_name.into(), None)
+                .component(Some(&environment), component_name.into(), None)
                 .await?
             {
                 Some(component) => {

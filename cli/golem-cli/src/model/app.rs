@@ -10,7 +10,7 @@ use crate::wasm_rpc_stubgen::naming;
 use crate::wasm_rpc_stubgen::naming::wit::package_dep_dir_name_from_parser;
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::anyhow;
-use golem_common::model::{ComponentFilePathWithPermissions, ComponentFilePermissions};
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
@@ -1133,6 +1133,18 @@ impl ComponentProperties {
 }
 
 #[derive(Clone, Debug)]
+pub struct ComponentFilePathWithPermissions {
+    pub path: ComponentFilePath,
+    pub permissions: ComponentFilePermissions,
+}
+
+impl ComponentFilePathWithPermissions {
+    pub fn extend_path(&mut self, path: &str) -> Result<(), String> {
+        self.path.extend(path)
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct InitialComponentFile {
     pub source: InitialComponentFileSource,
     pub target: ComponentFilePathWithPermissions,
@@ -1270,17 +1282,16 @@ mod app_builder {
     use crate::fuzzy;
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
-    use crate::model::api::to_method_pattern;
     use crate::model::app::{
         AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component,
         ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName,
         HttpApiDeploymentSite, ResolvedComponentProperties, TemplateName, WithSource,
     };
     use crate::model::app_raw;
-    use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
     use crate::model::text::fmt::format_rib_source_for_error;
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use colored::Colorize;
+    use golem_common::model::api_definition::RouteMethod;
     use heck::{
         ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase,
         ToSnakeCase, ToTitleCase, ToTrainCase, ToUpperCamelCase,
@@ -1623,7 +1634,7 @@ mod app_builder {
                                 &app.source,
                             ) {
                                 for route in &api_definition.routes {
-                                    let Ok(method) = to_method_pattern(&route.method) else {
+                                    let Ok(method) = route.method.parse::<RouteMethod>() else {
                                         continue;
                                     };
 
@@ -1631,7 +1642,9 @@ mod app_builder {
                                         UniqueSourceCheckedEntityKey::HttpApiDefinitionRoute {
                                             api: api_definition_name.clone(),
                                             method: method.to_string(),
-                                            path: normalize_http_api_binding_path(&route.path),
+                                            // TODO: atomic
+                                            // path: normalize_http_api_binding_path(&route.path),
+                                            path: route.path.clone(),
                                         },
                                         &app.source,
                                     );
@@ -2437,7 +2450,7 @@ mod app_builder {
                                 ],
                                 |validation| {
                                     if check_not_empty(validation, "method", &route.method) {
-                                        if let Err(err) = to_method_pattern(&route.method) {
+                                        if let Err(err) = route.method.parse::<RouteMethod>() {
                                             validation.add_error(err.to_string());
                                         }
                                     }

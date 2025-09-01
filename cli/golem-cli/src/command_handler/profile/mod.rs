@@ -22,8 +22,9 @@ use crate::config::{
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_warn_action, LogColorize};
+use crate::model::format::Format;
 use crate::model::text::fmt::log_error;
-use crate::model::{Format, ProfileView};
+use crate::model::ProfileView;
 use anyhow::bail;
 use std::collections::BTreeMap;
 use std::sync::Arc;

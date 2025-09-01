@@ -26,6 +26,18 @@ macro_rules! newtype_uuid {
             }
         }
 
+        impl From<$name> for uuid::Uuid {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl From<uuid::Uuid> for $name {
+            fn from(value: uuid::Uuid) -> Self {
+                Self(value)
+            }
+        }
+
         impl bincode::Encode for $name {
             fn encode<E: bincode::enc::Encoder>(
                 &self,
@@ -66,7 +78,7 @@ macro_rules! newtype_uuid {
 
             fn try_from(value: &str) -> Result<Self, Self::Error> {
                 let uuid =
-                    uuid::Uuid::parse_str(value).map_err(|err| format!("Invalid plan ID: {err}"))?;
+                    uuid::Uuid::parse_str(value).map_err(|err| format!("Invalid UUID: {err}"))?;
                 Ok(Self(uuid))
             }
         }

@@ -23,10 +23,10 @@ use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
 use crate::log::Output::Stdout;
 use crate::log::{log_action, logln, set_log_output, LogColorize};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::component::show_exported_functions;
+use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
+use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
-use crate::model::{ComponentNameMatchKind, Format};
 use colored::Colorize;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -138,18 +138,17 @@ impl ErrorHandler {
                         .match_worker_name(worker_name)
                         .await?;
 
-                    let project_formatted = match &worker_name_match.project {
-                        Some(project) => format!(
-                            " project: {} /",
-                            project.project_ref.to_string().log_color_highlight()
-                        ),
+                    let environment_formatted = match worker_name_match.environment_reference() {
+                        Some(env) => {
+                            format!(" environment: {} /", env.to_string().log_color_highlight())
+                        }
                         None => "".to_string(),
                     };
 
                     logln(format!(
                         "[{}]{} component: {} / worker: {}, {}",
                         "ok".green(),
-                        project_formatted,
+                        environment_formatted,
                         worker_name_match.component_name.0.log_color_highlight(),
                         worker_name_match
                             .worker_name
@@ -172,7 +171,7 @@ impl ErrorHandler {
                     .ctx
                     .component_handler()
                     .component(
-                        worker_name_match.project.as_ref(),
+                        worker_name_match.environment.as_ref(),
                         (&worker_name_match.component_name).into(),
                         worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
                     )
