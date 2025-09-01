@@ -119,6 +119,16 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "UpdatedEnvironmentShareData",
                 "golem_common::model::environment_share::UpdatedEnvironmentShareData",
             ),
+            (
+                "EnvironmentPluginGrant",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrant",
+            ),
+            (
+                "NewEnvironmentPluginGrantData",
+                "golem_common::model::environment_plugin_grant::NewEnvironmentPluginGrantData",
+            ),
+            // ("AgentType", "golem_common::model::agent::AgentType"),
+            // ("AgentType", "golem_common::model::agent::AgentType"),
             // ("DataSchema", "golem_common::model::agent::DataSchema"),
             // ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
             ("AgentType", "golem_common::model::agent::AgentType"),

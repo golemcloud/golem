@@ -18,6 +18,7 @@ use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
 use crate::services::environment::EnvironmentError;
+use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
 use crate::services::oauth2::OAuth2Error;
 use crate::services::plan::PlanError;
@@ -349,7 +350,7 @@ impl From<PluginRegistrationError> for ApiError {
         let error: String = value.to_safe_string();
         match value {
             PluginRegistrationError::ParentAccountNotFound(_)
-            | PluginRegistrationError::PluginNotFound(_) => {
+            | PluginRegistrationError::PluginRegistrationNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 
@@ -370,6 +371,37 @@ impl From<PluginRegistrationError> for ApiError {
                 error,
                 cause: Some(inner.context("PluginRegistrationError")),
             })),
+        }
+    }
+}
+
+impl From<EnvironmentPluginGrantError> for ApiError {
+    fn from(value: EnvironmentPluginGrantError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            EnvironmentPluginGrantError::ParentEnvironmentNotFound(_)
+            | EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            EnvironmentPluginGrantError::ReferencedPluginNotFound(_) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
+
+            EnvironmentPluginGrantError::GrantForPluginAlreadyExists => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            EnvironmentPluginGrantError::Unauthorized(inner) => inner.into(),
+            EnvironmentPluginGrantError::InternalError(inner) => {
+                Self::InternalError(Json(ErrorBody {
+                    error,
+                    cause: Some(inner.context("EnvironmentPluginGrantError")),
+                }))
+            }
         }
     }
 }

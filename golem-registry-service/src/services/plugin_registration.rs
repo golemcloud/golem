@@ -40,7 +40,7 @@ const OPLOG_PROCESSOR_VERSION_PREFIX: &str = "1.";
 #[derive(Debug, thiserror::Error)]
 pub enum PluginRegistrationError {
     #[error("Registered plugin not found for id {0}")]
-    PluginNotFound(PluginRegistrationId),
+    PluginRegistrationNotFound(PluginRegistrationId),
     #[error("Required wasm file missing")]
     RequiredWasmFileMissing,
     #[error("Target component for oplog processor does not exist")]
@@ -58,7 +58,7 @@ pub enum PluginRegistrationError {
 impl SafeDisplay for PluginRegistrationError {
     fn to_safe_string(&self) -> String {
         match self {
-            Self::PluginNotFound(_) => self.to_string(),
+            Self::PluginRegistrationNotFound(_) => self.to_string(),
             Self::RequiredWasmFileMissing => self.to_string(),
             Self::OplogProcessorComponentDoesNotExist => self.to_string(),
             Self::PluginNameAndVersionAlreadyExists => self.to_string(),
@@ -189,7 +189,9 @@ impl PluginRegistrationService {
             .plugin_repo
             .delete(&plugin_id.0, &auth.account_id.0)
             .await?
-            .ok_or(PluginRegistrationError::PluginNotFound(plugin_id.clone()))?
+            .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
+                plugin_id.clone(),
+            ))?
             .try_into()?;
 
         Ok(plugin)
@@ -204,11 +206,13 @@ impl PluginRegistrationService {
             .plugin_repo
             .get_by_id(&plugin_id.0)
             .await?
-            .ok_or(PluginRegistrationError::PluginNotFound(plugin_id.clone()))?
+            .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
+                plugin_id.clone(),
+            ))?
             .try_into()?;
 
         auth.authorize_account_action(&plugin.account_id, AccountAction::ViewPlugin)
-            .map_err(|_| PluginRegistrationError::PluginNotFound(plugin_id.clone()))?;
+            .map_err(|_| PluginRegistrationError::PluginRegistrationNotFound(plugin_id.clone()))?;
 
         Ok(plugin)
     }
@@ -219,6 +223,7 @@ impl PluginRegistrationService {
         auth: &AuthCtx,
     ) -> Result<Vec<PluginRegistration>, PluginRegistrationError> {
         // Optimally this is fetched together with the plugin data instead of up front
+        // see EnvironmentService::list_in_application for a better pattern
         self.account_service
             .get(account_id, auth)
             .await

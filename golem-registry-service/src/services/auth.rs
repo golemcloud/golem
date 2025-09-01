@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::account::{AccountError, AccountService};
-use super::token::{TokenError, TokenService};
 use crate::model::auth::AuthCtx;
+use crate::repo::account::AccountRepo;
+use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;
+use golem_common::model::account::Account;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
 use std::collections::HashSet;
 use std::sync::Arc;
+use tracing::warn;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthError {
@@ -38,46 +40,31 @@ impl SafeDisplay for AuthError {
     }
 }
 
-error_forwarding!(AuthError, AccountError, TokenError);
+error_forwarding!(AuthError, AccountRepoError);
 
-/// Note that only _direct_ access to entities is checked here. Listing of accounts / applications / environments has their
-/// security enforced on the
 pub struct AuthService {
-    account_service: Arc<AccountService>,
-    token_service: Arc<TokenService>,
+    account_repo: Arc<dyn AccountRepo>,
 }
 
 impl AuthService {
-    pub fn new(account_service: Arc<AccountService>, token_service: Arc<TokenService>) -> Self {
-        Self {
-            account_service,
-            token_service,
-        }
+    pub fn new(account_repo: Arc<dyn AccountRepo>) -> Self {
+        Self { account_repo }
     }
 
     pub async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthError> {
-        let token = self
-            .token_service
-            .get_by_secret(&token, &AuthCtx::system())
-            .await
-            .map_err(|err| match err {
-                TokenError::TokenBySecretNotFound => AuthError::CouldNotAuthenticate,
-                err => err.into(),
-            })?;
+        let record: AccountBySecretRecord = self
+            .account_repo
+            .get_by_secret(&token.0)
+            .await?
+            .ok_or(AuthError::CouldNotAuthenticate)?;
 
-        if token.expires_at <= Utc::now() {
-            Err(AuthError::CouldNotAuthenticate)?
+        // IMPORTANT: make sure the token is still valid
+        if *record.token_expires_at.as_utc() <= Utc::now() {
+            warn!("Tried to resolve an expired token {}", record.token_id);
+            return Err(AuthError::CouldNotAuthenticate);
         };
 
-        let account = self
-            .account_service
-            .get(&token.account_id, &AuthCtx::system())
-            .await
-            .map_err(|err| match err {
-                // This covers the account being deleted
-                AccountError::AccountNotFound(_) => AuthError::CouldNotAuthenticate,
-                other => other.into(),
-            })?;
+        let account: Account = record.value.try_into()?;
 
         let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
 

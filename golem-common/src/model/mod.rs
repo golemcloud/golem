@@ -28,6 +28,7 @@ pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
 pub mod environment;
+pub mod environment_plugin_grant;
 pub mod environment_share;
 pub mod error;
 pub mod exports;

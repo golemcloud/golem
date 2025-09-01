@@ -21,6 +21,7 @@ pub mod component_compilation;
 pub mod component_object_store;
 pub mod component_transformer_plugin_caller;
 pub mod environment;
+pub mod environment_plugin_grant;
 pub mod environment_share;
 pub mod oauth2;
 pub mod oauth2_github_client;

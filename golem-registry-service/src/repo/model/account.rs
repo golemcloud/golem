@@ -141,6 +141,15 @@ impl TryFrom<AccountExtRevisionRecord> for Account {
     }
 }
 
+#[derive(FromRow, Debug, Clone, PartialEq)]
+pub struct AccountBySecretRecord {
+    pub token_id: Uuid,
+    pub token_expires_at: SqlDateTime,
+
+    #[sqlx(flatten)]
+    pub value: AccountExtRevisionRecord,
+}
+
 // To allow abstracting over postgres and sqlite roles are stored as a bit vector.
 fn role_bit(role: &AccountRole) -> i32 {
     match role {
