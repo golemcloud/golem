@@ -124,7 +124,11 @@ impl RibRepl {
         // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
             config.worker_function_invoke,
-            RibCompiler::new(RibCompilerConfig::new(component_dependencies?, vec![], vec![])),
+            RibCompiler::new(RibCompilerConfig::new(
+                component_dependencies?,
+                vec![],
+                vec![],
+            )),
             history_file_path.clone(),
         );
 

@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use super::{IdempotencyKeyCompiled, InvocationContextCompiled, WorkerNameCompiled};
-use crate::gateway_rib_compiler::{ComponentDependencyWithAgentInfo, DefaultWorkerServiceRibCompiler};
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
+use crate::gateway_rib_compiler::{
+    ComponentDependencyWithAgentInfo, DefaultWorkerServiceRibCompiler,
+};
 use golem_common::model::component::VersionedComponentId;
 use rib::{
-    ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo,
-    RibOutputTypeInfo, WorkerFunctionsInRib,
+    Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
+    WorkerFunctionsInRib,
 };
 use serde::{Deserialize, Serialize};
 
@@ -120,7 +122,7 @@ pub struct WorkerBindingCompiled {
 impl WorkerBindingCompiled {
     pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
             Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(

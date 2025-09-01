@@ -14,23 +14,31 @@
 
 use golem_common::model::agent::AgentType;
 use golem_wasm_ast::analysis::AnalysedExport;
-use rib::{CompilerOutput, ComponentDependency, ComponentDependencyKey, Expr, GlobalVariableTypeSpec, InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig};
+use rib::{
+    CompilerOutput, ComponentDependency, ComponentDependencyKey, Expr, GlobalVariableTypeSpec,
+    InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig,
+};
 
 // A wrapper over ComponentDependency which is coming from rib-module
 // to attach agent types to it.
 pub struct ComponentDependencyWithAgentInfo {
     agent_types: Vec<AgentType>,
-    component_dependency: ComponentDependency
+    component_dependency: ComponentDependency,
 }
 
-
 impl ComponentDependencyWithAgentInfo {
-    pub fn new(component_dependency_key: ComponentDependencyKey,
-               component_exports: Vec<AnalysedExport>, agent_types: Vec<AgentType>,) -> Self {
-        Self { agent_types, component_dependency: ComponentDependency::new(
-            component_dependency_key,
-            component_exports,
-        ) }
+    pub fn new(
+        component_dependency_key: ComponentDependencyKey,
+        component_exports: Vec<AnalysedExport>,
+        agent_types: Vec<AgentType>,
+    ) -> Self {
+        Self {
+            agent_types,
+            component_dependency: ComponentDependency::new(
+                component_dependency_key,
+                component_exports,
+            ),
+        }
     }
 }
 
@@ -50,9 +58,9 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         rib: &Expr,
         component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<CompilerOutput, RibCompilationError> {
-
-
-        let agent_types = component_dependency.iter().enumerate()
+        let agent_types = component_dependency
+            .iter()
+            .enumerate()
             .map(|cd| (cd.0, cd.1.agent_types.clone()))
             .collect::<Vec<_>>();
 
@@ -61,19 +69,20 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         for (_component_index, agent_types) in agent_types {
             for agent_type in agent_types {
                 custom_instance_spec.push(rib::CustomInstanceSpec {
-                    instance_name:  agent_type.type_name.clone(),
+                    instance_name: agent_type.type_name.clone(),
                     parameter_types: vec![], // TODO; needed for compiler check, otherwise runtime error
                     interface_name: Some(InterfaceName {
                         name: agent_type.type_name,
                         version: None,
-                    })
+                    }),
                 });
             }
         }
 
-        let component_dependency =
-            component_dependency.iter().map(|cd| cd.component_dependency.clone()).collect::<Vec<_>>();
-
+        let component_dependency = component_dependency
+            .iter()
+            .map(|cd| cd.component_dependency.clone())
+            .collect::<Vec<_>>();
 
         let rib_input_spec = vec![
             GlobalVariableTypeSpec::new(
@@ -98,7 +107,8 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             ),
         ];
 
-        let compiler_config = RibCompilerConfig::new(component_dependency, rib_input_spec, custom_instance_spec);
+        let compiler_config =
+            RibCompilerConfig::new(component_dependency, rib_input_spec, custom_instance_spec);
 
         let compiler = RibCompiler::new(compiler_config);
 

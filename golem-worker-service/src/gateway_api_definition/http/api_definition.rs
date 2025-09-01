@@ -27,18 +27,20 @@ use crate::gateway_binding::{HttpHandlerBindingCompiled, WorkerBindingCompiled};
 use crate::gateway_middleware::{
     HttpAuthenticationMiddleware, HttpCors, HttpMiddleware, HttpMiddlewares,
 };
+use crate::gateway_rib_compiler::ComponentDependencyWithAgentInfo;
 use crate::gateway_security::SecuritySchemeReference;
 use crate::service::gateway::api_definition::ApiDefinitionError;
 use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use crate::service::gateway::BoxConversionContext;
 use bincode::{Decode, Encode};
+use golem_common::model::agent::AgentType;
 use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
 use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
 use poem_openapi::Enum;
-use rib::{ComponentDependency, ComponentDependencyKey, RibCompilationError, RibInputTypeInfo};
+use rib::{ComponentDependencyKey, RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -48,8 +50,6 @@ use std::ops::Deref;
 use std::str::FromStr;
 use std::sync::Arc;
 use Iterator;
-use golem_common::model::agent::AgentType;
-use crate::gateway_rib_compiler::ComponentDependencyWithAgentInfo;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct HttpApiDefinition {
@@ -672,7 +672,7 @@ pub struct ComponentMetadataDictionary {
 pub struct ComponentDetails {
     pub component_info: ComponentDependencyKey,
     pub metadata: Vec<AnalysedExport>,
-    pub agent_types: Vec<AgentType>
+    pub agent_types: Vec<AgentType>,
 }
 
 impl ComponentMetadataDictionary {
@@ -732,9 +732,10 @@ impl CompiledRoute {
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let component_dependency = vec![ComponentDependency::new(
+                let component_dependency = vec![ComponentDependencyWithAgentInfo::new(
                     component_details.component_info.clone(),
                     component_details.metadata.clone(),
+                    component_details.agent_types.clone(),
                 )];
 
                 let binding = WorkerBindingCompiled::from_raw_worker_binding(
@@ -768,11 +769,12 @@ impl CompiledRoute {
                         worker_binding.component_id.clone(),
                     ))?;
 
-                let component_dependency_with_agent_types = vec![ComponentDependencyWithAgentInfo::new(
-                    component_details.component_info.clone(),
-                    component_details.metadata.clone(),
-                    component_details.agent_types.clone(),
-                )];
+                let component_dependency_with_agent_types =
+                    vec![ComponentDependencyWithAgentInfo::new(
+                        component_details.component_info.clone(),
+                        component_details.metadata.clone(),
+                        component_details.agent_types.clone(),
+                    )];
 
                 let binding = FileServerBindingCompiled::from_raw_file_server_worker_binding(
                     worker_binding,

@@ -177,38 +177,42 @@ fn get_instance_creation_details(
                 ParsedFunctionReference::Function { function } => {
                     let custom_instance_spec =
                         resolve_custom_instance_spec(custom_instance_spec, &function)?;
+                    match custom_instance_spec {
+                        None => Ok(None),
+                        Some(custom_instance_spec) => {
+                            let optional_worker_name_expression = if !args.is_empty() {
+                                None
+                            } else {
+                                let new_worker_name_prefix =
+                                    format!("{}(", custom_instance_spec.instance_name);
 
-                    let optional_worker_name_expression = if !args.is_empty() {
-                        None
-                    } else {
-                        let new_worker_name_prefix =
-                            format!("{}(", custom_instance_spec.instance_name);
+                                let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
+                                let mut iter = args.iter().cloned().peekable();
 
-                        let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
-                        let mut iter = args.iter().cloned().peekable();
+                                while let Some(arg) = iter.next() {
+                                    exprs.push(arg);
+                                    if iter.peek().is_some() {
+                                        exprs.push(Expr::literal(","));
+                                    }
+                                }
 
-                        while let Some(arg) = iter.next() {
-                            exprs.push(arg);
-                            if iter.peek().is_some() {
-                                exprs.push(Expr::literal(","));
-                            }
+                                exprs.push(Expr::literal(")"));
+
+                                Some(Expr::concat(exprs))
+                            };
+
+                            let type_parameter = custom_instance_spec
+                                .interface_name
+                                .map(|interface_name| TypeParameter::Interface(interface_name));
+
+                            let instance_creation = component_dependency.get_worker_instance_type(
+                                type_parameter,
+                                optional_worker_name_expression,
+                            )?;
+
+                            Ok(Some(instance_creation))
                         }
-
-                        exprs.push(Expr::literal(")"));
-
-                        Some(Expr::concat(exprs))
-                    };
-
-                    let type_parameter = custom_instance_spec
-                        .interface_name
-                        .map(|interface_name| TypeParameter::Interface(interface_name));
-
-                    let instance_creation = component_dependency.get_worker_instance_type(
-                        type_parameter,
-                        optional_worker_name_expression,
-                    )?;
-
-                    Ok(Some(instance_creation))
+                    }
                 }
 
                 _ => Ok(None),
@@ -225,12 +229,10 @@ fn get_instance_creation_details(
 fn resolve_custom_instance_spec(
     custom_instance_spec: &Vec<CustomInstanceSpec>,
     function_name: &str,
-) -> Result<CustomInstanceSpec, String> {
-    for spec in custom_instance_spec {
-        if spec.instance_name == function_name {
-            return Ok(spec.clone());
-        }
-    }
-
-    Err(format!("Invalid instantiation with: {}", function_name))
+) -> Result<Option<CustomInstanceSpec>, String> {
+    let spec = custom_instance_spec
+        .iter()
+        .find(|spec| spec.instance_name == function_name)
+        .cloned();
+    Ok(spec)
 }
