@@ -24,8 +24,6 @@ use golem_common::model::environment::EnvironmentName;
 use std::sync::Arc;
 
 pub struct EnvironmentCommandHandler {
-    // TODO: atomic
-    #[allow(unused)]
     ctx: Arc<Context>,
 }
 

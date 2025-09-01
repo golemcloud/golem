@@ -25,6 +25,7 @@ use crate::command::worker::WorkerSubcommand;
 use crate::config::{BuildProfileName, ProfileName};
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
+use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::worker::WorkerName;
 use crate::{command_name, version};
@@ -93,33 +94,36 @@ impl Verbosity {
 #[derive(Debug, Clone, Default, Args)]
 pub struct GolemCliGlobalFlags {
     /// Output format, defaults to text, unless specified by the selected profile
-    #[arg(long, short, global = true, display_order = 101)]
+    #[arg(long, short = 'F', global = true, display_order = 101)]
     pub format: Option<Format>,
 
+    // TODO: atomic: drop
     /// Select Golem profile by name
-    #[arg(long, short, global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
+    #[arg(long, short = 'P', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
     pub profile: Option<ProfileName>,
 
-    /// Select builtin "local" profile, to use services provided by the "golem server" command
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"], display_order = 103
-    )]
+    /// Select Golem environment by name
+    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
+    pub environment: Option<EnvironmentReference>,
+
+    /// Select the builtin "local" server
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103)]
     pub local: bool,
 
-    /// Select builtin "cloud" profile to use Golem Cloud
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"], display_order = 104
-    )]
+    /// Select the builtin "cloud" server
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104)]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
-    #[arg(long, short, global = true, display_order = 105)]
+    #[arg(long, short = 'A', global = true, display_order = 105)]
     pub app_manifest_path: Option<PathBuf>,
 
     /// Disable automatic searching for application manifests
-    #[arg(long, short = 'A', global = true, display_order = 106)]
+    #[arg(long, short = 'X', global = true, display_order = 106)]
     pub disable_app_manifest_discovery: bool,
 
     /// Select build profile
-    #[arg(long, short, global = true, display_order = 107)]
+    #[arg(long, short = 'B', global = true, display_order = 107)]
     pub build_profile: Option<BuildProfileName>,
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
@@ -127,7 +131,7 @@ pub struct GolemCliGlobalFlags {
     pub config_dir: Option<PathBuf>,
 
     /// Automatically answer "yes" to any interactive confirm questions
-    #[arg(long, short, global = true, display_order = 109)]
+    #[arg(long, short = 'Y', global = true, display_order = 109)]
     pub yes: bool,
 
     /// Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
@@ -659,18 +663,17 @@ pub mod shared_args {
     #[derive(Debug, Args)]
     pub struct StreamArgs {
         /// Hide log levels in stream output
-        #[clap(long, short = 'L')]
+        #[clap(long)]
         pub stream_no_log_level: bool,
         /// Hide timestamp in stream output
-        #[clap(long, short = 'T')]
+        #[clap(long)]
         pub stream_no_timestamp: bool,
     }
 
     #[derive(Debug, Args)]
     pub struct UpdateOrRedeployArgs {
         /// Update existing workers with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers", "redeploy_all"], num_args = 0..=1
-        )]
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers", "redeploy_all"], num_args = 0..=1)]
         pub update_workers: Option<WorkerUpdateMode>,
         /// Delete and recreate existing workers
         #[clap(long, conflicts_with_all = ["update_workers"])]
@@ -679,8 +682,7 @@ pub mod shared_args {
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
         /// Delete and recreate components and HTTP APIs
-        #[clap(long, short, conflicts_with_all = ["update_workers", "redeploy_workers", "redeploy_http_api"]
-        )]
+        #[clap(long, short, conflicts_with_all = ["update_workers", "redeploy_workers", "redeploy_http_api"])]
         pub redeploy_all: bool,
     }
 
@@ -1014,14 +1016,14 @@ pub mod worker {
             function_name: WorkerFunctionName,
             /// Worker function arguments in WAVE format
             arguments: Vec<WorkerFunctionArgument>,
-            /// Enqueue invocation, and do not wait for it
+            /// Enqueue invocation and do not wait for it
             #[clap(long, short)]
             enqueue: bool,
-            /// Set idempotency key for the call, use "-" for auto generated key
+            /// Set idempotency key for the call, use "-" for an auto-generated key
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
-            /// Connect to the worker before invoke (the worker must already exist)
+            /// Connect to the worker before invoking (the worker must already exist)
             /// and live stream its standard output, error and log channels
             stream: bool,
             #[command(flatten)]
@@ -1189,11 +1191,13 @@ pub mod api {
             },
             /// Exports an api definition in OpenAPI format
             Export {
+                // TODO: atomic: should be name based, with app context
                 /// Api definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
+                // TODO: atomic: why this version is needed?
                 /// Version of the api definition
-                #[arg(short = 'V', long)]
+                #[arg(long)]
                 version: ApiDefinitionVersion,
                 /// Output format (json or yaml)
                 #[arg(long = "def-format", default_value = "yaml", name = "def-format")]
@@ -1204,14 +1208,16 @@ pub mod api {
             },
             /// Opens Swagger UI for an API definition
             Swagger {
+                // TODO: atomic: should be name based, with app context
                 /// Api definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
+                // TODO: atomic: why this version is needed?
                 /// Version of the api definition
-                #[arg(short = 'V', long)]
+                #[arg(long)]
                 version: ApiDefinitionVersion,
                 /// Port to open Swagger UI on (defaults to 9007)
-                #[arg(short = 'P', long, default_value_t = 9007)]
+                #[arg(long, short, default_value_t = 9007)]
                 port: u16,
             },
         }
@@ -1392,7 +1398,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
         New {
             /// Name of the newly created profile
             name: Option<ProfileName>,
