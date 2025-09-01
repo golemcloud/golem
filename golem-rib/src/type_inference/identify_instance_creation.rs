@@ -227,7 +227,7 @@ fn get_instance_creation_details(
 }
 
 fn resolve_custom_instance_spec(
-    custom_instance_spec: &Vec<CustomInstanceSpec>,
+    custom_instance_spec: &[CustomInstanceSpec],
     function_name: &str,
 ) -> Result<Option<CustomInstanceSpec>, String> {
     let spec = custom_instance_spec
