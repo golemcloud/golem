@@ -24,9 +24,9 @@ use golem_common::model::account::AccountId;
 use golem_common::model::deployment::Deployment;
 use golem_common::model::environment::*;
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, NewEnvironmentPluginGrantData,
+    EnvironmentPluginGrant, EnvironmentPluginGrantCreation,
 };
-use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShareData};
+use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -109,7 +109,7 @@ impl EnvironmentsApi {
     pub async fn update_environment(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<UpdatedEnvironmentData>,
+        payload: Json<EnvironmentUpdate>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
         let record = recorded_http_api_request!(
@@ -130,7 +130,7 @@ impl EnvironmentsApi {
     async fn update_environment_internal(
         &self,
         environment_id: EnvironmentId,
-        payload: UpdatedEnvironmentData,
+        payload: EnvironmentUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
         let result = self
@@ -361,7 +361,7 @@ impl EnvironmentsApi {
     async fn create_environment_share(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<NewEnvironmentShareData>,
+        payload: Json<EnvironmentShareCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -382,7 +382,7 @@ impl EnvironmentsApi {
     async fn create_environment_share_internal(
         &self,
         environment_id: EnvironmentId,
-        payload: NewEnvironmentShareData,
+        payload: EnvironmentShareCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
@@ -445,7 +445,7 @@ impl EnvironmentsApi {
     pub async fn create_environment_plugin_grant(
         &self,
         environment_id: Path<EnvironmentId>,
-        data: Json<NewEnvironmentPluginGrantData>,
+        data: Json<EnvironmentPluginGrantCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let record = recorded_http_api_request!(
@@ -466,7 +466,7 @@ impl EnvironmentsApi {
     async fn create_environment_plugin_grant_internal(
         &self,
         environment_id: EnvironmentId,
-        data: NewEnvironmentPluginGrantData,
+        data: EnvironmentPluginGrantCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let grant = self

@@ -27,7 +27,7 @@ declare_structs! {
         // As other member of the environment can not get the referenced plugin directly, we should include the plugin here
     }
 
-    pub struct NewEnvironmentPluginGrantData {
+    pub struct EnvironmentPluginGrantCreation {
         pub plugin_id: PluginRegistrationId,
     }
 }

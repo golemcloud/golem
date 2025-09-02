@@ -36,9 +36,10 @@ use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
-use crate::services::component::ComponentService;
+use crate::services::component::{ComponentService, ComponentWriteService};
 use crate::services::component_compilation::ComponentCompilationServiceDisabled;
 use crate::services::component_object_store::ComponentObjectStore;
+use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
@@ -69,6 +70,7 @@ pub struct Services {
     pub application_service: Arc<ApplicationService>,
     pub auth_service: Arc<AuthService>,
     pub component_service: Arc<ComponentService>,
+    pub component_write_service: Arc<ComponentWriteService>,
     pub environment_service: Arc<EnvironmentService>,
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
@@ -152,24 +154,10 @@ impl Services {
         ));
 
         let component_service = Arc::new(ComponentService::new(
-            repos.component_repo,
-            component_object_store,
-            component_compilation_service,
-            initial_component_files,
-            plugin_wasm_files.clone(),
-            account_usage_service,
+            repos.component_repo.clone(),
+            component_object_store.clone(),
             environment_service.clone(),
         ));
-
-        let login_system = LoginSystem::new(
-            &config.login,
-            account_service.clone(),
-            token_service.clone(),
-            repos.oauth2_token_repo.clone(),
-            repos.oauth2_webflow_state_repo.clone(),
-        )?;
-
-        let reports_service = Arc::new(ReportsService::new(repos.reports_repo.clone()));
 
         let plugin_registration_service = Arc::new(PluginRegistrationService::new(
             repos.plugin_repo.clone(),
@@ -184,10 +172,39 @@ impl Services {
             plugin_registration_service.clone(),
         ));
 
+        let component_transformer_plugin_caller =
+            Arc::new(ComponentTransformerPluginCallerDefault::new(
+                config.component_transformer_plugin_caller.clone(),
+            ));
+
+        let component_write_service = Arc::new(ComponentWriteService::new(
+            repos.component_repo,
+            component_object_store,
+            component_compilation_service,
+            initial_component_files,
+            plugin_wasm_files.clone(),
+            account_usage_service,
+            environment_service.clone(),
+            environment_plugin_grant_service.clone(),
+            plugin_registration_service.clone(),
+            component_transformer_plugin_caller.clone(),
+        ));
+
+        let login_system = LoginSystem::new(
+            &config.login,
+            account_service.clone(),
+            token_service.clone(),
+            repos.oauth2_token_repo.clone(),
+            repos.oauth2_webflow_state_repo.clone(),
+        )?;
+
+        let reports_service = Arc::new(ReportsService::new(repos.reports_repo.clone()));
+
         Ok(Self {
             account_service,
             application_service,
             component_service,
+            component_write_service,
             environment_service,
             token_service,
             login_system,

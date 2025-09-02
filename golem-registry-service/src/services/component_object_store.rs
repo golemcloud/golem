@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::run_cpu_bound_work;
 use anyhow::{Error, anyhow};
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
-use golem_service_base::replayable_stream::ContentHash;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use golem_service_base::stream::LoggedByteStream;
 use std::fmt::Debug;
@@ -111,15 +112,19 @@ impl ComponentObjectStore {
     pub async fn put(
         &self,
         environment_id: &EnvironmentId,
-        data: Vec<u8>,
-    ) -> Result<String, Error> {
-        let object_key = data.content_hash().await?;
+        data: Arc<[u8]>,
+    ) -> Result<Hash, Error> {
+        let data_clone = data.clone();
+        let object_key: Hash = run_cpu_bound_work(move || blake3::hash(&data_clone))
+            .await
+            .into();
 
         self.logged(
             "Putting object",
             environment_id,
-            &object_key,
-            self.put_internal(environment_id, &object_key, data).await,
+            &object_key.to_string(),
+            self.put_internal(environment_id, &object_key.to_string(), data)
+                .await,
         )?;
 
         Ok(object_key)
@@ -129,7 +134,7 @@ impl ComponentObjectStore {
         &self,
         environment_id: &EnvironmentId,
         object_key: &str,
-        data: Vec<u8>,
+        data: Arc<[u8]>,
     ) -> Result<(), Error> {
         let namespace = BlobStorageNamespace::Components {
             environment_id: environment_id.clone(),

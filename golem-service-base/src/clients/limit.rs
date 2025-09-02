@@ -25,8 +25,9 @@ use golem_api_grpc::proto::golem::limit::v1::{
 use golem_common::SafeDisplay;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::RetryConfig;
+use golem_common::model::WorkerId;
 use golem_common::model::account::AccountId;
-use golem_common::model::{ComponentId, WorkerId};
+use golem_common::model::component::ComponentId;
 use golem_common::retries::with_retries;
 use std::fmt::Display;
 use tonic::Status;

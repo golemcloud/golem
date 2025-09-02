@@ -15,13 +15,12 @@
 use super::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
-use crate::services::component::ComponentService;
+use crate::services::component::{ComponentService, ComponentWriteService};
 use futures::TryStreamExt;
-use golem_common::api::Page;
-use golem_common::model::ComponentId;
-use golem_common::model::component::Component;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::component::UpdatedComponentData;
+use golem_common::model::component::ComponentUpdate;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -36,6 +35,7 @@ use tracing::Instrument;
 
 pub struct ComponentsApi {
     component_service: Arc<ComponentService>,
+    component_write_service: Arc<ComponentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -45,9 +45,14 @@ pub struct ComponentsApi {
     tag = ApiTags::Component
 )]
 impl ComponentsApi {
-    pub fn new(component_service: Arc<ComponentService>, auth_service: Arc<AuthService>) -> Self {
+    pub fn new(
+        component_service: Arc<ComponentService>,
+        component_write_service: Arc<ComponentWriteService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
             component_service,
+            component_write_service,
             auth_service,
         }
     }
@@ -62,7 +67,7 @@ impl ComponentsApi {
         &self,
         component_id: Path<ComponentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let record =
             recorded_http_api_request!("get_component", component_id = component_id.0.to_string());
 
@@ -80,47 +85,13 @@ impl ComponentsApi {
         &self,
         component_id: ComponentId,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
-        let component: Component = self
+    ) -> ApiResult<Json<ComponentDto>> {
+        let component: ComponentDto = self
             .component_service
             .get_component(&component_id, &auth)
             .await?
             .into();
         Ok(Json(component))
-    }
-
-    /// Get all revisions for a component
-    #[oai(
-        path = "/:component_id/revisions",
-        method = "get",
-        operation_id = "get_component_revisions"
-    )]
-    async fn get_component_revisions(
-        &self,
-        component_id: Path<ComponentId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Component>>> {
-        let record = recorded_http_api_request!(
-            "get_component_revisions",
-            component_id = component_id.0.to_string()
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_component_revisions_internal(component_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_component_revisions_internal(
-        &self,
-        _component_id: ComponentId,
-        _auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Component>>> {
-        todo!()
     }
 
     /// Get specific revision of a component
@@ -134,7 +105,7 @@ impl ComponentsApi {
         component_id: Path<ComponentId>,
         revision: Path<ComponentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let record = recorded_http_api_request!(
             "get_component_revision",
             component_id = component_id.0.to_string(),
@@ -156,8 +127,8 @@ impl ComponentsApi {
         component_id: ComponentId,
         revision: ComponentRevision,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
-        let component: Component = self
+    ) -> ApiResult<Json<ComponentDto>> {
+        let component: ComponentDto = self
             .component_service
             .get_component_revision(&component_id, revision, &auth)
             .await?
@@ -222,7 +193,7 @@ impl ComponentsApi {
         component_id: Path<ComponentId>,
         payload: UpdateComponentRequest,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let record = recorded_http_api_request!(
             "update_component",
             component_id = component_id.0.to_string(),
@@ -243,7 +214,7 @@ impl ComponentsApi {
         component_id: ComponentId,
         payload: UpdateComponentRequest,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let data = if let Some(upload) = payload.new_component_wasm {
             Some(upload.into_vec().await?)
         } else {
@@ -252,21 +223,13 @@ impl ComponentsApi {
 
         let new_files_archive = payload.new_files.map(|f| f.into_file());
 
-        let metadata = payload.metadata.0;
-
-        let component: Component = self
-            .component_service
+        let component: ComponentDto = self
+            .component_write_service
             .update(
                 &component_id,
-                metadata.previous_version,
+                payload.metadata.0,
                 data,
-                metadata.component_type,
-                metadata.removed_files.unwrap_or_default(),
                 new_files_archive,
-                metadata.new_file_options.unwrap_or_default(),
-                metadata.dynamic_linking,
-                metadata.env,
-                metadata.agent_types,
                 &auth,
             )
             .await?
@@ -279,7 +242,7 @@ impl ComponentsApi {
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 struct UpdateComponentRequest {
-    metadata: JsonField<UpdatedComponentData>,
+    metadata: JsonField<ComponentUpdate>,
     new_component_wasm: Option<Upload>,
     new_files: Option<TempFileUpload>,
 }

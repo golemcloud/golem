@@ -244,10 +244,19 @@ impl From<ComponentError> for ApiError {
             | ComponentError::InvalidPluginScope { .. }
             | ComponentError::InvalidCurrentRevision
             | ComponentError::MalformedComponentArchive { .. }
-            | ComponentError::PluginInstallationNotFound { .. } => {
+            | ComponentError::PluginInstallationNotFound { .. }
+            | ComponentError::EnvironmentPluginNotFound(_)
+            | ComponentError::ConflictingPluginPriority(_)
+            | ComponentError::ComponentTransformerPluginFailed { .. } => {
                 Self::BadRequest(Json(ErrorsBody {
                     errors: vec![error],
                     cause: None,
+                }))
+            }
+            ComponentError::PluginCompositionFailed { cause, .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: Some(cause.context("ComponentError")),
                 }))
             }
 
@@ -255,9 +264,7 @@ impl From<ComponentError> for ApiError {
                 Self::Conflict(Json(ErrorBody { error, cause: None }))
             }
 
-            ComponentError::NotFound
-            | ComponentError::ParentEnvironmentNotFound(_)
-            | ComponentError::PluginNotFound { .. } => {
+            ComponentError::NotFound | ComponentError::ParentEnvironmentNotFound(_) => {
                 Self::NotFound(Json(ErrorBody { error, cause: None }))
             }
 

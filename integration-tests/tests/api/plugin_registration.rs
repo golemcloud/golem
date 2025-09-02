@@ -20,7 +20,7 @@ use golem_client::api::{
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
 use golem_common::model::plugin_registration::{
-    NewPluginRegistrationData, OplogProcessorPluginSpec, PluginSpecDto,
+    OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
@@ -42,15 +42,15 @@ async fn can_create_and_fetch_plugins(deps: &EnvBasedTestDependencies) -> anyhow
     let plugin = client
         .create_plugin(
             &user.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.versioned_component_id.component_id,
-                    component_revision: component.versioned_component_id.version,
+                    component_id: component.id,
+                    component_revision: component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -100,7 +100,7 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let app_plugin = client
         .create_plugin(
             &user.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-app-plugin".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
@@ -118,13 +118,13 @@ async fn can_list_plugins(deps: &EnvBasedTestDependencies) -> anyhow::Result<()>
     let library_plugin = client
         .create_plugin(
             &user.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-library-plugin".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
-                spec: PluginSpecDto::App(Empty {}),
+                spec: PluginSpecDto::Library(Empty {}),
             },
             Some(
                 tokio::fs::File::open(
@@ -165,15 +165,15 @@ async fn fails_with_bad_request_if_user_creates_oplog_processor_from_invalid_com
     let result = client
         .create_plugin(
             &user.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.versioned_component_id.component_id,
-                    component_revision: component.versioned_component_id.version,
+                    component_id: component.id,
+                    component_revision: component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -203,15 +203,15 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
     client
         .create_plugin(
             &user.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version,
+                    component_id: component.id.clone(),
+                    component_revision: component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -221,15 +221,15 @@ async fn fails_with_conflict_when_creating_two_plugins_with_same_name(
     let result = client
         .create_plugin(
             &user.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version,
+                    component_id: component.id.clone(),
+                    component_revision: component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -261,15 +261,15 @@ async fn fails_with_bad_request_when_creating_plugin_if_component_user_does_not_
     let result = client
         .create_plugin(
             &user_2.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version,
+                    component_id: component.id.clone(),
+                    component_revision: component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -304,15 +304,15 @@ async fn should_allow_creating_plugin_with_component_in_share_environment(
     client
         .create_plugin(
             &user_2.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: component.versioned_component_id.component_id.clone(),
-                    component_revision: component.versioned_component_id.version,
+                    component_id: component.id.clone(),
+                    component_revision: component.revision,
                 }),
             },
             None::<Vec<u8>>,

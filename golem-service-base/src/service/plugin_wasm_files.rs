@@ -19,7 +19,7 @@ use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use anyhow::{Context, Error};
 use bytes::Bytes;
 use golem_common::model::account::AccountId;
-use golem_common::model::plugin::PluginWasmFileKey;
+use golem_common::model::plugin_registration::PluginWasmFileKey;
 use tracing::debug;
 
 const PLUGIN_WASM_FILES_LABEL: &str = "plugin_wasms";

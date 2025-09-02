@@ -20,9 +20,9 @@ use crate::services::plan::PlanService;
 use crate::services::plugin_registration::PluginRegistrationService;
 use golem_common::api::Page;
 use golem_common::model::Empty;
-use golem_common::model::account::{Account, AccountId, NewAccountData, Plan, UpdatedAccountData};
+use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate, Plan};
 use golem_common::model::auth::AccountRole;
-use golem_common::model::plugin_registration::{NewPluginRegistrationData, PluginRegistrationDto};
+use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -67,7 +67,7 @@ impl AccountsApi {
     #[oai(path = "/", method = "post", operation_id = "create_account")]
     async fn create_account(
         &self,
-        data: Json<NewAccountData>,
+        data: Json<AccountCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record = recorded_http_api_request!("create_account", account_name = data.name.clone());
@@ -84,7 +84,7 @@ impl AccountsApi {
 
     async fn create_account_internal(
         &self,
-        data: NewAccountData,
+        data: AccountCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
         let result = self.account_service.create(data, &auth).await?;
@@ -167,7 +167,7 @@ impl AccountsApi {
     async fn put_account(
         &self,
         account_id: Path<AccountId>,
-        data: Json<UpdatedAccountData>,
+        data: Json<AccountUpdate>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Account>> {
         let record =
@@ -186,7 +186,7 @@ impl AccountsApi {
     async fn put_account_internal(
         &self,
         account_id: AccountId,
-        data: UpdatedAccountData,
+        data: AccountUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<Account>> {
         let result = self
@@ -301,7 +301,7 @@ impl AccountsApi {
     async fn create_plugin_internal(
         &self,
         account_id: AccountId,
-        metadata: NewPluginRegistrationData,
+        metadata: PluginRegistrationCreation,
         plugin_wasm: Option<TempFileUpload>,
         auth: AuthCtx,
     ) -> ApiResult<Json<PluginRegistrationDto>> {
@@ -365,6 +365,6 @@ impl AccountsApi {
 #[derive(Debug, poem_openapi::Multipart)]
 #[oai(rename_all = "camelCase")]
 struct CreatePluginRequest {
-    metadata: JsonField<NewPluginRegistrationData>,
+    metadata: JsonField<PluginRegistrationCreation>,
     plugin_wasm: Option<TempFileUpload>,
 }

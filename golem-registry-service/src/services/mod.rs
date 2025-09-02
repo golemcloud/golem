@@ -29,3 +29,20 @@ pub mod plan;
 pub mod plugin_registration;
 pub mod reports;
 pub mod token;
+
+/// Run CPU-heavy work on the global Rayon pool, returning a Future
+pub async fn run_cpu_bound_work<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    rayon::spawn(move || {
+        let result = f();
+        // ignore error if receiver was dropped
+        let _ = tx.send(result);
+    });
+
+    rx.await.expect("Rayon task panicked or channel closed")
+}

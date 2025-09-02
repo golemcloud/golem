@@ -13,36 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions};
-use golem_common::model::plugin::PluginScope;
-use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use std::path::PathBuf;
-
-#[derive(Debug, Clone)]
-pub struct PluginDefinitionCreation {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub icon: Vec<u8>,
-    pub homepage: String,
-    pub scope: PluginScope,
-    pub specs: PluginTypeSpecificDefinition,
-}
-
-impl From<PluginDefinitionCreation>
-    for golem_api_grpc::proto::golem::component::PluginDefinitionCreation
-{
-    fn from(value: PluginDefinitionCreation) -> Self {
-        golem_api_grpc::proto::golem::component::PluginDefinitionCreation {
-            name: value.name,
-            version: value.version,
-            description: value.description,
-            icon: value.icon,
-            homepage: value.homepage,
-            specs: Some(value.specs.into()),
-            scope: Some(value.scope.into()),
-        }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct IFSEntry {

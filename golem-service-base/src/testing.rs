@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::Component;
-use golem_common::model::component::{ComponentName, ComponentRevision, VersionedComponentId};
+use golem_common::model::component::ComponentDto;
+use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
@@ -46,14 +46,12 @@ pub struct LocalFileSystemComponentMetadata {
     pub agent_types: Vec<AgentType>,
 }
 
-impl From<LocalFileSystemComponentMetadata> for Component {
+impl From<LocalFileSystemComponentMetadata> for ComponentDto {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
             environment_id: value.environment_id,
-            versioned_component_id: VersionedComponentId {
-                component_id: value.component_id,
-                version: value.version,
-            },
+            id: value.component_id,
+            revision: value.version,
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(

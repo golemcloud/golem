@@ -1857,7 +1857,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewApplicationData'
+              $ref: '#/components/schemas/ApplicationCreation'
         required: true
       responses:
         '200':
@@ -2152,7 +2152,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewAccountData'
+              $ref: '#/components/schemas/AccountCreation'
         required: true
       responses:
         '200':
@@ -2301,7 +2301,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdatedAccountData'
+              $ref: '#/components/schemas/AccountUpdate'
         required: true
       responses:
         '200':
@@ -2664,7 +2664,7 @@ paths:
               type: object
               properties:
                 metadata:
-                  $ref: '#/components/schemas/NewPluginRegistrationData'
+                  $ref: '#/components/schemas/PluginRegistrationCreation'
                 pluginWasm:
                   type: string
                   format: binary
@@ -3668,7 +3668,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdatedApplicationData'
+              $ref: '#/components/schemas/ApplicationUpdate'
         required: true
       responses:
         '200':
@@ -3813,7 +3813,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewEnvironmentData'
+              $ref: '#/components/schemas/EnvironmentCreation'
         required: true
       responses:
         '200':
@@ -4180,7 +4180,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Component'
+                $ref: '#/components/schemas/ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4250,7 +4250,7 @@ paths:
               type: object
               properties:
                 metadata:
-                  $ref: '#/components/schemas/UpdatedComponentData'
+                  $ref: '#/components/schemas/ComponentUpdate'
                 newComponentWasm:
                   type: string
                   format: binary
@@ -4266,76 +4266,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Component'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/revisions:
-    get:
-      tags:
-      - RegistryService
-      - Component
-      summary: Get all revisions for a component
-      operationId: get_component_revisions
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/Page_Component'
+                $ref: '#/components/schemas/ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4413,7 +4344,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Component'
+                $ref: '#/components/schemas/ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5795,7 +5726,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Component'
+                $ref: '#/components/schemas/Page_ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5866,7 +5797,7 @@ paths:
               type: object
               properties:
                 metadata:
-                  $ref: '#/components/schemas/NewComponentData'
+                  $ref: '#/components/schemas/ComponentCreation'
                 componentWasm:
                   type: string
                   format: binary
@@ -5883,7 +5814,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Component'
+                $ref: '#/components/schemas/ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -5961,7 +5892,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Component'
+                $ref: '#/components/schemas/ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6041,7 +5972,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Page_Component'
+                $ref: '#/components/schemas/Page_ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6129,7 +6060,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/Component'
+                $ref: '#/components/schemas/ComponentDto'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -6328,7 +6259,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdatedEnvironmentData'
+              $ref: '#/components/schemas/EnvironmentUpdate'
         required: true
       responses:
         '200':
@@ -6825,7 +6756,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewEnvironmentShareData'
+              $ref: '#/components/schemas/EnvironmentShareCreation'
         required: true
       responses:
         '200':
@@ -6970,7 +6901,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/NewEnvironmentPluginGrantData'
+              $ref: '#/components/schemas/EnvironmentPluginGrantCreation'
         required: true
       responses:
         '200':
@@ -7540,7 +7471,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/UpdatedEnvironmentShareData'
+              $ref: '#/components/schemas/EnvironmentShareUpdate'
         required: true
       responses:
         '200':
@@ -12099,6 +12030,17 @@ components:
       - totalAccounts
       - totalActiveAccounts
       - totalDeletedAccounts
+    AccountCreation:
+      title: AccountCreation
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+      required:
+      - name
+      - email
     AccountRole:
       type: string
       enum:
@@ -12131,6 +12073,17 @@ components:
       - componentsCount
       - workersCount
       - createdAt
+    AccountUpdate:
+      title: AccountUpdate
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+      required:
+      - name
+      - email
     AgentConstructor:
       title: AgentConstructor
       type: object
@@ -12367,6 +12320,20 @@ components:
       - revision
       - accountId
       - name
+    ApplicationCreation:
+      title: ApplicationCreation
+      type: object
+      properties:
+        name:
+          type: string
+      required:
+      - name
+    ApplicationUpdate:
+      title: ApplicationUpdate
+      type: object
+      properties:
+        newName:
+          type: string
     BinaryDescriptor:
       title: BinaryDescriptor
       type: object
@@ -12398,15 +12365,54 @@ components:
       - revision
       - domainName
       - createdAt
-    Component:
-      title: Component
+    ComponentCreation:
+      title: ComponentCreation
       type: object
       properties:
+        componentName:
+          type: string
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        fileOptions:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentFileOptions'
+        dynamicLinking:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+        env:
+          default: {}
+          type: object
+          additionalProperties:
+            type: string
+        agentTypes:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+        plugins:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallation'
+      required:
+      - componentName
+    ComponentDto:
+      title: ComponentDto
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
         environmentId:
           type: string
           format: uuid
-        versionedComponentId:
-          $ref: '#/components/schemas/VersionedComponentId'
         componentName:
           type: string
         componentSize:
@@ -12426,7 +12432,7 @@ components:
         installedPlugins:
           type: array
           items:
-            $ref: '#/components/schemas/PluginInstallation'
+            $ref: '#/components/schemas/InstalledPlugin'
         env:
           type: object
           additionalProperties:
@@ -12435,8 +12441,9 @@ components:
           type: string
           format: hash
       required:
+      - id
+      - revision
       - environmentId
-      - versionedComponentId
       - componentName
       - componentSize
       - metadata
@@ -12536,8 +12543,47 @@ components:
     ComponentType:
       type: string
       enum:
-      - Durable
-      - Ephemeral
+      - durable
+      - ephemeral
+    ComponentUpdate:
+      title: ComponentUpdate
+      type: object
+      properties:
+        currentRevision:
+          type: integer
+          format: uint64
+        componentType:
+          $ref: '#/components/schemas/ComponentType'
+        removedFiles:
+          default: []
+          type: array
+          items:
+            description: Path inside a component filesystem. Must be absolute.
+            type: string
+        newFileOptions:
+          default: {}
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/ComponentFileOptions'
+        dynamicLinking:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/DynamicLinkedInstance'
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        agentTypes:
+          type: array
+          items:
+            $ref: '#/components/schemas/AgentType'
+        pluginUpdates:
+          default: []
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationAction'
+      required:
+      - currentRevision
     CorsConfiguration:
       title: CorsConfiguration
       type: object
@@ -12788,6 +12834,23 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
+    EnvironmentCreation:
+      title: EnvironmentCreation
+      type: object
+      properties:
+        name:
+          type: string
+        compatibilityCheck:
+          type: boolean
+        versionCheck:
+          type: boolean
+        securityOverrides:
+          type: boolean
+      required:
+      - name
+      - compatibilityCheck
+      - versionCheck
+      - securityOverrides
     EnvironmentHash:
       title: EnvironmentHash
       type: object
@@ -12807,6 +12870,15 @@ components:
       required:
       - id
       - environmentId
+      - pluginId
+    EnvironmentPluginGrantCreation:
+      title: EnvironmentPluginGrantCreation
+      type: object
+      properties:
+        pluginId:
+          type: string
+          format: uuid
+      required:
       - pluginId
     EnvironmentRole:
       type: string
@@ -12840,9 +12912,39 @@ components:
       - environmentId
       - granteeAccountId
       - roles
+    EnvironmentShareCreation:
+      title: EnvironmentShareCreation
+      type: object
+      properties:
+        granteeAccountId:
+          type: string
+          format: uuid
+        roles:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
+      required:
+      - granteeAccountId
+      - roles
+    EnvironmentShareUpdate:
+      title: EnvironmentShareUpdate
+      type: object
+      properties:
+        newRoles:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
+      required:
+      - newRoles
     EnvironmentSummary:
       title: EnvironmentSummary
       type: object
+    EnvironmentUpdate:
+      title: EnvironmentUpdate
+      type: object
+      properties:
+        newName:
+          type: string
     GatewayBindingRequestView:
       title: GatewayBindingRequestView
       type: object
@@ -12924,6 +13026,24 @@ components:
       - key
       - path
       - permissions
+    InstalledPlugin:
+      title: InstalledPlugin
+      type: object
+      properties:
+        pluginId:
+          type: string
+          format: uuid
+        priority:
+          type: integer
+          format: int32
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - pluginId
+      - priority
+      - parameters
     LinearMemory:
       title: LinearMemory
       type: object
@@ -12959,115 +13079,6 @@ components:
             $ref: '#/components/schemas/NamedElementSchema'
       required:
       - elements
-    NewAccountData:
-      title: NewAccountData
-      type: object
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-      required:
-      - name
-      - email
-    NewApplicationData:
-      title: NewApplicationData
-      type: object
-      properties:
-        name:
-          type: string
-      required:
-      - name
-    NewComponentData:
-      title: NewComponentData
-      type: object
-      properties:
-        componentName:
-          type: string
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
-        fileOptions:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        agentTypes:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentType'
-      required:
-      - componentName
-    NewEnvironmentData:
-      title: NewEnvironmentData
-      type: object
-      properties:
-        name:
-          type: string
-        compatibilityCheck:
-          type: boolean
-        versionCheck:
-          type: boolean
-        securityOverrides:
-          type: boolean
-      required:
-      - name
-      - compatibilityCheck
-      - versionCheck
-      - securityOverrides
-    NewEnvironmentPluginGrantData:
-      title: NewEnvironmentPluginGrantData
-      type: object
-      properties:
-        pluginId:
-          type: string
-          format: uuid
-      required:
-      - pluginId
-    NewEnvironmentShareData:
-      title: NewEnvironmentShareData
-      type: object
-      properties:
-        granteeAccountId:
-          type: string
-          format: uuid
-        roles:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
-      required:
-      - granteeAccountId
-      - roles
-    NewPluginRegistrationData:
-      title: NewPluginRegistrationData
-      type: object
-      properties:
-        name:
-          type: string
-        version:
-          type: string
-        description:
-          type: string
-        icon:
-          type: string
-          format: bytes
-        homepage:
-          type: string
-        spec:
-          $ref: '#/components/schemas/PluginSpecDto'
-      required:
-      - name
-      - version
-      - description
-      - icon
-      - homepage
-      - spec
     OAuth2DeviceFlowStartRequest:
       title: OAuth2DeviceFlowStartRequest
       type: object
@@ -13173,14 +13184,14 @@ components:
             $ref: '#/components/schemas/CertificateResponseView'
       required:
       - values
-    Page_Component:
-      title: Page_Component
+    Page_ComponentDto:
+      title: Page_ComponentDto
       type: object
       properties:
         values:
           type: array
           items:
-            $ref: '#/components/schemas/Component'
+            $ref: '#/components/schemas/ComponentDto'
       required:
       - values
     Page_Deployment:
@@ -13307,17 +13318,11 @@ components:
       title: PluginInstallation
       type: object
       properties:
-        id:
+        environmentPluginGrantId:
           type: string
           format: uuid
-        name:
-          type: string
-        version:
-          type: string
-        registered:
-          description: Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-          type: boolean
         priority:
+          description: Plugins will be applied in order of increasing priority
           type: integer
           format: int32
         parameters:
@@ -13325,25 +13330,22 @@ components:
           additionalProperties:
             type: string
       required:
-      - id
-      - name
-      - version
-      - registered
+      - environmentPluginGrantId
       - priority
       - parameters
     PluginInstallationAction:
       discriminator:
         propertyName: type
         mapping:
-          Install: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
-          Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+          Install: '#/components/schemas/PluginInstallationAction_PluginInstallation'
           Uninstall: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
+          Update: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdate'
       type: object
       oneOf:
-      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationCreation'
-      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallation'
       - $ref: '#/components/schemas/PluginInstallationAction_PluginUninstallation'
-    PluginInstallationAction_PluginInstallationCreation:
+      - $ref: '#/components/schemas/PluginInstallationAction_PluginInstallationUpdate'
+    PluginInstallationAction_PluginInstallation:
       allOf:
       - type: object
         properties:
@@ -13354,8 +13356,8 @@ components:
             - Install
         required:
         - type
-      - $ref: '#/components/schemas/PluginInstallationCreation'
-    PluginInstallationAction_PluginInstallationUpdateWithId:
+      - $ref: '#/components/schemas/PluginInstallation'
+    PluginInstallationAction_PluginInstallationUpdate:
       allOf:
       - type: object
         properties:
@@ -13366,7 +13368,7 @@ components:
             - Update
         required:
         - type
-      - $ref: '#/components/schemas/PluginInstallationUpdateWithId'
+      - $ref: '#/components/schemas/PluginInstallationUpdate'
     PluginInstallationAction_PluginUninstallation:
       allOf:
       - type: object
@@ -13379,45 +13381,47 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/PluginUninstallation'
-    PluginInstallationCreation:
-      title: PluginInstallationCreation
+    PluginInstallationUpdate:
+      title: PluginInstallationUpdate
+      type: object
+      properties:
+        pluginPriority:
+          description: Priority will be used to identify the plugin to update
+          type: integer
+          format: int32
+        newPriority:
+          type: integer
+          format: int32
+        newParameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - pluginPriority
+    PluginRegistrationCreation:
+      title: PluginRegistrationCreation
       type: object
       properties:
         name:
           type: string
         version:
           type: string
-        priority:
-          description: Plugins will be applied in order of increasing priority
-          type: integer
-          format: int32
-        parameters:
-          type: object
-          additionalProperties:
-            type: string
+        description:
+          type: string
+        icon:
+          type: string
+          format: bytes
+        homepage:
+          type: string
+        spec:
+          $ref: '#/components/schemas/PluginSpecDto'
       required:
       - name
       - version
-      - priority
-      - parameters
-    PluginInstallationUpdateWithId:
-      title: PluginInstallationUpdateWithId
-      type: object
-      properties:
-        installationId:
-          type: string
-          format: uuid
-        priority:
-          type: integer
-          format: int32
-        parameters:
-          type: object
-          additionalProperties:
-            type: string
-      required:
-      - installationId
-      - priority
-      - parameters
+      - description
+      - icon
+      - homepage
+      - spec
     PluginRegistrationDto:
       title: PluginRegistrationDto
       type: object
@@ -13504,11 +13508,12 @@ components:
       title: PluginUninstallation
       type: object
       properties:
-        installationId:
-          type: string
-          format: uuid
+        pluginPriority:
+          description: Priority will be used to identify the plugin to delete
+          type: integer
+          format: int32
       required:
-      - installationId
+      - pluginPriority
     ProducerField:
       title: ProducerField
       type: object
@@ -13696,88 +13701,6 @@ components:
           type: string
       required:
       - routes
-      - version
-    UpdatedAccountData:
-      title: UpdatedAccountData
-      type: object
-      properties:
-        name:
-          type: string
-        email:
-          type: string
-      required:
-      - name
-      - email
-    UpdatedApplicationData:
-      title: UpdatedApplicationData
-      type: object
-      properties:
-        newName:
-          type: string
-    UpdatedComponentData:
-      title: UpdatedComponentData
-      type: object
-      properties:
-        previousVersion:
-          type: integer
-          format: uint64
-        componentType:
-          $ref: '#/components/schemas/ComponentType'
-        removedFiles:
-          type: array
-          items:
-            description: Path inside a component filesystem. Must be absolute.
-            type: string
-        newFileOptions:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/ComponentFileOptions'
-        dynamicLinking:
-          type: object
-          additionalProperties:
-            $ref: '#/components/schemas/DynamicLinkedInstance'
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        agentTypes:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentType'
-        pluginInstallationActions:
-          type: array
-          items:
-            $ref: '#/components/schemas/PluginInstallationAction'
-      required:
-      - previousVersion
-    UpdatedEnvironmentData:
-      title: UpdatedEnvironmentData
-      type: object
-      properties:
-        newName:
-          type: string
-    UpdatedEnvironmentShareData:
-      title: UpdatedEnvironmentShareData
-      type: object
-      properties:
-        newRoles:
-          type: array
-          items:
-            $ref: '#/components/schemas/EnvironmentRole'
-      required:
-      - newRoles
-    VersionedComponentId:
-      title: VersionedComponentId
-      type: object
-      properties:
-        componentId:
-          type: string
-          format: uuid
-        version:
-          type: integer
-          format: uint64
-      required:
-      - componentId
       - version
     VersionedName:
       title: VersionedName

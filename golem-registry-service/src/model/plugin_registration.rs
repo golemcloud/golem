@@ -15,7 +15,7 @@
 use golem_common::model::Empty;
 use golem_common::model::account::AccountId;
 use golem_common::model::base64::Base64;
-use golem_common::model::plugin::PluginWasmFileKey;
+use golem_common::model::plugin_registration::PluginWasmFileKey;
 use golem_common::model::plugin_registration::{
     ComponentTransformerPluginSpec, OplogProcessorPluginSpec,
 };

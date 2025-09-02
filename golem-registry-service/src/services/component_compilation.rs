@@ -18,9 +18,10 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     component_compilation_service_client::ComponentCompilationServiceClient,
 };
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::RetryConfig;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentId, RetryConfig};
 use http::Uri;
 use std::fmt::{Debug, Formatter};
 use std::time::Duration;

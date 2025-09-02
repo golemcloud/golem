@@ -22,8 +22,8 @@ use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountAction, EnvironmentAction};
 use golem_common::model::environment::{
-    Environment, EnvironmentId, EnvironmentName, EnvironmentRevision, NewEnvironmentData,
-    UpdatedEnvironmentData,
+    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
+    EnvironmentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
@@ -89,7 +89,7 @@ impl EnvironmentService {
     pub async fn create(
         &self,
         application_id: ApplicationId,
-        data: NewEnvironmentData,
+        data: EnvironmentCreation,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
         let application = self
@@ -136,7 +136,7 @@ impl EnvironmentService {
     pub async fn update(
         &self,
         environment_id: EnvironmentId,
-        update: UpdatedEnvironmentData,
+        update: EnvironmentUpdate,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
         let environment_with_ctx = self.get(&environment_id, auth).await?;

@@ -55,14 +55,14 @@ declare_structs! {
         pub security_overrides: bool,
     }
 
-    pub struct NewEnvironmentData {
+    pub struct EnvironmentCreation {
         pub name: EnvironmentName,
         pub compatibility_check: bool,
         pub version_check: bool,
         pub security_overrides: bool,
     }
 
-    pub struct UpdatedEnvironmentData {
+    pub struct EnvironmentUpdate {
         pub new_name: Option<EnvironmentName>
     }
 

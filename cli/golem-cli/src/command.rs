@@ -925,7 +925,6 @@ pub mod component {
         use crate::command::parse_key_val;
         use crate::command::shared_args::ComponentOptionalComponentName;
         use clap::Subcommand;
-        use golem_common::base_model::PluginInstallationId;
 
         #[derive(Debug, Subcommand)]
         pub enum ComponentPluginSubcommand {
@@ -958,9 +957,9 @@ pub mod component {
                 /// The component to update the plugin for
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
-                /// Installation id of the plugin to update
+                /// Priority of the plugin to update
                 #[arg(long)]
-                installation_id: PluginInstallationId,
+                plugin_to_update: i32,
                 /// Updated priority of the plugin - largest priority is applied first
                 #[arg(long)]
                 priority: i32,
@@ -973,9 +972,9 @@ pub mod component {
                 /// The component to uninstall the plugin from
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
-                /// Installation id of the plugin to uninstall
+                /// Priority of the plugin to update
                 #[arg(long)]
-                installation_id: PluginInstallationId,
+                plugin_to_update: i32,
             },
         }
     }

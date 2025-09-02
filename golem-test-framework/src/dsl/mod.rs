@@ -27,20 +27,20 @@ use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOu
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::{
-    Application, ApplicationId, ApplicationName, NewApplicationData,
+    Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::{EnvironmentRole, TokenSecret};
+use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
-    Component, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName,
-    ComponentRevision, ComponentType,
+    ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentId,
+    ComponentName, ComponentRevision, ComponentType, PluginInstallation,
 };
-use golem_common::model::component::{NewComponentData, UpdatedComponentData};
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
 use golem_common::model::environment::{
-    Environment, EnvironmentId, EnvironmentName, NewEnvironmentData,
+    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
 };
-use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShareData};
-use golem_common::model::ComponentId;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -83,7 +83,8 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         files: Vec<IFSEntry>,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         env: BTreeMap<String, String>,
-    ) -> anyhow::Result<Component> {
+        plugins: Vec<PluginInstallation>,
+    ) -> anyhow::Result<ComponentDto> {
         let component_directy = self.deps.component_directory();
 
         let source_path = component_directy.join(format!("{wasm_name}.wasm"));
@@ -138,13 +139,14 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let component = client
             .create_component(
                 &environment_id.0,
-                &NewComponentData {
+                &ComponentCreation {
                     component_name,
                     component_type: Some(component_type),
-                    file_options: Some(file_options),
-                    dynamic_linking: Some(dynamic_linking),
-                    env: Some(env),
-                    agent_types: None,
+                    file_options,
+                    dynamic_linking,
+                    env,
+                    plugins,
+                    agent_types: vec![],
                 },
                 File::open(source_path).await?,
                 maybe_files_archive,
@@ -164,7 +166,7 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         removed_files: Vec<ComponentFilePath>,
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
-    ) -> anyhow::Result<Component> {
+    ) -> anyhow::Result<ComponentDto> {
         let component_directy = self.deps.component_directory();
 
         let updated_wasm = if let Some(wasm_name) = wasm_name {
@@ -199,15 +201,15 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let component = client
             .update_component(
                 &component_id.0,
-                &UpdatedComponentData {
-                    previous_version,
+                &ComponentUpdate {
+                    current_revision: previous_version,
                     component_type,
-                    new_file_options: Some(new_file_options),
-                    removed_files: Some(removed_files),
+                    new_file_options,
+                    removed_files,
                     dynamic_linking,
                     env,
                     agent_types: None,
-                    plugin_installation_actions: None,
+                    plugin_updates: Vec::new(),
                 },
                 updated_wasm,
                 maybe_new_files_archive,
@@ -222,7 +224,7 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
 
         let application = client
-            .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
+            .create_application(&self.account_id.0, &ApplicationCreation { name: app_name })
             .await?;
 
         Ok(application)
@@ -235,7 +237,7 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let environment = client
             .create_environment(
                 &application_id.0,
-                &NewEnvironmentData {
+                &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: false,
                     version_check: false,
@@ -253,13 +255,13 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
 
         let application = client
-            .create_application(&self.account_id.0, &NewApplicationData { name: app_name })
+            .create_application(&self.account_id.0, &ApplicationCreation { name: app_name })
             .await?;
 
         let environment = client
             .create_environment(
                 &application.id.0,
-                &NewEnvironmentData {
+                &EnvironmentCreation {
                     name: env_name,
                     compatibility_check: false,
                     version_check: false,
@@ -282,7 +284,7 @@ impl<Deps: TestDependencies> TestDependenciesDsl<Deps> {
         let environment_share = client
             .create_environment_share(
                 &environment_id.0,
-                &NewEnvironmentShareData {
+                &EnvironmentShareCreation {
                     grantee_account_id: grantee_account_id.clone(),
                     roles: roles.to_vec(),
                 },
@@ -304,6 +306,7 @@ pub struct StoreComponentBuilder<'a, Deps: TestDependencies> {
     files: Vec<IFSEntry>,
     dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     env: BTreeMap<String, String>,
+    plugins: Vec<PluginInstallation>,
 }
 
 impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
@@ -320,9 +323,10 @@ impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
             component_type: ComponentType::Durable,
             unique: false,
             unverified: false,
-            files: vec![],
+            files: Vec::new(),
             dynamic_linking: HashMap::new(),
             env: BTreeMap::new(),
+            plugins: Vec::new(),
         }
     }
 
@@ -425,9 +429,31 @@ impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
         self
     }
 
+    pub fn with_plugin(
+        self,
+        environment_plugin_id: &EnvironmentPluginGrantId,
+        priority: i32,
+    ) -> Self {
+        self.with_parametrized_plugin(environment_plugin_id, priority, BTreeMap::new())
+    }
+
+    pub fn with_parametrized_plugin(
+        mut self,
+        environment_plugin_id: &EnvironmentPluginGrantId,
+        priority: i32,
+        parameters: BTreeMap<String, String>,
+    ) -> Self {
+        self.plugins.push(PluginInstallation {
+            environment_plugin_grant_id: environment_plugin_id.clone(),
+            priority,
+            parameters,
+        });
+        self
+    }
+
     /// Stores the component and returns the final component name too which is useful when used
     /// together with unique
-    pub async fn store(self) -> anyhow::Result<Component> {
+    pub async fn store(self) -> anyhow::Result<ComponentDto> {
         self.dsl
             .store_component_with(
                 &self.wasm_name,
@@ -439,6 +465,7 @@ impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
                 self.files,
                 self.dynamic_linking,
                 self.env,
+                self.plugins,
             )
             .await
     }

@@ -15,27 +15,43 @@
 use super::agent::AgentType;
 use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
-use super::plugin::PluginInstallationAction;
-use super::PluginInstallationId;
-use crate::base_model::ComponentId;
-use crate::model::account::AccountId;
+use super::environment_plugin_grant::EnvironmentPluginGrantId;
+use super::plugin_registration::PluginRegistrationId;
 use crate::model::component_metadata::ComponentMetadata;
-use crate::{declare_revision, declare_structs, declare_transparent_newtypes};
+use crate::{
+    declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
+    newtype_uuid,
+};
 use bincode::{Decode, Encode};
-use core::fmt;
 use derive_more::Display;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
+use strum_macros::FromRepr;
 use typed_path::Utf8UnixPathBuf;
+
+newtype_uuid!(
+    ComponentId,
+    golem_api_grpc::proto::golem::component::ComponentId
+);
+
+newtype_uuid!(
+    PluginInstallationId,
+    golem_api_grpc::proto::golem::common::PluginInstallationId
+);
 
 declare_revision!(ComponentRevision);
 
 declare_transparent_newtypes! {
     #[derive(Display)]
     pub struct ComponentName(pub String);
+
+    /// Key that can be used to identify a component file.
+    /// All files with the same content will have the same key.
+    #[derive(Display)]
+    pub struct InitialComponentFileKey(pub String);
 }
 
 impl TryFrom<&str> for ComponentName {
@@ -64,36 +80,54 @@ impl FromStr for ComponentName {
 }
 
 declare_structs! {
-    pub struct NewComponentData {
+    pub struct ComponentCreation {
         pub component_name: ComponentName,
         pub component_type: Option<ComponentType>,
-        pub file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
-        pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
-        pub env: Option<BTreeMap<String, String>>,
-        pub agent_types: Option<Vec<AgentType>>
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub env: BTreeMap<String, String>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub agent_types: Vec<AgentType>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub plugins: Vec<PluginInstallation>,
     }
 
-    pub struct UpdatedComponentData {
-        pub previous_version: ComponentRevision,
+    pub struct ComponentUpdate {
+        pub current_revision: ComponentRevision,
         pub component_type: Option<ComponentType>,
-        pub removed_files: Option<Vec<ComponentFilePath>>,
-        pub new_file_options: Option<BTreeMap<ComponentFilePath, ComponentFileOptions>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub removed_files: Vec<ComponentFilePath>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         pub env: Option<BTreeMap<String, String>>,
         pub agent_types: Option<Vec<AgentType>>,
-        pub plugin_installation_actions: Option<Vec<PluginInstallationAction>>,
+        #[serde(default)]
+        #[cfg_attr(feature = "poem", oai(default))]
+        pub plugin_updates: Vec<PluginInstallationAction>,
     }
 
-    pub struct Component {
+    pub struct ComponentDto {
+        pub id: ComponentId,
+        pub revision: ComponentRevision,
         pub environment_id: EnvironmentId,
-        pub versioned_component_id: VersionedComponentId,
         pub component_name: ComponentName,
         pub component_size: u64,
         pub metadata: ComponentMetadata,
         pub created_at: chrono::DateTime<chrono::Utc>,
         pub component_type: ComponentType,
         pub files: Vec<InitialComponentFile>,
-        pub installed_plugins: Vec<PluginInstallation>,
+        pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub wasm_hash: crate::model::diff::Hash,
     }
@@ -104,40 +138,55 @@ declare_structs! {
         pub permissions: ComponentFilePermissions,
     }
 
-    pub struct PluginInstallation {
-        pub id: PluginInstallationId,
-        pub name: String,
-        pub version: String,
-        /// Whether the referenced plugin is still registered. If false, the installation will still work but the plugin will not show up when listing plugins.
-        pub registered: bool,
+    pub struct InstalledPlugin {
+        pub plugin_id: PluginRegistrationId,
         pub priority: i32,
-        pub parameters: HashMap<String, String>,
+        pub parameters: BTreeMap<String, String>,
+    }
+
+    pub struct PluginInstallation {
+        pub environment_plugin_grant_id: EnvironmentPluginGrantId,
+        /// Plugins will be applied in order of increasing priority
+        pub priority: i32,
+        pub parameters: BTreeMap<String, String>,
+    }
+
+    pub struct PluginInstallationUpdate {
+        /// Priority will be used to identify the plugin to update
+        pub plugin_priority: i32,
+        pub new_priority: Option<i32>,
+        pub new_parameters: Option<BTreeMap<String, String>>,
+    }
+
+    pub struct PluginUninstallation {
+        /// Priority will be used to identify the plugin to delete
+        pub plugin_priority: i32
+    }
+
+    pub struct InitialComponentFile {
+        pub key: InitialComponentFileKey,
+        pub path: ComponentFilePath,
+        pub permissions: ComponentFilePermissions,
     }
 }
 
-/// Key that can be used to identify a component file.
-/// All files with the same content will have the same key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, derive_more::Display)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-pub struct InitialComponentFileKey(pub String);
-
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-#[repr(i32)]
-pub enum ComponentType {
-    Durable = 0,
-    Ephemeral = 1,
+impl InitialComponentFile {
+    pub fn is_read_only(&self) -> bool {
+        self.permissions == ComponentFilePermissions::ReadOnly
+    }
 }
 
-impl TryFrom<i32> for ComponentType {
-    type Error = String;
+declare_enums! {
+    #[derive(Encode, Decode, FromRepr)]
+    #[repr(i32)]
+    pub enum ComponentType {
+        Durable = 0,
+        Ephemeral = 1,
+    }
 
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(ComponentType::Durable),
-            1 => Ok(ComponentType::Ephemeral),
-            _ => Err(format!("Unknown Component Type: {value}")),
-        }
+    pub enum ComponentFilePermissions {
+        ReadOnly,
+        ReadWrite,
     }
 }
 
@@ -161,6 +210,38 @@ impl FromStr for ComponentType {
             _ => Err(format!("Unknown Component Type: {s}")),
         }
     }
+}
+
+impl ComponentFilePermissions {
+    pub fn as_compact_str(&self) -> &'static str {
+        match self {
+            ComponentFilePermissions::ReadOnly => "ro",
+            ComponentFilePermissions::ReadWrite => "rw",
+        }
+    }
+    pub fn from_compact_str(s: &str) -> Result<Self, String> {
+        match s {
+            "ro" => Ok(ComponentFilePermissions::ReadOnly),
+            "rw" => Ok(ComponentFilePermissions::ReadWrite),
+            _ => Err(format!("Unknown permissions: {s}")),
+        }
+    }
+}
+
+impl Default for ComponentFilePermissions {
+    fn default() -> Self {
+        Self::ReadOnly
+    }
+}
+
+declare_unions! {
+
+    pub enum PluginInstallationAction {
+        Install(PluginInstallation),
+        Uninstall(PluginUninstallation),
+        Update(PluginInstallationUpdate),
+    }
+
 }
 
 /// Path inside a component filesystem. Must be
@@ -236,113 +317,53 @@ impl FromStr for ComponentFilePath {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct InitialComponentFile {
-    pub key: InitialComponentFileKey,
-    pub path: ComponentFilePath,
-    pub permissions: ComponentFilePermissions,
-}
+// #[derive(
+//     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+// )]
+// #[serde(rename_all = "camelCase")]
+// #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+// #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 
-impl InitialComponentFile {
-    pub fn is_read_only(&self) -> bool {
-        self.permissions == ComponentFilePermissions::ReadOnly
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-pub struct ComponentOwner {
-    pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
-}
+// pub struct VersionedComponentId {
+//     pub component_id: ComponentId,
+//     pub version: ComponentRevision,
+// }
 
-impl Display for ComponentOwner {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}:{}", self.account_id, self.environment_id)
-    }
-}
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
-)]
-#[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+// impl Display for VersionedComponentId {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}#{}", self.component_id, self.version)
+//     }
+// }
 
-pub struct VersionedComponentId {
-    pub component_id: ComponentId,
-    pub version: ComponentRevision,
-}
+// #[cfg(feature = "protobuf")]
+// mod protobuf {
+//     use super::ComponentRevision;
+//     use crate::model::component::VersionedComponentId;
 
-impl Display for VersionedComponentId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}#{}", self.component_id, self.version)
-    }
-}
+//     impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
+//         for VersionedComponentId
+//     {
+//         type Error = String;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-#[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
-pub enum ComponentFilePermissions {
-    ReadOnly,
-    ReadWrite,
-}
+//         fn try_from(
+//             value: golem_api_grpc::proto::golem::component::VersionedComponentId,
+//         ) -> Result<Self, Self::Error> {
+//             Ok(Self {
+//                 component_id: value
+//                     .component_id
+//                     .ok_or("Missing component_id")?
+//                     .try_into()?,
+//                 version: ComponentRevision(value.version),
+//             })
+//         }
+//     }
 
-impl ComponentFilePermissions {
-    pub fn as_compact_str(&self) -> &'static str {
-        match self {
-            ComponentFilePermissions::ReadOnly => "ro",
-            ComponentFilePermissions::ReadWrite => "rw",
-        }
-    }
-    pub fn from_compact_str(s: &str) -> Result<Self, String> {
-        match s {
-            "ro" => Ok(ComponentFilePermissions::ReadOnly),
-            "rw" => Ok(ComponentFilePermissions::ReadWrite),
-            _ => Err(format!("Unknown permissions: {s}")),
-        }
-    }
-}
-
-impl Default for ComponentFilePermissions {
-    fn default() -> Self {
-        Self::ReadOnly
-    }
-}
-
-#[cfg(feature = "protobuf")]
-mod protobuf {
-    use super::ComponentRevision;
-    use crate::model::component::VersionedComponentId;
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::VersionedComponentId>
-        for VersionedComponentId
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::VersionedComponentId,
-        ) -> Result<Self, Self::Error> {
-            Ok(Self {
-                component_id: value
-                    .component_id
-                    .ok_or("Missing component_id")?
-                    .try_into()?,
-                version: ComponentRevision(value.version),
-            })
-        }
-    }
-
-    impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
-        fn from(value: VersionedComponentId) -> Self {
-            Self {
-                component_id: Some(value.component_id.into()),
-                version: value.version.0,
-            }
-        }
-    }
-}
+//     impl From<VersionedComponentId> for golem_api_grpc::proto::golem::component::VersionedComponentId {
+//         fn from(value: VersionedComponentId) -> Self {
+//             Self {
+//                 component_id: Some(value.component_id.into()),
+//                 version: value.version.0,
+//             }
+//         }
+//     }
+// }

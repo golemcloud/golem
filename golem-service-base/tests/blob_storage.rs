@@ -22,7 +22,7 @@ use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::TryStreamExt;
 use futures::stream::BoxStream;
-use golem_common::model::ComponentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
 use golem_service_base::config::S3BlobStorageConfig;
