@@ -43,7 +43,7 @@ use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
-use rib::ParsedFunctionName;
+use rib::{ParsedFunctionName, ParsedFunctionSite};
 use tokio::runtime::Handle;
 use tracing::debug;
 
@@ -614,7 +614,16 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     ) -> String {
         let parsed_function_name: Option<ParsedFunctionName> =
             ParsedFunctionName::parse(&function_name).ok();
-        if parsed_function_name.is_some() {
+        if matches!(
+            parsed_function_name,
+            Some(ParsedFunctionName {
+                site: ParsedFunctionSite::Global,
+                function: _
+            }) | Some(ParsedFunctionName {
+                site: ParsedFunctionSite::PackagedInterface { .. },
+                function: _
+            })
+        ) {
             // already valid function name, doing nothing
             function_name
         } else if let Ok(target_component) = self
