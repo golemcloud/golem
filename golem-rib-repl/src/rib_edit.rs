@@ -18,7 +18,7 @@ use crate::CommandRegistry;
 use colored::Colorize;
 use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
-use rib::{Expr, VariableId};
+use rib::{CustomInstanceSpec, Expr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;
 use rustyline::hint::Hinter;
@@ -31,7 +31,7 @@ pub struct RibEdit {
     pub compiler_output: Option<ReplCompilerOutput>,
     pub key_words: Vec<&'static str>,
     pub std_function_names: Vec<&'static str>,
-    pub custom_instance_names: Vec<String>,
+    pub custom_instances: Vec<CustomInstanceSpec>,
     pub repl_commands: Vec<String>,
 }
 
@@ -52,6 +52,17 @@ impl RibEdit {
         self.compiler_output.as_ref().map(|output| &output.variants)
     }
 
+    pub fn custom_instance_names(&self) -> Vec<String> {
+        self.custom_instances
+            .iter()
+            .map(|spec| spec.instance_name.clone())
+            .collect()
+    }
+
+    pub fn custom_instances(&self) -> &Vec<CustomInstanceSpec> {
+        &self.custom_instances
+    }
+
     pub fn enums(&self) -> Option<&Vec<TypeEnum>> {
         self.compiler_output.as_ref().map(|output| &output.enums)
     }
@@ -63,7 +74,7 @@ impl RibEdit {
                 "let", "if", "else", "match", "for", "in", "true", "false", "yield", "some",
                 "none", "ok", "err",
             ],
-            custom_instance_names: vec![],
+            custom_instances: vec![],
             std_function_names: vec!["instance"],
             repl_commands: command_registry.get_commands(),
         }
@@ -72,8 +83,8 @@ impl RibEdit {
         self.compiler_output = Some(compiler_output.clone());
     }
 
-    pub fn update_std_function_names(&mut self, std_function_names: Vec<String>) {
-        self.custom_instance_names.extend(std_function_names);
+    pub fn update_custom_instances(&mut self, custom_instances: Vec<CustomInstanceSpec>) {
+        self.custom_instances.extend(custom_instances);
     }
 
     fn backtrack_and_get_start_pos(line: &str, end_pos: usize) -> usize {
@@ -195,6 +206,47 @@ impl RibEdit {
         }
     }
 
+    pub fn complete_custom_instance_args(
+        &self,
+        word: &str,
+        start: usize,
+    ) -> rustyline::Result<Option<(usize, Vec<String>)>> {
+        let custom_instances = self.custom_instances();
+
+        let mut completions = Vec::new();
+
+        for custom_instance in custom_instances.iter() {
+            let custom_instance_name = &custom_instance.instance_name;
+
+            let name_with_paren = format!("{custom_instance_name}(");
+
+            if word == name_with_paren {
+                let param_types = &custom_instance.parameter_types;
+
+                let args = param_types
+                    .into_iter()
+                    .map(|analysed_type| {
+                        ValueAndType::new(generate_value(&analysed_type), analysed_type.clone())
+                    })
+                    .collect::<Vec<_>>();
+
+                let args_str = args
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                completions.push(format!("{args_str})"));
+            }
+        }
+
+        if completions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some((start, completions)))
+        }
+    }
+
     pub fn complete_variants(
         &self,
         word: &str,
@@ -299,6 +351,13 @@ impl Completer for RibEdit {
             return Ok((new_start, completions));
         }
 
+        if let Some((new_start, new_completions)) =
+            self.complete_custom_instance_args(word, start)?
+        {
+            completions.extend(new_completions);
+            return Ok((new_start, completions));
+        }
+
         if let Some((new_start, new_completions)) = self.complete_variants(word, start, end_pos)? {
             completions.extend(new_completions);
             return Ok((new_start, completions));
@@ -325,8 +384,9 @@ impl Completer for RibEdit {
             }
 
             completions.extend(
-                self.custom_instance_names
+                self.custom_instances
                     .iter()
+                    .map(|spec| &spec.instance_name)
                     .filter(|name| name.starts_with(word))
                     .cloned(),
             );
@@ -351,7 +411,7 @@ impl Completer for RibEdit {
                     }),
             )
         } else {
-            completions.extend(self.custom_instance_names.clone());
+            completions.extend(self.custom_instance_names());
 
             completions.extend(self.std_function_names.iter().map(|&kw| kw.to_string()));
         }
