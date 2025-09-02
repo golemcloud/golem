@@ -34,6 +34,8 @@ use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
+use golem_common::model::agent::{DataSchema, ElementSchema};
+use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str, u8};
 
 #[derive(Clone)]
 pub struct RibReplHandler {
@@ -91,6 +93,28 @@ impl RibReplHandler {
             .agent_types()
             .iter()
             .map(|agent_type| {
+                let constructor_args = {
+                  match &agent_type.constructor.input_schema {
+                      DataSchema::Tuple(element_schemas) => {
+                          element_schemas.elements.iter().map(|x| {
+                              match &x.schema {
+                                  ElementSchema::ComponentModel(component_model_elem_schema) => {
+                                      component_model_elem_schema.element_type.clone()
+                                  }
+                                  ElementSchema::UnstructuredText(_) => {
+                                        str()
+                                  }
+                                  ElementSchema::UnstructuredBinary(_) => {
+                                      list(u8())
+                                  }
+                              }
+                          })
+                      }
+                      DataSchema::Multimodal(named_element_schemas) => {
+
+                      }
+                  }
+                };
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
                     vec![],
