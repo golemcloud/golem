@@ -395,6 +395,7 @@ pub struct Template {
     pub exclude: HashSet<String>,
     pub transform_exclude: HashSet<String>,
     pub transform: bool,
+    pub dev_only: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -424,6 +425,8 @@ pub(crate) struct TemplateMetadata {
     #[serde(rename = "transformExclude")]
     pub transform_exclude: Option<Vec<String>>,
     pub transform: Option<bool>,
+    #[serde(rename = "devOnly")]
+    pub dev_only: Option<bool>,
 }
 
 #[cfg(test)]
