@@ -1341,7 +1341,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             invocation: WorkerInvocation::ExportedFunction {
                                 idempotency_key: IdempotencyKey::fresh(),
                                 full_function_name: "golem:agent/guest.{initialize}".to_string(),
-                                function_input: vec![agent_id.parameters.clone().into_value()],
+                                function_input: vec![
+                                    agent_id.agent_type.clone().into_value(),
+                                    agent_id.parameters.clone().into_value(),
+                                ],
                                 invocation_context: invocation_context.clone(),
                             },
                         });
