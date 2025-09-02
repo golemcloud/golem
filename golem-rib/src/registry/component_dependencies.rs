@@ -292,6 +292,28 @@ impl ComponentDependencies {
                 }
             }
 
+            Some(TypeParameter::Interface(interface_name)) => {
+                let filtered_by_interface = self.filter_by_interface(&interface_name)?;
+
+                let dependency_key = if filtered_by_interface.dependencies.len() == 1 {
+                    filtered_by_interface
+                        .dependencies
+                        .iter()
+                        .next()
+                        .map(|(k, _)| k.clone())
+                        .unwrap()
+                } else {
+                    return Err(format!(
+                        "interface `{interface_name}` is ambiguous across components"
+                    ));
+                };
+
+                Ok(InstanceCreationType::WitWorker {
+                    component_info: Some(dependency_key.clone()),
+                    worker_name: worker_name.map(Box::new),
+                })
+            }
+
             _ => Ok(InstanceCreationType::WitWorker {
                 component_info: None,
                 worker_name: worker_name.map(Box::new),

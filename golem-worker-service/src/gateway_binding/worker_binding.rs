@@ -13,12 +13,14 @@
 // limitations under the License.
 
 use super::{IdempotencyKeyCompiled, InvocationContextCompiled, WorkerNameCompiled};
-use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
+use crate::gateway_rib_compiler::{
+    ComponentDependencyWithAgentInfo, DefaultWorkerServiceRibCompiler,
+};
 use golem_common::model::component::VersionedComponentId;
 use rib::{
-    ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo,
-    RibOutputTypeInfo, WorkerFunctionsInRib,
+    Expr, RibByteCode, RibCompilationError, RibInputTypeInfo, RibOutputTypeInfo,
+    WorkerFunctionsInRib,
 };
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +45,7 @@ pub struct FileServerBindingCompiled {
 impl FileServerBindingCompiled {
     pub fn from_raw_file_server_worker_binding(
         gateway_worker_binding: &FileServerBinding,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let worker_name_compiled: Option<WorkerNameCompiled> = gateway_worker_binding
             .worker_name
@@ -120,7 +122,7 @@ pub struct WorkerBindingCompiled {
 impl WorkerBindingCompiled {
     pub fn from_raw_worker_binding(
         gateway_worker_binding: &WorkerBinding,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let idempotency_key_compiled = match &gateway_worker_binding.idempotency_key {
             Some(idempotency_key) => Some(IdempotencyKeyCompiled::from_idempotency_key(
@@ -185,7 +187,7 @@ pub struct ResponseMappingCompiled {
 impl ResponseMappingCompiled {
     pub fn from_response_mapping(
         response_mapping: &ResponseMapping,
-        component_dependency: &[ComponentDependency],
+        component_dependency: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let response_compiled =
             DefaultWorkerServiceRibCompiler::compile(&response_mapping.0, component_dependency)?;
