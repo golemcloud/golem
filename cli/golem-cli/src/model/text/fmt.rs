@@ -15,13 +15,16 @@
 use crate::fuzzy::Match;
 use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::deploy_diff::DiffSerialize;
+use crate::model::environment::EnvironmentReference;
+use crate::model::format::Format;
 use crate::model::text::component::is_sensitive_env_var_name;
-use crate::model::{Format, WorkerNameMatch};
+use crate::model::worker::WorkerNameMatch;
 use anyhow::Context;
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
-use golem_client::model::{InitialComponentFile, WorkerStatus};
+use golem_common::model::component::InitialComponentFile;
+use golem_common::model::WorkerStatus;
 use itertools::Itertools;
 use regex::Regex;
 use similar::TextDiff;
@@ -507,16 +510,36 @@ impl Drop for NestedTextViewIndent {
 
 pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
     format!(
-        "{}{}{}/{}",
-        match &worker_name_match.account {
-            Some(account) => {
-                format!("{}/", account.email.blue().bold())
-            }
-            None => "".to_string(),
-        },
-        match &worker_name_match.project {
-            Some(project) => {
-                format!("{}/", project.project_ref.to_string().blue().bold())
+        "{}{}/{}",
+        match &worker_name_match.environment_reference() {
+            Some(environment_reference) => {
+                match environment_reference {
+                    EnvironmentReference::Environment { environment_name } => {
+                        format!("{}/", environment_name.0.blue().bold())
+                    }
+                    EnvironmentReference::ApplicationEnvironment {
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/",
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                    EnvironmentReference::AccountApplicationEnvironment {
+                        account_email,
+                        application_name,
+                        environment_name,
+                    } => {
+                        format!(
+                            "{}/{}/{}/",
+                            account_email.blue().bold(),
+                            application_name.0.blue().bold(),
+                            environment_name.0.blue().bold()
+                        )
+                    }
+                }
             }
             None => "".to_string(),
         },

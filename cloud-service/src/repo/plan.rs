@@ -157,7 +157,7 @@ impl PlanRepo for DbPlanRepo<golem_service_base::db::postgres::PostgresPool> {
 
         self.db_pool
             .with_ro("plan", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 

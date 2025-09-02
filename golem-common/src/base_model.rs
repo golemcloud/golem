@@ -12,30 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::ComponentId;
 use crate::newtype_uuid;
 use bincode::{Decode, Encode};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-
-newtype_uuid!(
-    ComponentId,
-    golem_api_grpc::proto::golem::component::ComponentId
-);
-
 newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
 
 newtype_uuid!(PluginId, golem_api_grpc::proto::golem::component::PluginId);
 
-newtype_uuid!(
-    PluginInstallationId,
-    golem_api_grpc::proto::golem::common::PluginInstallationId
-);
-
 newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
 newtype_uuid!(ProjectGrantId);
 newtype_uuid!(ProjectPolicyId);
-newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
@@ -100,8 +89,6 @@ impl golem_wasm_rpc::IntoValue for ShardId {
         golem_wasm_ast::analysis::analysed_type::s64()
     }
 }
-
-pub type ComponentVersion = u64;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]

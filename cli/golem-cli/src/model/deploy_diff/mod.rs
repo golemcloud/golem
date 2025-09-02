@@ -16,9 +16,10 @@
 //       This solution is intended to be a naive and temporary one until environments
 //       and atomic deployments will be developed.
 
-pub mod api_definition;
-pub mod api_deployment;
-pub mod component;
+// TODO: atomic
+// pub mod api_definition;
+// pub mod api_deployment;
+// pub mod component;
 
 use serde::Serialize;
 

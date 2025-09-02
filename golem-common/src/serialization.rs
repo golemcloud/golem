@@ -82,7 +82,7 @@ pub fn try_deserialize_with_version<T: Decode<()>>(
 
 #[cfg(test)]
 mod tests {
-    use crate::model::ComponentId;
+    use crate::model::component::ComponentId;
     use bincode::{Decode, Encode};
     use rand::distr::Alphanumeric;
     use rand::Rng;

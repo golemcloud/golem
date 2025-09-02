@@ -17,6 +17,9 @@ use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+#[cfg(feature = "model")]
+pub mod api;
+
 #[cfg(feature = "base-model")]
 pub mod base_model;
 
@@ -35,20 +38,16 @@ pub mod grpc;
 #[cfg(feature = "poem")]
 pub mod json_yaml;
 
+mod macros;
+
 #[cfg(feature = "observability")]
 pub mod metrics;
 
 #[cfg(feature = "model")]
 pub mod model;
 
-#[cfg(any(feature = "model", feature = "base-model"))]
-pub mod newtype;
-
 #[cfg(feature = "redis")]
 pub mod redis;
-
-#[cfg(feature = "sql")]
-pub mod repo;
 
 #[cfg(feature = "tokio")]
 pub mod retriable_error;
@@ -120,4 +119,11 @@ impl SafeDisplay for () {
     fn to_safe_string(&self) -> String {
         "".to_string()
     }
+}
+
+pub trait IntoAnyhow {
+    /// Direct conversion to anyhow::Error. This is preferred over going through the blanket Into<anyhow::Error> impl for std::err::Error,
+    /// as it can preserve more information depending on the implementor.
+    /// Can be removed when specialization is stable or std::err::Error has backtraces.
+    fn into_anyhow(self) -> anyhow::Error;
 }

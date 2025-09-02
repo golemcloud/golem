@@ -28,7 +28,7 @@ use golem_common::model::{
 use golem_common::repo::ComponentOwnerRow;
 use golem_common::repo::ComponentPluginInstallationRow;
 use golem_common::repo::PluginOwnerRow;
-use golem_service_base::db::Pool;
+use golem_service_base::db::{LabelledPoolTransaction, Pool};
 use golem_service_base::model::ComponentName;
 use golem_service_base::repo::plugin_installation::{
     DbPluginInstallationRepoQueries, PluginInstallationRecord, PluginInstallationRepoQueries,
@@ -547,7 +547,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
         .bind(version as i64);
         self.db_pool
             .with_ro("component", "get_files")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -573,7 +573,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
         .bind(version as i64);
         self.db_pool
             .with_ro("component", "get_transformed_files")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -596,7 +596,7 @@ impl DbComponentRepo<golem_service_base::db::postgres::PostgresPool> {
             query.build_query_as::<PluginInstallationRecord<ComponentPluginInstallationTarget>>();
         self.db_pool
             .with_ro("component", "get_installed_plugins_for_component")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 
@@ -644,10 +644,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             let namespace: String = result.get("namespace");
             let name: String = result.get("name");
             if namespace != component.namespace || name != component.name {
-                self.db_pool
-                    .with_rw("component", "create")
-                    .rollback(transaction)
-                    .await?;
+                transaction.rollback().await?;
                 return Err(RepoError::Internal(
                     "Component namespace and name invalid".to_string(),
                 ));
@@ -670,10 +667,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             if let Err(err) = result {
                 // Without this explicit rollback, sqlite seems to be remain locked when a next
                 // incoming request comes in.
-                self.db_pool
-                    .with_rw("component", "create")
-                    .rollback(transaction)
-                    .await?;
+                transaction.rollback().await?;
                 return Err(err);
             }
         }
@@ -757,10 +751,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             transaction.execute(query).await?;
         }
 
-        self.db_pool
-            .with_rw("component", "create")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -799,7 +790,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -840,7 +831,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -876,7 +867,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -912,7 +903,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get_all")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1121,7 +1112,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get_by_name")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         Ok(self.add_joined_data(components).await?)
@@ -1225,7 +1216,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with("component", "get_by_names")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1326,7 +1317,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get_by_names_sqlite")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1367,7 +1358,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
         let components = self
             .db_pool
             .with_ro("component", "get_by_name")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await?;
 
         self.add_joined_data(components).await
@@ -1433,11 +1424,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
                 .bind(component_id);
 
         transaction.execute(query).await?;
-
-        self.db_pool
-            .with_rw("component", "delete")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
@@ -1510,10 +1497,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             }
         }
 
-        self.db_pool
-            .with_rw("component", "delete_constraints")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -1587,10 +1571,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
             transaction.execute(query).await?;
         }
 
-        self.db_pool
-            .with_rw("component", "create_or_update_constraint")
-            .commit(transaction)
-            .await?;
+        transaction.commit().await?;
 
         Ok(())
     }
@@ -1644,7 +1625,7 @@ impl ComponentRepo for DbComponentRepo<golem_service_base::db::postgres::Postgre
 
         self.db_pool
             .with_ro("component", "get_installed_plugins")
-            .fetch_all(query)
+            .fetch_all_as(query)
             .await
     }
 }
