@@ -185,37 +185,33 @@ fn get_instance_creation_details(
                     match custom_instance_spec {
                         None => Ok((None, None)),
                         Some(custom_instance_spec) => {
-                            let optional_worker_name_expression = if args.is_empty() {
-                                None
-                            } else {
-                                let new_worker_name_prefix =
-                                    format!("{}(", custom_instance_spec.instance_name);
+                            let new_worker_name_prefix =
+                                format!("{}(", custom_instance_spec.instance_name);
 
-                                let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
-                                let mut iter = args.iter().cloned().peekable();
+                            let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
+                            let mut iter = args.iter().cloned().peekable();
 
-                                while let Some(arg) = iter.next() {
-                                    match arg {
-                                        Expr::Literal { .. } => {
-                                            exprs.push(Expr::literal("\""));
-                                            exprs.push(arg);
-                                            exprs.push(Expr::literal("\""));
-                                        }
-
-                                        _ => {
-                                            exprs.push(arg);
-                                        }
+                            while let Some(arg) = iter.next() {
+                                match arg {
+                                    Expr::Literal { .. } => {
+                                        exprs.push(Expr::literal("\""));
+                                        exprs.push(arg);
+                                        exprs.push(Expr::literal("\""));
                                     }
 
-                                    if iter.peek().is_some() {
-                                        exprs.push(Expr::literal(","));
+                                    _ => {
+                                        exprs.push(arg);
                                     }
                                 }
 
-                                exprs.push(Expr::literal(")"));
+                                if iter.peek().is_some() {
+                                    exprs.push(Expr::literal(","));
+                                }
+                            }
 
-                                Some(Expr::concat(exprs))
-                            };
+                            exprs.push(Expr::literal(")"));
+
+                            let worker_name_expr = Expr::concat(exprs);
 
                             let type_parameter = custom_instance_spec
                                 .interface_name
@@ -223,7 +219,7 @@ fn get_instance_creation_details(
 
                             let instance_creation = component_dependency.get_worker_instance_type(
                                 type_parameter.clone(),
-                                optional_worker_name_expression,
+                                Some(worker_name_expr),
                             )?;
 
                             Ok((Some(instance_creation), type_parameter))
