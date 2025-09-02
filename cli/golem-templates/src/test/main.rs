@@ -127,7 +127,7 @@ pub fn main() -> anyhow::Result<()> {
                 std::fs::remove_dir_all(&target_path)?;
             }
 
-            let app_templates = all_composable_app_templates();
+            let app_templates = all_composable_app_templates(true);
 
             let mut used_languages = HashSet::<GuestLanguage>::new();
             for (language, templates) in &app_templates {

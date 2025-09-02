@@ -291,6 +291,7 @@ condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
 command = "cargo"
 args = [
     "build",
+    "--workspace",
     "--release",
     "--exclude",
     "integration-tests",
@@ -304,6 +305,7 @@ condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
 command = "cargo"
 args = [
     "build",
+    "--workspace",
     "--release",
     "--target",
     "x86_64-unknown-linux-gnu",
@@ -320,6 +322,7 @@ install_crate = "cross"
 command = "cross"
 args = [
     "build",
+    "--workspace",
     "--release",
     "--target",
     "aarch64-unknown-linux-gnu",
