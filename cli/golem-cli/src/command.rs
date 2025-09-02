@@ -135,7 +135,7 @@ pub struct GolemCliGlobalFlags {
     pub show_sensitive: bool,
 
     /// Enable experimental, development-only features
-    #[arg(long, short, global = true, display_order = 111)]
+    #[arg(long, global = true, display_order = 111)]
     pub dev_mode: bool,
 
     #[command(flatten)]
