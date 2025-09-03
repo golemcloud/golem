@@ -24,9 +24,11 @@ use crate::model::{
 };
 use anyhow::bail;
 use async_trait::async_trait;
+use colored::Colorize;
 use golem_common::model::agent::{DataSchema, ElementSchema};
 use golem_rib_repl::{
-    ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
+    Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
+    RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
 use golem_wasm_ast::analysis::analysed_type::{str, variant};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
@@ -149,6 +151,10 @@ impl RibReplHandler {
             })
             .await;
 
+        let mut command_registry = CommandRegistry::default();
+
+        command_registry.register(Agents);
+
         let mut repl = RibRepl::bootstrap(RibReplConfig {
             history_file: Some(self.ctx.rib_repl_history_file().await?),
             dependency_manager: Arc::new(self.clone()),
@@ -156,7 +162,7 @@ impl RibReplHandler {
             printer: None,
             component_source: None,
             prompt: None,
-            command_registry: None,
+            command_registry: Some(command_registry),
         })
         .await?;
 
@@ -192,6 +198,45 @@ fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
             str()
         }
     }
+}
+
+pub struct Agents;
+
+impl Command for Agents {
+    type Input = ();
+    type Output = Vec<String>;
+    type InputParseError = ();
+    type ExecutionError = ();
+
+    fn parse(
+        &self,
+        _input: &str,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _input: Self::Input,
+        repl_context: &mut ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        let agent_names = repl_context.get_rib_compiler().get_custom_instance_names();
+
+        Ok(agent_names)
+    }
+
+    fn print_output(&self, output: Self::Output, _repl_context: &ReplContext) {
+        println!("{}", "Available agents:".green());
+        for agent_name in output {
+            println!("  - {}", agent_name.cyan());
+        }
+        println!()
+    }
+
+    fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
+
+    fn print_execution_error(&self, _error: Self::ExecutionError, _repl_context: &ReplContext) {}
 }
 
 #[async_trait]
