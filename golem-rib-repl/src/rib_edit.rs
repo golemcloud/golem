@@ -225,9 +225,9 @@ impl RibEdit {
                 let param_types = &custom_instance.parameter_types;
 
                 let args = param_types
-                    .into_iter()
+                    .iter()
                     .map(|analysed_type| {
-                        ValueAndType::new(generate_value(&analysed_type), analysed_type.clone())
+                        ValueAndType::new(generate_value(analysed_type), analysed_type.clone())
                     })
                     .collect::<Vec<_>>();
 
