@@ -20,7 +20,7 @@ use crate::app::build::{delete_path_logged, is_up_to_date, valid_env_vars};
 use crate::app::context::ApplicationContext;
 use crate::app::error::CustomCommandError;
 use crate::fs::compile_and_collect_globs;
-use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::AppComponentName;
 use crate::model::app_raw;
 use crate::model::app_raw::{
@@ -31,8 +31,9 @@ use crate::wasm_rpc_stubgen::commands;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use std::collections::HashMap;
+use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use tracing::debug;
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
@@ -353,15 +354,15 @@ fn execute_quickjs_d_ts(
 
 pub fn execute_external_command(
     ctx: &ApplicationContext,
-    base_build_dir: &Path,
+    base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
     additional_env_vars: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
         .as_ref()
-        .map(|dir| base_build_dir.join(dir))
-        .unwrap_or_else(|| base_build_dir.to_path_buf());
+        .map(|dir| base_command_dir.join(dir))
+        .unwrap_or_else(|| base_command_dir.to_path_buf());
 
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
@@ -442,22 +443,57 @@ pub fn execute_external_command(
             return Err(anyhow!("Empty command!"));
         }
 
-        let result = Command::new(command_tokens[0].clone())
+        ensure_common_deps_for_tool(ctx, command_tokens[0].as_str())?;
+
+        Command::new(command_tokens[0].clone())
             .args(command_tokens.iter().skip(1))
             .current_dir(build_dir)
             .status()
-            .with_context(|| "Failed to execute command".to_string())?;
+            .with_context(|| "Failed to execute command".to_string())?
+            .check_exit_status()
+    })())
+}
 
-        if result.success() {
+fn ensure_common_deps_for_tool(ctx: &ApplicationContext, tool: &str) -> anyhow::Result<()> {
+    match tool {
+        "node" | "npx" => ctx.ensure_common_deps_for_tool_once("node", || {
+            if fs::exists("node_modules")? {
+                return Ok(());
+            }
+
+            log_warn_action(
+                "Detected",
+                format!(
+                    "missing {}, executing {}",
+                    "node_modules".log_color_highlight(),
+                    "npm install".log_color_highlight()
+                ),
+            );
+            Command::new("npm")
+                .args(&["install"])
+                .status()
+                .context("Failed to execute npm install")?
+                .check_exit_status()
+        }),
+        _ => Ok(()),
+    }
+}
+
+trait ExitStatusExt {
+    fn check_exit_status(&self) -> anyhow::Result<()>;
+}
+
+impl ExitStatusExt for ExitStatus {
+    fn check_exit_status(&self) -> anyhow::Result<()> {
+        if self.success() {
             Ok(())
         } else {
             Err(anyhow!(format!(
                 "Command failed with exit code: {}",
-                result
-                    .code()
+                self.code()
                     .map(|code| code.to_string().log_color_error_highlight().to_string())
                     .unwrap_or_else(|| "?".to_string())
             )))
         }
-    })())
+    }
 }
