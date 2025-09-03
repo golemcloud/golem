@@ -24,11 +24,11 @@ use crate::model::{
 };
 use anyhow::bail;
 use async_trait::async_trait;
-use golem_common::model::agent::{DataSchema, ElementSchema, TextReference};
+use golem_common::model::agent::{DataSchema, ElementSchema};
 use golem_rib_repl::{
     ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
-use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str, u8, variant};
+use golem_wasm_ast::analysis::analysed_type::{str, variant};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
@@ -88,49 +88,33 @@ impl RibReplHandler {
             root_package_version: component.metadata.root_package_version().clone(),
         };
 
-        // The REPL has to know about the instance parameters to auto-populate the constructor arguments
-        // It has to also take into account how AgentId parser considers these input.
+        // The REPL has to know about the custom instance parameters
+        // to support creating instances using agent interface names.
         let custom_instance_spec = component
             .metadata
             .agent_types()
             .iter()
             .map(|agent_type| {
+                // constructor args is mainly constructed for REPL to auto populate
+                // the constructor argument values.
+                // If constructor-args is kept empty, the REPL will still work
+                // but users need to manually enter the type - otherwise end up in other compile time or runtime errors.
                 let constructor_args = {
                     match &agent_type.constructor.input_schema {
                         DataSchema::Tuple(element_schemas) => element_schemas
                             .elements
                             .iter()
-                            .map(|x| match &x.schema {
-                                ElementSchema::ComponentModel(component_model_elem_schema) => {
-                                    component_model_elem_schema.element_type.clone()
-                                }
-                                ElementSchema::UnstructuredText(_) => {
-                                    // the constructor args for unstructured text is just a text
-                                    // Ex: foo or [en]foo, where en is the language code
-                                    str()
-                                }
-                                ElementSchema::UnstructuredBinary(_) => {
-                                    // Example argument in constructor: [image/png]"iVBORw0KGA"
-                                    // The REPL can re-inspect the schema again and generate a proper base64
-                                    str()
-                                }
-                            })
+                            .map(|named_schema| get_analysed_type(&named_schema.schema))
                             .collect::<Vec<AnalysedType>>(),
                         DataSchema::Multimodal(named_element_schemas) => {
                             // the value is wrapped in names
                             named_element_schemas
                                 .elements
                                 .iter()
-                                .map(|x| {
-                                    let name = &x.name;
+                                .map(|named_schema| {
+                                    let name = &named_schema.name;
 
-                                    let analysed_type = match &x.schema {
-                                        ElementSchema::ComponentModel(
-                                            component_model_elem_schema,
-                                        ) => component_model_elem_schema.element_type.clone(),
-                                        ElementSchema::UnstructuredText(_) => str(),
-                                        ElementSchema::UnstructuredBinary(_) => str(),
-                                    };
+                                    let analysed_type = get_analysed_type(&named_schema.schema);
 
                                     let name_and_type = NameOptionTypePair {
                                         name: name.clone(),
@@ -143,6 +127,7 @@ impl RibReplHandler {
                         }
                     }
                 };
+
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
                     constructor_args,
@@ -188,6 +173,24 @@ impl RibReplHandler {
 
         repl.run().await;
         Ok(())
+    }
+}
+
+fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
+    match schema {
+        ElementSchema::ComponentModel(component_model_elem_schema) => {
+            component_model_elem_schema.element_type.clone()
+        }
+        ElementSchema::UnstructuredText(_) => {
+            // the constructor args for unstructured text is just a text
+            // Ex: foo or [en]foo, where en is the language code
+            str()
+        }
+        ElementSchema::UnstructuredBinary(_) => {
+            // Example argument in constructor: [image/png]"iVBORw0KGA"
+            // The REPL can re-inspect the schema again and generate a proper base64
+            str()
+        }
     }
 }
 
