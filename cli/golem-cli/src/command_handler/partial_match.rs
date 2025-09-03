@@ -251,7 +251,9 @@ impl ErrorHandler {
                         self.ctx.app_handler().log_languages_help();
                     }
                     ShowClapHelpTarget::ComponentNew => {
-                        self.ctx.app_handler().log_templates_help(None, None);
+                        self.ctx
+                            .app_handler()
+                            .log_templates_help(None, None, self.ctx.dev_mode());
                     }
                     ShowClapHelpTarget::ComponentAddDependency => {}
                 }
