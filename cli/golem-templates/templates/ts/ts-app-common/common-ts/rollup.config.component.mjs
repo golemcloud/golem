@@ -42,7 +42,7 @@ export default function componentRollupConfig() {
                 include: [
                     "./src/**/*.ts",
                     ".agent/**/*.ts",
-                    "../../.metadata/**/*.ts",
+                    ".metadata/**/*.ts",
                     "../../common-ts/src/**/*.ts",
                 ],
             }),
