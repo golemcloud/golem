@@ -348,6 +348,7 @@ fn execute_quickjs_d_ts(
     task_result_marker.result({
         wasm_rquickjs::generate_dts(wit, generate_quickjs_dts, command.world.as_deref())
             .context("Failed to generate QuickJS DTS")
+            .map(|_| ())
     })
 }
 
