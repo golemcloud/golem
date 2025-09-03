@@ -291,13 +291,13 @@ pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
     agents.iter().flat_map(render_exported_agent).collect()
 }
 
+pub fn show_exported_agent_constructors(agents: &[AgentType]) -> Vec<String> {
+    agents.iter().map(render_agent_constructor).collect()
+}
+
 fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     let mut result = Vec::new();
-    result.push(format!(
-        "{}({}) agent constructor",
-        agent.type_name,
-        render_data_schema(&agent.constructor.input_schema)
-    ));
+    result.push(render_agent_constructor(agent));
     for method in &agent.methods {
         result.push(format!(
             "{}.{}({}) -> {}",
@@ -309,6 +309,14 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     }
 
     result
+}
+
+fn render_agent_constructor(agent: &AgentType) -> String {
+    format!(
+        "{}({}) agent constructor",
+        agent.type_name,
+        render_data_schema(&agent.constructor.input_schema)
+    )
 }
 
 fn render_data_schema(schema: &DataSchema) -> String {
