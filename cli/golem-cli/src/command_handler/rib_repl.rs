@@ -24,7 +24,7 @@ use crate::model::{
 };
 use anyhow::bail;
 use async_trait::async_trait;
-use golem_common::model::agent::{DataSchema, ElementSchema};
+use golem_common::model::agent::{DataSchema, ElementSchema, TextReference};
 use golem_rib_repl::{
     ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
@@ -88,6 +88,8 @@ impl RibReplHandler {
             root_package_version: component.metadata.root_package_version().clone(),
         };
 
+        // The REPL has to know about the instance parameters to auto-populate the constructor arguments
+        // It has to also take into account how AgentId parser considers these input.
         let custom_instance_spec = component
             .metadata
             .agent_types()
@@ -102,8 +104,16 @@ impl RibReplHandler {
                                 ElementSchema::ComponentModel(component_model_elem_schema) => {
                                     component_model_elem_schema.element_type.clone()
                                 }
-                                ElementSchema::UnstructuredText(_) => str(),
-                                ElementSchema::UnstructuredBinary(_) => list(u8()),
+                                ElementSchema::UnstructuredText(_) => {
+                                    // the constructor args for unstructured text is just a text
+                                    // Ex: foo or [en]foo, where en is the language code
+                                    str()
+                                }
+                                ElementSchema::UnstructuredBinary(_) => {
+                                    // Example argument in constructor: [image/png]"iVBORw0KGA"
+                                    // The REPL can re-inspect the schema again and generate a proper base64
+                                    str()
+                                }
                             })
                             .collect::<Vec<AnalysedType>>(),
                         DataSchema::Multimodal(named_element_schemas) => {
