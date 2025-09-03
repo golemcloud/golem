@@ -28,8 +28,8 @@ use golem_common::model::agent::{DataSchema, ElementSchema, TextReference};
 use golem_rib_repl::{
     ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
-use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str, u8};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str, u8, variant};
+use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
@@ -117,7 +117,29 @@ impl RibReplHandler {
                             })
                             .collect::<Vec<AnalysedType>>(),
                         DataSchema::Multimodal(named_element_schemas) => {
-                            unimplemented!("Multimodal constructor args are not supported in REPL")
+                            // the value is wrapped in names
+                            named_element_schemas
+                                .elements
+                                .iter()
+                                .map(|x| {
+                                    let name = &x.name;
+
+                                    let analysed_type = match &x.schema {
+                                        ElementSchema::ComponentModel(
+                                            component_model_elem_schema,
+                                        ) => component_model_elem_schema.element_type.clone(),
+                                        ElementSchema::UnstructuredText(_) => str(),
+                                        ElementSchema::UnstructuredBinary(_) => str(),
+                                    };
+
+                                    let name_and_type = NameOptionTypePair {
+                                        name: name.clone(),
+                                        typ: Some(analysed_type),
+                                    };
+
+                                    variant(vec![name_and_type])
+                                })
+                                .collect::<Vec<_>>()
                         }
                     }
                 };
