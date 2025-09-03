@@ -153,7 +153,7 @@ impl RibReplHandler {
 
         let mut command_registry = CommandRegistry::default();
 
-        command_registry.register(AgentNames);
+        command_registry.register(Agents);
 
         let mut repl = RibRepl::bootstrap(RibReplConfig {
             history_file: Some(self.ctx.rib_repl_history_file().await?),
@@ -200,9 +200,9 @@ fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
     }
 }
 
-pub struct AgentNames;
+pub struct Agents;
 
-impl Command for AgentNames {
+impl Command for Agents {
     type Input = ();
     type Output = Vec<String>;
     type InputParseError = ();
