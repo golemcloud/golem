@@ -756,9 +756,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:empty;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:empty;
 
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
@@ -770,7 +772,8 @@ mod tests {
               export golem:agent/guest;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -854,9 +857,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:single1;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:single1;
 
             /// An example agent
             interface agent1 {
@@ -885,7 +890,8 @@ mod tests {
               export agent1;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -981,9 +987,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:single2;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:single2;
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
@@ -1037,7 +1045,8 @@ mod tests {
               export agent1;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -1048,9 +1057,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:multi1;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:multi1;
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
@@ -1102,7 +1113,7 @@ mod tests {
             /// Another example agent
             interface agent2 {
               use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-              use types.{f2-input, f2-output, person};
+              use types.{f2-input, f2-output, location, person};
 
               /// Creates another example agent instance
               initialize: func(person-group: list<person>) -> result<_, agent-error>;
@@ -1126,7 +1137,8 @@ mod tests {
               export agent2;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -1136,9 +1148,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:single1;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:single1;
 
             /// An example agent using WIT keywords as names
             interface agent1 {
@@ -1167,7 +1181,8 @@ mod tests {
               export agent1;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -1177,9 +1192,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:bug;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:bug;
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
@@ -1234,6 +1251,17 @@ mod tests {
               export weather-agent;
             }
             "#
-        )));
+            ),
+        );
+    }
+
+    fn assert_wit(actual: &str, expected: &str) {
+        let line_count = expected.lines().count();
+        let actual_prefix = actual
+            .lines()
+            .take(line_count)
+            .collect::<Vec<_>>()
+            .join("\n");
+        pretty_assertions::assert_eq!(actual_prefix, expected.trim_end())
     }
 }
