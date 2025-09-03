@@ -75,7 +75,10 @@ impl RibCompiler {
     }
 
     pub fn get_custom_instance_names(&self) -> Vec<String> {
-        self.custom_instance_spec.iter().map(|spec| spec.instance_name.clone()).collect::<Vec<_>>()
+        self.custom_instance_spec
+            .iter()
+            .map(|spec| spec.instance_name.clone())
+            .collect::<Vec<_>>()
     }
 
     // Currently supports only 1 component and hence really only one InstanceType

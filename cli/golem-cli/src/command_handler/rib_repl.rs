@@ -24,11 +24,11 @@ use crate::model::{
 };
 use anyhow::bail;
 use async_trait::async_trait;
-use golem_rib_repl::{parse_with_clap, Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke};
-use golem_wasm_ast::analysis::AnalysedType;
+use colored::Colorize;
 use golem_common::model::agent::{DataSchema, ElementSchema};
 use golem_rib_repl::{
-    ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
+    Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
+    RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
 use golem_wasm_ast::analysis::analysed_type::{str, variant};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
@@ -37,7 +37,6 @@ use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use std::sync::Arc;
-use colored::Colorize;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -152,8 +151,7 @@ impl RibReplHandler {
             })
             .await;
 
-        let mut command_registry =
-            CommandRegistry::default();
+        let mut command_registry = CommandRegistry::default();
 
         command_registry.register(Agents);
 
@@ -202,7 +200,6 @@ fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
     }
 }
 
-
 pub struct Agents;
 
 impl Command for Agents {
@@ -216,7 +213,6 @@ impl Command for Agents {
         _input: &str,
         _repl_context: &ReplContext,
     ) -> Result<Self::Input, Self::InputParseError> {
-
         Ok(())
     }
 
@@ -225,8 +221,7 @@ impl Command for Agents {
         _input: Self::Input,
         repl_context: &mut ReplContext,
     ) -> Result<Self::Output, Self::ExecutionError> {
-        let agent_names =
-            repl_context.get_rib_compiler().get_custom_instance_names();
+        let agent_names = repl_context.get_rib_compiler().get_custom_instance_names();
 
         Ok(agent_names)
     }
