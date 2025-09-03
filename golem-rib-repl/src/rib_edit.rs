@@ -210,6 +210,7 @@ impl RibEdit {
         &self,
         word: &str,
         start: usize,
+        end_pos: usize,
     ) -> rustyline::Result<Option<(usize, Vec<String>)>> {
         let custom_instances = self.custom_instances();
 
@@ -237,6 +238,7 @@ impl RibEdit {
                     .join(", ");
 
                 completions.push(format!("{args_str})"));
+                return Ok(Some((end_pos, completions)));
             }
         }
 
@@ -352,7 +354,7 @@ impl Completer for RibEdit {
         }
 
         if let Some((new_start, new_completions)) =
-            self.complete_custom_instance_args(word, start)?
+            self.complete_custom_instance_args(word, start, end_pos)?
         {
             completions.extend(new_completions);
             return Ok((new_start, completions));

@@ -108,16 +108,16 @@ impl RibReplHandler {
                                       list(u8())
                                   }
                               }
-                          })
+                          }).collect::<Vec<AnalysedType>>()
                       }
                       DataSchema::Multimodal(named_element_schemas) => {
-
+                          unimplemented!("Multimodal constructor args are not supported in REPL")
                       }
                   }
                 };
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
-                    vec![],
+                    constructor_args,
                     Some(rib::InterfaceName {
                         name: agent_type.type_name.to_string(),
                         version: None,
