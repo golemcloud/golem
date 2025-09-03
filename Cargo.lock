@@ -4161,6 +4161,7 @@ dependencies = [
  "native-tls",
  "nondestructive",
  "phf",
+ "pretty_assertions",
  "pretty_env_logger",
  "prettyplease",
  "proc-macro2",
