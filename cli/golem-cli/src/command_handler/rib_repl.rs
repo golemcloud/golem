@@ -153,7 +153,7 @@ impl RibReplHandler {
 
         let mut command_registry = CommandRegistry::default();
 
-        command_registry.register(Agents);
+        command_registry.register(AgentNames);
 
         let mut repl = RibRepl::bootstrap(RibReplConfig {
             history_file: Some(self.ctx.rib_repl_history_file().await?),
@@ -200,12 +200,12 @@ fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
     }
 }
 
-pub struct Agents;
+pub struct AgentNames;
 
-impl Command for Agents {
+impl Command for AgentNames {
     type Input = ();
     type Output = Vec<String>;
-    type InputParseError = clap::Error;
+    type InputParseError = ();
     type ExecutionError = ();
 
     fn parse(
@@ -226,18 +226,19 @@ impl Command for Agents {
         Ok(agent_names)
     }
 
-    fn print_output(&self, output: Self::Output, repl_context: &ReplContext) {
-        println!("{}", "Available agents:".yellow());
-        println!();
+    fn print_output(&self, output: Self::Output, _repl_context: &ReplContext) {
+        println!("{}", "Available agents:".green());
         for agent_name in output {
-            println!("- {}", agent_name.truecolor(180, 180, 180));
+            println!("  - {}", agent_name.cyan());
         }
+        println!()
     }
 
     fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
 
-    fn print_execution_error(&self, error: Self::ExecutionError, repl_context: &ReplContext) {}
+    fn print_execution_error(&self, _error: Self::ExecutionError, _repl_context: &ReplContext) {}
 }
+
 #[async_trait]
 impl RibDependencyManager for RibReplHandler {
     async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies> {
