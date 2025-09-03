@@ -497,11 +497,6 @@ impl Highlighter for RibEdit {
 
         let chars = line.chars().peekable();
 
-        // if line.starts_with(":") {
-        //     // If the line starts with ":", treat it as a command
-        //     highlighted.push_str(&line[..2]);
-        // }
-
         for c in chars {
             // accumulate code characters
             if c.is_alphanumeric() || c == '_' || c == '.' || c == '-' {

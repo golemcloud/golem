@@ -24,9 +24,11 @@ use crate::model::{
 };
 use anyhow::bail;
 use async_trait::async_trait;
+use golem_common::model::agent::{DataSchema, ElementSchema};
 use golem_rib_repl::{
     ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
+use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str, u8};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
@@ -34,8 +36,6 @@ use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
-use golem_common::model::agent::{DataSchema, ElementSchema};
-use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str, u8};
 
 #[derive(Clone)]
 pub struct RibReplHandler {
@@ -94,26 +94,22 @@ impl RibReplHandler {
             .iter()
             .map(|agent_type| {
                 let constructor_args = {
-                  match &agent_type.constructor.input_schema {
-                      DataSchema::Tuple(element_schemas) => {
-                          element_schemas.elements.iter().map(|x| {
-                              match &x.schema {
-                                  ElementSchema::ComponentModel(component_model_elem_schema) => {
-                                      component_model_elem_schema.element_type.clone()
-                                  }
-                                  ElementSchema::UnstructuredText(_) => {
-                                        str()
-                                  }
-                                  ElementSchema::UnstructuredBinary(_) => {
-                                      list(u8())
-                                  }
-                              }
-                          }).collect::<Vec<AnalysedType>>()
-                      }
-                      DataSchema::Multimodal(named_element_schemas) => {
-                          unimplemented!("Multimodal constructor args are not supported in REPL")
-                      }
-                  }
+                    match &agent_type.constructor.input_schema {
+                        DataSchema::Tuple(element_schemas) => element_schemas
+                            .elements
+                            .iter()
+                            .map(|x| match &x.schema {
+                                ElementSchema::ComponentModel(component_model_elem_schema) => {
+                                    component_model_elem_schema.element_type.clone()
+                                }
+                                ElementSchema::UnstructuredText(_) => str(),
+                                ElementSchema::UnstructuredBinary(_) => list(u8()),
+                            })
+                            .collect::<Vec<AnalysedType>>(),
+                        DataSchema::Multimodal(named_element_schemas) => {
+                            unimplemented!("Multimodal constructor args are not supported in REPL")
+                        }
+                    }
                 };
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
