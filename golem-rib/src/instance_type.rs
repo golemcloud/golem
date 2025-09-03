@@ -269,7 +269,7 @@ impl InstanceType {
                     let component_dependency =
                         self.component_dependencies().filter_by_interface(&iface)?;
 
-                    if component_dependency.size() == 1 {
+                    if component_dependency.dependencies.len() == 1 {
                         let (info, function_dictionary) =
                             component_dependency.dependencies.first_key_value().unwrap();
 
@@ -306,7 +306,7 @@ impl InstanceType {
                     let component_dependency =
                         self.component_dependencies().filter_by_package_name(&pkg)?;
 
-                    if component_dependency.size() == 1 {
+                    if component_dependency.dependencies.len() == 1 {
                         let (info, function_dictionary) =
                             component_dependency.dependencies.first_key_value().unwrap();
 
@@ -355,7 +355,7 @@ impl InstanceType {
                         .component_dependencies()
                         .filter_by_fully_qualified_interface(&fq_iface)?;
 
-                    if component_dependency.size() == 1 {
+                    if component_dependency.dependencies.len() == 1 {
                         let (info, function_dictionary) =
                             component_dependency.dependencies.first_key_value().unwrap();
 

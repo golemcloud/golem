@@ -39,6 +39,7 @@ use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
@@ -55,7 +56,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -79,6 +80,7 @@ use wasmtime::{Store, UpdateDeadline};
 /// Every worker invocation should be done through this service.
 pub struct Worker<Ctx: WorkerCtx> {
     owned_worker_id: OwnedWorkerId,
+    agent_id: Option<AgentId>,
 
     oplog: Arc<dyn Oplog>,
     worker_event_service: Arc<dyn WorkerEventService + Send + Sync>,
@@ -123,6 +125,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -137,6 +140,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_wasi_config_vars,
                 component_version,
                 parent,
+                invocation_context_stack,
             )
             .await
     }
@@ -151,6 +155,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
@@ -164,6 +169,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_wasi_config_vars,
             component_version,
             parent,
+            invocation_context_stack,
         )
         .await?;
         Self::start_if_needed(worker.clone()).await?;
@@ -202,8 +208,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_config: Option<BTreeMap<String, String>>,
         component_version: Option<u64>,
         parent: Option<WorkerId>,
+        invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
-        let (worker_metadata, execution_status) = Self::get_or_create_worker_metadata(
+        let (worker_metadata, agent_id, execution_status) = Self::get_or_create_worker_metadata(
             deps,
             account_id,
             &owned_worker_id,
@@ -212,13 +219,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             worker_env,
             worker_config,
             parent,
+            invocation_context_stack,
         )
         .await?;
 
         let initial_component_metadata = deps
             .component_service()
             .get_metadata(
-                &owned_worker_id.project_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(worker_metadata.last_known_status.component_version),
             )
@@ -280,6 +287,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         Ok(Worker {
             owned_worker_id,
+            agent_id,
             oplog,
             worker_event_service: Arc::new(WorkerEventServiceDefault::new(
                 deps.config().limits.event_broadcast_capacity,
@@ -367,7 +375,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Here we first acquire the `instance` lock. This means the worker cannot be started/stopped while we
     /// are processing this method.
     /// If it was not running, then we don't have to stop it.
-    /// If it was running then we recheck the conditions and then stop the worker.
+    /// If it was running, then we recheck the conditions and then stop the worker.
     ///
     /// We know that the conditions remain true because:
     /// - the invocation queue is empty, so it cannot get into `ExecutionStatus::Running`, as there is nothing to run
@@ -1287,24 +1295,64 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
         parent: Option<WorkerId>,
-    ) -> Result<(WorkerMetadata, Arc<std::sync::RwLock<ExecutionStatus>>), WorkerExecutorError>
-    {
+        invocation_context: &InvocationContextStack,
+    ) -> Result<
+        (
+            WorkerMetadata,
+            Option<AgentId>,
+            Arc<std::sync::RwLock<ExecutionStatus>>,
+        ),
+        WorkerExecutorError,
+    > {
         let component_id = owned_worker_id.component_id();
         let component = this
             .component_service()
-            .get_metadata(
-                &owned_worker_id.project_id,
-                &component_id,
-                component_version,
-            )
+            .get_metadata(&component_id, component_version)
             .await?;
 
         let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
 
         match this.worker_service().get(owned_worker_id).await {
             None => {
-                let initial_status =
+                let mut initial_status =
                     calculate_last_known_status(this, owned_worker_id, &None).await?;
+
+                let created_at = Timestamp::now_utc();
+                let agent_id = if component.metadata.is_agent() {
+                    let agent_id =
+                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
+                            .await
+                            .map_err(|err| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Invalid agent id: {}",
+                                    err
+                                ))
+                            })?;
+
+                    info!(
+                        "Enqueuing agent initialization for agent type {} with parameters {}",
+                        agent_id.agent_type, agent_id.parameters
+                    );
+
+                    initial_status
+                        .pending_invocations
+                        .push(TimestampedWorkerInvocation {
+                            timestamp: created_at,
+                            invocation: WorkerInvocation::ExportedFunction {
+                                idempotency_key: IdempotencyKey::fresh(),
+                                full_function_name: "golem:agent/guest.{initialize}".to_string(),
+                                function_input: vec![
+                                    agent_id.agent_type.clone().into_value(),
+                                    agent_id.parameters.clone().into_value(),
+                                ],
+                                invocation_context: invocation_context.clone(),
+                            },
+                        });
+                    Some(agent_id)
+                } else {
+                    None
+                };
+
                 let worker_metadata = WorkerMetadata {
                     worker_id: owned_worker_id.worker_id(),
                     args: worker_args.unwrap_or_default(),
@@ -1312,7 +1360,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
                     project_id: owned_worker_id.project_id(),
                     created_by: account_id.clone(),
-                    created_at: Timestamp::now_utc(),
+                    created_at,
                     parent,
                     last_known_status: WorkerStatusRecord {
                         component_version: component.versioned_component_id.version,
@@ -1336,7 +1384,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .worker_service()
                     .add(&worker_metadata, component.component_type)
                     .await?;
-                Ok((worker_metadata, execution_status))
+                Ok((worker_metadata, agent_id, execution_status))
             }
             Some(previous_metadata) => {
                 let worker_metadata = WorkerMetadata {
@@ -1354,7 +1402,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         component_type: component.component_type,
                         timestamp: Timestamp::now_utc(),
                     }));
-                Ok((worker_metadata, execution_status))
+
+                let agent_id = if component.metadata.is_agent() {
+                    let agent_id =
+                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
+                            .await
+                            .map_err(|err| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Invalid agent id: {}",
+                                    err
+                                ))
+                            })?;
+                    Some(agent_id)
+                } else {
+                    None
+                };
+
+                Ok((worker_metadata, agent_id, execution_status))
             }
         }
     }
@@ -1444,6 +1508,11 @@ impl WaitingWorker {
             Level::INFO,
             "waiting-for-permits",
             worker_id = parent.owned_worker_id.worker_id.to_string(),
+            agent_type = parent
+                .agent_id
+                .as_ref()
+                .map(|id| id.agent_type.clone())
+                .unwrap_or_else(|| "-".to_string()),
         );
         let handle = tokio::task::spawn(
             async move {
@@ -1504,6 +1573,11 @@ impl RunningWorker {
             Level::INFO,
             "invocation-loop",
             worker_id = parent.owned_worker_id.worker_id.to_string(),
+            agent_type = parent
+                .agent_id
+                .as_ref()
+                .map(|id| id.agent_type.clone())
+                .unwrap_or_else(|| "-".to_string()),
         );
         let handle = tokio::task::spawn(
             async move {
@@ -1592,7 +1666,6 @@ impl RunningWorker {
     async fn create_instance<Ctx: WorkerCtx>(
         parent: Arc<Worker<Ctx>>,
     ) -> Result<(Instance, async_mutex::Mutex<Store<Ctx>>), WorkerExecutorError> {
-        let project_id = parent.owned_worker_id.project_id();
         let component_id = parent.owned_worker_id.component_id();
         let worker_metadata = parent.get_metadata()?;
 
@@ -1619,12 +1692,7 @@ impl RunningWorker {
 
             match parent
                 .component_service()
-                .get(
-                    &parent.engine(),
-                    &project_id,
-                    &component_id,
-                    component_version,
-                )
+                .get(&parent.engine(), &component_id, component_version)
                 .await
             {
                 Ok((component, component_metadata)) => Ok((component, component_metadata)),
@@ -1649,7 +1717,6 @@ impl RunningWorker {
                             .component_service()
                             .get(
                                 &parent.engine(),
-                                &project_id,
                                 &component_id,
                                 worker_metadata.last_known_status.component_version,
                             )

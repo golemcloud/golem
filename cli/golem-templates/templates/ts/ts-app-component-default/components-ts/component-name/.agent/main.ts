@@ -1,11 +1,7 @@
-import '../.metadata/metadata.index';
-import { Metadata } from '@golemcloud/golem-ts-sdk';
-import { metadataCollection } from '../.metadata/metadata.index';
+import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
+import { Metadata } from '../../../.metadata/generated-types';
 
-// Clear preloaded metadata
-Metadata.clearMetadata("@golemcloud/golem-ts-sdk");
-// Load generated metadata
-metadataCollection.forEach(mod => mod.add(Metadata, false));
+TypescriptTypeRegistry.register(Metadata);
 
 // Import the user module after metadata is ready
 // This needs to be done this way otherwise rollup ends up generating the module,

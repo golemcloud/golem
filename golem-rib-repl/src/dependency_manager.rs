@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use rib::ComponentDependency;
+use rib::{ComponentDependency, CustomInstanceSpec};
 use std::path::Path;
 
 /// Dependency manager for the Rib REPL environment.
@@ -45,6 +45,8 @@ pub trait RibDependencyManager {
     ) -> anyhow::Result<ComponentDependency>;
 }
 
+#[derive(Clone)]
 pub struct ReplComponentDependencies {
     pub component_dependencies: Vec<ComponentDependency>,
+    pub custom_instance_spec: Vec<CustomInstanceSpec>,
 }

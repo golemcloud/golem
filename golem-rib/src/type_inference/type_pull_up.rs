@@ -569,7 +569,7 @@ mod type_pull_up_tests {
 
     use crate::call_type::CallType;
     use crate::function_name::DynamicParsedFunctionName;
-    use crate::DynamicParsedFunctionReference::IndexedResourceMethod;
+    use crate::DynamicParsedFunctionReference::Function;
     use crate::ParsedFunctionSite::PackagedInterface;
     use crate::{ArmPattern, ComponentDependencies, Expr, InferredType, MatchArm, VariableId};
 
@@ -889,13 +889,13 @@ mod type_pull_up_tests {
     pub fn test_pull_up_for_dynamic_call() {
         let rib = r#"
            let input = { foo: "afs", bar: "al" };
-           golem:it/api.{cart(input.foo).checkout}()
+           golem:it/api.{cart-checkout}(input.foo)
         "#;
 
         let mut expr = Expr::from_text(rib).unwrap();
         let component_dependencies = ComponentDependencies::default();
 
-        expr.infer_types_initial_phase(&component_dependencies, &vec![])
+        expr.infer_types_initial_phase(&component_dependencies, &vec![], &[])
             .unwrap();
         expr.infer_all_identifiers();
         expr.pull_types_up(&ComponentDependencies::default())
@@ -929,26 +929,24 @@ mod type_pull_up_tests {
                             interface: "api".to_string(),
                             version: None,
                         },
-                        function: IndexedResourceMethod {
-                            resource: "cart".to_string(),
-                            resource_params: vec![Expr::select_field(
-                                Expr::identifier_local("input", 0, None).with_inferred_type(
-                                    InferredType::record(vec![
-                                        ("foo".to_string(), InferredType::string()),
-                                        ("bar".to_string(), InferredType::string()),
-                                    ]),
-                                ),
-                                "foo",
-                                None,
-                            )
-                            .with_inferred_type(InferredType::string())],
-                            method: "checkout".to_string(),
+                        function: Function {
+                            function: "cart-checkout".to_string(),
                         },
                     },
                     None,
                 ),
                 None,
-                vec![],
+                vec![Expr::select_field(
+                    Expr::identifier_local("input", 0, None).with_inferred_type(
+                        InferredType::record(vec![
+                            ("foo".to_string(), InferredType::string()),
+                            ("bar".to_string(), InferredType::string()),
+                        ]),
+                    ),
+                    "foo",
+                    None,
+                )
+                .with_inferred_type(InferredType::string())],
             ),
         ]);
 

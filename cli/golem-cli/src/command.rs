@@ -134,6 +134,10 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, global = true, display_order = 110)]
     pub show_sensitive: bool,
 
+    /// Enable experimental, development-only features
+    #[arg(long, global = true, display_order = 111)]
+    pub dev_mode: bool,
+
     #[command(flatten)]
     pub verbosity: Verbosity,
 
@@ -586,6 +590,14 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
+    pub struct OptionalAgentTypeName {
+        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
+        /// Optional agent type name. If not specified, the component name must be specified.
+        #[clap(long, verbatim_doc_comment)]
+        pub agent_type_name: Option<String>,
+    }
+
+    #[derive(Debug, Args)]
     pub struct ComponentOptionalComponentNames {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Optional component names, if not specified components are selected based on the current directory
@@ -993,8 +1005,8 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        ComponentOptionalComponentName, NewWorkerArgument, StreamArgs, WorkerFunctionArgument,
-        WorkerFunctionName, WorkerNameArg,
+        ComponentOptionalComponentName, NewWorkerArgument, OptionalAgentTypeName, StreamArgs,
+        WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
     };
     use crate::model::{IdempotencyKey, WorkerUpdateMode};
     use clap::Subcommand;
@@ -1048,6 +1060,10 @@ pub mod worker {
         List {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
+
+            #[command(flatten)]
+            agent_type_name: OptionalAgentTypeName,
+
             /// Filter for worker metadata in form of `property op value`.
             ///
             /// Filter examples: `name = worker-name`, `version >= 0`, `status = Running`, `env.var1 = value`.

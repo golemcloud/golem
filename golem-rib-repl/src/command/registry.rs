@@ -1,4 +1,4 @@
-use crate::command::builtin::{Clear, Exports, TypeInfo};
+use crate::command::builtin::{Clear, Exports, ExportsConcise, TypeInfo};
 use crate::UntypedCommand;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,6 +14,7 @@ impl CommandRegistry {
         registry.register(TypeInfo);
         registry.register(Clear);
         registry.register(Exports);
+        registry.register(ExportsConcise);
         registry
     }
 

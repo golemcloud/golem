@@ -79,6 +79,7 @@ pub struct Context {
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
+    dev_mode: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -110,6 +111,7 @@ impl Context {
         let show_sensitive = global_flags.show_sensitive;
 
         let mut yes = global_flags.yes;
+        let dev_mode = global_flags.dev_mode;
         let mut update_or_redeploy = UpdateOrRedeployArgs::none();
 
         let mut app_context_config = ApplicationContextConfig::new(global_flags);
@@ -218,6 +220,7 @@ impl Context {
             auth_token_override: auth_token,
             project,
             yes,
+            dev_mode,
             show_sensitive,
             start_local_server,
             client_config,
@@ -255,6 +258,10 @@ impl Context {
 
     pub fn yes(&self) -> bool {
         self.yes
+    }
+
+    pub fn dev_mode(&self) -> bool {
+        self.dev_mode
     }
 
     pub fn show_sensitive(&self) -> bool {
@@ -443,14 +450,16 @@ impl Context {
         let rib_repl_state = self.rib_repl_state.read().await;
         ReplComponentDependencies {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
+            custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
         }
     }
 
     pub fn templates(
         &self,
+        dev_mode: bool,
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
-            .get_or_init(golem_templates::all_composable_app_templates)
+            .get_or_init(|| golem_templates::all_composable_app_templates(dev_mode))
     }
 
     pub async fn select_account_by_email_or_error(
@@ -829,6 +838,7 @@ impl Default for RibReplState {
         Self {
             dependencies: ReplComponentDependencies {
                 component_dependencies: vec![],
+                custom_instance_spec: vec![],
             },
         }
     }

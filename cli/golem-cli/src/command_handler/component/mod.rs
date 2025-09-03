@@ -188,7 +188,9 @@ impl ComponentCommandHandler {
                 "Both TEMPLATE and COMPONENT_PACKAGE_NAME are required in non-interactive mode",
             );
             logln("");
-            self.ctx.app_handler().log_templates_help(None, None);
+            self.ctx
+                .app_handler()
+                .log_templates_help(None, None, self.ctx.dev_mode());
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
@@ -206,7 +208,8 @@ impl ComponentCommandHandler {
         }
 
         let app_handler = self.ctx.app_handler();
-        let (common_template, component_template) = app_handler.get_template(&template)?;
+        let (common_template, component_template) =
+            app_handler.get_template(&template, self.ctx.dev_mode())?;
 
         // Unloading app context, so we can reload after the new component is created
         self.ctx.unload_app_context().await;
@@ -296,16 +299,23 @@ impl ComponentCommandHandler {
         match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None);
+                    self.ctx.app_handler().log_templates_help(
+                        Some(language),
+                        None,
+                        self.ctx.dev_mode(),
+                    );
                 } else {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter));
+                    self.ctx.app_handler().log_templates_help(
+                        None,
+                        Some(&filter),
+                        self.ctx.dev_mode(),
+                    );
                 }
             }
-            None => self.ctx.app_handler().log_templates_help(None, None),
+            None => self
+                .ctx
+                .app_handler()
+                .log_templates_help(None, None, self.ctx.dev_mode()),
         }
     }
 

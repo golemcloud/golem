@@ -3,7 +3,7 @@ set -euo pipefail
 IFS=$'\n\t'
 
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
-"option-service" "flags-service" "http-client-2" "stdio-cc" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
+"option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
 "update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests")
 zig_test_components=("zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
@@ -15,7 +15,7 @@ swift_test_components=("swift-1")
 c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
 
-rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability" "low-level-agent")
+rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability")
 ts_test_apps=("ts-rpc")
 
 # Optional arguments:
@@ -113,6 +113,9 @@ fi
 
 if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
   echo "Building the Rust test apps"
+  TEST_COMP_DIR="$(pwd)"
+  export GOLEM_RUST_PATH="${TEST_COMP_DIR}/../sdks/rust/golem-rust"
+  export GOLEM_CLI=${TEST_COMP_DIR}/../target/debug/golem-cli
   for subdir in "${rust_test_apps[@]}"; do
     echo "Building $subdir..."
     pushd "$subdir" || exit
@@ -122,12 +125,12 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
     fi
 
     if [ "$rebuild" = true ]; then
-      golem-cli app clean
+      $GOLEM_CLI app clean
       cargo clean
     fi
 
-    golem-cli app -b release build
-    golem-cli app -b release copy
+    $GOLEM_CLI app -b release build
+    $GOLEM_CLI app -b release copy
 
     popd || exit
   done

@@ -382,7 +382,7 @@ mod internal {
             &self,
             _component_dependency_key: ComponentDependencyKey,
             _instruction_id: &InstructionId,
-            _worker_name: Option<EvaluatedWorkerName>,
+            _worker_name: EvaluatedWorkerName,
             _function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
             _return_type: Option<AnalysedType>,
@@ -1181,130 +1181,6 @@ mod internal {
 
                 interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
             }
-            FunctionReferenceType::IndexedResourceConstructor { resource, arg_size } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let parameter_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!("failed to construct resource")
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceConstructor {
-                        resource,
-                        resource_params: parameter_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
-            FunctionReferenceType::IndexedResourceMethod {
-                resource,
-                arg_size,
-                method,
-            } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let param_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!(
-                                "internal error: failed to call indexed resource method {}",
-                                method
-                            )
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceMethod {
-                        resource,
-                        resource_params: param_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<String>>(),
-                        method,
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
-            FunctionReferenceType::IndexedResourceStaticMethod {
-                resource,
-                arg_size,
-                method,
-            } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let param_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!(
-                                "failed to call static resource method {}",
-                                method
-                            )
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceStaticMethod {
-                        resource,
-                        resource_params: param_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                        method,
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
-            FunctionReferenceType::IndexedResourceDrop { resource, arg_size } => {
-                let last_n_elements = interpreter_stack
-                    .pop_n(arg_size)
-                    .ok_or_else(|| insufficient_stack_items(arg_size))?;
-
-                let param_values = last_n_elements
-                    .iter()
-                    .map(|interpreter_result| {
-                        interpreter_result.get_val().ok_or_else(|| {
-                            internal_corrupted_state!("failed to call indexed resource drop")
-                        })
-                    })
-                    .collect::<RibInterpreterResult<Vec<ValueAndType>>>()?;
-
-                let parsed_function_name = ParsedFunctionName {
-                    site,
-                    function: ParsedFunctionReference::IndexedResourceDrop {
-                        resource,
-                        resource_params: param_values
-                            .iter()
-                            .map(|x| x.to_string())
-                            .collect::<Vec<_>>(),
-                    },
-                };
-
-                interpreter_stack.push_val(parsed_function_name.to_string().into_value_and_type());
-            }
         }
 
         Ok(())
@@ -1375,7 +1251,7 @@ mod internal {
                     .invoke_worker_function_async(
                         component_info,
                         instruction_id,
-                        Some(worker_id_string),
+                        worker_id_string,
                         function_name_cloned,
                         parameter_values,
                         expected_result_type.clone(),
@@ -1400,7 +1276,7 @@ mod internal {
                     .invoke_worker_function_async(
                         component_info,
                         instruction_id,
-                        None,
+                        "___STATIC_WIT_RESOURCE".to_string(),
                         function_name_cloned,
                         parameter_values,
                         expected_result_type.clone(),
@@ -1450,7 +1326,7 @@ mod internal {
                             .invoke_worker_function_async(
                                 component_info,
                                 instruction_id,
-                                Some(worker_name.to_string()),
+                                worker_name.to_string(),
                                 function_name_cloned.clone(),
                                 final_args,
                                 expected_result_type.clone(),
@@ -1653,8 +1529,8 @@ mod tests {
         get_analysed_type_variant, get_value_and_type, strip_spaces, RibTestDeps,
     };
     use crate::{
-        Expr, GlobalVariableTypeSpec, InferredType, InstructionId, Path, RibCompiler,
-        RibCompilerConfig, VariableId,
+        CustomInstanceSpec, Expr, GlobalVariableTypeSpec, InferredType, InstructionId,
+        InterfaceName, Path, RibCompiler, RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
         bool, f32, field, list, r#enum, record, result, s32, str, tuple, u32, u64, u8,
@@ -2061,7 +1937,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec, vec![]));
         let compiled = compiler.compile(expr).unwrap();
 
         let result = interpreter
@@ -2125,7 +2001,7 @@ mod tests {
 
         let expr = Expr::from_text(rib_expr).unwrap();
 
-        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(vec![], type_spec, vec![]));
 
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2173,6 +2049,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -2228,6 +2105,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -2398,7 +2276,7 @@ mod tests {
 
         let expr = Expr::from_text(rib).unwrap();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2430,7 +2308,7 @@ mod tests {
 
         let expr = Expr::from_text(rib).unwrap();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2455,7 +2333,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![], vec![]));
         let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
@@ -2474,7 +2352,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(rib).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(component_metadata, vec![], vec![]));
         let compile_result = compiler.compile(expr);
         assert!(compile_result.is_err());
     }
@@ -2700,7 +2578,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2731,7 +2609,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2768,7 +2646,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2807,7 +2685,7 @@ mod tests {
         "#;
 
         let expr = Expr::from_text(expr).unwrap();
-        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![]));
+        let compiler = RibCompiler::new(RibCompilerConfig::new(analysed_exports, vec![], vec![]));
         let compiled = compiler.compile(expr).unwrap();
         let result = interpreter.run(compiled.byte_code).await.unwrap();
 
@@ -2828,7 +2706,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let component_metadata = test_utils::get_metadata_with_resource_with_params();
 
-        let compiler_config = RibCompilerConfig::new(component_metadata, vec![]);
+        let compiler_config = RibCompilerConfig::new(component_metadata, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -2853,7 +2731,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2884,7 +2762,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2919,7 +2797,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2952,7 +2830,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -2980,7 +2858,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -3012,7 +2890,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -3044,7 +2922,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -3073,7 +2951,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -3099,7 +2977,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
 
         let compiled = compiler.compile(expr).unwrap();
@@ -3128,7 +3006,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -3160,7 +3038,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3666,7 +3544,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_for_pass_through_function();
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3703,6 +3581,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr);
@@ -3721,6 +3600,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -3741,6 +3621,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr);
@@ -3758,7 +3639,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let error = compiler.compile(expr).unwrap_err();
 
@@ -3780,6 +3661,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
@@ -3799,6 +3681,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -3826,7 +3709,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3849,7 +3732,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_for_pass_through_function();
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3879,7 +3762,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3901,7 +3784,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3926,7 +3809,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -3954,6 +3837,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies,
             vec![],
+            vec![],
         ));
 
         let compilation_error = compiler.compile(expr).unwrap_err().to_string();
@@ -3975,7 +3859,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4000,7 +3884,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4024,7 +3908,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
-        let compiler_config = RibCompilerConfig::new(test_deps.component_dependencies, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4051,6 +3936,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
@@ -4072,7 +3958,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4097,7 +3983,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4127,7 +4013,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4151,7 +4037,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4177,6 +4063,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr);
@@ -4197,7 +4084,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4219,7 +4106,8 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
-        let compiler_config = RibCompilerConfig::new(test_deps.component_dependencies, vec![]);
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies, vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4244,6 +4132,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let compiled = compiler.compile(expr).unwrap_err().to_string();
@@ -4264,6 +4153,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -4288,7 +4178,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4314,6 +4204,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -4341,7 +4232,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4367,7 +4258,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4397,7 +4288,7 @@ mod tests {
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4436,7 +4327,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4479,7 +4370,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler.compile(expr).unwrap();
 
@@ -4522,7 +4413,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4549,6 +4440,7 @@ mod tests {
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
             vec![],
+            vec![],
         ));
 
         let error = compiler.compile(expr).unwrap_err().to_string();
@@ -4569,6 +4461,7 @@ mod tests {
 
         let compiler = RibCompiler::new(RibCompilerConfig::new(
             test_deps.component_dependencies.clone(),
+            vec![],
             vec![],
         ));
 
@@ -4595,7 +4488,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_multiple_interfaces(None);
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4638,7 +4531,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4691,7 +4584,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4766,7 +4659,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4826,7 +4719,7 @@ mod tests {
         let test_deps = RibTestDeps::test_deps_with_indexed_resource_functions(Some(rib_input));
 
         let compiler_config =
-            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![]);
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
 
         let compiler = RibCompiler::new(compiler_config);
 
@@ -4837,6 +4730,78 @@ mod tests {
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
         assert_eq!(result.get_val().unwrap(), "success".into_value_and_type());
+    }
+
+    #[test]
+    async fn test_interpreter_custom_instance() {
+        let expr = r#"
+                let city = "nyc";
+                let country = "usa";
+                let weather-agent = weather-agent("united", 1,  {city: city, country: country});
+                let first-result = weather-agent.get-weather("bar");
+                let assistant-agent = assistant-agent("my assistant");
+                let second-result = assistant-agent.ask("foo", "bar");
+                {weather: first-result, assistant: second-result}
+            "#;
+
+        let custom_spec1 = CustomInstanceSpec {
+            instance_name: "weather-agent".to_string(),
+            parameter_types: vec![
+                str(),
+                record(vec![field("city", str()), field("country", str())]),
+            ],
+            interface_name: Some(InterfaceName {
+                name: "weather-agent".to_string(),
+                version: None,
+            }),
+        };
+
+        let custom_spec2 = CustomInstanceSpec {
+            instance_name: "assistant-agent".to_string(),
+            parameter_types: vec![str()],
+            interface_name: Some(InterfaceName {
+                name: "assistant-agent".to_string(),
+                version: None,
+            }),
+        };
+
+        let expr = Expr::from_text(expr).unwrap();
+        let test_deps = RibTestDeps::test_deps_with_multiple_interfaces_simple(None);
+
+        let compiler_config = RibCompilerConfig::new(
+            test_deps.component_dependencies.clone(),
+            vec![],
+            vec![custom_spec1, custom_spec2],
+        );
+        let compiler = RibCompiler::new(compiler_config);
+        let compiled = compiler.compile(expr).unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = Value::Record(vec![
+            Value::Record(vec![
+                // worker-name
+                Value::String(
+                    "weather-agent(\"united\",1,{city: \"nyc\", country: \"usa\"})".to_string(),
+                ),
+                // function-name
+                Value::String("my:agent/weather-agent.{get-weather}".to_string()),
+                // args concatenated
+                Value::String("\"bar\"".to_string()),
+            ]),
+            Value::Record(vec![
+                // worker-name
+                Value::String("assistant-agent(\"my assistant\")".to_string()),
+                // function-name
+                Value::String("my:agent/assistant-agent.{ask}".to_string()),
+                // args concatenated
+                Value::String("\"foo\"\"bar\"".to_string()),
+            ]),
+        ]);
+
+        assert_eq!(result.get_val().unwrap().value, expected);
     }
 
     mod test_utils {
@@ -4857,7 +4822,7 @@ mod tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };
-        use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+        use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
 
@@ -4975,6 +4940,55 @@ mod tests {
 
         pub(crate) fn get_metadata_with_resource_without_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![])
+        }
+
+        pub(crate) fn get_metadata_with_multiple_interfaces_simple() -> Vec<ComponentDependency> {
+            // Exist in only amazon:shopping-cart/api1
+            let get_weather = AnalysedFunction {
+                name: "get-weather".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: str(),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            };
+
+            let ask = AnalysedFunction {
+                name: "ask".to_string(),
+                parameters: vec![
+                    AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: str(),
+                    },
+                    AnalysedFunctionParameter {
+                        name: "arg2".to_string(),
+                        typ: str(),
+                    },
+                ],
+                result: Some(AnalysedFunctionResult { typ: s32() }),
+            };
+
+            let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+                name: "my:agent/weather-agent".to_string(),
+                functions: vec![get_weather],
+            });
+
+            let analysed_export2 = AnalysedExport::Instance(AnalysedInstance {
+                name: "my:agent/assistant-agent".to_string(),
+                functions: vec![ask],
+            });
+
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(
+                component_info,
+                vec![analysed_export1, analysed_export2],
+            )]
         }
 
         pub(crate) fn get_metadata_with_multiple_interfaces() -> Vec<ComponentDependency> {
@@ -5304,7 +5318,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 _fqn: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5322,7 +5336,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5334,7 +5348,7 @@ mod tests {
                     field("args1", u32()),
                 ]);
 
-                let worker_name = Value::String(worker_name.map(|x| x.0).unwrap_or_default());
+                let worker_name = Value::String(worker_name.0);
                 let function_name = Value::String(function_name.0);
                 let args0 = args.0[0].value.clone();
                 let args1 = args.0[1].value.clone();
@@ -5353,14 +5367,14 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: Option<EvaluatedWorkerName>,
+                worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
                 match function_name.0.as_str() {
                     "golem:it/api.{cart.new}" => {
-                        let worker_name = worker_name.map(|x| x.0).unwrap_or_default();
+                        let worker_name = worker_name.0;
 
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{worker_name}"
@@ -5420,7 +5434,7 @@ mod tests {
                     "golem:it/api.{[static]cart.create}" => {
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
-                            worker_name.map(|x| x.0).unwrap_or_default()
+                            worker_name.0
                         );
 
                         let value = Value::Handle {
@@ -5437,7 +5451,7 @@ mod tests {
                     "golem:it/api.{[static]cart.create-safe}" => {
                         let uri = format!(
                             "urn:worker:99738bab-a3bf-4a12-8830-b6fd783d1ef2/{}",
-                            worker_name.map(|x| x.0).unwrap_or_default()
+                            worker_name.0
                         );
 
                         let resource = Value::Handle {
@@ -5457,7 +5471,7 @@ mod tests {
                     }
 
                     "golem:it/api.{cart.pass-through}" => {
-                        let worker_name = worker_name.map(|x| x.0);
+                        let worker_name = worker_name.0;
                         let function_args = args.0[1..].to_vec();
 
                         let mut arg_types = vec![];
@@ -5471,15 +5485,13 @@ mod tests {
                         let function_name = function_name.0.into_value_and_type();
 
                         let mut analysed_type_pairs = vec![];
-                        analysed_type_pairs.push(field("worker-name", option(str())));
+                        analysed_type_pairs.push(field("worker-name", str()));
                         analysed_type_pairs.push(field("function-name", str()));
                         analysed_type_pairs.extend(arg_types);
 
                         let mut values = vec![];
 
-                        values.push(Value::Option(
-                            worker_name.map(|x| Box::new(Value::String(x))),
-                        ));
+                        values.push(Value::String(worker_name));
                         values.push(function_name.value);
 
                         for arg_value in function_args {
@@ -5497,6 +5509,48 @@ mod tests {
             }
         }
 
+        struct CustomInstanceFunctionInvoke;
+        #[async_trait]
+        impl RibComponentFunctionInvoke for CustomInstanceFunctionInvoke {
+            async fn invoke(
+                &self,
+                _component_dependency_key: ComponentDependencyKey,
+                _instruction_id: &InstructionId,
+                worker_name: EvaluatedWorkerName,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
+            ) -> RibFunctionInvokeResult {
+                let mut arguments_concatenated = String::new();
+
+                for arg in args.0 {
+                    let arg_str = print_value_and_type(&arg)?;
+                    arguments_concatenated.push_str(arg_str.as_str());
+                }
+
+                let result_value = ValueAndType::new(
+                    Value::Record(vec![
+                        Value::String(worker_name.0),
+                        Value::String(function_name.0.clone()),
+                        Value::String(arguments_concatenated),
+                    ]),
+                    record(vec![
+                        field("worker-name", str()),
+                        field("function-name", str()),
+                        field("args", str()),
+                    ]),
+                );
+
+                match function_name.0.as_str() {
+                    "my:agent/weather-agent.{get-weather}" => Ok(Some(result_value)),
+
+                    "my:agent/assistant-agent.{ask}" => Ok(Some(result_value)),
+
+                    _ => Err(format!("unexpected function name: {}", function_name.0).into()),
+                }
+            }
+        }
+
         struct MultiplePackageFunctionInvoke;
 
         #[async_trait]
@@ -5505,7 +5559,7 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 _args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
@@ -5659,6 +5713,22 @@ mod tests {
                 }
             }
 
+            pub(crate) fn test_deps_with_multiple_interfaces_simple(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_with_multiple_interfaces_simple();
+                let interpreter = Interpreter::new(
+                    rib_input.unwrap_or_default(),
+                    Arc::new(CustomInstanceFunctionInvoke),
+                    Arc::new(StaticWorkerNameGenerator),
+                );
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+
             pub(crate) fn test_deps_with_multiple_interfaces(
                 rib_input: Option<RibInput>,
             ) -> RibTestDeps {
@@ -5758,7 +5828,7 @@ mod tests {
                 &self,
                 _component_dependency: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                _worker_name: Option<EvaluatedWorkerName>,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,

@@ -171,19 +171,16 @@ interface oplog {
 
     record create-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id
+        resource-id: worker-resource-id,
+        name: string,
+        owner: string
     }
 
     record drop-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id
-    }
-
-    record describe-resource-parameters {
-        timestamp: datetime,
         resource-id: worker-resource-id,
-        resource-name: string,
-        resource-params: list<wit-value>
+        name: string,
+        owner: string
     }
 
     enum log-level {
@@ -305,8 +302,6 @@ interface oplog {
         create-resource(create-resource-parameters),
         /// Dropped a resource instance
         drop-resource(drop-resource-parameters),
-        /// Adds additional information for a created resource instance
-        describe-resource(describe-resource-parameters),
         /// The worker emitted a log message
         log(log-parameters),
         /// The worker's has been restarted, forgetting all its history

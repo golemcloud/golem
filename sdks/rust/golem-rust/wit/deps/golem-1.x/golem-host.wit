@@ -75,7 +75,8 @@ interface host {
         equal,
         not-equal,
         like,
-        not-like
+        not-like,
+        starts-with
     }
 
     enum worker-status {

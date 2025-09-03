@@ -24,7 +24,20 @@ use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
         self.observe_function_call("io::poll:pollable", "ready");
-        HostPollable::ready(&mut self.as_wasi_view().0, self_).await
+        let durability = Durability::<bool, SerializableError>::new(
+            self,
+            "golem io::poll",
+            "ready",
+            DurableFunctionType::ReadLocal,
+        )
+        .await?;
+
+        if durability.is_live() {
+            let result = HostPollable::ready(&mut self.as_wasi_view().0, self_).await;
+            durability.persist(self, (), result).await
+        } else {
+            durability.replay(self).await
+        }
     }
 
     async fn block(&mut self, self_: Resource<Pollable>) -> anyhow::Result<()> {

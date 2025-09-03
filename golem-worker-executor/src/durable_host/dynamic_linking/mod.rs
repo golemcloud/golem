@@ -28,8 +28,12 @@ mod mock;
 mod wasm_rpc;
 
 #[async_trait]
-impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
-    for DurableWorkerCtx<Ctx>
+impl<
+        Ctx: WorkerCtx
+            + HostWasmRpc
+            + HostFutureInvokeResult
+            + wasmtime_wasi::p2::bindings::cli::environment::Host,
+    > DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
 {
     fn link(
         &mut self,

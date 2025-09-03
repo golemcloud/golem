@@ -19,13 +19,19 @@ use crate::log::logln;
 use crate::model::component::ComponentView;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
-use crate::model::{ComponentName, ComponentNameMatchKind, IdempotencyKey, WorkerName};
+use crate::model::{
+    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, IdempotencyKey, WorkerName,
+};
 use anyhow::bail;
 use async_trait::async_trait;
+use colored::Colorize;
+use golem_common::model::agent::{DataSchema, ElementSchema};
 use golem_rib_repl::{
-    ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
+    Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
+    RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::analysed_type::{str, variant};
+use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
@@ -84,14 +90,70 @@ impl RibReplHandler {
             root_package_version: component.metadata.root_package_version().clone(),
         };
 
+        // The REPL has to know about the custom instance parameters
+        // to support creating instances using agent interface names.
+        let custom_instance_spec = component
+            .metadata
+            .agent_types()
+            .iter()
+            .map(|agent_type| {
+                // constructor args is mainly constructed for REPL to auto populate
+                // the constructor argument values.
+                // If constructor-args is kept empty, the REPL will still work
+                // but users need to manually enter the type - otherwise end up in other compile time or runtime errors.
+                let constructor_args = {
+                    match &agent_type.constructor.input_schema {
+                        DataSchema::Tuple(element_schemas) => element_schemas
+                            .elements
+                            .iter()
+                            .map(|named_schema| get_analysed_type(&named_schema.schema))
+                            .collect::<Vec<AnalysedType>>(),
+                        DataSchema::Multimodal(named_element_schemas) => {
+                            // the value is wrapped in names
+                            named_element_schemas
+                                .elements
+                                .iter()
+                                .map(|named_schema| {
+                                    let name = &named_schema.name;
+
+                                    let analysed_type = get_analysed_type(&named_schema.schema);
+
+                                    let name_and_type = NameOptionTypePair {
+                                        name: name.clone(),
+                                        typ: Some(analysed_type),
+                                    };
+
+                                    variant(vec![name_and_type])
+                                })
+                                .collect::<Vec<_>>()
+                        }
+                    }
+                };
+
+                rib::CustomInstanceSpec::new(
+                    agent_type.type_name.to_string(),
+                    constructor_args,
+                    Some(rib::InterfaceName {
+                        name: agent_type.type_name.to_string(),
+                        version: None,
+                    }),
+                )
+            })
+            .collect::<Vec<_>>();
+
         self.ctx
             .set_rib_repl_dependencies(ReplComponentDependencies {
                 component_dependencies: vec![ComponentDependency::new(
                     component_dependency_key,
                     component.metadata.exports().to_vec(),
                 )],
+                custom_instance_spec,
             })
             .await;
+
+        let mut command_registry = CommandRegistry::default();
+
+        command_registry.register(Agents);
 
         let mut repl = RibRepl::bootstrap(RibReplConfig {
             history_file: Some(self.ctx.rib_repl_history_file().await?),
@@ -100,7 +162,7 @@ impl RibReplHandler {
             printer: None,
             component_source: None,
             prompt: None,
-            command_registry: None,
+            command_registry: Some(command_registry),
         })
         .await?;
 
@@ -118,6 +180,63 @@ impl RibReplHandler {
         repl.run().await;
         Ok(())
     }
+}
+
+fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
+    match schema {
+        ElementSchema::ComponentModel(component_model_elem_schema) => {
+            component_model_elem_schema.element_type.clone()
+        }
+        ElementSchema::UnstructuredText(_) => {
+            // the constructor args for unstructured text is just a text
+            // Ex: foo or [en]foo, where en is the language code
+            str()
+        }
+        ElementSchema::UnstructuredBinary(_) => {
+            // Example argument in constructor: [image/png]"iVBORw0KGA"
+            // The REPL can re-inspect the schema again and generate a proper base64
+            str()
+        }
+    }
+}
+
+pub struct Agents;
+
+impl Command for Agents {
+    type Input = ();
+    type Output = Vec<String>;
+    type InputParseError = ();
+    type ExecutionError = ();
+
+    fn parse(
+        &self,
+        _input: &str,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _input: Self::Input,
+        repl_context: &mut ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        let agent_names = repl_context.get_rib_compiler().get_custom_instance_names();
+
+        Ok(agent_names)
+    }
+
+    fn print_output(&self, output: Self::Output, _repl_context: &ReplContext) {
+        println!("{}", "Available agents:".green());
+        for agent_name in output {
+            println!("  - {}", agent_name.cyan());
+        }
+        println!()
+    }
+
+    fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
+
+    fn print_execution_error(&self, _error: Self::ExecutionError, _repl_context: &ReplContext) {}
 }
 
 #[async_trait]
@@ -141,12 +260,12 @@ impl WorkerFunctionInvoke for RibReplHandler {
         &self,
         component_id: Uuid,
         component_name: &str,
-        worker_name: Option<String>,
+        worker_name: &str,
         function_name: &str,
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let worker_name = worker_name.map(WorkerName::from);
+        let worker_name = WorkerName::from(worker_name);
 
         let component = self
             .ctx
@@ -154,7 +273,9 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .component(
                 None,
                 component_id.into(),
-                worker_name.as_ref().map(|wn| wn.into()),
+                Some(ComponentVersionSelection::ByWorkerName(&WorkerName(
+                    worker_name.to_string(),
+                ))),
             )
             .await?;
 
@@ -173,7 +294,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .worker_handler()
             .invoke_worker(
                 &component,
-                worker_name.as_ref(),
+                &worker_name,
                 function_name,
                 arguments,
                 IdempotencyKey::new(),

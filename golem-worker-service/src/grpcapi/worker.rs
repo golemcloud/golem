@@ -16,7 +16,7 @@ use super::error::WorkerTraceErrorKind;
 use super::{
     bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
     validate_component_file_path, validate_protobuf_plugin_installation_id,
-    validate_protobuf_target_worker_id, validate_protobuf_worker_id, validated_worker_id,
+    validate_protobuf_worker_id, validated_worker_id,
 };
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
@@ -54,7 +54,7 @@ use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, Work
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
     proto_invocation_context_parent_worker_id_string, proto_plugin_installation_id_string,
-    proto_target_worker_id_string, proto_worker_id_string,
+    proto_worker_id_string,
 };
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
@@ -227,7 +227,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_and_await",
-            worker_id = proto_target_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -257,7 +257,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_json",
-            worker_id = proto_target_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -287,7 +287,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_typed",
-            worker_id = proto_target_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -317,7 +317,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke",
-            worker_id = proto_target_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -343,7 +343,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (m, _, r) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_json",
-            worker_id = proto_target_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&r.worker_id),
             idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
             function = r.function,
             context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
@@ -532,7 +532,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (metadata, _, req) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "get_file_system_node",
-            worker_id = proto_target_worker_id_string(&req.worker_id),
+            worker_id = proto_worker_id_string(&req.worker_id),
             path = req.path
         );
 
@@ -565,7 +565,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let (metadata, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "get_file_contents",
-            worker_id = proto_target_worker_id_string(&request.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
         );
 
         let stream = self
@@ -576,7 +576,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let stream = match stream {
             Ok(stream) => record.succeed(stream),
             Err(error) => {
-                let res = golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                let res = GetFileContentsResponse {
                     result: Some(
                         golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.clone())
                     )
@@ -793,6 +793,7 @@ impl WorkerGrpcApi {
                 request.args,
                 request.env,
                 wasi_config_vars,
+                request.ignore_already_existing,
                 namespace,
             )
             .await?;
@@ -928,7 +929,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -958,7 +959,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
         let params = InvocationParameters::from_optionally_type_annotated_value_jsons(params)
@@ -1010,7 +1011,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<InvokeResult, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = request
             .invoke_parameters
@@ -1041,7 +1042,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<String, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let params = parse_json_invoke_parameters(&request.invoke_parameters)?;
         let params = InvocationParameters::from_optionally_type_annotated_value_jsons(params)
             .map_err(bad_request_errors)?;
@@ -1100,7 +1101,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<InvokeResultTyped, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let params = request
             .invoke_parameters
             .ok_or(bad_request_error("Missing invoke parameters"))?;
@@ -1293,7 +1294,7 @@ impl WorkerGrpcApi {
     ) -> Result<golem_api_grpc::proto::golem::worker::v1::GetFileSystemNodeResponse, GrpcWorkerError>
     {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let file_path = validate_component_file_path(request.path)?;
 
         let namespace = self
@@ -1324,7 +1325,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<<Self as GrpcWorkerService>::GetFileContentsStream, GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let worker_id = validate_protobuf_target_worker_id(request.worker_id)?;
+        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let file_path = validate_component_file_path(request.file_path)?;
 
         let namespace = self
@@ -1342,11 +1343,11 @@ impl WorkerGrpcApi {
             .map(|item|
                 match item {
                     Ok(data) =>
-                        Ok(golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                        Ok(GetFileContentsResponse {
                             result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Success(data.into())),
                         }),
                     Err(error) =>
-                        Ok(golem_api_grpc::proto::golem::worker::v1::GetFileContentsResponse {
+                        Ok(GetFileContentsResponse {
                             result: Some(golem_api_grpc::proto::golem::worker::v1::get_file_contents_response::Result::Error(error.into())),
                         })
                 }

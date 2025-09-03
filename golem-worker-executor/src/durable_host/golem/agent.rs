@@ -13,11 +13,12 @@
 // limitations under the License.
 
 use crate::durable_host::serialized::SerializableError;
-use crate::durable_host::{Durability, DurableWorkerCtx};
+use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::agent::bindings::golem::agent::common::AgentError;
 use golem_common::model::agent::bindings::golem::agent::host;
-use golem_common::model::agent::bindings::golem::agent::host::Host;
-use golem_common::model::agent::RegisteredAgentType;
+use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
+use golem_common::model::agent::{AgentId, RegisteredAgentType};
 use golem_common::model::oplog::DurableFunctionType;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -77,6 +78,32 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         match result {
             Ok(result) => Ok(result.map(|r| r.into())),
             Err(err) => Err(err.into()),
+        }
+    }
+
+    async fn make_agent_id(
+        &mut self,
+        agent_type_name: String,
+        input: DataValue,
+    ) -> anyhow::Result<Result<String, AgentError>> {
+        DurabilityHost::observe_function_call(self, "golem_agent", "make_agent_id");
+
+        if let Some(agent_type) = self.get_agent_type(agent_type_name.clone()).await? {
+            match golem_common::model::agent::DataValue::try_from_bindings(
+                input,
+                agent_type.agent_type.constructor.input_schema,
+            ) {
+                Ok(input) => {
+                    let agent_id = AgentId {
+                        agent_type: agent_type_name,
+                        parameters: input,
+                    };
+                    Ok(Ok(agent_id.to_string()))
+                }
+                Err(err) => Ok(Err(AgentError::InvalidInput(err))),
+            }
+        } else {
+            Ok(Err(AgentError::InvalidType(agent_type_name)))
         }
     }
 }

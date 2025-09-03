@@ -20,12 +20,14 @@ mod worker_binding;
 pub use self::http_handler_binding::*;
 pub use self::worker_binding::*;
 pub(crate) use crate::gateway_execution::gateway_binding_resolver::*;
-use crate::gateway_rib_compiler::DefaultWorkerServiceRibCompiler;
 use crate::gateway_rib_compiler::WorkerServiceRibCompiler;
+use crate::gateway_rib_compiler::{
+    ComponentDependencyWithAgentInfo, DefaultWorkerServiceRibCompiler,
+};
 pub use gateway_binding_compiled::SwaggerUiBinding;
 pub(crate) use gateway_binding_compiled::*;
 use golem_common::model::component::VersionedComponentId;
-use rib::{ComponentDependency, Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
+use rib::{Expr, RibByteCode, RibCompilationError, RibInputTypeInfo};
 pub use static_binding::*;
 
 // A gateway binding is integration to the backend. This is similar to AWS's x-amazon-gateway-integration
@@ -136,7 +138,7 @@ pub struct InvocationContextCompiled {
 impl InvocationContextCompiled {
     pub fn from_invocation_context(
         invocation_context: &Expr,
-        exports: &[ComponentDependency],
+        exports: &[ComponentDependencyWithAgentInfo],
     ) -> Result<Self, RibCompilationError> {
         let invocation_context_compiled =
             DefaultWorkerServiceRibCompiler::compile(invocation_context, exports)?;

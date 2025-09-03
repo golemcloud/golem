@@ -18,15 +18,13 @@ use crate::preview2::wasi::clocks::wall_clock::Datetime;
 use golem_common::base_model::ProjectId;
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
-    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
-    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
-    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
-    LogParameters, ManualUpdateParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttributeValue,
-    PublicDurableFunctionType, PublicRetryConfig, PublicSpanData, PublicWorkerInvocation,
-    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    ChangeRetryPolicyParameters, CreateParameters, DeactivatePluginParameters, EndRegionParameters,
+    ErrorParameters, ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicAttributeValue, PublicDurableFunctionType, PublicRetryConfig, PublicSpanData,
+    PublicWorkerInvocation, ResourceParameters, RevertParameters, SetSpanAttributeParameters,
     SnapshotBasedUpdateParameters, StartSpanParameters, StringAttributeValue,
     SuccessfulUpdateParameters, TimestampParameter, WriteRemoteBatchedParameters,
 };
@@ -206,35 +204,24 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::CreateResource(ResourceParameters {
                 timestamp,
                 id,
-                name: _,  // TODO
-                owner: _, // TODO
+                name,
+                owner,
             }) => Self::CreateResource(oplog::CreateResourceParameters {
                 timestamp: timestamp.into(),
                 resource_id: id.0,
+                name,
+                owner,
             }),
             PublicOplogEntry::DropResource(ResourceParameters {
                 timestamp,
                 id,
-                name: _,  // TODO
-                owner: _, // TODO
+                name,
+                owner,
             }) => Self::DropResource(oplog::DropResourceParameters {
                 timestamp: timestamp.into(),
                 resource_id: id.0,
-            }),
-            PublicOplogEntry::DescribeResource(DescribeResourceParameters {
-                timestamp,
-                id,
-                resource_name,
-                resource_params,
-                resource_owner: _, // TODO
-            }) => Self::DescribeResource(oplog::DescribeResourceParameters {
-                timestamp: timestamp.into(),
-                resource_id: id.0,
-                resource_name,
-                resource_params: resource_params
-                    .into_iter()
-                    .map(|value| value.into())
-                    .collect(),
+                name,
+                owner,
             }),
             PublicOplogEntry::Log(LogParameters {
                 timestamp,
@@ -321,28 +308,6 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 timestamp: timestamp.into(),
                 persistence_level: persistence_level.into(),
             }),
-            PublicOplogEntry::CreateAgentInstance(CreateAgentInstanceParameters {
-                timestamp,
-                key,
-                parameters,
-            }) => {
-                // TODO: add this to WIT - until then we temporarily represent with a log entry
-                Self::Log(oplog::LogParameters {
-                    timestamp: timestamp.into(),
-                    level: golem_common::model::oplog::LogLevel::Info.into(),
-                    context: "CreateAgentInstance".to_string(),
-                    message: format!("Key: {key:?}, Parameters: {parameters:?}"),
-                })
-            }
-            PublicOplogEntry::DropAgentInstance(DropAgentInstanceParameters { timestamp, key }) => {
-                // TODO: add this to WIT - until then we temporarily represent with a log entry
-                Self::Log(oplog::LogParameters {
-                    timestamp: timestamp.into(),
-                    level: golem_common::model::oplog::LogLevel::Info.into(),
-                    context: "CreateAgentInstance".to_string(),
-                    message: format!("Key: {key:?}"),
-                })
-            }
         }
     }
 }

@@ -20,6 +20,9 @@ use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
 };
+use golem_common::model::agent::{
+    AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
+};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
@@ -27,6 +30,7 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
+use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -179,7 +183,11 @@ impl ComponentView {
             component_size: value.component_size,
             created_at: value.created_at,
             project_id: value.project_id,
-            exports: show_exported_functions(value.metadata.exports(), true),
+            exports: if value.metadata.is_agent() {
+                show_exported_agents(value.metadata.agent_types())
+            } else {
+                show_exported_functions(value.metadata.exports(), true)
+            },
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
@@ -276,6 +284,83 @@ pub fn render_type(typ: &AnalysedType) -> String {
             AnalysedResourceMode::Borrowed => format!("&handle<{}>", handle.resource_id.0),
             AnalysedResourceMode::Owned => format!("handle<{}>", handle.resource_id.0),
         },
+    }
+}
+
+pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
+    agents.iter().flat_map(render_exported_agent).collect()
+}
+
+fn render_exported_agent(agent: &AgentType) -> Vec<String> {
+    let mut result = Vec::new();
+    result.push(format!(
+        "{}({}) agent constructor",
+        agent.type_name,
+        render_data_schema(&agent.constructor.input_schema)
+    ));
+    for method in &agent.methods {
+        result.push(format!(
+            "{}.{}({}) -> {}",
+            agent.type_name,
+            method.name,
+            render_data_schema(&method.input_schema),
+            render_data_schema(&method.output_schema)
+        ));
+    }
+
+    result
+}
+
+fn render_data_schema(schema: &DataSchema) -> String {
+    match schema {
+        DataSchema::Tuple(elements) => elements
+            .elements
+            .iter()
+            .map(|named_elem| {
+                format!(
+                    "{}: {}",
+                    named_elem.name,
+                    render_element_schema(&named_elem.schema)
+                )
+            })
+            .join(", "),
+        DataSchema::Multimodal(elements) => elements
+            .elements
+            .iter()
+            .map(|named_elem| {
+                format!(
+                    "{}({})",
+                    named_elem.name,
+                    render_element_schema(&named_elem.schema)
+                )
+            })
+            .join(" | "),
+    }
+}
+
+fn render_element_schema(schema: &ElementSchema) -> String {
+    match schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            render_type(element_type)
+        }
+        ElementSchema::UnstructuredText(text_descriptor) => {
+            let mut result = "text".to_string();
+            if let Some(restrictions) = &text_descriptor.restrictions {
+                result.push('[');
+                result.push_str(&restrictions.iter().map(|r| &r.language_code).join(", "));
+                result.push(']');
+            }
+            result
+        }
+        ElementSchema::UnstructuredBinary(binary_descriptor) => {
+            let mut result = "binary".to_string();
+            if let Some(restrictions) = &binary_descriptor.restrictions {
+                result.push('[');
+                result.push_str(&restrictions.iter().map(|r| &r.mime_type).join(", "));
+                result.push(']');
+            }
+            result
+        }
     }
 }
 
@@ -409,13 +494,9 @@ pub fn function_params_types<'t>(
     component: &'t Component,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
-    let (func, parsed) = resolve_function(component, function)?;
+    let (func, _parsed) = resolve_function(component, function)?;
 
-    if parsed.function().is_indexed_resource() {
-        Ok(func.parameters.iter().skip(1).map(|r| &r.typ).collect())
-    } else {
-        Ok(func.parameters.iter().map(|r| &r.typ).collect())
-    }
+    Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
 
 #[cfg(test)]

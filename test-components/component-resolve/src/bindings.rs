@@ -195,6 +195,7 @@ pub mod golem {
                 NotEqual,
                 Like,
                 NotLike,
+                StartsWith,
             }
             impl ::core::fmt::Debug for StringFilterComparator {
                 fn fmt(
@@ -214,6 +215,9 @@ pub mod golem {
                         StringFilterComparator::NotLike => {
                             f.debug_tuple("StringFilterComparator::NotLike").finish()
                         }
+                        StringFilterComparator::StartsWith => {
+                            f.debug_tuple("StringFilterComparator::StartsWith").finish()
+                        }
                     }
                 }
             }
@@ -228,6 +232,7 @@ pub mod golem {
                         1 => StringFilterComparator::NotEqual,
                         2 => StringFilterComparator::Like,
                         3 => StringFilterComparator::NotLike,
+                        4 => StringFilterComparator::StartsWith,
                         _ => panic!("invalid enum discriminant"),
                     }
                 }
@@ -3189,29 +3194,6 @@ pub mod golem {
                                 ptr3.cast_mut(),
                                 len3,
                             )
-                        };
-                        unsafe { WasmRpc::from_handle(ret as u32) }
-                    }
-                }
-            }
-            impl WasmRpc {
-                #[allow(unused_unsafe, clippy::all)]
-                pub fn ephemeral(component_id: ComponentId) -> WasmRpc {
-                    unsafe {
-                        let ComponentId { uuid: uuid0 } = component_id;
-                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
-                        #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.2.2")]
-                        unsafe extern "C" {
-                            #[link_name = "[static]wasm-rpc.ephemeral"]
-                            fn wit_import2(_: i64, _: i64) -> i32;
-                        }
-                        #[cfg(not(target_arch = "wasm32"))]
-                        unsafe extern "C" fn wit_import2(_: i64, _: i64) -> i32 {
-                            unreachable!()
-                        }
-                        let ret = unsafe {
-                            wit_import2(_rt::as_i64(high_bits1), _rt::as_i64(low_bits1))
                         };
                         unsafe { WasmRpc::from_handle(ret as u32) }
                     }
@@ -8565,8 +8547,8 @@ pub(crate) use __export_component_resolve_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5590] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xce*\x01A\x02\x01A\x15\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5552] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xa8*\x01A\x02\x01A\x15\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -8577,7 +8559,7 @@ n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x
 \x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/mon\
 otonic-clock@0.2.3\x05\x02\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08\
 datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\
-\0\x1cwasi:clocks/wall-clock@0.2.3\x05\x03\x02\x03\0\x02\x08datetime\x01B[\x02\x03\
+\0\x1cwasi:clocks/wall-clock@0.2.3\x05\x03\x02\x03\0\x02\x08datetime\x01BY\x02\x03\
 \x02\x01\x04\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
 \0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x04\x01r\x01\x04u\
 uid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0ccomponent-id\x07\x0bworker-n\
@@ -8605,82 +8587,81 @@ rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01&\0\x0
 s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09\
 rpc-error\x03\0.\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\
 \x04\0\x12cancellation-token\x03\x01\x01i0\x01@\x01\x09worker-id\x09\03\x04\0\x15\
-[constructor]wasm-rpc\x014\x01@\x01\x0ccomponent-id\x07\03\x04\0\x1a[static]wasm\
--rpc.ephemeral\x015\x01h0\x01p+\x01j\x01+\x01/\x01@\x03\x04self6\x0dfunction-nam\
-es\x0ffunction-params7\08\x04\0![method]wasm-rpc.invoke-and-await\x019\x01j\0\x01\
-/\x01@\x03\x04self6\x0dfunction-names\x0ffunction-params7\0:\x04\0\x17[method]wa\
-sm-rpc.invoke\x01;\x01i1\x01@\x03\x04self6\x0dfunction-names\x0ffunction-params7\
-\0<\x04\0'[method]wasm-rpc.async-invoke-and-await\x01=\x01@\x04\x04self6\x0esche\
-duled-time\x01\x0dfunction-names\x0ffunction-params7\x01\0\x04\0$[method]wasm-rp\
-c.schedule-invocation\x01>\x01i2\x01@\x04\x04self6\x0escheduled-time\x01\x0dfunc\
-tion-names\x0ffunction-params7\0?\x04\0/[method]wasm-rpc.schedule-cancelable-inv\
-ocation\x01@\x01h1\x01i\x03\x01@\x01\x04self\xc1\0\0\xc2\0\x04\0&[method]future-\
-invoke-result.subscribe\x01C\x01k8\x01@\x01\x04self\xc1\0\0\xc4\0\x04\0\x20[meth\
-od]future-invoke-result.get\x01E\x01h2\x01@\x01\x04self\xc6\0\x01\0\x04\0![metho\
-d]cancellation-token.cancel\x01G\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc8\0\x04\
-\0\x0aparse-uuid\x01I\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01J\x01@\x01\
-\x03vnt-\0+\x04\0\x0dextract-value\x01K\x01@\x01\x03vnt-\0\x20\x04\0\x0cextract-\
-type\x01L\x03\0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\
-\0\x03\x0ccomponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\
-\x03\0\x03\x09worker-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\
-\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uu\
-id\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\
-\x0a\x04\0\x09worker-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01r\x02\x09\
-worker-id\x09\x09oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\x11compo\
-nent-version\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01r\x01\
-\x04uuid\x05\x04\0\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09mi\
-n-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\0\x0cre\
-try-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effe\
-cts\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09automatic\x0e\
-snapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0d\
-greater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\
-\x01m\x04\x05equal\x09not-equal\x04like\x08not-like\x04\0\x18string-filter-compa\
-rator\x03\0\x1d\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retry\
-ing\x06failed\x06exited\x04\0\x0dworker-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\
-\x05values\x04\0\x12worker-name-filter\x03\0!\x01r\x02\x0acomparator\x1c\x05valu\
-e\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\
-\0\x15worker-version-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x18\
-worker-created-at-filter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\
-\0\x11worker-env-filter\x03\0)\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\
-\0\x1eworker-wasi-config-vars-filter\x03\0+\x01q\x06\x04name\x01\"\0\x06status\x01\
-$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03env\x01*\0\x10wasi-config-vars\x01\
-,\0\x04\0\x16worker-property-filter\x03\0-\x01p.\x01r\x01\x07filters/\x04\0\x11w\
-orker-all-filter\x03\00\x01p1\x01r\x01\x07filters2\x04\0\x11worker-any-filter\x03\
-\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker-id\x09\x04args5\x03env7\x10wasi-co\
-nfig-vars7\x06status\x20\x11component-versionw\x0bretry-countw\x04\0\x0fworker-m\
-etadata\x03\08\x04\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\
-\x0b\0\x17revert-last-invocations\x01w\0\x04\0\x14revert-worker-target\x03\0;\x01\
-m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0=\x01k4\x01i:\x01@\x03\x0c\
-component-id\x03\x06filter?\x07precise\x7f\0\xc0\0\x04\0\x18[constructor]get-wor\
-kers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04self\xc2\0\0\xc4\0\x04\0\x1c[method\
-]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0ecreate-promise\x01F\x01p}\x01@\x01\
-\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-promise\x01H\x01k\xc7\0\x01@\x01\x0apr\
-omise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01J\x01@\x02\x0apromise-id\x0d\x04da\
-ta\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01@\x01\x0apromise-id\x0d\x01\0\x04\
-\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0fget-oplog-index\x01M\x01@\x01\x09\
-oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01N\x01@\x01\x08replicas}\x01\0\x04\
-\0\x0coplog-commit\x01O\x04\0\x14mark-begin-operation\x01M\x01@\x01\x05begin\x0b\
-\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\x16\x04\0\x10get-retry-policy\x01\
-Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\x10set-retry-policy\x01R\x01@\0\0\
-\x18\x04\0\x1bget-oplog-persistence-level\x01S\x01@\x01\x15new-persistence-level\
-\x18\x01\0\x04\0\x1bset-oplog-persistence-level\x01T\x01@\0\0\x7f\x04\0\x14get-i\
-dempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-m\
-ode\x01V\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01W\x01@\x03\x09worker-\
-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\0\x0dupdate-worker\x01X\x01@\0\
-\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\x09worker-id\x09\0\xda\0\x04\0\
-\x13get-worker-metadata\x01[\x01@\x03\x10source-worker-id\x09\x10target-worker-i\
-d\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfork-worker\x01\\\x01@\x02\x09work\
-er-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert-worker\x01]\x01k\x03\x01@\x01\x13\
-component-references\0\xde\0\x04\0\x14resolve-component-id\x01_\x01k\x09\x01@\x02\
-\x13component-references\x0bworker-names\0\xe0\0\x04\0\x11resolve-worker-id\x01a\
-\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\x08new-names\0>\x04\0\x04fork\x01\
-b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x02\x03\0\x04\x09worker-id\x02\x03\0\x04\
-\x0ccomponent-id\x01B\x09\x02\x03\x02\x01\x0c\x04\0\x09worker-id\x03\0\0\x02\x03\
-\x02\x01\x0d\x04\0\x0ccomponent-id\x03\0\x02\x01k\x03\x01k\x01\x01o\x03\x04\x05\x05\
-\x01@\0\0\x06\x04\0\x03run\x01\x07\x04\0\x1egolem:it/component-resolve-api\x05\x0e\
-\x04\0\x1agolem:it/component-resolve\x04\0\x0b\x17\x01\0\x11component-resolve\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-\
-bindgen-rust\x060.41.0";
+[constructor]wasm-rpc\x014\x01h0\x01p+\x01j\x01+\x01/\x01@\x03\x04self5\x0dfunct\
+ion-names\x0ffunction-params6\07\x04\0![method]wasm-rpc.invoke-and-await\x018\x01\
+j\0\x01/\x01@\x03\x04self5\x0dfunction-names\x0ffunction-params6\09\x04\0\x17[me\
+thod]wasm-rpc.invoke\x01:\x01i1\x01@\x03\x04self5\x0dfunction-names\x0ffunction-\
+params6\0;\x04\0'[method]wasm-rpc.async-invoke-and-await\x01<\x01@\x04\x04self5\x0e\
+scheduled-time\x01\x0dfunction-names\x0ffunction-params6\x01\0\x04\0$[method]was\
+m-rpc.schedule-invocation\x01=\x01i2\x01@\x04\x04self5\x0escheduled-time\x01\x0d\
+function-names\x0ffunction-params6\0>\x04\0/[method]wasm-rpc.schedule-cancelable\
+-invocation\x01?\x01h1\x01i\x03\x01@\x01\x04self\xc0\0\0\xc1\0\x04\0&[method]fut\
+ure-invoke-result.subscribe\x01B\x01k7\x01@\x01\x04self\xc0\0\0\xc3\0\x04\0\x20[\
+method]future-invoke-result.get\x01D\x01h2\x01@\x01\x04self\xc5\0\x01\0\x04\0![m\
+ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0\
+\x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x01\
+@\x01\x03vnt-\0+\x04\0\x0dextract-value\x01J\x01@\x01\x03vnt-\0\x20\x04\0\x0cext\
+ract-type\x01K\x03\0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\
+\x03\0\x03\x0ccomponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\
+\x02\x03\0\x03\x09worker-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\
+\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\
+\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\
+\x02\x01\x0a\x04\0\x09worker-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01\
+r\x02\x09worker-id\x09\x09oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\
+\x11component-version\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\
+\x01r\x01\x04uuid\x05\x04\0\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemp\
+tsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\
+\0\x0cretry-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-s\
+ide-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09au\
+tomatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09no\
+t-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-compar\
+ator\x03\0\x1b\x01m\x05\x05equal\x09not-equal\x04like\x08not-like\x0bstarts-with\
+\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\x07running\x04idle\x09susp\
+ended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\
+\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x12worker-name-filter\x03\0!\x01\
+r\x02\x0acomparator\x1c\x05value\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\
+\x0acomparator\x1c\x05valuew\x04\0\x15worker-version-filter\x03\0%\x01r\x02\x0ac\
+omparator\x1c\x05valuew\x04\0\x18worker-created-at-filter\x03\0'\x01r\x03\x04nam\
+es\x0acomparator\x1e\x05values\x04\0\x11worker-env-filter\x03\0)\x01r\x03\x04nam\
+es\x0acomparator\x1e\x05values\x04\0\x1eworker-wasi-config-vars-filter\x03\0+\x01\
+q\x06\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03\
+env\x01*\0\x10wasi-config-vars\x01,\0\x04\0\x16worker-property-filter\x03\0-\x01\
+p.\x01r\x01\x07filters/\x04\0\x11worker-all-filter\x03\00\x01p1\x01r\x01\x07filt\
+ers2\x04\0\x11worker-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker\
+-id\x09\x04args5\x03env7\x10wasi-config-vars7\x06status\x20\x11component-version\
+w\x0bretry-countw\x04\0\x0fworker-metadata\x03\08\x04\0\x0bget-workers\x03\x01\x01\
+q\x02\x15revert-to-oplog-index\x01\x0b\0\x17revert-last-invocations\x01w\0\x04\0\
+\x14revert-worker-target\x03\0;\x01m\x02\x08original\x06forked\x04\0\x0bfork-res\
+ult\x03\0=\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06filter?\x07precise\x7f\0\xc0\
+\0\x04\0\x18[constructor]get-workers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04sel\
+f\xc2\0\0\xc4\0\x04\0\x1c[method]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0e\
+create-promise\x01F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-prom\
+ise\x01H\x01k\xc7\0\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01\
+J\x01@\x02\x0apromise-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01\
+@\x01\x0apromise-id\x0d\x01\0\x04\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0f\
+get-oplog-index\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01\
+N\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01O\x04\0\x14mark-begin-ope\
+ration\x01M\x01@\x01\x05begin\x0b\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\
+\x16\x04\0\x10get-retry-policy\x01Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\
+\x10set-retry-policy\x01R\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01S\
+\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-leve\
+l\x01T\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01V\x01@\0\0\x05\x04\0\x18generate-idempot\
+ency-key\x01W\x01@\x03\x09worker-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\
+\0\x0dupdate-worker\x01X\x01@\0\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\
+\x09worker-id\x09\0\xda\0\x04\0\x13get-worker-metadata\x01[\x01@\x03\x10source-w\
+orker-id\x09\x10target-worker-id\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfor\
+k-worker\x01\\\x01@\x02\x09worker-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert\
+-worker\x01]\x01k\x03\x01@\x01\x13component-references\0\xde\0\x04\0\x14resolve-\
+component-id\x01_\x01k\x09\x01@\x02\x13component-references\x0bworker-names\0\xe0\
+\0\x04\0\x11resolve-worker-id\x01a\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\
+\x08new-names\0>\x04\0\x04fork\x01b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x02\x03\
+\0\x04\x09worker-id\x02\x03\0\x04\x0ccomponent-id\x01B\x09\x02\x03\x02\x01\x0c\x04\
+\0\x09worker-id\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x0ccomponent-id\x03\0\x02\x01k\
+\x03\x01k\x01\x01o\x03\x04\x05\x05\x01@\0\0\x06\x04\0\x03run\x01\x07\x04\0\x1ego\
+lem:it/component-resolve-api\x05\x0e\x04\0\x1agolem:it/component-resolve\x04\0\x0b\
+\x17\x01\0\x11component-resolve\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0d\
+wit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {
