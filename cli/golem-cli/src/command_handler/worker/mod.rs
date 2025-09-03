@@ -28,8 +28,7 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
-    function_params_types, show_exported_agent_constructors, show_exported_agents,
-    show_exported_functions, Component,
+    function_params_types, show_exported_agent_constructors, show_exported_functions, Component,
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
@@ -64,6 +63,7 @@ use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use itertools::{EitherOrBoth, Itertools};
+use rib::ParsedFunctionSite;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1737,12 +1737,21 @@ impl WorkerCommandHandler {
         match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata).await {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
-                    if agent_type
-                        .methods
-                        .iter()
-                        .find(|method| method.name == function_name)
-                        .is_some()
-                    {
+                    let interface = component
+                        .metadata
+                        .find_function(function_name)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|f| match f.name.site {
+                            ParsedFunctionSite::Global => None,
+                            ParsedFunctionSite::Interface { .. } => None,
+                            ParsedFunctionSite::PackagedInterface { interface, .. } => {
+                                Some(interface)
+                            }
+                        });
+
+                    if interface == Some(agent_type.type_name) {
                         return true;
                     }
 
@@ -1755,7 +1764,10 @@ impl WorkerCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp {
                         component_name: component.component_name.to_string(),
-                        function_names: show_exported_agents(component.metadata.agent_types()),
+                        function_names: show_exported_functions(
+                            component.metadata.exports(),
+                            false,
+                        ),
                     });
 
                     false
