@@ -24,15 +24,14 @@ use crate::model::{
 };
 use anyhow::bail;
 use async_trait::async_trait;
-use golem_rib_repl::{
-    ReplComponentDependencies, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke,
-};
+use golem_rib_repl::{parse_with_clap, Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager, RibRepl, RibReplConfig, WorkerFunctionInvoke};
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use std::sync::Arc;
+use colored::Colorize;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -112,6 +111,11 @@ impl RibReplHandler {
             })
             .await;
 
+        let mut command_registry =
+            CommandRegistry::default();
+
+        command_registry.register(Agents);
+
         let mut repl = RibRepl::bootstrap(RibReplConfig {
             history_file: Some(self.ctx.rib_repl_history_file().await?),
             dependency_manager: Arc::new(self.clone()),
@@ -119,7 +123,7 @@ impl RibReplHandler {
             printer: None,
             component_source: None,
             prompt: None,
-            command_registry: None,
+            command_registry: Some(command_registry),
         })
         .await?;
 
@@ -139,6 +143,47 @@ impl RibReplHandler {
     }
 }
 
+
+pub struct Agents;
+
+impl Command for Agents {
+    type Input = ();
+    type Output = Vec<String>;
+    type InputParseError = clap::Error;
+    type ExecutionError = ();
+
+    fn parse(
+        &self,
+        _input: &str,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
+
+        Ok(())
+    }
+
+    fn execute(
+        &self,
+        _input: Self::Input,
+        repl_context: &mut ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        let agent_names =
+            repl_context.get_rib_compiler().get_custom_instance_names();
+
+        Ok(agent_names)
+    }
+
+    fn print_output(&self, output: Self::Output, repl_context: &ReplContext) {
+        println!("{}", "Available agents:".yellow());
+        println!();
+        for agent_name in output {
+            println!("- {}", agent_name.truecolor(180, 180, 180));
+        }
+    }
+
+    fn print_input_parse_error(&self, _error: Self::InputParseError, _repl_context: &ReplContext) {}
+
+    fn print_execution_error(&self, error: Self::ExecutionError, repl_context: &ReplContext) {}
+}
 #[async_trait]
 impl RibDependencyManager for RibReplHandler {
     async fn get_dependencies(&self) -> anyhow::Result<ReplComponentDependencies> {
