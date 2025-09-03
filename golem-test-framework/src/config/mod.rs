@@ -25,7 +25,7 @@ pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
-use golem_client::model::{AccountRole, CreateTokenRequest};
+use golem_client::model::{AccountRole, TokenCreation};
 use golem_common::model::account::AccountCreation;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -104,7 +104,7 @@ pub trait TestDependencies: Send + Sync {
         let token = client
             .create_token(
                 &account.id.0,
-                &CreateTokenRequest {
+                &TokenCreation {
                     expires_at: DateTime::<Utc>::MAX_UTC,
                 },
             )
