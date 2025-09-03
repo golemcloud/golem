@@ -1293,7 +1293,7 @@ fn extract_wit_value(
                 .ok_or_else(|| anyhow!("Missing type name for record: {typ:?}"))?
                 .to_upper_camel_case();
 
-            writeln!(result, "{indent}{record_name}::{{")?;
+            writeln!(result, "{indent}@types.{record_name}::{{")?;
 
             for (idx, field) in record.fields.iter().enumerate() {
                 let field_name = to_moonbit_ident(&field.name);
@@ -1414,6 +1414,7 @@ fn to_moonbit_ident(name: impl AsRef<str>) -> String {
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
+    use crate::model::agent::test::reproducer_for_multiple_types_called_element;
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
     use tempfile::NamedTempFile;
@@ -1446,6 +1447,16 @@ mod tests {
     fn single_agent_with_wit_keywords(_trace: &Trace) {
         let component_name: AppComponentName = "example:single1".into();
         let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn bug_multiple_types_called_element() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_multiple_types_called_element();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();
