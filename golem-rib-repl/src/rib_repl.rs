@@ -136,15 +136,9 @@ impl RibRepl {
             history_file_path.clone(),
         );
 
-        let new_functions: Vec<String> = component_dependencies
-            .custom_instance_spec
-            .iter()
-            .map(|x| x.instance_name.clone())
-            .collect();
-
         rl.helper_mut()
             .unwrap()
-            .update_std_function_names(new_functions);
+            .update_custom_instances(component_dependencies.custom_instance_spec);
 
         Ok(RibRepl {
             printer: config

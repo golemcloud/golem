@@ -4747,8 +4747,8 @@ mod tests {
         let custom_spec1 = CustomInstanceSpec {
             instance_name: "weather-agent".to_string(),
             parameter_types: vec![
-                InferredType::from(&str()),
-                InferredType::from(&record(vec![field("city", str()), field("country", str())])),
+                str(),
+                record(vec![field("city", str()), field("country", str())]),
             ],
             interface_name: Some(InterfaceName {
                 name: "weather-agent".to_string(),
@@ -4758,7 +4758,7 @@ mod tests {
 
         let custom_spec2 = CustomInstanceSpec {
             instance_name: "assistant-agent".to_string(),
-            parameter_types: vec![InferredType::from(&str())],
+            parameter_types: vec![str()],
             interface_name: Some(InterfaceName {
                 name: "assistant-agent".to_string(),
                 version: None,
