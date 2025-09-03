@@ -535,7 +535,7 @@ fn ensure_common_deps_for_tool(ctx: &ApplicationContext, tool: &str) -> anyhow::
                 ),
             );
             Command::new("npm")
-                .args(&["install"])
+                .args(["install"])
                 .status()
                 .context("Failed to execute npm install")?
                 .check_exit_status()
