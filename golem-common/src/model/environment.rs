@@ -12,8 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::account::AccountId;
 use super::application::ApplicationId;
+use super::auth::EnvironmentRole;
+use super::deployment::DeploymentRevision;
+use super::diff::Hash;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
+use std::collections::HashSet;
 use std::str::FromStr;
 
 newtype_uuid!(
@@ -45,6 +50,11 @@ impl FromStr for EnvironmentName {
 }
 
 declare_structs! {
+    pub struct EnvironmentCurrentDeploymentView {
+        pub revision: DeploymentRevision,
+        pub hash: Hash
+    }
+
     pub struct Environment {
         pub id: EnvironmentId,
         pub revision: EnvironmentRevision,
@@ -53,6 +63,12 @@ declare_structs! {
         pub compatibility_check: bool,
         pub version_check: bool,
         pub security_overrides: bool,
+
+        pub owner_account_id: AccountId,
+        /// Roles in the environment that were given to the current user by shares. The owner always has full access.
+        pub roles_from_shares: HashSet<EnvironmentRole>,
+
+        pub current_deployment: Option<EnvironmentCurrentDeploymentView>,
     }
 
     pub struct EnvironmentCreation {
@@ -64,17 +80,5 @@ declare_structs! {
 
     pub struct EnvironmentUpdate {
         pub new_name: Option<EnvironmentName>
-    }
-
-    pub struct EnvironmentHash {
-
-    }
-
-    pub struct EnvironmentDeploymentPlan {
-
-    }
-
-    pub struct EnvironmentSummary {
-
     }
 }

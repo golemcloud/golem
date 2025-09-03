@@ -140,6 +140,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                     services.environment_service.clone(),
                     services.environment_share_service.clone(),
                     services.environment_plugin_grant_service.clone(),
+                    services.deployment_service.clone(),
                     services.auth_service.clone(),
                 ),
                 EnvironmentSecuritySchemesApi::new(services.auth_service.clone()),

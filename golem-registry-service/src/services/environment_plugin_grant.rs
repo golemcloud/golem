@@ -14,7 +14,6 @@
 
 use super::environment::{EnvironmentError, EnvironmentService};
 use super::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
-use crate::model::WithEnvironmentCtx;
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment_plugin_grant::EnvironmentPluginGrantRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
@@ -223,10 +222,7 @@ impl EnvironmentPluginGrantService {
         &self,
         environment_plugin_grant_id: &EnvironmentPluginGrantId,
         auth: &AuthCtx,
-    ) -> Result<
-        (EnvironmentPluginGrant, WithEnvironmentCtx<Environment>),
-        EnvironmentPluginGrantError,
-    > {
+    ) -> Result<(EnvironmentPluginGrant, Environment), EnvironmentPluginGrantError> {
         let grant: EnvironmentPluginGrant = self
             .environment_plugin_grant_repo
             .get_by_id(&environment_plugin_grant_id.0)

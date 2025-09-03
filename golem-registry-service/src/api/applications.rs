@@ -199,12 +199,13 @@ impl ApplicationsApi {
         application_id: ApplicationId,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<Environment>>> {
-        let result = self
+        let environments = self
             .environment_service
             .list_in_application(&application_id, &auth)
             .await?;
+
         Ok(Json(Page {
-            values: result.into_iter().map(|e| e.value).collect(),
+            values: environments,
         }))
     }
 
@@ -289,6 +290,6 @@ impl ApplicationsApi {
             .environment_service
             .get_in_application(&application_id, &EnvironmentName(environment_name), &auth)
             .await?;
-        Ok(Json(environment.value))
+        Ok(Json(environment))
     }
 }

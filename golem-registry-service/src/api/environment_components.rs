@@ -20,7 +20,7 @@ use golem_common::api::Page;
 use golem_common::model::component::ComponentCreation;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::ComponentName;
-use golem_common::model::deployment::DeploymentRevisionId;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -206,7 +206,7 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_components(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let record = recorded_http_api_request!(
@@ -228,7 +228,7 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_components_internal(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevisionId,
+        deployment_revision_id: DeploymentRevision,
         auth: AuthCtx,
     ) -> ApiResult<Json<Page<ComponentDto>>> {
         let components: Vec<ComponentDto> = self
@@ -252,7 +252,7 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_component(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ComponentDto>> {
@@ -281,7 +281,7 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_component_internal(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevisionId,
+        deployment_revision_id: DeploymentRevision,
         component_name: ComponentName,
         auth: AuthCtx,
     ) -> ApiResult<Json<ComponentDto>> {

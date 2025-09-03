@@ -15,13 +15,11 @@
 pub mod api_definition;
 pub mod api_domain;
 pub mod certificate;
-pub mod environment;
 
 use crate::declare_structs;
 use crate::model::api_definition::ApiDefinitionId;
 use crate::model::component::ComponentId;
 use crate::model::component::ComponentRevision;
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "poem")]
@@ -33,10 +31,6 @@ pub struct Page<
 }
 
 declare_structs! {
-    pub struct CreateTokenRequest {
-        pub expires_at: chrono::DateTime<Utc>,
-    }
-
     pub struct CreateApiDeploymentRequest {
         pub api_definitions: Vec<ApiDefinitionId>,
     }

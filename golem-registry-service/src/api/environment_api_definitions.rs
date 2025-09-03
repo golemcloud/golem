@@ -19,7 +19,7 @@ use golem_common::api::Page;
 use golem_common::api::api_definition::{
     CreateHttpApiDefinitionRequest, HttpApiDefinitionResponseView,
 };
-use golem_common::model::deployment::DeploymentRevisionId;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -162,7 +162,7 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definitions(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<HttpApiDefinitionResponseView>>> {
         let record = recorded_http_api_request!(
@@ -188,7 +188,7 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definitions_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_revision_id: DeploymentRevisionId,
+        _deployment_revision_id: DeploymentRevision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<HttpApiDefinitionResponseView>>> {
         todo!()
@@ -204,7 +204,7 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definition(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         api_definition_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<HttpApiDefinitionResponseView>> {
@@ -233,7 +233,7 @@ impl EnvironmentApiDefinitionsApi {
     async fn get_deployment_api_definition_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_revision_id: DeploymentRevisionId,
+        _deployment_revision_id: DeploymentRevision,
         _api_definition_name: String,
         _auth: AuthCtx,
     ) -> ApiResult<Json<HttpApiDefinitionResponseView>> {

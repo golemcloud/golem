@@ -17,6 +17,7 @@ use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
 use crate::services::component::ComponentError;
+use crate::services::deployment::DeploymentError;
 use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::environment_share::EnvironmentShareError;
@@ -409,6 +410,45 @@ impl From<EnvironmentPluginGrantError> for ApiError {
                     cause: Some(inner.context("EnvironmentPluginGrantError")),
                 }))
             }
+        }
+    }
+}
+
+impl From<DeploymentError> for ApiError {
+    fn from(value: DeploymentError) -> Self {
+        let error: String = value.to_safe_string();
+        match value {
+            DeploymentError::ParentEnvironmentNotFound(_)
+            | DeploymentError::DeploymentNotFound(_) => {
+                Self::NotFound(Json(ErrorBody { error, cause: None }))
+            }
+
+            DeploymentError::VersionAlreadyExists { .. }
+            | DeploymentError::DeploymentHashMismatch { .. } => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: vec![error],
+                    cause: None,
+                }))
+            }
+            DeploymentError::DeploymentValidationFailed(failed_validations) => {
+                Self::BadRequest(Json(ErrorsBody {
+                    errors: failed_validations
+                        .into_iter()
+                        .map(|fv| fv.to_safe_string())
+                        .collect(),
+                    cause: None,
+                }))
+            }
+
+            DeploymentError::ConcurrentDeployment => {
+                Self::Conflict(Json(ErrorBody { error, cause: None }))
+            }
+
+            DeploymentError::Unauthorized(inner) => inner.into(),
+            DeploymentError::InternalError(inner) => Self::InternalError(Json(ErrorBody {
+                error,
+                cause: Some(inner.context("EnvironmentPluginGrantError")),
+            })),
         }
     }
 }
