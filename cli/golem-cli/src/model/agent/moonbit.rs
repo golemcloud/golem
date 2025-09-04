@@ -1462,4 +1462,14 @@ mod tests {
         let target = NamedTempFile::new().unwrap();
         generate_moonbit_wrapper(ctx, target.path()).unwrap();
     }
+
+    #[test]
+    fn single_agent_with_test_in_package_name(_trace: &Trace) {
+        let component_name: AppComponentName = "test:agent".into();
+        let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
 }

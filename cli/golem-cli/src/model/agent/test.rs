@@ -20,6 +20,80 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, r#enum, record, s32, str, u32, unit_case, variant,
 };
 
+pub fn single_agent_wrapper_types() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "agent1".to_string(),
+        description: "An example agent".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Creates an example agent instance".into(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![
+                    NamedElementSchema {
+                        name: "a".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: u32(),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "b".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: option(str()),
+                        }),
+                    },
+                ],
+            }),
+        },
+        methods: vec![
+            AgentMethod {
+                name: "f1".to_string(),
+                description: "returns a random string".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "a".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            AgentMethod {
+                name: "f2".to_string(),
+                description: "adds two numbers".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![
+                        NamedElementSchema {
+                            name: "x".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        },
+                        NamedElementSchema {
+                            name: "y".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        },
+                    ],
+                }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "return".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: u32(),
+                        }),
+                    }],
+                }),
+            },
+        ],
+        dependencies: vec![],
+    }]
+}
+
 pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
     let color = r#enum(&["red", "green", "blue"]).named("color");
 

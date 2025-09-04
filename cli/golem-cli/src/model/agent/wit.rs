@@ -737,6 +737,7 @@ mod tests {
     use crate::model::agent::test;
     use crate::model::agent::test::{
         agent_type_with_wit_keywords, reproducer_for_multiple_types_called_element,
+        single_agent_wrapper_types,
     };
 
     use golem_common::model::agent::{
@@ -779,81 +780,7 @@ mod tests {
     #[test]
     fn single_agent_wrapper_1() {
         let component_name = "example:single1".into();
-        let agent_types = vec![AgentType {
-            type_name: "agent1".to_string(),
-            description: "An example agent".to_string(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "Creates an example agent instance".into(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "b".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: option(str()),
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![
-                AgentMethod {
-                    name: "f1".to_string(),
-                    description: "returns a random string".to_string(),
-                    prompt_hint: None,
-                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-                    output_schema: DataSchema::Tuple(NamedElementSchemas {
-                        elements: vec![NamedElementSchema {
-                            name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str(),
-                            }),
-                        }],
-                    }),
-                },
-                AgentMethod {
-                    name: "f2".to_string(),
-                    description: "adds two numbers".to_string(),
-                    prompt_hint: None,
-                    input_schema: DataSchema::Tuple(NamedElementSchemas {
-                        elements: vec![
-                            NamedElementSchema {
-                                name: "x".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: u32(),
-                                    },
-                                ),
-                            },
-                            NamedElementSchema {
-                                name: "y".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: u32(),
-                                    },
-                                ),
-                            },
-                        ],
-                    }),
-                    output_schema: DataSchema::Tuple(NamedElementSchemas {
-                        elements: vec![NamedElementSchema {
-                            name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        }],
-                    }),
-                },
-            ],
-            dependencies: vec![],
-        }];
+        let agent_types = single_agent_wrapper_types();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
@@ -1249,6 +1176,50 @@ mod tests {
               export types;
               export assistant-agent;
               export weather-agent;
+            }
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn single_agent_wrapper_1_test_in_package_name() {
+        let component_name = "test:agent".into();
+        let agent_types = single_agent_wrapper_types();
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package test:agent;
+
+            /// An example agent
+            interface agent1 {
+              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+
+              /// Creates an example agent instance
+              initialize: func(a: u32, b: option<string>) -> result<_, agent-error>;
+
+              get-definition: func() -> agent-type;
+
+              /// returns a random string
+              f1: func() -> result<string, agent-error>;
+
+              /// adds two numbers
+              f2: func(x: u32, y: u32) -> result<u32, agent-error>;
+            }
+
+            world agent-wrapper {
+              import wasi:clocks/wall-clock@0.2.3;
+              import wasi:io/poll@0.2.3;
+              import golem:rpc/types@0.2.2;
+              import golem:agent/common;
+              import golem:agent/guest;
+
+              export golem:agent/guest;
+              export agent1;
             }
             "#
             ),
