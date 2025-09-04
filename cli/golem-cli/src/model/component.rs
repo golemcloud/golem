@@ -187,7 +187,7 @@ impl ComponentView {
             exports: if value.metadata.is_agent() {
                 show_exported_agents(value.metadata.agent_types())
             } else {
-                show_exported_functions(value.metadata.exports(), true)
+                show_exported_functions(value.metadata.exports(), true, None)
             },
             dynamic_linking: value
                 .metadata
@@ -381,11 +381,20 @@ fn render_element_schema(schema: &ElementSchema) -> String {
     }
 }
 
-pub fn show_exported_functions(exports: &[AnalysedExport], with_parameters: bool) -> Vec<String> {
+pub fn show_exported_functions(
+    exports: &[AnalysedExport],
+    with_parameters: bool,
+    instance_name_filter: Option<&str>,
+) -> Vec<String> {
     exports
         .iter()
         .flat_map(|exp| match exp {
             AnalysedExport::Instance(AnalysedInstance { name, functions }) => {
+                if let Some(instance_name_filter) = instance_name_filter {
+                    if name != instance_name_filter {
+                        return vec![];
+                    }
+                }
                 let fs: Vec<String> = functions
                     .iter()
                     .map(|f| render_exported_function(Some(name), f, with_parameters))
@@ -514,6 +523,17 @@ pub fn function_params_types<'t>(
     let (func, _parsed) = resolve_function(component, function)?;
 
     Ok(func.parameters.iter().map(|r| &r.typ).collect())
+}
+
+pub fn agent_interface_name(component: &Component, agent_type_name: &str) -> Option<String> {
+    match (
+        component.metadata.root_package_name(),
+        component.metadata.root_package_version(),
+    ) {
+        (Some(name), Some(version)) => Some(format!("{}/{}@{}", name, agent_type_name, version)),
+        (Some(name), None) => Some(format!("{}/{}", name, agent_type_name)),
+        _ => None,
+    }
 }
 
 #[cfg(test)]

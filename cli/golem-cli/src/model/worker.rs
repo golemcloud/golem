@@ -14,22 +14,26 @@
 
 use crate::fuzzy::{Error, FuzzySearch, Match};
 use crate::model::component::show_exported_functions;
+
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 
 pub fn fuzzy_match_function_name(
     provided_function_name: &str,
     exports: &[AnalysedExport],
+    interface_name_filter: Option<&str>,
 ) -> crate::fuzzy::Result {
-    let component_function_names =
-        duplicate_names_with_syntax_sugar(show_exported_functions(exports, false));
+    let component_function_names = duplicate_names_with_syntax_sugar(show_exported_functions(
+        exports,
+        false,
+        interface_name_filter,
+    ));
 
     // First see if the function name is a valid function name
     let (normalized_function_name, parsed_function_name) =
         match ParsedFunctionName::parse(provided_function_name) {
             Ok(parsed_function_name) => {
                 // If it is we render the normalized function name for fuzzy-searching that
-
                 let normalized_function_name = normalize_function_name(&parsed_function_name);
                 (
                     normalized_function_name.to_string(),
@@ -265,19 +269,23 @@ mod tests {
     #[test]
     fn test_fuzzy_match_simple_function_names() {
         assert_eq!(
-            fuzzy_match_function_name("golem:it/api.{initialize-cart}", &example_exported_global())
+            fuzzy_match_function_name(
+                "golem:it/api.{initialize-cart}",
+                &example_exported_global(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{initialize-cart}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name("initialize-cart", &example_exported_global(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{initialize-cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("initialize-cart", &example_exported_global())
-                .unwrap()
-                .option,
-            "golem:it/api.{initialize-cart}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("initialize", &example_exported_global())
+            fuzzy_match_function_name("initialize", &example_exported_global(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{initialize-cart}"
@@ -289,26 +297,31 @@ mod tests {
         assert_eq!(
             fuzzy_match_function_name(
                 "golem:it/api.{[constructor]cart}",
-                &example_exported_resource()
+                &example_exported_resource(),
+                None
             )
             .unwrap()
             .option,
             "golem:it/api.{[constructor]cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("golem:it/api.{cart.new}", &example_exported_resource())
+            fuzzy_match_function_name(
+                "golem:it/api.{cart.new}",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[constructor]cart}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name("[constructor]cart", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[constructor]cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("[constructor]cart", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[constructor]cart}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("cart.new", &example_exported_resource())
+            fuzzy_match_function_name("cart.new", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[constructor]cart}"
@@ -318,37 +331,45 @@ mod tests {
     #[test]
     fn test_fuzzy_match_drop() {
         assert_eq!(
-            fuzzy_match_function_name("golem:it/api.{[drop]cart}", &example_exported_resource())
+            fuzzy_match_function_name(
+                "golem:it/api.{[drop]cart}",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[drop]cart}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name(
+                "golem:it/api.{cart.drop}",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[drop]cart}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name("api.[drop]cart", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[drop]cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("golem:it/api.{cart.drop}", &example_exported_resource())
+            fuzzy_match_function_name("api.cart.drop", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[drop]cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("api.[drop]cart", &example_exported_resource())
+            fuzzy_match_function_name("[drop]cart", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[drop]cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("api.cart.drop", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[drop]cart}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("[drop]cart", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[drop]cart}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("cart.drop", &example_exported_resource())
+            fuzzy_match_function_name("cart.drop", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[drop]cart}"
@@ -360,44 +381,53 @@ mod tests {
         assert_eq!(
             fuzzy_match_function_name(
                 "golem:it/api.{[method]cart.add-item}",
-                &example_exported_resource()
+                &example_exported_resource(),
+                None
             )
             .unwrap()
             .option,
             "golem:it/api.{[method]cart.add-item}"
         );
         assert_eq!(
-            fuzzy_match_function_name("golem:it/api.{cart.add-item}", &example_exported_resource())
+            fuzzy_match_function_name(
+                "golem:it/api.{cart.add-item}",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[method]cart.add-item}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name(
+                "api.[method]cart.add-item",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[method]cart.add-item}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name("api.cart.add-item", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.add-item}"
         );
         assert_eq!(
-            fuzzy_match_function_name("api.[method]cart.add-item", &example_exported_resource())
+            fuzzy_match_function_name("[method]cart.add-item", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.add-item}"
         );
         assert_eq!(
-            fuzzy_match_function_name("api.cart.add-item", &example_exported_resource())
+            fuzzy_match_function_name("cart.add-item", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.add-item}"
         );
         assert_eq!(
-            fuzzy_match_function_name("[method]cart.add-item", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[method]cart.add-item}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("cart.add-item", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[method]cart.add-item}"
-        );
-        assert_eq!(
-            fuzzy_match_function_name("cart.add", &example_exported_resource())
+            fuzzy_match_function_name("cart.add", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.add-item}"
@@ -409,7 +439,8 @@ mod tests {
         assert_eq!(
             fuzzy_match_function_name(
                 "golem:it/api.{[method]cart.merge-with}",
-                &example_exported_resource()
+                &example_exported_resource(),
+                None
             )
             .unwrap()
             .option,
@@ -418,7 +449,8 @@ mod tests {
         assert_eq!(
             fuzzy_match_function_name(
                 "golem:it/api.{[static]cart.merge-with}",
-                &example_exported_resource()
+                &example_exported_resource(),
+                None
             )
             .unwrap()
             .option,
@@ -427,47 +459,89 @@ mod tests {
         assert_eq!(
             fuzzy_match_function_name(
                 "golem:it/api.{cart.merge-with}",
-                &example_exported_resource()
+                &example_exported_resource(),
+                None
             )
             .unwrap()
             .option,
             "golem:it/api.{[method]cart.merge-with}"
         );
         assert_eq!(
-            fuzzy_match_function_name("api.[method]cart.merge-with", &example_exported_resource())
+            fuzzy_match_function_name(
+                "api.[method]cart.merge-with",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[method]cart.merge-with}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name("api.cart.merge-with", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.merge-with}"
         );
         assert_eq!(
-            fuzzy_match_function_name("api.cart.merge-with", &example_exported_resource())
+            fuzzy_match_function_name(
+                "[method]cart.merge-with",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[method]cart.merge-with}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name(
+                "[static]cart.merge-with",
+                &example_exported_resource(),
+                None
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{[method]cart.merge-with}"
+        );
+        assert_eq!(
+            fuzzy_match_function_name("cart.merge-with", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.merge-with}"
         );
         assert_eq!(
-            fuzzy_match_function_name("[method]cart.merge-with", &example_exported_resource())
+            fuzzy_match_function_name("cart.merge", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.merge-with}"
         );
         assert_eq!(
-            fuzzy_match_function_name("[static]cart.merge-with", &example_exported_resource())
+            fuzzy_match_function_name("cart.merge", &example_exported_resource(), None)
                 .unwrap()
                 .option,
             "golem:it/api.{[method]cart.merge-with}"
         );
+    }
+
+    #[test]
+    fn test_fuzzy_interface_filter() {
         assert_eq!(
-            fuzzy_match_function_name("cart.merge-with", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[method]cart.merge-with}"
+            fuzzy_match_function_name(
+                "initialize-cart",
+                &example_exported_global(),
+                Some("golem:it/api")
+            )
+            .unwrap()
+            .option,
+            "golem:it/api.{initialize-cart}"
         );
         assert_eq!(
-            fuzzy_match_function_name("cart.merge", &example_exported_resource())
-                .unwrap()
-                .option,
-            "golem:it/api.{[method]cart.merge-with}"
+            fuzzy_match_function_name(
+                "initialize-cart",
+                &example_exported_global(),
+                Some("golem:it/api-2")
+            )
+            .ok(),
+            None
         );
     }
 

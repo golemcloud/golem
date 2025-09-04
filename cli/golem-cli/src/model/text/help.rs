@@ -14,13 +14,16 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::app::AppComponentName;
-use crate::model::component::render_type;
+use crate::model::component::{
+    agent_interface_name, render_type, show_exported_functions, Component,
+};
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
 };
 use cli_table::Table;
 use colored::Colorize;
+use golem_common::model::agent::AgentType;
 use golem_wasm_ast::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
@@ -48,8 +51,8 @@ impl MessageWithFields for WorkerNameHelp {
             ),
         );
         fields.field(
-                "<COMPONENT>/<WORKER>",
-                &indoc!(
+            "<COMPONENT>/<WORKER>",
+            &indoc!(
                     "
                         Component specific worker name.
 
@@ -62,7 +65,7 @@ impl MessageWithFields for WorkerNameHelp {
 
                     "
                 ),
-            );
+        );
         fields.field(
             "<PROJECT>/<COMPONENT>/<WORKER>",
             &indoc!(
@@ -113,8 +116,8 @@ impl MessageWithFields for ComponentNameHelp {
 
         // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
         fields.field(
-                "<COMPONENT>",
-                &indoc!(
+            "<COMPONENT>",
+            &indoc!(
                     "
                     Standalone component name.
 
@@ -127,7 +130,7 @@ impl MessageWithFields for ComponentNameHelp {
 
                     "
                 ),
-            );
+        );
         fields.field(
             "<PROJECT>/<COMPONENT>",
             &indoc!(
@@ -192,32 +195,77 @@ impl TextView for AvailableComponentNamesHelp {
 
 pub struct AvailableFunctionNamesHelp {
     pub component_name: String,
+    pub agent_name: Option<String>,
     pub function_names: Vec<String>,
+}
+
+impl AvailableFunctionNamesHelp {
+    pub fn new(component: &Component, agent_type: Option<&AgentType>) -> Self {
+        AvailableFunctionNamesHelp {
+            component_name: component.component_name.0.clone(),
+            agent_name: agent_type.as_ref().map(|a| a.type_name.clone()),
+            function_names: show_exported_functions(
+                component.metadata.exports(),
+                false,
+                agent_type
+                    .and_then(|agent_type| {
+                        agent_interface_name(component, agent_type.type_name.as_str())
+                    })
+                    .as_deref(),
+            ),
+        }
+    }
 }
 
 impl TextView for AvailableFunctionNamesHelp {
     fn log(&self) {
         if self.function_names.is_empty() {
-            logln(
-                format!(
-                    "No functions are available for component {}.",
-                    self.component_name.log_color_highlight()
-                )
-                .log_color_warn()
-                .to_string(),
-            );
+            match &self.agent_name {
+                Some(agent_name) => {
+                    logln(
+                        format!(
+                            "No methods are available for agent {}.",
+                            agent_name.underline()
+                        )
+                        .log_color_warn()
+                        .to_string(),
+                    );
+                }
+                None => {
+                    logln(
+                        format!(
+                            "No functions are available for component {}.",
+                            self.component_name.underline()
+                        )
+                        .log_color_warn()
+                        .to_string(),
+                    );
+                }
+            }
             return;
         }
 
-        logln(
-            format!(
-                "Available function names for component {}:",
-                self.component_name
-            )
-            .bold()
-            .underline()
-            .to_string(),
-        );
+        match &self.agent_name {
+            Some(agent_name) => {
+                logln(
+                    format!("Available method names for agent {}:", agent_name)
+                        .bold()
+                        .underline()
+                        .to_string(),
+                );
+            }
+            None => {
+                logln(
+                    format!(
+                        "Available function names for component {}:",
+                        self.component_name
+                    )
+                    .bold()
+                    .underline()
+                    .to_string(),
+                );
+            }
+        }
         for function_name in &self.function_names {
             logln(format!("  - {}", format_export(function_name)));
         }

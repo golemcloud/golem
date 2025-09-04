@@ -28,7 +28,7 @@ use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
-    function_params_types, show_exported_agent_constructors, show_exported_functions, Component,
+    agent_interface_name, function_params_types, show_exported_agent_constructors, Component,
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
@@ -50,7 +50,8 @@ use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::{AgentTypesClient, ComponentClient, WorkerClient};
 use golem_client::model::{
-    InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
+    AgentType, InvokeParameters as InvokeParametersCloud,
+    RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
     UpdateWorkerRequest as UpdateWorkerRequestCloud,
     WorkerCreationRequest as WorkerCreationRequestCloud,
@@ -194,12 +195,8 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        if !self
-            .validate_worker_name_and_function(&component, &worker_name_match.worker_name, None)
-            .await
-        {
-            bail!(NonSuccessfulExit);
-        }
+        self.validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
+            .await?;
 
         log_action(
             "Creating",
@@ -276,77 +273,71 @@ impl WorkerCommandHandler {
             .await?;
 
         // First validate without the function name
-        if !self
-            .validate_worker_name_and_function(&component, &worker_name_match.worker_name, None)
-            .await
-        {
-            bail!(NonSuccessfulExit);
-        }
+        let agent_type = self
+            .validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
+            .await?;
 
-        let matched_function_name =
-            fuzzy_match_function_name(function_name, component.metadata.exports());
+        let matched_function_name = fuzzy_match_function_name(
+            function_name,
+            component.metadata.exports(),
+            agent_type
+                .as_ref()
+                .and_then(|a| agent_interface_name(&component, &a.type_name))
+                .as_deref(),
+        );
         let function_name = match matched_function_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
                 match_.option
             }
-            Err(error) => {
-                let component_functions =
-                    show_exported_functions(component.metadata.exports(), false);
-
-                match error {
-                    Error::Ambiguous {
-                        highlighted_options,
-                        ..
-                    } => {
-                        logln("");
-                        log_error(format!(
-                            "The requested function name ({}) is ambiguous.",
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        logln("Did you mean one of");
-                        for option in highlighted_options {
-                            logln(format!(" - {}", option.bold()));
-                        }
-                        logln("?");
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: component_functions,
-                        });
-
-                        bail!(NonSuccessfulExit);
+            Err(error) => match error {
+                Error::Ambiguous {
+                    highlighted_options,
+                    ..
+                } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested function name ({}) is ambiguous.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    logln("Did you mean one of");
+                    for option in highlighted_options {
+                        logln(format!(" - {}", option.bold()));
                     }
-                    Error::NotFound { .. } => {
-                        logln("");
-                        log_error(format!(
-                            "The requested function name ({}) was not found.",
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: component_functions,
-                        });
+                    logln("?");
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        &component,
+                        agent_type.as_ref(),
+                    ));
 
-                        bail!(NonSuccessfulExit);
-                    }
+                    bail!(NonSuccessfulExit);
                 }
-            }
+                Error::NotFound { .. } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested function name ({}) was not found.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        &component,
+                        agent_type.as_ref(),
+                    ));
+
+                    bail!(NonSuccessfulExit);
+                }
+            },
         };
 
         // Re-validate with function name
-        if !self
-            .validate_worker_name_and_function(
-                &component,
-                &worker_name_match.worker_name,
-                Some(&function_name),
-            )
-            .await
-        {
-            bail!(NonSuccessfulExit);
-        }
+        self.validate_worker_and_function_names(
+            &component,
+            &worker_name_match.worker_name,
+            Some(&function_name),
+        )
+        .await?;
 
         if enqueue {
             log_action(
@@ -1724,20 +1715,20 @@ impl WorkerCommandHandler {
         }
     }
 
-    pub async fn validate_worker_name_and_function(
+    pub async fn validate_worker_and_function_names(
         &self,
         component: &Component,
         worker_name: &WorkerName,
         function_name: Option<&str>,
-    ) -> bool {
+    ) -> anyhow::Result<Option<AgentType>> {
         if !component.metadata.is_agent() {
-            return true;
+            return Ok(None);
         }
 
         match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata).await {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
-                    let interface = component
+                    if let Some((namespace, package, interface)) = component
                         .metadata
                         .find_function(function_name)
                         .await
@@ -1746,13 +1737,20 @@ impl WorkerCommandHandler {
                         .and_then(|f| match f.name.site {
                             ParsedFunctionSite::Global => None,
                             ParsedFunctionSite::Interface { .. } => None,
-                            ParsedFunctionSite::PackagedInterface { interface, .. } => {
-                                Some(interface)
-                            }
-                        });
-
-                    if interface == Some(agent_type.type_name) {
-                        return true;
+                            ParsedFunctionSite::PackagedInterface {
+                                namespace,
+                                package,
+                                interface,
+                                ..
+                            } => Some((namespace, package, interface)),
+                        })
+                    {
+                        let component_name = format!("{namespace}:{package}");
+                        if interface == agent_type.type_name
+                            && component.component_name.0 == component_name
+                        {
+                            return Ok(Some(agent_type));
+                        }
                     }
 
                     logln("");
@@ -1762,18 +1760,14 @@ impl WorkerCommandHandler {
                         function_name.log_color_error_highlight()
                     ));
                     logln("");
-                    log_text_view(&AvailableFunctionNamesHelp {
-                        component_name: component.component_name.to_string(),
-                        function_names: show_exported_functions(
-                            component.metadata.exports(),
-                            false,
-                        ),
-                    });
-
-                    false
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        component,
+                        Some(&agent_type),
+                    ));
+                    bail!(NonSuccessfulExit);
                 }
 
-                None => true,
+                None => Ok(Some(agent_type)),
             },
             Err(err) => {
                 logln("");
@@ -1789,7 +1783,7 @@ impl WorkerCommandHandler {
                     ),
                 });
 
-                false
+                bail!(NonSuccessfulExit);
             }
         }
     }
