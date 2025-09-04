@@ -29,7 +29,7 @@ use futures::stream::BoxStream;
 use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
-use golem_common::model::deployment::DeploymentRevisionId;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use std::sync::Arc;
 use tracing::info;
@@ -195,7 +195,7 @@ impl ComponentService {
     pub async fn list_deployed_components(
         &self,
         environment_id: &EnvironmentId,
-        deployment_revision_id: DeploymentRevisionId,
+        deployment_revision_id: DeploymentRevision,
         auth: &AuthCtx,
     ) -> Result<Vec<Component>, ComponentError> {
         info!(
@@ -229,7 +229,7 @@ impl ComponentService {
     pub async fn get_deployed_component(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevisionId,
+        deployment_revision_id: DeploymentRevision,
         component_name: ComponentName,
         auth: &AuthCtx,
     ) -> Result<Component, ComponentError> {

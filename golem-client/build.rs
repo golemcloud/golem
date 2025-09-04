@@ -63,6 +63,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // Auth
             ("Token", "golem_common::model::auth::Token"),
+            ("TokenCreation", "golem_common::model::auth::TokenCreation"),
             (
                 "TokenWithSecret",
                 "golem_common::model::auth::TokenWithSecret",
@@ -109,6 +110,20 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             (
                 "ComponentMetadata",
                 "golem_common::model::component_metadata::ComponentMetadata",
+            ),
+            // Deployment
+            ("Deployment", "golem_common::model::deployment::Deployment"),
+            (
+                "DeploymentCreation",
+                "golem_common::model::deployment::DeploymentCreation",
+            ),
+            (
+                "DeploymentPlan",
+                "golem_common::model::deployment::DeploymentPlan",
+            ),
+            (
+                "DeploymentPlanComponentEntry",
+                "golem_common::model::deployment::DeploymentPlanComponentEntry",
             ),
             // Environment
             (

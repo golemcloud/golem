@@ -31,6 +31,10 @@ declare_structs! {
         pub expires_at: chrono::DateTime<Utc>,
     }
 
+    pub struct TokenCreation {
+        pub expires_at: chrono::DateTime<Utc>,
+    }
+
     pub struct TokenWithSecret {
         pub id: TokenId,
         pub secret: TokenSecret,
@@ -139,10 +143,13 @@ pub enum EnvironmentAction {
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
     DeleteShare,
+    DeployEnvironment,
     UpdateComponent,
     UpdateEnvironment,
     UpdateShare,
     ViewComponent,
+    ViewDeployment,
+    ViewDeploymentPlan,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
     ViewShares,

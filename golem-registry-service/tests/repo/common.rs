@@ -307,7 +307,7 @@ pub async fn test_environment_create(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(env_by_name) = env_by_name);
-    check!(env == env_by_name.value);
+    check!(env == env_by_name);
 
     let env_by_id = deps
         .environment_repo
@@ -319,7 +319,7 @@ pub async fn test_environment_create(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(env_by_id) = env_by_id);
-    check!(env == env_by_id.value);
+    check!(env == env_by_id);
 }
 
 pub async fn test_environment_create_concurrently(deps: &Deps) {
@@ -410,9 +410,9 @@ pub async fn test_environment_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_name) = rev_1_by_name);
-    assert!(env_rev_1 == rev_1_by_name.value.revision);
-    assert!(env_rev_0.revision.name == rev_1_by_name.value.revision.name);
-    assert!(env_rev_0.application_id == rev_1_by_name.value.application_id);
+    assert!(env_rev_1 == rev_1_by_name.revision);
+    assert!(env_rev_0.revision.name == rev_1_by_name.revision.name);
+    assert!(env_rev_0.application_id == rev_1_by_name.application_id);
 
     let rev_1_by_id = deps
         .environment_repo
@@ -420,9 +420,9 @@ pub async fn test_environment_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(rev_1_by_id) = rev_1_by_id);
-    assert!(env_rev_1 == rev_1_by_id.value.revision);
-    assert!(env_rev_0.revision.name == rev_1_by_id.value.revision.name);
-    assert!(env_rev_0.application_id == rev_1_by_id.value.application_id);
+    assert!(env_rev_1 == rev_1_by_id.revision);
+    assert!(env_rev_0.revision.name == rev_1_by_id.revision.name);
+    assert!(env_rev_0.application_id == rev_1_by_id.application_id);
 
     let env_rev_2 = EnvironmentRevisionRecord {
         environment_id: env_rev_0.revision.environment_id,
@@ -469,9 +469,9 @@ pub async fn test_environment_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_name) = rev_2_by_name);
-    assert!(env_rev_2 == rev_2_by_name.value.revision);
-    assert!(env_rev_0.revision.name == rev_2_by_name.value.revision.name);
-    assert!(env_rev_0.application_id == rev_2_by_name.value.application_id);
+    assert!(env_rev_2 == rev_2_by_name.revision);
+    assert!(env_rev_0.revision.name == rev_2_by_name.revision.name);
+    assert!(env_rev_0.application_id == rev_2_by_name.application_id);
 
     let rev_2_by_id = deps
         .environment_repo
@@ -479,9 +479,9 @@ pub async fn test_environment_update(deps: &Deps) {
         .await
         .unwrap();
     let_assert!(Some(rev_2_by_id) = rev_2_by_id);
-    assert!(env_rev_2 == rev_2_by_id.value.revision);
-    assert!(env_rev_0.revision.name == rev_2_by_id.value.revision.name);
-    assert!(env_rev_0.application_id == rev_2_by_id.value.application_id);
+    assert!(env_rev_2 == rev_2_by_id.revision);
+    assert!(env_rev_0.revision.name == rev_2_by_id.revision.name);
+    assert!(env_rev_0.application_id == rev_2_by_id.application_id);
 }
 
 pub async fn test_environment_update_concurrently(deps: &Deps) {

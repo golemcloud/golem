@@ -354,10 +354,11 @@ CREATE TABLE current_deployment_revisions
 (
     environment_id         UUID      NOT NULL,
     revision_id            BIGINT    NOT NULL,
+
+    deployment_revision_id BIGINT    NOT NULL,
+
     created_at             TIMESTAMP NOT NULL,
     created_by             UUID      NOT NULL,
-    deployment_revision_id BIGINT    NOT NULL,
-    deployment_version     TEXT      NOT NULL,
     CONSTRAINT current_deployment_revisions_pk
         PRIMARY KEY (environment_id, revision_id),
     CONSTRAINT current_deployment_revisions_deployment_revisions_fk
@@ -377,7 +378,7 @@ CREATE TABLE current_deployments
     CONSTRAINT current_deployments_pk
         PRIMARY KEY (environment_id, current_revision_id),
     CONSTRAINT current_deployments_deployments_revisions_fk
-        FOREIGN KEY (environment_id, current_revision_id) REFERENCES deployment_revisions (environment_id, revision_id)
+        FOREIGN KEY (environment_id, current_revision_id) REFERENCES current_deployment_revisions (environment_id, revision_id)
 );
 
 CREATE TABLE deployment_component_revisions

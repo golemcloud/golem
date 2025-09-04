@@ -103,7 +103,7 @@ async fn other_users_cannot_get_applications(
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceListApplicationEnvironmentsError::Error403(_))) = result);
+        assert!(let Err(golem_client::Error::Item(RegistryServiceListApplicationEnvironmentsError::Error404(_))) = result);
     }
 
     Ok(())
@@ -128,7 +128,7 @@ async fn deleting_account_hides_environments(
         let result = admin_client.list_application_environments(&app.id.0).await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceListApplicationEnvironmentsError::Error403(_)
+                RegistryServiceListApplicationEnvironmentsError::Error404(_)
             )) = result
         );
     }
@@ -163,7 +163,7 @@ async fn deleting_application_hides_environments(
         let result = client.list_application_environments(&app.id.0).await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceListApplicationEnvironmentsError::Error403(_)
+                RegistryServiceListApplicationEnvironmentsError::Error404(_)
             )) = result
         );
     }

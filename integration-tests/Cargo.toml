@@ -27,6 +27,7 @@ assert2 = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
 base64 = { workspace = true }
+blake3 = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true }
 futures-concurrency = { workspace = true }

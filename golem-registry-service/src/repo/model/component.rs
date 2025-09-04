@@ -26,7 +26,8 @@ use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
-use golem_common::model::diff::{self, Hashable};
+use golem_common::model::deployment::DeploymentPlanComponentEntry;
+use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
@@ -623,5 +624,16 @@ pub struct ComponentRevisionIdentityRecord {
     pub name: String,
     pub revision_id: i64,
     pub version: String,
-    pub hash: Option<SqlBlake3Hash>,
+    pub hash: SqlBlake3Hash,
+}
+
+impl From<ComponentRevisionIdentityRecord> for DeploymentPlanComponentEntry {
+    fn from(value: ComponentRevisionIdentityRecord) -> Self {
+        Self {
+            id: ComponentId(value.component_id),
+            revision: value.revision_id.into(),
+            name: ComponentName(value.name),
+            hash: Hash::new(value.hash.into_blake3_hash()),
+        }
+    }
 }

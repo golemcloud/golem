@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::application::ApplicationService;
-use crate::model::WithEnvironmentCtx;
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
@@ -22,8 +21,7 @@ use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::auth::{AccountAction, EnvironmentAction};
 use golem_common::model::environment::{
-    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentRevision,
-    EnvironmentUpdate,
+    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
@@ -105,18 +103,7 @@ impl EnvironmentService {
 
         auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
 
-        let environment = Environment {
-            id: EnvironmentId::new_v4(),
-            revision: EnvironmentRevision::INITIAL,
-            application_id: application_id.clone(),
-            name: data.name,
-            compatibility_check: data.compatibility_check,
-            version_check: data.version_check,
-            security_overrides: data.security_overrides,
-        };
-
-        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
-        let record = EnvironmentRevisionRecord::from_model(environment, audit);
+        let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id.clone());
 
         let result = self
             .environment_repo
@@ -139,15 +126,13 @@ impl EnvironmentService {
         update: EnvironmentUpdate,
         auth: &AuthCtx,
     ) -> Result<Environment, EnvironmentError> {
-        let environment_with_ctx = self.get(&environment_id, auth).await?;
+        let mut environment = self.get(&environment_id, auth).await?;
 
         auth.authorize_environment_action(
-            &environment_with_ctx.owner_account_id,
-            &environment_with_ctx.roles_from_shares,
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
             EnvironmentAction::UpdateEnvironment,
         )?;
-
-        let mut environment = environment_with_ctx.value;
 
         let current_revision = environment.revision;
         environment.revision = current_revision.next()?;
@@ -182,15 +167,13 @@ impl EnvironmentService {
         environment_id: EnvironmentId,
         auth: &AuthCtx,
     ) -> Result<(), EnvironmentError> {
-        let environment_with_ctx = self.get(&environment_id, auth).await?;
+        let mut environment = self.get(&environment_id, auth).await?;
 
         auth.authorize_environment_action(
-            &environment_with_ctx.owner_account_id,
-            &environment_with_ctx.roles_from_shares,
+            &environment.owner_account_id,
+            &environment.roles_from_shares,
             EnvironmentAction::DeleteEnvironment,
         )?;
-
-        let mut environment = environment_with_ctx.value;
 
         let current_revision = environment.revision;
         environment.revision = current_revision.next()?;
@@ -215,8 +198,8 @@ impl EnvironmentService {
         &self,
         environment_id: &EnvironmentId,
         auth: &AuthCtx,
-    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
-        let environment: WithEnvironmentCtx<Environment> = self
+    ) -> Result<Environment, EnvironmentError> {
+        let environment: Environment = self
             .environment_repo
             .get_by_id(
                 &environment_id.0,
@@ -228,6 +211,8 @@ impl EnvironmentService {
                 environment_id.clone(),
             ))?
             .into();
+
+        // If the current caller is also the owner or global admin, add those roles.
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -244,8 +229,8 @@ impl EnvironmentService {
         application_id: &ApplicationId,
         name: &EnvironmentName,
         auth: &AuthCtx,
-    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
-        let result: WithEnvironmentCtx<Environment> = self
+    ) -> Result<Environment, EnvironmentError> {
+        let result: Environment = self
             .environment_repo
             .get_by_name(
                 &application_id.0,
@@ -276,8 +261,8 @@ impl EnvironmentService {
         environment_id: &EnvironmentId,
         action: EnvironmentAction,
         auth: &AuthCtx,
-    ) -> Result<WithEnvironmentCtx<Environment>, EnvironmentError> {
-        let environment: WithEnvironmentCtx<Environment> = self.get(environment_id, auth).await?;
+    ) -> Result<Environment, EnvironmentError> {
+        let environment: Environment = self.get(environment_id, auth).await?;
 
         auth.authorize_environment_action(
             &environment.owner_account_id,
@@ -292,7 +277,7 @@ impl EnvironmentService {
         &self,
         application_id: &ApplicationId,
         auth: &AuthCtx,
-    ) -> Result<Vec<WithEnvironmentCtx<Environment>>, EnvironmentError> {
+    ) -> Result<Vec<Environment>, EnvironmentError> {
         let mut authorized_environments = Vec::new();
         let mut application_owner_id = None;
 
@@ -305,20 +290,23 @@ impl EnvironmentService {
             )
             .await?
         {
-            let env_ctx: WithEnvironmentCtx<Option<Environment>> = record.into();
+            let owner_account_id = record.owner_account_id();
+            let environment_roles_from_shares = record.environment_roles_from_shares();
 
-            application_owner_id.get_or_insert_with(|| env_ctx.owner_account_id.clone());
+            let environment: Option<Environment> = record.into_revision_record().map(|r| r.into());
 
-            if let Some(env_inner) = env_ctx.map_into_inner()
+            application_owner_id.get_or_insert_with(|| owner_account_id.clone());
+
+            if let Some(environment) = environment
                 && auth
                     .authorize_environment_action(
-                        &env_inner.owner_account_id,
-                        &env_inner.roles_from_shares,
+                        &owner_account_id,
+                        &environment_roles_from_shares,
                         EnvironmentAction::ViewEnvironment,
                     )
                     .is_ok()
             {
-                authorized_environments.push(env_inner);
+                authorized_environments.push(environment);
             }
         }
 
@@ -334,11 +322,9 @@ impl EnvironmentService {
                 )?;
             }
             (None, _) => {
-                // parent application does not exist -> return unauthorized to prevent leakage
-                return Err(EnvironmentError::Unauthorized(
-                    AuthorizationError::AccountActionNotAllowed(
-                        AccountAction::ListAllApplicationEnvironments,
-                    ),
+                // parent application does not exist -> return notfound to prevent leakage
+                return Err(EnvironmentError::ParentApplicationNotFound(
+                    application_id.clone(),
                 ));
             }
         }

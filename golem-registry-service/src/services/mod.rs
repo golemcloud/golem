@@ -20,6 +20,7 @@ pub mod component;
 pub mod component_compilation;
 pub mod component_object_store;
 pub mod component_transformer_plugin_caller;
+pub mod deployment;
 pub mod environment;
 pub mod environment_plugin_grant;
 pub mod environment_share;

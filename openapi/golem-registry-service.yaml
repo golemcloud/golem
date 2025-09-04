@@ -382,7 +382,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/CreateTokenRequest'
+              $ref: '#/components/schemas/TokenCreation'
         required: true
       responses:
         '200':
@@ -4536,148 +4536,12 @@ paths:
       - Cookie: []
       - Token: []
       operationId: delete_environment
-  /v1/envs/{environment_id}/current-deployment/hash:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      summary: Get hash of the currently deployed environment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/EnvironmentHash'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_deployed_environment_hash
-  /v1/envs/{environment_id}/current-deployment/summary:
-    get:
-      tags:
-      - RegistryService
-      - Environment
-      summary: Get summary of the currently deployed environment
-      parameters:
-      - name: environment_id
-        schema:
-          type: string
-          format: uuid
-        in: path
-        required: true
-        deprecated: false
-        explode: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/EnvironmentSummary'
-        '400':
-          description: Invalid request, returning with a list of issues detected in the request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: Unauthorized request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: Forbidden Request
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: Entity not found
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '422':
-          description: Limits of the plan exceeded
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: Internal server error
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-      security:
-      - Cookie: []
-      - Token: []
-      operationId: get_deployed_environment_summary
   /v1/envs/{environment_id}/plan:
     get:
       tags:
       - RegistryService
       - Environment
-      summary: Get the current deployment plan. This is equivalent to a summary of the current staging area.
+      summary: Get the current deployment plan
       parameters:
       - name: environment_id
         schema:
@@ -4693,7 +4557,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/EnvironmentSummary'
+                $ref: '#/components/schemas/DeploymentPlan'
         '400':
           description: Invalid request, returning with a list of issues detected in the request
           content:
@@ -4828,7 +4692,7 @@ paths:
         content:
           application/json; charset=utf-8:
             schema:
-              $ref: '#/components/schemas/DeployEnvironmentRequest'
+              $ref: '#/components/schemas/DeploymentCreation'
         required: true
       responses:
         '200':
@@ -4883,6 +4747,82 @@ paths:
       - Cookie: []
       - Token: []
       operationId: deploy_environment
+  /v1/envs/{environment_id}/deployments/{deployment_id}/plan:
+    get:
+      tags:
+      - RegistryService
+      - Environment
+      summary: Get the deployment plan of a deployed deployment
+      parameters:
+      - name: environment_id
+        schema:
+          type: string
+          format: uuid
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      - name: deployment_id
+        schema:
+          type: integer
+          format: uint64
+        in: path
+        required: true
+        deprecated: false
+        explode: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeploymentPlan'
+        '400':
+          description: Invalid request, returning with a list of issues detected in the request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: Unauthorized request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: Forbidden Request
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: Entity not found
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '422':
+          description: Limits of the plan exceeded
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: Internal server error
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+      security:
+      - Cookie: []
+      - Token: []
+      operationId: get_environment_deployed_deployment_plan
   /v1/envs/{environment_id}/shares:
     post:
       tags:
@@ -7794,15 +7734,6 @@ components:
           type: array
           items:
             type: string
-    CreateTokenRequest:
-      type: object
-      title: CreateTokenRequest
-      required:
-      - expiresAt
-      properties:
-        expiresAt:
-          type: string
-          format: date-time
     DataSchema:
       type: object
       oneOf:
@@ -7825,22 +7756,76 @@ components:
             - Multimodal
             example: Multimodal
       - $ref: '#/components/schemas/NamedElementSchemas'
-    DeployEnvironmentRequest:
-      type: object
-      title: DeployEnvironmentRequest
     Deployment:
       type: object
       title: Deployment
       required:
       - environmentId
-      - deploymentRevisionId
+      - revision
+      - version
+      - deploymentHash
       properties:
         environmentId:
           type: string
           format: uuid
-        deploymentRevisionId:
+        revision:
           type: integer
           format: uint64
+        version:
+          type: string
+        deploymentHash:
+          type: string
+          format: hash
+    DeploymentCreation:
+      type: object
+      title: DeploymentCreation
+      required:
+      - expectedDeploymentHash
+      - version
+      properties:
+        currentDeploymentRevision:
+          type: integer
+          format: uint64
+        expectedDeploymentHash:
+          type: string
+          format: hash
+        version:
+          type: string
+    DeploymentPlan:
+      type: object
+      title: DeploymentPlan
+      description: Summary of all entities tracked by the deployment
+      required:
+      - deploymentHash
+      - components
+      properties:
+        deploymentHash:
+          type: string
+          format: hash
+        components:
+          type: array
+          items:
+            $ref: '#/components/schemas/DeploymentPlanComponentEntry'
+    DeploymentPlanComponentEntry:
+      type: object
+      title: DeploymentPlanComponentEntry
+      required:
+      - id
+      - revision
+      - name
+      - hash
+      properties:
+        id:
+          type: string
+          format: uuid
+        revision:
+          type: integer
+          format: uint64
+        name:
+          type: string
+        hash:
+          type: string
+          format: hash
     DynamicLinkedInstance:
       type: object
       oneOf:
@@ -7934,6 +7919,8 @@ components:
       - compatibilityCheck
       - versionCheck
       - securityOverrides
+      - ownerAccountId
+      - rolesFromShares
       properties:
         id:
           type: string
@@ -7952,6 +7939,16 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
+        ownerAccountId:
+          type: string
+          format: uuid
+        rolesFromShares:
+          type: array
+          description: Roles in the environment that were given to the current user by shares. The owner always has full access.
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
+        currentDeployment:
+          $ref: '#/components/schemas/EnvironmentCurrentDeploymentView'
     EnvironmentCreation:
       type: object
       title: EnvironmentCreation
@@ -7969,9 +7966,19 @@ components:
           type: boolean
         securityOverrides:
           type: boolean
-    EnvironmentHash:
+    EnvironmentCurrentDeploymentView:
       type: object
-      title: EnvironmentHash
+      title: EnvironmentCurrentDeploymentView
+      required:
+      - revision
+      - hash
+      properties:
+        revision:
+          type: integer
+          format: uint64
+        hash:
+          type: string
+          format: hash
     EnvironmentPluginGrant:
       type: object
       title: EnvironmentPluginGrant
@@ -8054,9 +8061,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/EnvironmentRole'
-    EnvironmentSummary:
-      type: object
-      title: EnvironmentSummary
     EnvironmentUpdate:
       type: object
       title: EnvironmentUpdate
@@ -8837,6 +8841,15 @@ components:
         createdAt:
           type: string
           format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+    TokenCreation:
+      type: object
+      title: TokenCreation
+      required:
+      - expiresAt
+      properties:
         expiresAt:
           type: string
           format: date-time

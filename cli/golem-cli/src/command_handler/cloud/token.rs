@@ -20,7 +20,7 @@ use crate::log::{log_warn_action, LogColorize};
 use crate::model::text::token::{TokenListView, TokenNewView};
 use chrono::{DateTime, Utc};
 use golem_client::api::TokenClient;
-use golem_client::model::CreateTokenRequest;
+use golem_client::model::TokenCreation;
 use golem_common::model::auth::TokenId;
 use std::sync::Arc;
 
@@ -62,7 +62,7 @@ impl CloudTokenCommandHandler {
 
         let token = clients
             .token
-            .create_token(&clients.account_id().0, &CreateTokenRequest { expires_at })
+            .create_token(&clients.account_id().0, &TokenCreation { expires_at })
             .await
             .map_service_error()?;
 
