@@ -17,6 +17,7 @@ use crate::model::TrapType;
 use crate::virtual_export_compat;
 use crate::workerctx::{PublicWorkerIo, WorkerCtx};
 use anyhow::anyhow;
+use golem_common::model::agent::AgentId;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{IdempotencyKey, WorkerStatus};
@@ -24,6 +25,7 @@ use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm_rpc::Value;
+use heck::ToKebabCase;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error, Instrument};
 use wasmtime::component::{Func, Val};
@@ -216,6 +218,8 @@ async fn invoke_observed<Ctx: WorkerCtx>(
             ))
         })?;
 
+    verify_agent_invocation(store.data().agent_id(), &metadata)?;
+
     let call_result = match function {
         FindFunctionResult::ExportedFunction(function) => {
             invoke(
@@ -239,6 +243,37 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store.data().set_suspended().await?;
 
     call_result
+}
+
+fn verify_agent_invocation(
+    agent_id: Option<AgentId>,
+    invocation: &InvokableFunction,
+) -> Result<(), WorkerExecutorError> {
+    if let Some(agent_id) = agent_id {
+        if invocation.agent_method_or_constructor.is_some() {
+            if let Some(interface_name) = invocation.name.site.interface_name() {
+                // interface_name is the kebab-cased agent type name from the static wrapper
+                let agent_type = agent_id.agent_type.to_kebab_case();
+                if interface_name != agent_type {
+                    Err(WorkerExecutorError::invalid_request(
+                        format!("Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}")
+                    ))
+                } else {
+                    // matching names
+                    Ok(())
+                }
+            } else {
+                // Unexpected state - should never reach this
+                Ok(())
+            }
+        } else {
+            // Not an agent invocation (deprecated)
+            Ok(())
+        }
+    } else {
+        // Not an agent (deprecated)
+        Ok(())
+    }
 }
 
 async fn validate_function_parameters(

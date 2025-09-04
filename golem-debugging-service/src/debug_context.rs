@@ -15,6 +15,7 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -558,6 +559,7 @@ impl WorkerCtx for DebugContext {
     async fn create(
         _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -586,6 +588,7 @@ impl WorkerCtx for DebugContext {
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
+            agent_id,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -639,6 +642,14 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.owned_worker_id()
     }
 
+    fn agent_id(&self) -> Option<AgentId> {
+        self.durable_ctx.agent_id()
+    }
+
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
+    }
+
     fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
@@ -655,15 +666,11 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.worker_proxy()
     }
 
-    fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
-        self.durable_ctx.worker_fork()
-    }
-
     fn component_service(&self) -> Arc<dyn ComponentService> {
         self.durable_ctx().component_service()
     }
 
-    fn created_by(&self) -> &AccountId {
-        self.durable_ctx.created_by()
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
+        self.durable_ctx.worker_fork()
     }
 }
