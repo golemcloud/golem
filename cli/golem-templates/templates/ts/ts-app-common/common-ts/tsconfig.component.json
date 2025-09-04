@@ -17,7 +17,10 @@
     "emitDecoratorMetadata": true,
     "useDefineForClassFields": false,
     "paths": {
-      "common/*": ["../common-ts/src/*"]
+      "common/*": ["./src/*"]
     }
-  }
+  },
+  "include": [
+    "../node_modules/@golemcloud/golem-ts-sdk/types/*.d.ts"
+  ]
 }
