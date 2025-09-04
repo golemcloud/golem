@@ -47,6 +47,7 @@ use crate::workerctx::{
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -638,6 +639,7 @@ impl WorkerCtx for Context {
     async fn create(
         account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -666,6 +668,7 @@ impl WorkerCtx for Context {
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
+            agent_id,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -715,6 +718,10 @@ impl WorkerCtx for Context {
 
     fn owned_worker_id(&self) -> &OwnedWorkerId {
         self.durable_ctx.owned_worker_id()
+    }
+
+    fn agent_id(&self) -> Option<AgentId> {
+        self.durable_ctx.agent_id()
     }
 
     fn created_by(&self) -> &AccountId {
