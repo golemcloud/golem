@@ -42,8 +42,8 @@ pub async fn add_metadata_to_selected_components(
 
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
-            || vec![linked_wasm.clone()],
-            || [final_linked_wasm.clone()],
+            || [&linked_wasm],
+            || [&final_linked_wasm],
         ) {
             log_skipping_up_to_date(format!(
                 "adding metadata to {}",

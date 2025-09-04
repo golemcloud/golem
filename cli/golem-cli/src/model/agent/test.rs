@@ -17,8 +17,82 @@ use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm_ast::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, str, u32, unit_case, variant,
+    case, field, list, option, r#enum, record, s32, str, u32, unit_case, variant,
 };
+
+pub fn single_agent_wrapper_types() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "agent1".to_string(),
+        description: "An example agent".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Creates an example agent instance".into(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![
+                    NamedElementSchema {
+                        name: "a".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: u32(),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "b".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: option(str()),
+                        }),
+                    },
+                ],
+            }),
+        },
+        methods: vec![
+            AgentMethod {
+                name: "f1".to_string(),
+                description: "returns a random string".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "a".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            AgentMethod {
+                name: "f2".to_string(),
+                description: "adds two numbers".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![
+                        NamedElementSchema {
+                            name: "x".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        },
+                        NamedElementSchema {
+                            name: "y".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: u32(),
+                            }),
+                        },
+                    ],
+                }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "return".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: u32(),
+                        }),
+                    }],
+                }),
+            },
+        ],
+        dependencies: vec![],
+    }]
+}
 
 pub fn multi_agent_wrapper_2_types() -> Vec<AgentType> {
     let color = r#enum(&["red", "green", "blue"]).named("color");
@@ -206,4 +280,91 @@ pub fn agent_type_with_wit_keywords() -> Vec<AgentType> {
         ],
         dependencies: vec![],
     }]
+}
+
+pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
+    vec![
+        AgentType {
+            type_name: "assistant-agent".to_string(),
+            description: "AssistantAgent".to_string(),
+            constructor: AgentConstructor {
+                name: Some("AssistantAgent".to_string()),
+                description: "Constructs [object Object]".to_string(),
+                prompt_hint: Some("Enter something...".to_string()),
+                input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+            },
+            methods: vec![AgentMethod {
+                name: "ask_more".to_string(),
+                description: "".to_string(),
+                prompt_hint: Some("".to_string()),
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "name".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "return-value".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![field("x", str())]),
+                        }),
+                    }],
+                }),
+            }],
+            dependencies: vec![],
+        },
+        AgentType {
+            type_name: "weather-agent".to_string(),
+            description: "WeatherAgent".to_string(),
+            constructor: AgentConstructor {
+                name: Some("WeatherAgent".to_string()),
+                description: "Constructs [object Object]".to_string(),
+                prompt_hint: Some("Enter something...".to_string()),
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "username".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            },
+            methods: vec![AgentMethod {
+                name: "getWeather".to_string(),
+                description: "Weather forecast weather for you".to_string(),
+                prompt_hint: Some("".to_string()),
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![
+                        NamedElementSchema {
+                            name: "name".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        },
+                        NamedElementSchema {
+                            name: "param2".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: record(vec![
+                                    field("data", str()),
+                                    field("value", s32()),
+                                ]),
+                            }),
+                        },
+                    ],
+                }),
+                output_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "return-value".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: str(),
+                        }),
+                    }],
+                }),
+            }],
+            dependencies: vec![],
+        },
+    ]
 }

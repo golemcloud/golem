@@ -81,6 +81,7 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -144,6 +145,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -237,6 +239,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state: PrivateDurableWorkerState::new(
+                agent_id,
                 oplog_service,
                 oplog,
                 promise_service,
@@ -330,6 +333,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub fn created_by(&self) -> &AccountId {
         &self.state.created_by
+    }
+
+    pub fn agent_id(&self) -> Option<AgentId> {
+        self.state.agent_id.clone()
     }
 
     pub fn component_metadata(&self) -> &golem_service_base::model::Component {
@@ -2326,6 +2333,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
+    agent_id: Option<AgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -2366,6 +2374,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
+        agent_id: Option<AgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -2406,6 +2415,7 @@ impl PrivateDurableWorkerState {
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
+            agent_id,
             oplog_service,
             oplog: oplog.clone(),
             promise_service,

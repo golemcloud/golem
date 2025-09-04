@@ -15,7 +15,7 @@
 use crate::router::start_router;
 use crate::StartedComponents;
 use anyhow::Context;
-use cloud_service::config::CloudServiceConfig;
+use cloud_service::config::{CloudServiceConfig, PlanConfig, PlansConfig};
 use cloud_service::CloudService;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
@@ -152,6 +152,17 @@ fn cloud_service_config(args: &LaunchArgs) -> CloudServiceConfig {
         accounts.insert(root_account.id.clone(), root_account);
     }
 
+    // no need for limits in the single executable, just set them to max values for convenience
+    let default_plan = PlanConfig {
+        plan_id: Uuid::nil(),
+        project_limit: i32::MAX,
+        component_limit: i32::MAX,
+        worker_limit: i32::MAX,
+        storage_limit: i32::MAX,
+        monthly_gas_limit: i64::MAX,
+        monthly_upload_limit: i32::MAX,
+    };
+
     CloudServiceConfig {
         grpc_port: 0,
         http_port: 0,
@@ -160,6 +171,9 @@ fn cloud_service_config(args: &LaunchArgs) -> CloudServiceConfig {
             max_connections: 4,
         }),
         accounts: AccountsConfig { accounts },
+        plans: PlansConfig {
+            default: default_plan,
+        },
         ..Default::default()
     }
 }

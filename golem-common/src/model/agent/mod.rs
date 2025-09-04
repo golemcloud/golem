@@ -616,17 +616,28 @@ impl AgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<Self, String> {
+        Self::parse_and_resolve_type(s, resolver)
+            .await
+            .map(|(agent_id, _)| agent_id)
+    }
+
+    pub async fn parse_and_resolve_type(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<(Self, AgentType), String> {
         let s = s.as_ref();
 
         if let Some((agent_type, param_list)) = s.split_once('(') {
             if let Some(param_list) = param_list.strip_suffix(')') {
                 let agent_type = resolver.resolve_agent_type(agent_type).await?;
-                let schema = agent_type.constructor.input_schema;
-                let value = DataValue::parse(param_list, &schema)?;
-                Ok(AgentId {
-                    agent_type: agent_type.type_name,
-                    parameters: value,
-                })
+                let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
+                Ok((
+                    AgentId {
+                        agent_type: agent_type.type_name.clone(),
+                        parameters: value,
+                    },
+                    agent_type,
+                ))
             } else {
                 Err("Unexpected agent-id format - missing closing )".to_string())
             }

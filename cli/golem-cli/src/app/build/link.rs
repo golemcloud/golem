@@ -114,11 +114,12 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
             || {
-                let mut inputs = wasms_to_compose_with.clone();
-                inputs.push(component_wasm.clone());
-                inputs
+                wasms_to_compose_with
+                    .iter()
+                    .map(|s| s.as_path())
+                    .chain(std::iter::once(component_wasm.as_path()))
             },
-            || [linked_wasm.clone()],
+            || [&linked_wasm],
         ) {
             log_skipping_up_to_date(format!(
                 "linking dependencies for {}",

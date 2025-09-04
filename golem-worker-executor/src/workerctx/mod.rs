@@ -41,6 +41,7 @@ use crate::services::{
 };
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -115,6 +116,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -159,6 +161,9 @@ pub trait WorkerCtx:
 
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
+
+    /// Get the agent-id resolved from the worker name
+    fn agent_id(&self) -> Option<AgentId>;
 
     /// Gets the account created this worker
     fn created_by(&self) -> &AccountId;

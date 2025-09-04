@@ -5,7 +5,7 @@ import {
     description,
 } from '@golemcloud/golem-ts-sdk';
 
-interface CustomData {
+type CustomData = {
     data: string;
     value: number;
 }
