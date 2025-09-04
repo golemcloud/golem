@@ -38,6 +38,7 @@ use golem_client::api::{
 };
 use golem_client::{Context as ContextCloud, Security};
 use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
@@ -154,7 +155,7 @@ impl Context {
         let environment: Option<EnvironmentReference> =
             match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
                 Some(_project) => {
-                    // TODO: atomic deployment
+                    // TODO: atomic deployment: it should also handle global flags!
                     /*Some(
                     ProjectReference::from_str(project.as_str())
                         .map_err(|err| anyhow!("{}", err))
@@ -274,6 +275,11 @@ impl Context {
 
     pub fn build_profile(&self) -> Option<&AppBuildProfileName> {
         self.app_context_config.build_profile.as_ref()
+    }
+
+    pub fn application_name(&self) -> Option<ApplicationName> {
+        // TODO: atomic
+        todo!()
     }
 
     pub fn default_environment(&self) -> Option<&EnvironmentReference> {

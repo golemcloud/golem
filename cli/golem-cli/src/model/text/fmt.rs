@@ -531,6 +531,7 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
                         account_email,
                         application_name,
                         environment_name,
+                        auto_create: _,
                     } => {
                         format!(
                             "{}/{}/{}/",
