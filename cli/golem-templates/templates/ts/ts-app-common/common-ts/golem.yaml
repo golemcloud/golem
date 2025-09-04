@@ -3,19 +3,18 @@
 templates:
   ts:
     build:
-    - command: npx --no golem-typegen components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files components-ts/{{ component_name | to_kebab_case }}/**/src/**/*.ts
+    - command: npx --no golem-typegen tsconfig.json --files src/**/*.ts
       sources:
-        - src
-        - ../../common-ts
+      - src
       targets:
-        - .metadata
-      dir: ../..
+      - .metadata
     - command: npx --no rollup -- -c
       sources:
       - src
       - ../../common-ts
       - rollup.config.mjs
       - tsconfig.js
+      - .metadata
       targets:
       - dist/main.js
     - injectToPrebuiltQuickjs: ../../wasm/golem_agent.wasm

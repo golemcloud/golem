@@ -44,9 +44,6 @@ impl MessageWithFields for WorkerNameHelp {
                 "
                     Standalone worker name, usable when only one component is selected based on the
                     current application directory.
-
-                    For ephemeral workers or for random worker name generation \"-\" can be used.
-
                     "
             ),
         );
@@ -54,14 +51,14 @@ impl MessageWithFields for WorkerNameHelp {
                 "<COMPONENT>/<WORKER>",
                 &indoc!(
                     "
-                    Component specific worker name.
+                        Component specific worker name.
 
-                    When used in an application (sub)directory then the given component name is fuzzy
-                    matched against the application component names. If no matches are found, then
-                    a the component name is used as is.
+                        When used in an application (sub)directory then the given component name is fuzzy
+                        matched against the application component names. If no matches are found, then
+                        a the component name is used as is.
 
-                    When used in a directory without application manifest(s), then the full component
-                    name is expected.
+                        When used in a directory without application manifest(s), then the full component
+                        name is expected.
 
                     "
                 ),
@@ -223,6 +220,41 @@ impl TextView for AvailableFunctionNamesHelp {
         );
         for function_name in &self.function_names {
             logln(format!("  - {}", format_export(function_name)));
+        }
+        logln("");
+    }
+}
+
+pub struct AvailableAgentConstructorsHelp {
+    pub component_name: String,
+    pub constructors: Vec<String>,
+}
+
+impl TextView for AvailableAgentConstructorsHelp {
+    fn log(&self) {
+        if self.constructors.is_empty() {
+            logln(
+                format!(
+                    "No agent constructors are available for component {}.",
+                    self.component_name.log_color_highlight()
+                )
+                .log_color_warn()
+                .to_string(),
+            );
+            return;
+        }
+
+        logln(
+            format!(
+                "Available agent constructors for component {}:",
+                self.component_name
+            )
+            .bold()
+            .underline()
+            .to_string(),
+        );
+        for constructor in &self.constructors {
+            logln(format!("  - {}", format_export(constructor)));
         }
         logln("");
     }

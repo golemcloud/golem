@@ -13,14 +13,17 @@
 // limitations under the License.
 
 use crate::app::build::task_result_marker::{
+    AgentWrapperCommandMarkerHash, ComposeAgentWrapperCommandMarkerHash,
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
-    ResolvedExternalCommandMarkerHash, TaskResultMarker,
+    InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
-use crate::app::build::{delete_path_logged, is_up_to_date, valid_env_vars};
+use crate::app::build::{
+    delete_path_logged, is_up_to_date, new_task_up_to_date_check, valid_env_vars,
+};
 use crate::app::context::ApplicationContext;
 use crate::app::error::CustomCommandError;
 use crate::fs::compile_and_collect_globs;
-use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
+use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::AppComponentName;
 use crate::model::app_raw;
 use crate::model::app_raw::{
@@ -32,7 +35,7 @@ use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use tracing::debug;
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
@@ -60,10 +63,10 @@ pub async fn execute_build_command(
             execute_agent_wrapper(ctx, component_name, &base_build_dir, command).await
         }
         app_raw::BuildCommand::ComposeAgentWrapper(command) => {
-            execute_compose_agent_wrapper(&base_build_dir, command).await
+            execute_compose_agent_wrapper(ctx, component_name, &base_build_dir, command).await
         }
         app_raw::BuildCommand::InjectToPrebuiltQuickJs(command) => {
-            execute_inject_to_prebuilt_quick_js(&base_build_dir, command).await
+            execute_inject_to_prebuilt_quick_js(ctx, &base_build_dir, command).await
         }
     }
 }
@@ -78,11 +81,35 @@ async fn execute_agent_wrapper(
     let wrapper_wasm_path = base_build_dir.join(&command.generate_agent_wrapper);
     let compiled_wasm_path = base_build_dir.join(&command.based_on_compiled_wasm);
 
+    // NOTE: cannot use new_task_up_to_date_check yet, because of the mut app ctx
+    let task_result_marker = TaskResultMarker::new(
+        &ctx.application.task_result_marker_dir(),
+        AgentWrapperCommandMarkerHash {
+            build_dir: base_build_dir.as_std_path(),
+            command,
+        },
+    )?;
+
+    let skip_up_to_date_check =
+        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
+
+    if is_up_to_date(
+        skip_up_to_date_check,
+        || [&compiled_wasm_path],
+        || [&wrapper_wasm_path],
+    ) {
+        log_skipping_up_to_date(format!(
+            "generating agent wrapper for {}",
+            component_name.as_str().log_color_highlight()
+        ));
+        return Ok(());
+    }
+
     log_action(
         "Generating",
         format!(
             "agent wrapper for {}",
-            component_name.to_string().log_color_highlight()
+            component_name.as_str().log_color_highlight()
         ),
     );
     let _indent = LogIndent::new();
@@ -90,36 +117,42 @@ async fn execute_agent_wrapper(
     let agent_types = ctx
         .wit
         .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
-        .await?;
+        .await;
 
-    log_action(
-        "Generating",
-        format!(
-            "agent WIT interface for {}",
-            component_name.to_string().log_color_highlight()
-        ),
-    );
+    task_result_marker.result((|| {
+        let agent_types = agent_types?;
 
-    let wrapper_context =
-        crate::model::agent::wit::generate_agent_wrapper_wit(component_name, &agent_types)?;
+        log_action(
+            "Generating",
+            format!(
+                "agent WIT interface for {}",
+                component_name.to_string().log_color_highlight()
+            ),
+        );
 
-    log_action(
-        "Generating",
-        format!(
-            "agent WIT interface implementation to {}",
-            wrapper_wasm_path.to_string().log_color_highlight()
-        ),
-    );
+        let wrapper_context =
+            crate::model::agent::wit::generate_agent_wrapper_wit(component_name, &agent_types)?;
 
-    crate::model::agent::moonbit::generate_moonbit_wrapper(
-        wrapper_context,
-        wrapper_wasm_path.as_std_path(),
-    )?;
+        log_action(
+            "Generating",
+            format!(
+                "agent WIT interface implementation to {}",
+                wrapper_wasm_path.to_string().log_color_highlight()
+            ),
+        );
 
-    Ok(())
+        crate::model::agent::moonbit::generate_moonbit_wrapper(
+            wrapper_context,
+            wrapper_wasm_path.as_std_path(),
+        )?;
+
+        Ok(())
+    })())
 }
 
 async fn execute_compose_agent_wrapper(
+    ctx: &ApplicationContext,
+    component_name: &AppComponentName,
     base_build_dir: &Path,
     command: &ComposeAgentWrapper,
 ) -> anyhow::Result<()> {
@@ -128,17 +161,43 @@ async fn execute_compose_agent_wrapper(
     let user_component = base_build_dir.join(&command.with_agent);
     let target_component = base_build_dir.join(&command.to);
 
-    commands::composition::compose(
-        wrapper_wasm_path.as_std_path(),
-        &[user_component.as_std_path().to_path_buf()],
-        target_component.as_std_path(),
-    )
-    .await?;
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(ComposeAgentWrapperCommandMarkerHash {
+            build_dir: base_build_dir.as_std_path(),
+            command,
+        })?
+        .with_sources(|| [&wrapper_wasm_path, &user_component])
+        .with_targets(|| [&target_component])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Composing",
+                    format!(
+                        "agent wrapper for {}",
+                        component_name.to_string().log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
 
-    Ok(())
+                commands::composition::compose(
+                    wrapper_wasm_path.as_std_path(),
+                    &[user_component.as_std_path().to_path_buf()],
+                    target_component.as_std_path(),
+                )
+                .await
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "composing agent wrapper for {}",
+                    component_name.as_str().log_color_highlight()
+                ));
+            },
+        )
+        .await
 }
 
 async fn execute_inject_to_prebuilt_quick_js(
+    ctx: &ApplicationContext,
     base_build_dir: &Path,
     command: &InjectToPrebuiltQuickJs,
 ) -> anyhow::Result<()> {
@@ -150,28 +209,48 @@ async fn execute_inject_to_prebuilt_quick_js(
     let js_module_wasm = base_build_dir.join(&command.module_wasm);
     let target = base_build_dir.join(&command.into);
 
-    log_action(
-        "Injecting",
-        format!(
-            "JS module {} into QuickJS WASM {}",
-            js_module.log_color_highlight(),
-            base_wasm.log_color_highlight()
-        ),
-    );
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(InjectToPrebuiltQuickJsCommandMarkerHash {
+            build_dir: base_build_dir.as_std_path(),
+            command,
+        })?
+        .with_sources(|| [&base_wasm, &js_module, &js_module_wasm])
+        .with_targets(|| [&target])
+        .run_async_or_skip(
+            || async {
+                log_action(
+                    "Injecting",
+                    format!(
+                        "JS module {} into QuickJS WASM {}",
+                        js_module.log_color_highlight(),
+                        base_wasm.log_color_highlight()
+                    ),
+                );
+                let _indent = LogIndent::new();
 
-    moonbit_component_generator::get_script::generate_get_script_component(
-        &js_module_contents,
-        &js_module_wasm,
-    )?;
+                moonbit_component_generator::get_script::generate_get_script_component(
+                    &js_module_contents,
+                    &js_module_wasm,
+                )?;
 
-    commands::composition::compose(
-        base_wasm.as_std_path(),
-        &[js_module_wasm.as_std_path().to_path_buf()],
-        target.as_std_path(),
-    )
-    .await?;
+                commands::composition::compose(
+                    base_wasm.as_std_path(),
+                    &[js_module_wasm.as_std_path().to_path_buf()],
+                    target.as_std_path(),
+                )
+                .await?;
 
-    Ok(())
+                Ok(())
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "injecting JS module {} into QuickJS WASM {}",
+                    js_module.log_color_highlight(),
+                    base_wasm.log_color_highlight()
+                ));
+            },
+        )
+        .await
 }
 
 pub fn execute_custom_command(
@@ -264,45 +343,39 @@ fn execute_quickjs_create(
         });
     }
 
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        GenerateQuickJSCrateCommandMarkerHash {
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(GenerateQuickJSCrateCommandMarkerHash {
             build_dir: base_build_dir.as_std_path(),
             command,
-        },
-    )?;
+        })?
+        .with_sources(|| {
+            std::iter::once(wit.as_std_path()).chain(js_paths.iter().map(|p| p.as_path()))
+        })
+        .with_targets(|| [&generate_quickjs_crate])
+        .run_or_skip(
+            || {
+                log_action(
+                    "Executing",
+                    format!(
+                        "WASM RQuickJS wrapper generator in directory {}",
+                        base_build_dir.log_color_highlight()
+                    ),
+                );
 
-    let skip_up_to_date_checks =
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
-
-    if is_up_to_date(
-        skip_up_to_date_checks,
-        || [vec![wit.clone().into_std_path_buf()], js_paths].concat(),
-        || vec![generate_quickjs_crate.clone().into_std_path_buf()],
-    ) {
-        log_skipping_up_to_date(format!(
-            "executing WASM RQuickJS wrapper generator in directory {}",
-            base_build_dir.log_color_highlight()
-        ));
-        return Ok(());
-    }
-
-    log_action(
-        "Executing",
-        format!(
-            "WASM RQuickJS wrapper generator in directory {}",
-            base_build_dir.log_color_highlight()
-        ),
-    );
-
-    task_result_marker.result({
-        wasm_rquickjs::generate_wrapper_crate(
-            &wit,
-            &js_modules,
-            &generate_quickjs_crate,
-            command.world.as_deref(),
+                wasm_rquickjs::generate_wrapper_crate(
+                    &wit,
+                    &js_modules,
+                    &generate_quickjs_crate,
+                    command.world.as_deref(),
+                )
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "executing WASM RQuickJS wrapper generator in directory {}",
+                    base_build_dir.log_color_highlight()
+                ));
+            },
         )
-    })
 }
 
 fn execute_quickjs_d_ts(
@@ -314,56 +387,49 @@ fn execute_quickjs_d_ts(
     let wit = &base_build_dir.join(&command.wit);
     let generate_quickjs_dts = &base_build_dir.join(&command.generate_quickjs_dts);
 
-    let task_result_marker = TaskResultMarker::new(
-        &ctx.application.task_result_marker_dir(),
-        GenerateQuickJSDTSCommandMarkerHash {
+    new_task_up_to_date_check(ctx)
+        .with_task_result_marker(GenerateQuickJSDTSCommandMarkerHash {
             build_dir: base_build_dir.as_std_path(),
             command,
-        },
-    )?;
+        })?
+        .with_sources(|| [&wit])
+        .with_targets(|| [&generate_quickjs_dts])
+        .run_or_skip(
+            || {
+                log_action(
+                    "Executing",
+                    format!(
+                        "WASM RQuickJS d.ts generator in directory {}",
+                        base_build_dir.log_color_highlight()
+                    ),
+                );
 
-    let skip_up_to_date_checks =
-        ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date();
-
-    if is_up_to_date(
-        skip_up_to_date_checks,
-        || vec![wit.clone().into_std_path_buf()],
-        || vec![generate_quickjs_dts.clone().into_std_path_buf()],
-    ) {
-        log_skipping_up_to_date(format!(
-            "executing WASM RQuickJS d.ts generator in directory {}",
-            base_build_dir.log_color_highlight()
-        ));
-        return Ok(());
-    }
-
-    log_action(
-        "Executing",
-        format!(
-            "WASM RQuickJS d.ts generator in directory {}",
-            base_build_dir.log_color_highlight()
-        ),
-    );
-
-    task_result_marker.result({
-        wasm_rquickjs::generate_dts(wit, generate_quickjs_dts, command.world.as_deref())
-            .context("Failed to generate QuickJS DTS")
-            .map(|_| ())
-    })
+                wasm_rquickjs::generate_dts(wit, generate_quickjs_dts, command.world.as_deref())
+                    .context("Failed to generate QuickJS DTS")
+                    .map(|_| ())
+            },
+            || {
+                log_skipping_up_to_date(format!(
+                    "executing WASM RQuickJS d.ts generator in directory {}",
+                    base_build_dir.log_color_highlight()
+                ));
+            },
+        )
 }
 
 pub fn execute_external_command(
     ctx: &ApplicationContext,
-    base_build_dir: &Path,
+    base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
     additional_env_vars: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
         .as_ref()
-        .map(|dir| base_build_dir.join(dir))
-        .unwrap_or_else(|| base_build_dir.to_path_buf());
+        .map(|dir| base_command_dir.join(dir))
+        .unwrap_or_else(|| base_command_dir.to_path_buf());
 
+    // NOTE: cannot use new_task_up_to_date_check yet, because of the special source and target handling
     let task_result_marker = TaskResultMarker::new(
         &ctx.application.task_result_marker_dir(),
         ResolvedExternalCommandMarkerHash {
@@ -443,22 +509,57 @@ pub fn execute_external_command(
             return Err(anyhow!("Empty command!"));
         }
 
-        let result = Command::new(command_tokens[0].clone())
+        ensure_common_deps_for_tool(ctx, command_tokens[0].as_str())?;
+
+        Command::new(command_tokens[0].clone())
             .args(command_tokens.iter().skip(1))
             .current_dir(build_dir)
             .status()
-            .with_context(|| "Failed to execute command".to_string())?;
+            .with_context(|| "Failed to execute command".to_string())?
+            .check_exit_status()
+    })())
+}
 
-        if result.success() {
+fn ensure_common_deps_for_tool(ctx: &ApplicationContext, tool: &str) -> anyhow::Result<()> {
+    match tool {
+        "node" | "npx" => ctx.ensure_common_deps_for_tool_once("node", || {
+            if std::fs::exists("node_modules")? {
+                return Ok(());
+            }
+
+            log_warn_action(
+                "Detected",
+                format!(
+                    "missing {}, executing {}",
+                    "node_modules".log_color_highlight(),
+                    "npm install".log_color_highlight()
+                ),
+            );
+            Command::new("npm")
+                .args(["install"])
+                .status()
+                .context("Failed to execute npm install")?
+                .check_exit_status()
+        }),
+        _ => Ok(()),
+    }
+}
+
+trait ExitStatusExt {
+    fn check_exit_status(&self) -> anyhow::Result<()>;
+}
+
+impl ExitStatusExt for ExitStatus {
+    fn check_exit_status(&self) -> anyhow::Result<()> {
+        if self.success() {
             Ok(())
         } else {
             Err(anyhow!(format!(
                 "Command failed with exit code: {}",
-                result
-                    .code()
+                self.code()
                     .map(|code| code.to_string().log_color_error_highlight().to_string())
                     .unwrap_or_else(|| "?".to_string())
             )))
         }
-    })())
+    }
 }
