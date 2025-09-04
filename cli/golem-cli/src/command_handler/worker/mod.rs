@@ -1488,7 +1488,7 @@ impl WorkerCommandHandler {
         &self,
         worker_name: WorkerName,
     ) -> anyhow::Result<WorkerNameMatch> {
-        let segments = worker_name.0.split("/").collect::<Vec<&str>>();
+        let segments = split_worker_name(&worker_name.0);
         match segments.len() {
             // <WORKER>
             1 => {
@@ -1941,5 +1941,49 @@ fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
             golem_client::Error::<golem_client::api::WorkerError>::unexpected(status, body.into())
                 .into()
         }
+    }
+}
+
+fn split_worker_name(worker_name: &str) -> Vec<&str> {
+    match worker_name.find('(') {
+        Some(constructor_open_parentheses_idx) => {
+            let splittable = &worker_name[0..constructor_open_parentheses_idx];
+            let last_slash_idx = splittable.rfind('/');
+            match last_slash_idx {
+                Some(last_slash_idx) => {
+                    let mut segments = worker_name[0..last_slash_idx]
+                        .split('/')
+                        .collect::<Vec<&str>>();
+                    segments.push(&worker_name[last_slash_idx + 1..]);
+                    segments
+                }
+                None => {
+                    vec![worker_name]
+                }
+            }
+        }
+        None => worker_name.split("/").collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::command_handler::worker::split_worker_name;
+    use assert2::assert;
+    use test_r::test;
+
+    #[test]
+    fn test_split_worker_name() {
+        assert!(split_worker_name("a") == vec!["a"]);
+        assert!(split_worker_name("a()") == vec!["a()"]);
+        assert!(split_worker_name("a(\"///\")") == vec!["a(\"///\")"]);
+        assert!(split_worker_name("a/b") == vec!["a", "b"]);
+        assert!(split_worker_name("a/b()") == vec!["a", "b()"]);
+        assert!(split_worker_name("a/b(\"///\")") == vec!["a", "b(\"///\")"]);
+        assert!(split_worker_name("a/b/c") == vec!["a", "b", "c"]);
+        assert!(split_worker_name("a/b/c()") == vec!["a", "b", "c()"]);
+        assert!(split_worker_name("a/b/c(\"/\")") == vec!["a", "b", "c(\"/\")"]);
+        assert!(split_worker_name("/") == vec!["", ""]);
+        assert!(split_worker_name("a(/") == vec!["a(/"]);
     }
 }
