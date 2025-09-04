@@ -44,15 +44,7 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 # For creating APIs see https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
-static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {"
-# Example for adding dependencies for Worker to Worker communication:
-# See https://learn.golem.cloud/docs/app-manifest#fields_dependencies for more information
-#
-#dependencies:
-#  componentname:
-#  - target: <target component name to be called>
-#    type: wasm-rpc
-"};
+static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {""};
 
 fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];

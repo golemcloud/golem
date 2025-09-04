@@ -1,5 +1,5 @@
 import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
-import { Metadata } from '../../../.metadata/generated-types';
+import { Metadata } from '../.metadata/generated-types';
 
 TypescriptTypeRegistry.register(Metadata);
 

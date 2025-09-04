@@ -521,12 +521,6 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
             None => "".to_string(),
         },
         worker_name_match.component_name.0.blue().bold(),
-        worker_name_match
-            .worker_name
-            .as_ref()
-            .map(|wn| wn.0.as_str())
-            .unwrap_or("-")
-            .green()
-            .bold(),
+        worker_name_match.worker_name.0.green().bold(),
     )
 }
