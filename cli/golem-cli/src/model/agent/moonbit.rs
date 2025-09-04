@@ -18,7 +18,9 @@ use camino::Utf8Path;
 use golem_client::model::AnalysedType;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
-use moonbit_component_generator::{MoonBitComponent, MoonBitPackage, Warning, WarningControl};
+use moonbit_component_generator::{
+    to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
+};
 use std::fmt::Write;
 use std::path::Path;
 use wit_parser::PackageName;
@@ -36,8 +38,10 @@ pub fn generate_moonbit_wrapper(
         .context("Defining bindgen packages")?;
 
     let moonbit_root_package = component.moonbit_root_package()?;
-    let pkg_namespace = to_moonbit_ident(component.root_pkg_namespace()?);
-    let pkg_name = to_moonbit_ident(component.root_pkg_name()?);
+    let pkg_namespace = component.root_pkg_namespace()?.to_snake_case();
+    let escaped_pkg_namespace = to_moonbit_ident(&pkg_namespace);
+    let pkg_name = component.root_pkg_name()?.to_snake_case();
+    let escaped_pkg_name = to_moonbit_ident(&pkg_name);
 
     // Adding the builder and extractor packages
     add_builder_package(&mut component, &moonbit_root_package)?;
@@ -47,8 +51,8 @@ pub fn generate_moonbit_wrapper(
         &mut component,
         ctx.has_types,
         &moonbit_root_package,
-        &pkg_namespace,
-        &pkg_name,
+        &escaped_pkg_namespace,
+        &escaped_pkg_name,
         &ctx.agent_types,
     )?;
 
@@ -94,10 +98,10 @@ pub fn generate_moonbit_wrapper(
 
         component.set_warning_control(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             vec![
-                // These are disabled so we don't have to check if the generated inside of try .. catch is always
+                // These are disabled so we don't have to check if the generated inside try .. catch is always
                 // capable of throwing an exception
                 WarningControl::Disable(Warning::Specific(23)),
                 WarningControl::Disable(Warning::Specific(11)),
@@ -266,8 +270,8 @@ fn setup_dependencies(
     component: &mut MoonBitComponent,
     has_types: bool,
     moonbit_root_package: &str,
-    pkg_namespace: &str,
-    pkg_name: &str,
+    escaped_pkg_namespace: &str,
+    escaped_pkg_name: &str,
     agent_types: &[AgentType],
 ) -> anyhow::Result<()> {
     // NOTE: setting up additional dependencies. this could be automatically done by a better implementation of define_bindgen_packages
@@ -305,8 +309,8 @@ fn setup_dependencies(
 
     let depends_on_types = |component: &mut MoonBitComponent,
                             has_types: bool,
-                            pkg_namespace: &str,
-                            pkg_name: &str,
+                            escaped_pkg_namespace: &str,
+                            escaped_pkg_name: &str,
                             name: &str| {
         if has_types {
             component.add_dependency(
@@ -317,8 +321,8 @@ fn setup_dependencies(
                     .join("build")
                     .join("gen")
                     .join("interface")
-                    .join(pkg_namespace)
-                    .join(pkg_name)
+                    .join(escaped_pkg_namespace)
+                    .join(escaped_pkg_name)
                     .join("types")
                     .join("types.mi"),
                 "types",
@@ -349,7 +353,7 @@ fn setup_dependencies(
     if has_types {
         depends_on_golem_agent_common(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/types"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/types"),
         )?;
     }
 
@@ -358,23 +362,23 @@ fn setup_dependencies(
 
         depends_on_golem_agent_common(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
         depends_on_golem_agent_guest(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
         depends_on_types(
             component,
             has_types,
-            pkg_namespace,
-            pkg_name,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            escaped_pkg_namespace,
+            escaped_pkg_name,
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
 
         component.add_dependency(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             &Utf8Path::new("target")
                 .join("wasm")
@@ -386,7 +390,7 @@ fn setup_dependencies(
         )?;
         component.add_dependency(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             &Utf8Path::new("target")
                 .join("wasm")
@@ -1385,31 +1389,6 @@ fn extract_wit_value(
     Ok(())
 }
 
-fn to_moonbit_ident(name: impl AsRef<str>) -> String {
-    // Escape MoonBit keywords and reserved keywords
-    let name = name.as_ref();
-    match name {
-        // Keywords
-        "as" | "else" | "extern" | "fn" | "fnalias" | "if" | "let" | "const" | "match" | "using"
-        | "mut" | "type" | "typealias" | "struct" | "enum" | "trait" | "traitalias" | "derive"
-        | "while" | "break" | "continue" | "import" | "return" | "throw" | "raise" | "try" | "catch"
-        | "pub" | "priv" | "readonly" | "true" | "false" | "_" | "test" | "loop" | "for" | "in" | "impl"
-        | "with" | "guard" | "async" | "is" | "suberror" | "and" | "letrec" | "enumview" | "noraise"
-        | "defer" | "init" | "main"
-        // Reserved keywords
-        | "module" | "move" | "ref" | "static" | "super" | "unsafe" | "use" | "where" | "await"
-        | "dyn" | "abstract" | "do" | "final" | "macro" | "override" | "typeof" | "virtual" | "yield"
-        | "local" | "method" | "alias" | "assert" | "recur" | "isnot" | "define" | "downcast"
-            | "inherit" | "member" | "namespace" | "upcast" | "void" | "lazy" | "include" | "mixin"
-            | "protected" | "sealed" | "constructor" | "atomic" | "volatile" | "anyframe" | "anytype"
-            | "asm" | "comptime" | "errdefer" | "export" | "opaque" | "orelse" | "resume" | "threadlocal"
-            | "unreachable" | "dynclass" | "dynobj" | "dynrec" | "var" | "finally" | "noasync" => {
-        format ! ("{name}_")
-        }
-        _ => name.to_snake_case(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
@@ -1457,6 +1436,16 @@ mod tests {
     fn bug_multiple_types_called_element() {
         let component_name = "example:bug".into();
         let agent_types = reproducer_for_multiple_types_called_element();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn single_agent_with_test_in_package_name(_trace: &Trace) {
+        let component_name: AppComponentName = "test:agent".into();
+        let agent_types = test::agent_type_with_wit_keywords();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();
