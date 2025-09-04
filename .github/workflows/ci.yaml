@@ -353,7 +353,7 @@ jobs:
           name: docker-targets-build-${{ env.PLATFORM_PAIR }}
           path: target/${{ matrix.platform.target }}.tar
 
-  docker-publish:
+  docker-publish-1:
     runs-on: blacksmith
     needs:
       - docker-targets-build
@@ -457,6 +457,55 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-shard-manager.outputs.tags }}
           labels: ${{ steps.meta-shard-manager.outputs.labels }}
+
+  docker-publish-2:
+    runs-on: blacksmith
+    needs:
+      - docker-targets-build
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Prepare
+        run: |
+          echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        name: Download Targets
+        with:
+          pattern: docker-targets-build-*
+          path: target
+          merge-multiple: true
+      - name: Extract Targets
+        run: |
+          ls -R target
+          cd target
+          for f in *.tar; do tar xvf "$f"; done
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Set Docker version
+        id: set-version
+        run: |
+          if [ "${{ github.event_name }}" == 'push' ] && [ "${{ github.ref_type }}" == 'tag' ]; then
+            DOCKER_VERSION=$(echo "${{ github.ref }}" | sed 's|^refs/tags/v||')
+            echo "DOCKER_VERSION=${DOCKER_VERSION}" >> $GITHUB_ENV
+          else
+            COMMIT_SHORT_HASH=$(git rev-parse --short=7 HEAD)
+            echo "DOCKER_VERSION=${COMMIT_SHORT_HASH}" >> $GITHUB_ENV
+          fi
+      - uses: jpribyl/action-docker-layer-caching@v0.1.1
+        continue-on-error: true
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_PASSWORD }}
       - name: Extract metadata (tags, labels) for golem component service
         id: meta-golem-component-service
         uses: docker/metadata-action@v5
@@ -630,7 +679,8 @@ jobs:
   publish-slack-notification:
     needs:
       - publish
-      - docker-publish
+      - docker-publish-1
+      - docker-publish-2
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: blacksmith
     steps:
@@ -640,6 +690,6 @@ jobs:
           SLACK_COLOR: ${{ needs.publish.result }}
           SLACK_ICON: https://uploads-ssl.webflow.com/64721eeec7cd7ef4f6f1683e/64831138b73a996d0e831773_32.png
           SLACK_TITLE: "Release Notification"
-          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker result: `${{ needs.docker-publish.result }}`"
+          SLACK_MESSAGE: "Publish - cargo result: `${{ needs.publish.result }}`, docker-1 result: `${{ needs.docker-publish-1.result }}`, docker-2 result: `${{ needs.docker-publish-2.result }}`"
           SLACK_USERNAME: CI
           SLACK_WEBHOOK: ${{ secrets.SLACK_ALERT_URL }}
