@@ -136,8 +136,6 @@ cp wit/deps/golem-agent cli/golem-cli/wit/deps
 private = true
 script_runner = "@duckscript"
 script = """
-rm -r cli/template-golem-agent-ts/wit/deps
-mkdir cli/template-golem-agent-ts/wit/deps
 glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
 """
 

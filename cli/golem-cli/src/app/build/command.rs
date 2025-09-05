@@ -406,6 +406,7 @@ fn execute_quickjs_d_ts(
 
                 wasm_rquickjs::generate_dts(wit, generate_quickjs_dts, command.world.as_deref())
                     .context("Failed to generate QuickJS DTS")
+                    .map(|_| ())
             },
             || {
                 log_skipping_up_to_date(format!(
