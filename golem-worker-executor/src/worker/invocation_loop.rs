@@ -34,8 +34,7 @@ use golem_common::model::{
     GetFileSystemNodeResult,
 };
 use golem_common::model::{
-    ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
+    IdempotencyKey, OwnedWorkerId, TimestampedWorkerInvocation, WorkerId, WorkerInvocation
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -50,6 +49,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, error, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store};
+use golem_common::model::component::{ComponentFilePath, ComponentRevision, ComponentType};
 
 /// Context of a running worker's invocation loop
 pub struct InvocationLoop<Ctx: WorkerCtx> {
@@ -704,7 +704,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Try to perform the save-snapshot step of a manual update on the worker
-    async fn manual_update(&mut self, target_version: ComponentVersion) -> CommandOutcome {
+    async fn manual_update(&mut self, target_version: ComponentRevision) -> CommandOutcome {
         let span = span!(
             Level::INFO,
             "manual_update",
@@ -723,7 +723,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// The inner implementation of the manual update command
-    async fn manual_update_inner(&mut self, target_version: ComponentVersion) -> CommandOutcome {
+    async fn manual_update_inner(&mut self, target_version: ComponentRevision) -> CommandOutcome {
         let _idempotency_key = {
             let ctx = self.store.data_mut();
             let idempotency_key = IdempotencyKey::fresh();
@@ -889,7 +889,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     }
 
     /// Records an attempted worker update as failed
-    async fn fail_update(&self, target_version: ComponentVersion, error: String) -> CommandOutcome {
+    async fn fail_update(&self, target_version: ComponentRevision, error: String) -> CommandOutcome {
         self.store
             .data()
             .on_worker_update_failed(target_version, Some(error))

@@ -50,7 +50,7 @@ declare_transparent_newtypes! {
 
     /// Key that can be used to identify a component file.
     /// All files with the same content will have the same key.
-    #[derive(Display)]
+    #[derive(Display, Eq, Hash)]
     pub struct InitialComponentFileKey(pub String);
 }
 

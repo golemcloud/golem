@@ -18,8 +18,8 @@ use crate::components::rdb::DbInfo;
 use crate::components::{new_reqwest_client, wait_for_startup_http};
 use async_trait::async_trait;
 use golem_common::model::account::AccountId;
+use golem_common::model::account::PlanId;
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_common::model::PlanId;
 use golem_registry_service::config::{
     AccountsConfig, PlansConfig, PrecreatedAccount, PrecreatedPlan, RegistryServiceConfig,
 };

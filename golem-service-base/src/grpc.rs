@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ProjectId;
+use golem_common::model::environment::EnvironmentId;
 
-pub fn proto_project_id_string(
-    id: &Option<golem_api_grpc::proto::golem::common::ProjectId>,
+pub fn proto_environment_id_string(
+    id: &Option<golem_api_grpc::proto::golem::common::EnvironmentId>,
 ) -> Option<String> {
     (*id)
-        .and_then(|v| TryInto::<ProjectId>::try_into(v).ok())
+        .and_then(|v| TryInto::<EnvironmentId>::try_into(v).ok())
         .map(|v| v.to_string())
 }

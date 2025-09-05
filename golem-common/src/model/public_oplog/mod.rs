@@ -18,6 +18,7 @@ mod protobuf;
 #[cfg(test)]
 mod tests;
 
+use super::environment::EnvironmentId;
 use super::worker::WasiConfigVars;
 use crate::model::component::ComponentRevision;
 use crate::model::invocation_context::{AttributeValue, SpanId, TraceId};
@@ -26,8 +27,8 @@ use crate::model::oplog::{
     DurableFunctionType, LogLevel, OplogIndex, PersistenceLevel, WorkerResourceId,
 };
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{AccountId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId};
-use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
@@ -218,7 +219,7 @@ pub struct CreateParameters {
     pub component_version: ComponentRevision,
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub wasi_config_vars: WasiConfigVars,
     pub parent: Option<WorkerId>,

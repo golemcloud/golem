@@ -19,9 +19,9 @@ pub mod sqlite;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
-use golem_common::base_model::ProjectId;
 use golem_common::serialization::{deserialize, serialize};
 use std::fmt::Debug;
+use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 pub trait KeyValueStorage: Debug {
@@ -625,7 +625,7 @@ pub enum KeyValueStorageNamespace {
     Promise,
     Schedule,
     UserDefined {
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         bucket: String,
     },
 }

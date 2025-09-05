@@ -28,7 +28,7 @@ use golem_api_grpc::proto::golem::worker::{InvokeParameters, UpdateMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::{Value, ValueAndType, WitValue};
@@ -41,6 +41,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
+use golem_common::model::component::ComponentRevision;
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
@@ -81,7 +82,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError>;
 
@@ -398,7 +399,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to version {target_version} in {mode:?} mode");
@@ -409,7 +410,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.update_worker(authorised_grpc_request(
                     UpdateWorkerRequest {
                         worker_id: Some(owned_worker_id.worker_id().into()),
-                        target_version,
+                        target_version: target_version.0,
                         mode: mode as i32,
                     },
                     &self.access_token,

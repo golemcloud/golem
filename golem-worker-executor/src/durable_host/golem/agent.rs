@@ -31,12 +31,12 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let result = if durability.is_live() {
-            let project_id = &self.owned_worker_id.project_id;
+            let environment_id = &self.owned_worker_id.environment_id;
             durability
                 .persist(
                     self,
                     (),
-                    self.agent_types_service().get_all(project_id).await,
+                    self.agent_types_service().get_all(environment_id).await,
                 )
                 .await
         } else {
@@ -61,13 +61,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let result = if durability.is_live() {
-            let project_id = &self.owned_worker_id.project_id;
+            let environment_id = &self.owned_worker_id.environment_id;
             durability
                 .persist(
                     self,
                     agent_type_name.clone(),
                     self.agent_types_service()
-                        .get(project_id, &agent_type_name)
+                        .get(environment_id, &agent_type_name)
                         .await,
                 )
                 .await
