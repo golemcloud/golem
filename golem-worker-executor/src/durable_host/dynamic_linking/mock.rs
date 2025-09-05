@@ -19,7 +19,7 @@ use golem_wasm_rpc::HostWasmRpc;
 use rib::ParsedFunctionName;
 use tracing::error;
 use wasmtime::component::types::{ComponentInstance, ComponentItem};
-use wasmtime::component::{LinkerInstance, ResourceType, Type};
+use wasmtime::component::{LinkerInstance, ResourceType};
 use wasmtime::Engine;
 
 /// Temporary solution for mocking some dependencies
