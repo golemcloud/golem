@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{AccountId, ProjectId, RetryConfig};
+use golem_common::model::{ProjectId, RetryConfig};
 use golem_common::retries::with_retries;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::Uri;
@@ -28,6 +28,7 @@ use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use uuid::Uuid;
+use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait ProjectService: Send + Sync {

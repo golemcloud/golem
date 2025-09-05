@@ -23,8 +23,10 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
 };
+use golem_common::model::component::{ComponentId,  ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
     WorkerId, WorkerMetadata,
 };
 use golem_common::serialization::{serialize, try_deserialize};
@@ -128,7 +130,7 @@ pub trait OplogService: Debug + Send + Sync {
     /// Pages can be empty. This operation is slow and is not locking the oplog.
     async fn scan_for_component(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -297,7 +299,7 @@ pub trait OplogOps: Oplog {
 
     async fn create_snapshot_based_update_description(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         payload: &[u8],
     ) -> Result<UpdateDescription, String> {
         let payload = self.upload_payload(payload).await?;

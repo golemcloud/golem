@@ -33,9 +33,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
-use golem_common::model::{
-    AccountId, ComponentId, IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId,
-};
+use golem_common::model::{IdempotencyKey, OplogIndex, OwnedWorkerId, ScheduledAction, WorkerId};
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_ast::analysis::analysed_type;
@@ -57,6 +55,8 @@ use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
 use wasmtime_wasi::runtime::AbortOnDropJoinHandle;
 use wasmtime_wasi::subscribe;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
 
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -1122,7 +1122,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
         .invocation_context
         .clone_as_inherited_stack(span.span_id());
 
-    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.project_id, &remote_worker_id);
+    let remote_worker_id = OwnedWorkerId::new(&ctx.owned_worker_id.environment_id, &remote_worker_id);
     let demand = ctx
         .rpc()
         .create_demand(

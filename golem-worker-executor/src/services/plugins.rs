@@ -17,7 +17,9 @@ use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
 use golem_common::model::PluginId;
-use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::{PluginInstallationId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -37,7 +39,7 @@ pub trait PluginsObservations: Send + Sync {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         plugin_installation: &PluginInstallation,
     ) -> Result<(), WorkerExecutorError>;
 }
@@ -50,7 +52,7 @@ pub trait Plugins: PluginsObservations {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         installation_id: &PluginInstallationId,
     ) -> Result<(PluginInstallation, PluginDefinition), WorkerExecutorError> {
         let plugin_installation = self
@@ -71,7 +73,7 @@ pub trait Plugins: PluginsObservations {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         installation_id: &PluginInstallationId,
     ) -> Result<PluginInstallation, WorkerExecutorError>;
 
@@ -79,7 +81,7 @@ pub trait Plugins: PluginsObservations {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         plugin_installation: &PluginInstallation,
     ) -> Result<PluginDefinition, WorkerExecutorError>;
 }
@@ -159,7 +161,7 @@ impl<Inner: Plugins> PluginsObservations for CachedPlugins<Inner> {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         plugin_installation: &PluginInstallation,
     ) -> Result<(), WorkerExecutorError> {
         let key = (
@@ -183,7 +185,7 @@ impl<Inner: Plugins + Clone + 'static> Plugins for CachedPlugins<Inner> {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         installation_id: &PluginInstallationId,
     ) -> Result<PluginInstallation, WorkerExecutorError> {
         let key = (
@@ -216,7 +218,7 @@ impl<Inner: Plugins + Clone + 'static> Plugins for CachedPlugins<Inner> {
         &self,
         account_id: &AccountId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         plugin_installation: &PluginInstallation,
     ) -> Result<PluginDefinition, WorkerExecutorError> {
         let key = (account_id.clone(), plugin_installation.plugin_id.clone());
@@ -263,7 +265,7 @@ impl Plugins for PluginsUnavailable {
         &self,
         _account_id: &AccountId,
         _component_id: &ComponentId,
-        _component_version: ComponentVersion,
+        _component_version: ComponentRevision,
         _installation_id: &PluginInstallationId,
     ) -> Result<PluginInstallation, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
@@ -273,7 +275,7 @@ impl Plugins for PluginsUnavailable {
         &self,
         _account_id: &AccountId,
         _component_id: &ComponentId,
-        _component_version: ComponentVersion,
+        _component_version: ComponentRevision,
         _plugin_installation: &PluginInstallation,
     ) -> Result<PluginDefinition, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
@@ -297,7 +299,9 @@ mod grpc {
     use golem_common::model::plugin::PluginOwner;
     use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
     use golem_common::model::RetryConfig;
-    use golem_common::model::{AccountId, ComponentId, ComponentVersion, PluginInstallationId};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::{PluginInstallationId};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use http::Uri;
     use std::time::Duration;

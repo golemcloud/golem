@@ -50,16 +50,18 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
-    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
+    proto_component_id_string, proto_idempotency_key_string,
     proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
+use golem_common::model::component::{ComponentId, ComponentFilePath, ComponentType};
+use golem_common::model::account::AccountId;
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentId, ComponentType, GetFileSystemNodeResult,
-    IdempotencyKey, OwnedWorkerId, PluginInstallationId, ProjectId, ScanCursor, ShardId,
+    GetFileSystemNodeResult,
+    IdempotencyKey, OwnedWorkerId, PluginInstallationId, ScanCursor, ShardId,
     TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus,
 };
@@ -82,6 +84,7 @@ use tracing::info_span;
 use tracing::{debug, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
+use golem_common::model::component::ComponentRevision;
 
 pub enum GrpcError<E> {
     Transport(tonic::transport::Error),
@@ -266,7 +269,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         if let Some(limits) = request.account_limits {
-            Ctx::record_last_known_limits(self, &owned_worker_id.project_id, &limits.into())
+            Ctx::record_last_known_limits(self, &owned_worker_id.environment_id, &limits.into())
                 .await?;
         }
 
@@ -1066,7 +1069,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 owned_worker_id.worker_id(),
             ))?;
 
-        if metadata.last_known_status.component_version == request.target_version {
+        if metadata.last_known_status.component_version.0 == request.target_version {
             return Err(WorkerExecutorError::invalid_request(
                 "Worker is already at the target version",
             ));
@@ -1088,7 +1091,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         match request.mode() {
             UpdateMode::Automatic => {
                 let update_description = UpdateDescription::Automatic {
-                    target_version: request.target_version,
+                    target_version: ComponentRevision(request.target_version),
                 };
 
                 if metadata
@@ -1205,7 +1208,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.enqueue_manual_update(request.target_version).await;
+                worker.enqueue_manual_update(ComponentRevision(request.target_version)).await;
             }
         }
 
@@ -1274,7 +1277,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.plugins(),
                 self.project_service(),
                 &owned_worker_id,
-                cursor.current_component_version,
+                ComponentRevision(cursor.current_component_version),
                 OplogIndex::from_u64(cursor.next_oplog_index),
                 min(
                     request.count as usize,
@@ -1312,7 +1315,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_version: chunk.current_component_version,
+                current_component_version: chunk.current_component_version.0,
             })
         };
 
@@ -1350,7 +1353,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.plugins(),
                 self.project_service(),
                 &owned_worker_id,
-                cursor.current_component_version,
+                ComponentRevision(cursor.current_component_version),
                 OplogIndex::from_u64(cursor.next_oplog_index),
                 min(
                     request.count as usize,
@@ -1389,7 +1392,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         } else {
             Some(golem::worker::OplogCursor {
                 next_oplog_index: chunk.next_oplog_index.into(),
-                current_component_version: chunk.current_component_version,
+                current_component_version: chunk.current_component_version.0,
             })
         };
 
@@ -1755,7 +1758,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             created_by: Some(metadata.created_by.into()),
             wasi_config_vars: Some(metadata.wasi_config_vars.into()),
-            component_version: latest_status.component_version,
+            component_version: latest_status.component_version.0,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()
@@ -1835,7 +1838,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -1874,7 +1877,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -1915,7 +1918,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -1957,7 +1960,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -1998,7 +2001,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2040,7 +2043,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2087,7 +2090,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::DeleteWorkerResponse {
                         result: Some(
@@ -2097,7 +2100,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2126,7 +2129,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::CompletePromiseResponse {
                         result: Some(
@@ -2136,7 +2139,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2165,7 +2168,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InterruptWorkerResponse {
                         result: Some(
@@ -2175,7 +2178,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2201,7 +2204,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::RevokeShardsResponse {
                         result: Some(
@@ -2211,7 +2214,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2237,7 +2240,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::AssignShardsResponse {
                         result: Some(
@@ -2247,7 +2250,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2286,7 +2289,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::GetWorkerMetadataResponse {
                         result: Some(
@@ -2296,7 +2299,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2325,7 +2328,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::ResumeWorkerResponse {
                         result: Some(
@@ -2335,7 +2338,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2366,7 +2369,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     GetRunningWorkersMetadataResponse {
                         result: Some(
@@ -2376,7 +2379,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     },
                 )),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2408,7 +2411,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 })))
             }
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(GetWorkersMetadataResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_workers_metadata_response::Result::Failure(
@@ -2416,7 +2419,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2444,7 +2447,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(UpdateWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::update_worker_response::Result::Failure(
@@ -2452,7 +2455,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2473,7 +2476,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
         match result {
             Ok(response) => record.succeed(Ok(Response::new(response))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(GetOplogResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_oplog_response::Result::Failure(
@@ -2481,7 +2484,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2502,7 +2505,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
         match result {
             Ok(response) => record.succeed(Ok(Response::new(response))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(SearchOplogResponse {
                     result: Some(
                         golem::workerexecutor::v1::search_oplog_response::Result::Failure(
@@ -2510,7 +2513,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2540,7 +2543,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(ForkWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::fork_worker_response::Result::Failure(
@@ -2548,7 +2551,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2577,7 +2580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(RevertWorkerResponse {
                     result: Some(
                         golem::workerexecutor::v1::revert_worker_response::Result::Failure(
@@ -2585,7 +2588,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2615,7 +2618,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(CancelInvocationResponse {
                     result: Some(
                         golem::workerexecutor::v1::cancel_invocation_response::Result::Failure(
@@ -2623,7 +2626,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2645,7 +2648,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
         match result {
             Ok(response) => record.succeed(Ok(Response::new(response))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(GetFileSystemNodeResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_file_system_node_response::Result::Failure(
@@ -2653,7 +2656,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2679,7 +2682,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let stream: Self::GetFileContentsStream = match result {
             Ok(stream) => record.succeed(stream),
-            Err(err) => {
+            Err(mut err) => {
                 let res = GetFileContentsResponse {
                     result: Some(
                         golem::workerexecutor::v1::get_file_contents_response::Result::Failure(
@@ -2691,7 +2694,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 let err_stream: Self::GetFileContentsStream =
                     Box::pin(tokio_stream::iter(vec![Ok(res)]));
 
-                record.fail(err_stream, &err)
+                record.fail(err_stream, &mut err)
             }
         };
         Ok(Response::new(stream))
@@ -2721,7 +2724,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(ActivatePluginResponse {
                     result: Some(
                         golem::workerexecutor::v1::activate_plugin_response::Result::Failure(
@@ -2729,7 +2732,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }
@@ -2766,7 +2769,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         ),
                     ),
                 })),
-                &err,
+                &mut err,
             ),
         }
     }

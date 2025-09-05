@@ -45,8 +45,10 @@ use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
+    GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
@@ -163,7 +165,7 @@ pub trait WorkerCtx:
     /// Gets the account created this worker
     fn created_by(&self) -> &AccountId;
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component;
+    fn component_metadata(&self) -> &ComponentDto;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
     /// on the actual WASI implementation installed by the worker context, this function is used to
@@ -323,7 +325,7 @@ pub trait UpdateManagement {
     /// Called when an update attempt has failed
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     );
 
@@ -401,7 +403,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         this: &T,
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError>;
 }
@@ -468,7 +470,7 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()>;
 }
 

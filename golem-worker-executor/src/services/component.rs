@@ -20,8 +20,6 @@ use crate::metrics::component::record_compilation_time;
 use crate::services::projects::ProjectService;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::component::ComponentOwner;
-use golem_common::model::{ComponentId, ComponentVersion};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
@@ -30,6 +28,7 @@ use tracing::info;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -38,14 +37,14 @@ pub trait ComponentService: Send + Sync {
         &self,
         engine: &Engine,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
-    ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>;
+        component_version: ComponentRevision,
+    ) -> Result<(Component, ComponentDto), WorkerExecutorError>;
 
     async fn get_metadata(
         &self,
         component_id: &ComponentId,
-        forced_version: Option<ComponentVersion>,
-    ) -> Result<golem_service_base::model::Component, WorkerExecutorError>;
+        forced_version: Option<ComponentRevision>,
+    ) -> Result<ComponentDto, WorkerExecutorError>;
 
     /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
     /// Resolving component is the component in whose context the resolution is being performed
@@ -57,7 +56,7 @@ pub trait ComponentService: Send + Sync {
 
     /// Returns all the component metadata the implementation has cached.
     /// This is useful for some mock/local implementations.
-    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component>;
+    async fn all_cached_metadata(&self) -> Vec<ComponentDto>;
 }
 
 pub fn configured(
@@ -106,7 +105,7 @@ pub fn configured(
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct ComponentKey {
     component_id: ComponentId,
-    component_version: ComponentVersion,
+    component_version: ComponentRevision,
 }
 
 fn create_component_cache(

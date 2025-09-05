@@ -90,11 +90,10 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
-use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
-    FailedUpdateRecord, GetFileSystemNodeResult, IdempotencyKey, InitialComponentFile,
+use golem_common::model::{ProjectId};
+use golem_common::model::{ComponentFileSystemNode,
+    ComponentFileSystemNodeDetails,
+    FailedUpdateRecord, GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
     WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
@@ -125,6 +124,10 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
+use golem_common::model::component::{ComponentDto, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType, InitialComponentFile};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentFilePath;
+use golem_common::model::environment::EnvironmentId;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -331,7 +334,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by
     }
 
-    pub fn component_metadata(&self) -> &golem_service_base::model::Component {
+    pub fn component_metadata(&self) -> &ComponentDto {
         &self.state.component_metadata
     }
 
@@ -794,11 +797,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn update_state_to_new_component_version(
         &mut self,
-        new_version: ComponentVersion,
+        new_version: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
-        if new_version <= current_metadata.versioned_component_id.version {
+        if new_version <= current_metadata.revision {
             debug!("Update {new_version} was already applied, skipping");
             return Ok(());
         };
@@ -812,7 +815,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.project_id,
+            &self.owned_worker_id.environment_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -1231,7 +1234,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) {
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -1981,7 +1984,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         this: &T,
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
@@ -2340,7 +2343,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: golem_service_base::model::Component,
+    component_metadata: ComponentDto,
 
     total_linear_memory_size: u64,
 
@@ -2383,7 +2386,7 @@ impl PrivateDurableWorkerState {
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: golem_service_base::model::Component,
+        component_metadata: ComponentDto,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
@@ -2850,7 +2853,7 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    project_id: &ProjectId,
+    environment_id: &EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(), WorkerExecutorError> {
@@ -2913,7 +2916,7 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(project_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.key, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
@@ -2930,7 +2933,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(project_id, &file.key, &path)
+                            .get_read_only_to(environment_id, &file.key, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -2968,7 +2971,7 @@ async fn update_filesystem(
                     }
 
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
@@ -2981,7 +2984,7 @@ async fn update_filesystem(
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }

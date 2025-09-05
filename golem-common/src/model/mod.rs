@@ -52,6 +52,7 @@ pub use crate::base_model::*;
 use self::component::{
     ComponentFilePermissions, ComponentId, ComponentRevision, PluginInstallationId,
 };
+use self::environment::EnvironmentId;
 use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
 use crate::model::oplog::{TimestampedUpdateDescription, WorkerResourceId};
@@ -224,14 +225,14 @@ impl IntoValue for Timestamp {
 /// Associates a worker-id with its owner project
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 pub struct OwnedWorkerId {
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub worker_id: WorkerId,
 }
 
 impl OwnedWorkerId {
-    pub fn new(project_id: &ProjectId, worker_id: &WorkerId) -> Self {
+    pub fn new(environment_id: &EnvironmentId, worker_id: &WorkerId) -> Self {
         Self {
-            project_id: project_id.clone(),
+            environment_id: environment_id.clone(),
             worker_id: worker_id.clone(),
         }
     }
@@ -240,8 +241,8 @@ impl OwnedWorkerId {
         self.worker_id.clone()
     }
 
-    pub fn project_id(&self) -> ProjectId {
-        self.project_id.clone()
+    pub fn environment_id(&self) -> EnvironmentId {
+        self.environment_id.clone()
     }
 
     pub fn component_id(&self) -> ComponentId {
@@ -255,7 +256,7 @@ impl OwnedWorkerId {
 
 impl Display for OwnedWorkerId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.project_id, self.worker_id)
+        write!(f, "{}/{}", self.environment_id(), self.worker_id)
     }
 }
 
@@ -271,7 +272,7 @@ pub enum ScheduledAction {
     /// Completes a given promise
     CompletePromise {
         account_id: AccountId,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         promise_id: PromiseId,
     },
     /// Archives all entries from the first non-empty layer of an oplog to the next layer,
@@ -299,10 +300,10 @@ impl ScheduledAction {
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
         match self {
             ScheduledAction::CompletePromise {
-                project_id,
+                environment_id,
                 promise_id,
                 ..
-            } => OwnedWorkerId::new(project_id, &promise_id.worker_id),
+            } => OwnedWorkerId::new(environment_id, &promise_id.worker_id),
             ScheduledAction::ArchiveOplog {
                 owned_worker_id, ..
             } => owned_worker_id.clone(),
@@ -545,7 +546,7 @@ pub struct WorkerMetadata {
     pub worker_id: WorkerId,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub wasi_config_vars: BTreeMap<String, String>,
     pub created_at: Timestamp,
@@ -557,13 +558,13 @@ impl WorkerMetadata {
     pub fn default(
         worker_id: WorkerId,
         created_by: AccountId,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
     ) -> WorkerMetadata {
         WorkerMetadata {
             worker_id,
             args: vec![],
             env: vec![],
-            project_id,
+            environment_id,
             created_by,
             wasi_config_vars: BTreeMap::new(),
             created_at: Timestamp::now_utc(),
@@ -573,7 +574,7 @@ impl WorkerMetadata {
     }
 
     pub fn owned_worker_id(&self) -> OwnedWorkerId {
-        OwnedWorkerId::new(&self.project_id, &self.worker_id)
+        OwnedWorkerId::new(&self.environment_id, &self.worker_id)
     }
 }
 
@@ -1854,11 +1855,11 @@ impl From<ComponentId> for golem_wasm_rpc::ComponentId {
 #[cfg(test)]
 mod tests {
     use crate::model::component::{ComponentFilePath, ComponentRevision};
+    use crate::model::environment::EnvironmentId;
     use crate::model::oplog::OplogIndex;
     use crate::model::{
-        AccountId, ComponentId, FilterComparator, IdempotencyKey, ProjectId,
-        StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-        WorkerStatusRecord,
+        AccountId, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
+        Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
     use bincode::{Decode, Encode};
     use serde::{Deserialize, Serialize};
@@ -2026,7 +2027,7 @@ mod tests {
                 ("env1".to_string(), "value1".to_string()),
                 ("env2".to_string(), "value2".to_string()),
             ],
-            project_id: ProjectId::new_v4(),
+            environment_id: EnvironmentId::new_v4(),
             created_by: AccountId::new_v4(),
             wasi_config_vars: BTreeMap::from([("var1".to_string(), "value1".to_string())]),
             created_at: Timestamp::now_utc(),

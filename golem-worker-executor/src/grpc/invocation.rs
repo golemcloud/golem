@@ -20,7 +20,6 @@ use golem_common::base_model::WorkerId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::Component;
 use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::protobuf::Val;
@@ -29,6 +28,7 @@ use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;
+use golem_common::model::component::ComponentDto;
 
 pub trait CanStartWorker {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError>;
@@ -397,7 +397,7 @@ fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersio
 }
 
 fn resolve_function<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), WorkerExecutorError> {
     let parsed =
@@ -417,7 +417,7 @@ fn resolve_function<'t>(
             }
             AnalysedExport::Function(ref f @ AnalysedFunction { name, .. }) => {
                 if parsed.site() == &ParsedFunctionSite::Global
-                    && &parsed.function().function_name() == name
+                    && parsed.function().function_name() == *name
                 {
                     functions.push(f);
                 }

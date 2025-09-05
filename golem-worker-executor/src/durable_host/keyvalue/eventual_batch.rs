@@ -31,7 +31,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<Vec<Option<Resource<IncomingValue>>>, Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -51,7 +51,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .get_many(project_id, bucket, keys)
+                .get_many(environment_id, bucket, keys)
                 .await;
             durability.persist(self, input, result).await
         } else {
@@ -91,7 +91,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         bucket: Resource<Bucket>,
     ) -> anyhow::Result<Result<Vec<Key>, Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -110,7 +110,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .get_keys(project_id, bucket.clone())
+                .get_keys(environment_id, bucket.clone())
                 .await;
             durability.persist(self, bucket, result).await
         } else {
@@ -125,7 +125,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         key_values: Vec<(Key, Resource<OutgoingValue>)>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let environment_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()
@@ -166,7 +166,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .key_value_service
-                .set_many(project_id, bucket, key_values)
+                .set_many(environment_id, bucket, key_values)
                 .await;
             durability.persist(self, input, result).await
         } else {
@@ -190,7 +190,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         bucket: Resource<Bucket>,
         keys: Vec<Key>,
     ) -> anyhow::Result<Result<(), Resource<Error>>> {
-        let project_id = self.owned_worker_id.project_id();
+        let project_id = self.owned_worker_id.environment_id();
         let bucket = self
             .as_wasi_view()
             .table()

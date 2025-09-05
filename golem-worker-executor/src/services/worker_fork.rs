@@ -43,13 +43,15 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
-use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata, WorkerStatusRecord};
+use golem_common::model::{Timestamp, WorkerMetadata, WorkerStatusRecord};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::sync::RwLock;
 use tokio::runtime::Handle;
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -377,7 +379,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
     async fn validate_worker_forking(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
@@ -390,7 +392,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             ));
         }
 
-        let owned_target_worker_id = OwnedWorkerId::new(project_id, target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(environment_id, target_worker_id);
 
         let target_metadata = self.worker_service.get(&owned_target_worker_id).await;
 
@@ -404,7 +406,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         // We assume the source worker belongs to this executor
         self.shard_service.check_worker(source_worker_id)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(project_id, source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(environment_id, source_worker_id);
 
         self.worker_service
             .get(&owned_source_worker_id)
@@ -427,7 +429,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
 
         let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
-                &source_worker_id.project_id,
+                &source_worker_id.environment_id,
                 &source_worker_id.worker_id,
                 target_worker_id,
                 oplog_index_cut_off,
@@ -435,7 +437,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?;
 
         let target_worker_id = owned_target_worker_id.worker_id.clone();
-        let project_id = owned_target_worker_id.project_id.clone();
+        let environment_id = owned_target_worker_id.environment_id.clone();
 
         let source_worker_instance = Worker::get_or_create_suspended(
             self,
@@ -455,7 +457,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
             created_by: fork_account_id.clone(),
-            project_id,
+            environment_id,
             env: source_worker_metadata.env.clone(),
             args: source_worker_metadata.args.clone(),
             wasi_config_vars: source_worker_metadata.wasi_config_vars.clone(),

@@ -45,10 +45,11 @@ use golem_common::model::oplog::{
     OplogEntry, OplogIndex, TimestampedUpdateDescription, UpdateDescription, WorkerError,
 };
 use golem_common::model::regions::{DeletedRegions, DeletedRegionsBuilder, OplogRegion};
-use golem_common::model::{AccountId, RetryConfig};
-use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
+use golem_common::model::{RetryConfig};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentFilePath, ComponentType, PluginInstallationId, ComponentRevision};
 use golem_common::model::{
-    ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
+    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
@@ -123,7 +124,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -153,7 +154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -206,7 +207,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
@@ -626,7 +627,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ///
     /// This enqueues a special function invocation that saves the component's state and
     /// triggers a restart immediately.
-    pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
+    pub async fn enqueue_manual_update(&self, target_version: ComponentRevision) {
         match &*self.instance.lock().await {
             WorkerInstance::Running(running) => {
                 running.enqueue_manual_update(target_version).await;
@@ -1290,7 +1291,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: &T,
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        component_version: Option<ComponentVersion>,
+        component_version: Option<ComponentRevision>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
@@ -1355,13 +1356,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
-                    project_id: owned_worker_id.project_id(),
+                    environment_id: owned_worker_id.environment_id(),
                     created_by: account_id.clone(),
                     created_at,
                     parent,
                     last_known_status: WorkerStatusRecord {
-                        component_version: component.versioned_component_id.version,
-                        component_version_for_replay: component.versioned_component_id.version,
+                        component_version: component.revision,
+                        component_version_for_replay: component.revision,
                         component_size: component.component_size,
                         total_linear_memory_size: component
                             .metadata
@@ -1442,7 +1443,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 pub fn merge_worker_env_with_component_env(
     worker_env: Option<Vec<(String, String)>>,
-    component_env: HashMap<String, String>,
+    component_env: BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut seen_keys = HashSet::new();
     let mut result = Vec::new();
@@ -1627,7 +1628,7 @@ impl RunningWorker {
         self.enqueue_worker_invocation(invocation).await;
     }
 
-    pub async fn enqueue_manual_update(&self, target_version: ComponentVersion) {
+    pub async fn enqueue_manual_update(&self, target_version: ComponentRevision) {
         let invocation = WorkerInvocation::ManualUpdate { target_version };
         self.enqueue_worker_invocation(invocation).await;
     }
@@ -1746,7 +1747,7 @@ impl RunningWorker {
 
         let context = Ctx::create(
             worker_metadata.created_by,
-            OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
+            OwnedWorkerId::new(&worker_metadata.environment_id, &worker_metadata.worker_id),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),
@@ -1766,7 +1767,7 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
-                component_metadata.versioned_component_id.version,
+                component_metadata.revision,
                 worker_metadata.args.clone(),
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions.clone(),

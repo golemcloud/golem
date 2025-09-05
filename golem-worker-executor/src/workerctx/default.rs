@@ -51,8 +51,10 @@ use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
+    GetFileSystemNodeResult, IdempotencyKey,
     OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
@@ -372,7 +374,7 @@ impl ExternalOperations<Context> for Context {
         this: &T,
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<Context>::on_worker_update_failed_to_start(
@@ -417,7 +419,7 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) {
         self.durable_ctx
@@ -567,7 +569,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -721,7 +723,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component {
+    fn component_metadata(&self) -> &ComponentDto {
         self.durable_ctx.component_metadata()
     }
 

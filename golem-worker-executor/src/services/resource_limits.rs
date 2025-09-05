@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::limit::v1::{
     BatchUpdateResourceLimitsRequest, GetResourceLimitsRequest,
 };
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::AccountId;
+use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -101,7 +101,7 @@ impl ResourceLimitsGrpc {
         updates: HashMap<AccountId, i64>,
     ) -> Result<(), WorkerExecutorError> {
         let body = BatchUpdateResourceLimits {
-            updates: updates.into_iter().map(|(k, v)| (k.value, v)).collect(),
+            updates: updates.into_iter().map(|(k, v)| (k.0, v)).collect(),
         };
         with_retries(
             "resource_limits",

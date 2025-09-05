@@ -50,11 +50,11 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 worker_id: worker_id.into(),
-                component_version,
+                component_version: component_version.0,
                 args,
                 env: env.into_iter().collect(),
                 created_by: oplog::AccountId {
-                    value: created_by.value,
+                    value: created_by.0,
                 },
                 project_id: project_id.into(),
                 parent: parent.map(|id| id.into()),
@@ -172,7 +172,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 description,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_version: target_version.0,
                 update_description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
@@ -182,7 +182,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_version: target_version.0,
                 new_component_size,
                 new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
@@ -192,7 +192,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 details,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_version: target_version.0,
                 details,
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
@@ -376,7 +376,7 @@ impl From<PublicWorkerInvocation> for oplog::WorkerInvocation {
                 idempotency_key: idempotency_key.value,
             }),
             PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_version }) => {
-                Self::ManualUpdate(target_version)
+                Self::ManualUpdate(target_version.0)
             }
         }
     }

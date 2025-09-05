@@ -18,7 +18,7 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::{AccountId, ProjectId, RetryConfig};
+use golem_common::model::{RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
@@ -29,6 +29,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -916,7 +918,7 @@ impl SafeDisplay for ProjectServiceGrpcConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectServiceDisabledConfig {
     pub account_id: AccountId,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub project_name: String,
 }
 
@@ -924,7 +926,7 @@ impl SafeDisplay for ProjectServiceDisabledConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "account_id: {}", self.account_id);
-        let _ = writeln!(&mut result, "project id: {}", self.project_id);
+        let _ = writeln!(&mut result, "environment_id id: {}", self.environment_id);
         let _ = writeln!(&mut result, "project name: {}", self.project_name);
         result
     }

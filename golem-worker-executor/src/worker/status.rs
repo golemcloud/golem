@@ -13,6 +13,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use golem_common::model::component::ComponentRevision;
 
 /// Gets the last cached worker status record and the new oplog entries and calculates the new worker status.
 #[async_recursion]
@@ -431,18 +432,18 @@ fn calculate_update_fields(
     initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
-    initial_version: u64,
+    initial_version: ComponentRevision,
     initial_component_size: u64,
-    initial_component_version_for_replay: u64,
+    initial_component_version_for_replay: ComponentRevision,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
+    ComponentRevision,
     u64,
-    u64,
-    u64,
+    ComponentRevision,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;

@@ -33,7 +33,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
-        let account_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let durability = Durability::<u64, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -44,8 +44,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         let result = if durability.is_live() {
             let svc = self.state.blob_store_service.clone();
             let result = svc
-                .create_container(account_id.clone(), name.clone())
-                .and_then(|_| svc.get_container(account_id, name.clone()))
+                .create_container(environment_id.clone(), name.clone())
+                .and_then(|_| svc.get_container(environment_id, name.clone()))
                 .await
                 .map(|r| r.unwrap());
             durability.persist(self, name.clone(), result).await
@@ -69,7 +69,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<Resource<Container>, Error>> {
-        let account_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let durability = Durability::<Option<u64>, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -81,7 +81,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .get_container(account_id, name.clone())
+                .get_container(environment_id, name.clone())
                 .await;
             durability.persist(self, name.clone(), result).await
         } else {
@@ -102,7 +102,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn delete_container(&mut self, name: ContainerName) -> anyhow::Result<Result<(), Error>> {
-        let account_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -114,7 +114,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .delete_container(account_id, name.clone())
+                .delete_container(environment_id, name.clone())
                 .await;
             durability.persist(self, name.clone(), result).await
         } else {
@@ -131,7 +131,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         name: ContainerName,
     ) -> anyhow::Result<Result<bool, Error>> {
-        let account_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let durability = Durability::<bool, SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -143,7 +143,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .container_exists(account_id, name.clone())
+                .container_exists(environment_id, name.clone())
                 .await;
             durability.persist(self, name, result).await
         } else {
@@ -161,7 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
-        let account_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -180,7 +180,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .copy_object(
-                    account_id,
+                    environment_id,
                     src.container,
                     src.object,
                     dest.container,
@@ -203,7 +203,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         src: ObjectId,
         dest: ObjectId,
     ) -> anyhow::Result<Result<(), Error>> {
-        let account_id = self.state.owned_worker_id.project_id();
+        let environment_id = self.state.owned_worker_id.environment_id();
         let durability = Durability::<(), SerializableError>::new(
             self,
             "golem blobstore::blobstore",
@@ -222,7 +222,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .state
                 .blob_store_service
                 .move_object(
-                    account_id,
+                    environment_id,
                     src.container,
                     src.object,
                     dest.container,

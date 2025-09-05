@@ -15,7 +15,7 @@
 use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::new_repo_uuid;
 use anyhow::anyhow;
-use golem_common::model::PlanId;
+use golem_common::model::account::PlanId;
 use golem_common::model::account::{Plan, PlanName};
 use golem_service_base::repo::{RepoError, RepoResult};
 use sqlx::FromRow;

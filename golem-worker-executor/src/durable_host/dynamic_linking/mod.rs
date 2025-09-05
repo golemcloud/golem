@@ -22,6 +22,7 @@ use golem_wasm_rpc::HostWasmRpc;
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
+use golem_common::model::component::ComponentDto;
 
 mod wasm_rpc;
 
@@ -38,7 +39,7 @@ impl<
         engine: &Engine,
         linker: &mut Linker<Ctx>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         let mut root = linker.root();
 
