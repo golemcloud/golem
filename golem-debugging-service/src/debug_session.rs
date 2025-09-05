@@ -307,6 +307,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 PublicDurableFunctionType::WriteRemoteBatched(params) => {
                     DurableFunctionType::WriteRemoteBatched(params.index)
                 }
+                PublicDurableFunctionType::WriteRemoteTransaction(params) => {
+                    DurableFunctionType::WriteRemoteTransaction(params.index)
+                }
             };
 
             Ok(OplogEntry::ImportedFunctionInvoked {
@@ -389,6 +392,21 @@ fn get_oplog_entry_from_public_oplog_entry(
         }
         PublicOplogEntry::PendingUpdate(_) => {
             Err("Cannot override an oplog with a pending update".to_string())?
+        }
+        PublicOplogEntry::BeginRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a begin remote transaction".to_string())?
+        }
+        PublicOplogEntry::PreCommitRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a pre commit remote transaction".to_string())?
+        }
+        PublicOplogEntry::CommittedRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a committed remote transaction".to_string())?
+        }
+        PublicOplogEntry::PreRollbackRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a pre rollback remote transaction".to_string())?
+        }
+        PublicOplogEntry::RolledBackRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a rolled back remote transaction".to_string())?
         }
         PublicOplogEntry::SuccessfulUpdate(successful_update_params) => {
             let plugin_installation_ids: HashSet<PluginInstallationId> = successful_update_params
