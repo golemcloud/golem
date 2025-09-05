@@ -23,7 +23,6 @@ use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
 use crate::log::Output::Stdout;
 use crate::log::{log_action, logln, set_log_output, LogColorize};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::component::show_exported_functions;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
 use crate::model::{ComponentNameMatchKind, Format};
@@ -173,25 +172,21 @@ impl ErrorHandler {
                     )
                     .await
                 {
-                    if self
+                    let agent_type = self
                         .ctx
                         .worker_handler()
-                        .validate_worker_name_and_function(
+                        .validate_worker_and_function_names(
                             &component,
                             &worker_name_match.worker_name,
                             None,
                         )
-                        .await
-                    {
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: show_exported_functions(
-                                component.metadata.exports(),
-                                false,
-                            ),
-                        });
-                        logln("");
-                    }
+                        .await?;
+
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        &component,
+                        agent_type.as_ref(),
+                    ));
+                    logln("");
                 }
                 Ok(())
             }

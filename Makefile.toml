@@ -130,14 +130,13 @@ cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-rpc cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
+cp wit/deps/logging cli/golem-cli/wit/deps
 """
 
 [tasks.wit-template-golem-agent-ts]
 private = true
 script_runner = "@duckscript"
 script = """
-rm -r cli/template-golem-agent-ts/wit/deps
-mkdir cli/template-golem-agent-ts/wit/deps
 glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
 """
 
