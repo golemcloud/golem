@@ -210,7 +210,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.4", features = ["get-script"] }
+moonbit-component-generator = { version = "0.0.5", features = ["get-script"] }
 nanoid = "0.4.0"
 native-tls = "0.2.13"
 nom = "7.1.3"

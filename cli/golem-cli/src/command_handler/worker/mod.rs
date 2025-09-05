@@ -27,15 +27,17 @@ use crate::error::NonSuccessfulExit;
 use crate::fuzzy::{Error, FuzzySearch};
 use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::app::ApplicationComponentSelectMode;
-use crate::model::component::{function_params_types, show_exported_functions, Component};
+use crate::model::component::{
+    agent_interface_name, function_params_types, show_exported_agent_constructors, Component,
+};
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::{
     format_export, format_worker_name_match, log_error, log_fuzzy_match, log_text_view, log_warn,
 };
 use crate::model::text::help::{
-    ArgumentError, AvailableComponentNamesHelp, AvailableFunctionNamesHelp, ComponentNameHelp,
-    ParameterErrorTableView, WorkerNameHelp,
+    ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
+    AvailableFunctionNamesHelp, ComponentNameHelp, ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
 use crate::model::worker::fuzzy_match_function_name;
@@ -48,20 +50,21 @@ use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::{AgentTypesClient, ComponentClient, WorkerClient};
 use golem_client::model::{
-    ComponentType, InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord,
-};
-use golem_client::model::{
-    InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
+    AgentType, InvokeParameters as InvokeParametersCloud,
+    RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
     UpdateWorkerRequest as UpdateWorkerRequestCloud,
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
+use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
+use golem_common::model::agent::AgentId;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
 use itertools::{EitherOrBoth, Itertools};
+use rib::ParsedFunctionSite;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -180,7 +183,7 @@ impl WorkerCommandHandler {
         self.ctx.silence_app_context_init().await;
 
         let worker_name = worker_name.worker_name;
-        let mut worker_name_match = self.match_worker_name(worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name).await?;
         let component = self
             .ctx
             .component_handler()
@@ -188,24 +191,12 @@ impl WorkerCommandHandler {
                 worker_name_match.project.as_ref(),
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
-                worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
+                Some((&worker_name_match.worker_name).into()),
             )
             .await?;
 
-        if component.component_type == ComponentType::Ephemeral
-            && worker_name_match.worker_name.is_some()
-        {
-            log_error("Cannot use explicit name for ephemeral worker!");
-            logln("");
-            logln("Use '-' as worker name for ephemeral workers");
-            logln("");
-            bail!(NonSuccessfulExit);
-        }
-
-        if worker_name_match.worker_name.is_none() {
-            worker_name_match.worker_name = Some(Uuid::new_v4().to_string().into());
-        }
-        let worker_name = worker_name_match.worker_name.clone().unwrap().0;
+        self.validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
+            .await?;
 
         log_action(
             "Creating",
@@ -217,7 +208,7 @@ impl WorkerCommandHandler {
 
         self.new_worker(
             component.versioned_component_id.component_id,
-            worker_name.clone(),
+            worker_name_match.worker_name.0.clone(),
             arguments,
             env.into_iter().collect(),
         )
@@ -226,7 +217,7 @@ impl WorkerCommandHandler {
         logln("");
         self.ctx.log_handler().log_view(&WorkerCreateView {
             component_name: worker_name_match.component_name,
-            worker_name: Some(worker_name.into()),
+            worker_name: Some(worker_name_match.worker_name),
         });
 
         Ok(())
@@ -277,62 +268,76 @@ impl WorkerCommandHandler {
                 worker_name_match.project.as_ref(),
                 worker_name_match.component_name_match_kind,
                 &worker_name_match.component_name,
-                worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
+                Some((&worker_name_match.worker_name).into()),
             )
             .await?;
 
-        let matched_function_name =
-            fuzzy_match_function_name(function_name, component.metadata.exports());
+        // First validate without the function name
+        let agent_type = self
+            .validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
+            .await?;
+
+        let matched_function_name = fuzzy_match_function_name(
+            function_name,
+            component.metadata.exports(),
+            agent_type
+                .as_ref()
+                .and_then(|a| agent_interface_name(&component, &a.type_name))
+                .as_deref(),
+        );
         let function_name = match matched_function_name {
             Ok(match_) => {
                 log_fuzzy_match(&match_);
                 match_.option
             }
-            Err(error) => {
-                let component_functions =
-                    show_exported_functions(component.metadata.exports(), false);
-
-                match error {
-                    Error::Ambiguous {
-                        highlighted_options,
-                        ..
-                    } => {
-                        logln("");
-                        log_error(format!(
-                            "The requested function name ({}) is ambiguous.",
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        logln("Did you mean one of");
-                        for option in highlighted_options {
-                            logln(format!(" - {}", option.bold()));
-                        }
-                        logln("?");
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: component_functions,
-                        });
-
-                        bail!(NonSuccessfulExit);
+            Err(error) => match error {
+                Error::Ambiguous {
+                    highlighted_options,
+                    ..
+                } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested function name ({}) is ambiguous.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    logln("Did you mean one of");
+                    for option in highlighted_options {
+                        logln(format!(" - {}", option.bold()));
                     }
-                    Error::NotFound { .. } => {
-                        logln("");
-                        log_error(format!(
-                            "The requested function name ({}) was not found.",
-                            function_name.log_color_error_highlight()
-                        ));
-                        logln("");
-                        log_text_view(&AvailableFunctionNamesHelp {
-                            component_name: worker_name_match.component_name.0,
-                            function_names: component_functions,
-                        });
+                    logln("?");
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        &component,
+                        agent_type.as_ref(),
+                    ));
 
-                        bail!(NonSuccessfulExit);
-                    }
+                    bail!(NonSuccessfulExit);
                 }
-            }
+                Error::NotFound { .. } => {
+                    logln("");
+                    log_error(format!(
+                        "The requested function name ({}) was not found.",
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        &component,
+                        agent_type.as_ref(),
+                    ));
+
+                    bail!(NonSuccessfulExit);
+                }
+            },
         };
+
+        // Re-validate with function name
+        self.validate_worker_and_function_names(
+            &component,
+            &worker_name_match.worker_name,
+            Some(&function_name),
+        )
+        .await?;
 
         if enqueue {
             log_action(
@@ -359,7 +364,7 @@ impl WorkerCommandHandler {
         let result = self
             .invoke_worker(
                 &component,
-                &worker_name_match.worker_name(),
+                &worker_name_match.worker_name,
                 &function_name,
                 arguments,
                 idempotency_key.clone(),
@@ -1403,21 +1408,13 @@ impl WorkerCommandHandler {
         &self,
         worker_name_match: &WorkerNameMatch,
     ) -> anyhow::Result<(Component, WorkerName)> {
-        let Some(worker_name) = &worker_name_match.worker_name else {
-            log_error("Worker name is required");
-            logln("");
-            log_text_view(&WorkerNameHelp);
-            logln("");
-            bail!(NonSuccessfulExit);
-        };
-
         let component = self
             .ctx
             .component_handler()
             .component(
                 worker_name_match.project.as_ref(),
                 (&worker_name_match.component_name).into(),
-                worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
+                Some((&worker_name_match.worker_name).into()),
             )
             .await?;
 
@@ -1433,7 +1430,7 @@ impl WorkerCommandHandler {
             bail!(NonSuccessfulExit);
         };
 
-        Ok((component, worker_name.clone()))
+        Ok((component, worker_name_match.worker_name.clone()))
     }
 
     async fn resume_worker(
@@ -1482,11 +1479,7 @@ impl WorkerCommandHandler {
         &self,
         worker_name: WorkerName,
     ) -> anyhow::Result<WorkerNameMatch> {
-        fn to_opt_worker_name(worker_name: String) -> Option<WorkerName> {
-            (worker_name != "-").then(|| worker_name.into())
-        }
-
-        let segments = worker_name.0.split("/").collect::<Vec<&str>>();
+        let segments = split_worker_name(&worker_name.0);
         match segments.len() {
             // <WORKER>
             1 => {
@@ -1532,7 +1525,7 @@ impl WorkerCommandHandler {
                                 .unwrap()
                                 .as_str()
                                 .into(),
-                            worker_name: to_opt_worker_name(worker_name),
+                            worker_name: worker_name.into(),
                         })
                     }
                     None => {
@@ -1659,7 +1652,7 @@ impl WorkerCommandHandler {
                                     project,
                                     component_name_match_kind: ComponentNameMatchKind::App,
                                     component_name: match_.option.into(),
-                                    worker_name: to_opt_worker_name(worker_name),
+                                    worker_name: worker_name.into(),
                                 })
                             }
                             Err(error) => match error {
@@ -1694,7 +1687,7 @@ impl WorkerCommandHandler {
                                         project,
                                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                                         component_name,
-                                        worker_name: to_opt_worker_name(worker_name),
+                                        worker_name: worker_name.into(),
                                     })
                                 }
                             },
@@ -1705,7 +1698,7 @@ impl WorkerCommandHandler {
                         project,
                         component_name_match_kind: ComponentNameMatchKind::Unknown,
                         component_name,
-                        worker_name: to_opt_worker_name(worker_name),
+                        worker_name: worker_name.into(),
                     }),
                 }
             }
@@ -1717,6 +1710,79 @@ impl WorkerCommandHandler {
                 ));
                 logln("");
                 log_text_view(&WorkerNameHelp);
+                bail!(NonSuccessfulExit);
+            }
+        }
+    }
+
+    pub async fn validate_worker_and_function_names(
+        &self,
+        component: &Component,
+        worker_name: &WorkerName,
+        function_name: Option<&str>,
+    ) -> anyhow::Result<Option<AgentType>> {
+        if !component.metadata.is_agent() {
+            return Ok(None);
+        }
+
+        match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata).await {
+            Ok((agent_id, agent_type)) => match function_name {
+                Some(function_name) => {
+                    if let Some((namespace, package, interface)) = component
+                        .metadata
+                        .find_function(function_name)
+                        .await
+                        .ok()
+                        .flatten()
+                        .and_then(|f| match f.name.site {
+                            ParsedFunctionSite::Global => None,
+                            ParsedFunctionSite::Interface { .. } => None,
+                            ParsedFunctionSite::PackagedInterface {
+                                namespace,
+                                package,
+                                interface,
+                                ..
+                            } => Some((namespace, package, interface)),
+                        })
+                    {
+                        let component_name = format!("{namespace}:{package}");
+                        if interface == agent_type.type_name
+                            && component.component_name.0 == component_name
+                        {
+                            return Ok(Some(agent_type));
+                        }
+                    }
+
+                    logln("");
+                    log_error(format!(
+                        "Incompatible agent type ({}) and method ({})",
+                        agent_id.agent_type.log_color_error_highlight(),
+                        function_name.log_color_error_highlight()
+                    ));
+                    logln("");
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        component,
+                        Some(&agent_type),
+                    ));
+                    bail!(NonSuccessfulExit);
+                }
+
+                None => Ok(Some(agent_type)),
+            },
+            Err(err) => {
+                logln("");
+                log_error(format!(
+                    "Failed to parse worker name ({}) as agent id: {err}",
+                    worker_name.0.log_color_error_highlight()
+                ));
+                logln("");
+                log_text_view(&AvailableAgentConstructorsHelp {
+                    component_name: component.component_name.0.clone(),
+                    constructors: show_exported_agent_constructors(
+                        component.metadata.agent_types(),
+                    ),
+                });
+
                 bail!(NonSuccessfulExit);
             }
         }
@@ -1869,5 +1935,49 @@ fn parse_worker_error(status: u16, body: Vec<u8>) -> ServiceError {
             golem_client::Error::<golem_client::api::WorkerError>::unexpected(status, body.into())
                 .into()
         }
+    }
+}
+
+fn split_worker_name(worker_name: &str) -> Vec<&str> {
+    match worker_name.find('(') {
+        Some(constructor_open_parentheses_idx) => {
+            let splittable = &worker_name[0..constructor_open_parentheses_idx];
+            let last_slash_idx = splittable.rfind('/');
+            match last_slash_idx {
+                Some(last_slash_idx) => {
+                    let mut segments = worker_name[0..last_slash_idx]
+                        .split('/')
+                        .collect::<Vec<&str>>();
+                    segments.push(&worker_name[last_slash_idx + 1..]);
+                    segments
+                }
+                None => {
+                    vec![worker_name]
+                }
+            }
+        }
+        None => worker_name.split("/").collect(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::command_handler::worker::split_worker_name;
+    use assert2::assert;
+    use test_r::test;
+
+    #[test]
+    fn test_split_worker_name() {
+        assert!(split_worker_name("a") == vec!["a"]);
+        assert!(split_worker_name("a()") == vec!["a()"]);
+        assert!(split_worker_name("a(\"///\")") == vec!["a(\"///\")"]);
+        assert!(split_worker_name("a/b") == vec!["a", "b"]);
+        assert!(split_worker_name("a/b()") == vec!["a", "b()"]);
+        assert!(split_worker_name("a/b(\"///\")") == vec!["a", "b(\"///\")"]);
+        assert!(split_worker_name("a/b/c") == vec!["a", "b", "c"]);
+        assert!(split_worker_name("a/b/c()") == vec!["a", "b", "c()"]);
+        assert!(split_worker_name("a/b/c(\"/\")") == vec!["a", "b", "c(\"/\")"]);
+        assert!(split_worker_name("/") == vec!["", ""]);
+        assert!(split_worker_name("a(/") == vec!["a(/"]);
     }
 }

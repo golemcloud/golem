@@ -1750,6 +1750,7 @@ impl RunningWorker {
         let context = Ctx::create(
             worker_metadata.created_by,
             OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
+            parent.agent_id.clone(),
             parent.promise_service(),
             parent.worker_service(),
             parent.worker_enumeration_service(),

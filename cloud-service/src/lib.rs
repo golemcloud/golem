@@ -24,9 +24,9 @@ pub mod repo;
 pub mod service;
 
 use self::config::{AccountConfig, AccountsConfig};
-use self::service::account::AccountService;
+use self::service::account::{AccountError, AccountService};
 use self::service::account_grant::AccountGrantService;
-use self::service::token::TokenService;
+use self::service::token::{TokenService, TokenServiceError};
 use crate::api::Apis;
 use crate::bootstrap::Services;
 use crate::config::CloudServiceConfig;
@@ -112,7 +112,7 @@ impl CloudService {
             &services.account_grant_service,
             &services.token_service,
         )
-        .await;
+        .await?;
 
         Ok(Self {
             config,
@@ -221,7 +221,7 @@ async fn create_all_initial_accounts(
     account_service: &Arc<dyn AccountService>,
     grant_service: &Arc<dyn AccountGrantService>,
     token_service: &Arc<dyn TokenService>,
-) {
+) -> anyhow::Result<()> {
     for account_config in accounts_config.accounts.values() {
         create_initial_account(
             account_config,
@@ -229,8 +229,9 @@ async fn create_all_initial_accounts(
             grant_service,
             token_service,
         )
-        .await
+        .await?
     }
+    Ok(())
 }
 
 async fn create_initial_account(
@@ -238,7 +239,7 @@ async fn create_initial_account(
     account_service: &Arc<dyn AccountService>,
     grant_service: &Arc<dyn AccountGrantService>,
     token_service: &Arc<dyn TokenService>,
-) {
+) -> anyhow::Result<()> {
     info!(
         "Creating initial account({}, {}).",
         account_config.id, account_config.name
@@ -246,21 +247,28 @@ async fn create_initial_account(
     // This unwrap is infallible.
     let account_id = AccountId::from_str(&account_config.id).unwrap();
 
-    account_service
-        .create(
-            &account_id,
-            &AccountData {
-                name: account_config.name.clone(),
-                email: account_config.email.clone(),
-            },
-        )
-        .await
-        .ok();
+    // Check if the user exists. Trying to create it and catching the error leads to ugly Error level repo logs
+    let user_exists = match account_service.get(&account_id).await {
+        Ok(_) => true,
+        Err(AccountError::AccountNotFound(_)) => false,
+        Err(other) => Err(other)?,
+    };
 
-    grant_service
-        .add(&account_id, &account_config.role)
-        .await
-        .ok();
+    if !user_exists {
+        account_service
+            .create(
+                &account_id,
+                &AccountData {
+                    name: account_config.name.clone(),
+                    email: account_config.email.clone(),
+                },
+            )
+            .await
+            .ok();
+    }
+
+    // idempotent / will not fail on already existing role grant
+    grant_service.add(&account_id, &account_config.role).await?;
 
     token_service
         .create_known_secret(
@@ -269,5 +277,13 @@ async fn create_initial_account(
             &TokenSecret::new(account_config.token),
         )
         .await
-        .ok();
+        .or_else(|e| match e {
+            TokenServiceError::InternalSecretAlreadyExists {
+                existing_account_id,
+                ..
+            } if existing_account_id == account_id => Ok(()),
+            _ => Err(e),
+        })?;
+
+    Ok(())
 }
