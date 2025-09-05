@@ -400,6 +400,21 @@ fn setup_dependencies(
                 .join("extractor.mi"),
             "extractor",
         )?;
+        component.add_dependency(
+            &format!(
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
+            ),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("wasi")
+                .join("logging")
+                .join("logging")
+                .join("logging.mi"),
+            "logging",
+        )?;
     }
 
     depends_on_golem_agent_common(component, "gen/interface/golem/agent/guest")?;
@@ -450,10 +465,7 @@ fn generate_agent_stub(
 
     let constructor_params =
         to_moonbit_parameter_list(ctx, &agent.constructor.input_schema, "constructor", false)?;
-    writeln!(
-        result,
-        "pub fn initialize({constructor_params}) -> Result[Unit, @common.AgentError] {{"
-    )?;
+    writeln!(result, "pub fn initialize({constructor_params}) -> Unit {{")?;
     writeln!(result, "  let encoded_params = try ")?;
     build_data_value(
         &mut result,
@@ -464,13 +476,16 @@ fn generate_agent_stub(
     writeln!(result, "    catch {{")?;
     writeln!(
         result,
-        "      BuilderError(msg) => return Err(@common.AgentError::InvalidInput(msg))"
+        "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", msg); panic(); }}"
     )?;
     writeln!(result, "    }}")?;
     writeln!(
         result,
-        "  @guest.initialize(\"{original_agent_name}\", encoded_params)"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params) {{"
     )?;
+    writeln!(result, "    Ok(result) => result")?;
+    writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
+    writeln!(result, "  }}")?;
     writeln!(result, "}}")?;
     writeln!(result)?;
 
@@ -488,30 +503,35 @@ fn generate_agent_stub(
         let moonbit_return_type =
             to_moonbit_return_type(ctx, &method.output_schema, original_method_name)?;
 
-        writeln!(result, "pub fn {method_name}({moonbit_param_defs}) -> Result[{moonbit_return_type}, @common.AgentError] {{")?;
+        writeln!(
+            result,
+            "pub fn {method_name}({moonbit_param_defs}) -> {moonbit_return_type} {{"
+        )?;
         writeln!(result, "  let input = try ")?;
         build_data_value(&mut result, ctx, &method.input_schema, original_method_name)?;
         writeln!(result, "    catch {{")?;
         writeln!(
             result,
-            "      BuilderError(msg) => return Err(@common.AgentError::InvalidInput(msg))"
+            "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", msg); panic(); }}"
         )?;
         writeln!(result, "    }}")?;
 
         writeln!(
             result,
-            "  @guest.invoke(\"{original_method_name}\", input).bind(result => {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input) {{"
         )?;
+        writeln!(result, "    Ok(result) => result")?;
+        writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;
+        writeln!(result, "  }}")?;
 
         extract_data_value(
             &mut result,
             ctx,
             &method.output_schema,
-            "    ",
+            "  ",
             original_method_name,
         )?;
 
-        writeln!(result, "  }})")?;
         writeln!(result, "}}")?;
         writeln!(result)?;
     }
@@ -1053,7 +1073,6 @@ fn extract_data_value(
     match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => {
             if elements.is_empty() {
-                writeln!(result, "{indent}Ok(())")?;
             } else if elements.len() == 1 {
                 writeln!(
                     result,
@@ -1066,9 +1085,7 @@ fn extract_data_value(
                             result,
                             "{indent}let wit_value = @extractor.extract_component_model_value(values[0])"
                         )?;
-                        writeln!(result, "{indent}Ok(")?;
                         extract_wit_value(result, ctx, &schema.element_type, "wit_value", indent)?;
-                        writeln!(result, "{indent})")?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         writeln!(
@@ -1088,7 +1105,6 @@ fn extract_data_value(
                     result,
                     "{indent}let values = @extractor.extract_tuple(result)"
                 )?;
-                writeln!(result, "{indent}Ok((")?;
                 for (idx, element) in elements.iter().enumerate() {
                     match &element.schema {
                         ElementSchema::ComponentModel(schema) => {
@@ -1120,7 +1136,6 @@ fn extract_data_value(
                         }
                     }
                 }
-                writeln!(result, "{indent}))")?;
             }
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
@@ -1135,7 +1150,7 @@ fn extract_data_value(
                 result,
                 "{indent}let values = @extractor.extract_multimodal(result)"
             )?;
-            writeln!(result, "{indent}Ok(values.map(pair => {{")?;
+            writeln!(result, "{indent}values.map(pair => {{")?;
             writeln!(result, "{indent}  match pair.0 {{")?;
             for element in elements {
                 let case_name = element.name.to_kebab_case().to_upper_camel_case();
@@ -1185,7 +1200,7 @@ fn extract_data_value(
                 writeln!(result, "{indent}    }}")?;
             }
             writeln!(result, "{indent}  }}")?;
-            writeln!(result, "{indent}}}))")?;
+            writeln!(result, "{indent}}})")?;
         }
     }
 

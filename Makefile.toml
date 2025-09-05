@@ -130,6 +130,7 @@ cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-rpc cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
+cp wit/deps/logging cli/golem-cli/wit/deps
 """
 
 [tasks.wit-template-golem-agent-ts]

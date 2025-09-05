@@ -16,7 +16,7 @@ use crate::metrics::events::{record_broadcast_event, record_event};
 use crate::model::event::InternalWorkerEvent;
 use applying::Apply;
 use futures::{stream, StreamExt};
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{IdempotencyKey, LogLevel};
 use ringbuf::storage::Heap;
 use ringbuf::traits::{Consumer, Producer, Split};
 use ringbuf::*;
@@ -39,8 +39,8 @@ pub trait WorkerEventService: Send + Sync {
     fn receiver(&self) -> WorkerEventReceiver;
 
     /// Gets a string representation of the worker's stderr stream. The stream is truncated to the last
-    /// N elements and may be further truncated by guest language specific matchers. The stream is
-    /// guaranteed to contain information only emitted during the _last_ invocation.
+    /// N elements and may be further truncated by guest language specific matchers. Warning and error level
+    /// structured log entries are also included. The stream is guaranteed to contain information only emitted during the _last_ invocation.
     fn get_last_invocation_errors(&self) -> String;
 
     fn emit_invocation_start(
@@ -148,6 +148,23 @@ impl WorkerEventService for WorkerEventServiceDefault {
             match &event.event {
                 InternalWorkerEvent::StdErr { bytes, .. } => {
                     stderr_chunks.push(bytes.clone());
+                }
+                InternalWorkerEvent::Log {
+                    level,
+                    context,
+                    message,
+                    ..
+                } if level == &LogLevel::Warn
+                    || level == &LogLevel::Error
+                    || level == &LogLevel::Critical =>
+                {
+                    let line = format!(
+                        "[{}] [{}] {}",
+                        (*level).to_string().to_uppercase(),
+                        context,
+                        message
+                    );
+                    stderr_chunks.push(line.as_bytes().to_vec());
                 }
                 InternalWorkerEvent::InvocationStart { .. } => break,
                 _ => {}
