@@ -1,9 +1,7 @@
 {
     "name": "golem-agentic",
     "private": true,
-    "workspaces": [
-        "packages/*"
-    ],
+    "type": "module",
     "scripts": {
         "preinstall": "pnpm --filter @golemcloud/golem-ts-types-core run build",
         "build": "pnpm --filter @golemcloud/golem-ts-types-core run build && pnpm --filter @golemcloud/golem-ts-typegen run build && pnpm --filter @golemcloud/golem-ts-sdk run build",
