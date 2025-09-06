@@ -8,24 +8,25 @@ import {
     description,
 } from '@golemcloud/golem-ts-sdk';
 
-type Input = {
-    username: string,
-    location: Location
+type CustomData = {
+    data: string;
+    value: number;
 }
-
-type GeoLocation = { lat: number, long: number };
-
-type Name = string;
-
-type Place = Name | GeoLocation;
 
 @agent()
 class AssistantAgent extends BaseAgent {
-    @prompt("Public weather forecast")
+    @prompt("Ask your question")
     @description("This method allows the agent to answer your question")
-    async ask(input: Input): Promise<string> {
-        const remoteWeatherClient = WeatherAgent.createRemote(input.username);
-        return await remoteWeatherClient.getWeather(input.location);
+    async ask(name: string): Promise<string> {
+        const customData = { data: "Sample data", value: 42 };
+
+        const remoteWeatherClient = WeatherAgent.get("Jon");
+        const remoteWeather = await remoteWeatherClient.getWeather(name, customData);
+
+        return (
+            `${this.getId().value} reporting on the weather in ${name}: ` +
+            remoteWeather
+        );
     }
 }
 
@@ -39,11 +40,10 @@ class WeatherAgent extends BaseAgent {
     }
 
     @prompt("Get weather")
-    @description("Internal weather forecasting service. Only accessible if authorized.")
-    async getWeather(location: Place): Promise<String> {
+    @description("Weather forecast weather for you")
+    async getWeather(name: string, param2: CustomData): Promise<string> {
         return Promise.resolve(
-            `Hi ${this.userName} ! Weather in ${location} is sunny. ` + 
-            `Reported by weather-agent ${this.getId()}. `
+            `Weather in ${name} is sunny.`
         );
     }
 }
