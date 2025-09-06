@@ -5,11 +5,12 @@
         "packages/*"
     ],
     "scripts": {
-        "build": "pnpm -r run build",
+        "preinstall": "pnpm --filter @golemcloud/golem-ts-types-core run build",
+        "build": "pnpm --filter @golemcloud/golem-ts-types-core run build && pnpm --filter @golemcloud/golem-ts-typegen run build && pnpm --filter @golemcloud/golem-ts-sdk run build",
         "lint": "pnpm -r run lint",
         "test": "pnpm -r run test",
         "format:check": "pnpm -r run format:check",
-        "clean": "pnpm -r exec rm -rf dist node_modules .turbo packages/*/dist packages/*/node_modules packages/*/.metadata"
+        "clean": "rm -rf dist node_modules packages/*/dist packages/*/node_modules packages/*/.metadata"
     },
     "devDependencies": {
         "@eslint/js": "^9.35.0",

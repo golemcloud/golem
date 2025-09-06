@@ -38,8 +38,8 @@
     "generate-dts": "wasm-rquickjs generate-dts --wit ../../../wit --output types",
     "clean-test-data": "rm -rf .metadata",
     "generate-test-types-metadata": "pnpm exec golem-typegen ./tsconfig.json --files tests/**/*.ts",
-    "prebuild": "pnpm run clean-test-data && pnpm run generate-dts && pnpm run generate-test-types-metadata",
-    "build": "tsc --noEmit && rollup -c",
+    "prebuild": "npm run clean-test-data && pnpm run generate-dts && pnpm run generate-test-types-metadata",
+    "build": "npm run prebuild && tsc --noEmit && rollup -c",
     "clean": "rm -rf .metadata dist node_modules package-lock.json && printf '\\nRun `npm install` before building again.\\n\\n'",
     "test": "pnpm run clean-test-data && npm run generate-test-types-metadata && tsc --noEmit && vitest run",
     "dev": "rollup -c -w"

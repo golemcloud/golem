@@ -31,7 +31,6 @@
     }
   },
   "scripts": {
-    "prepare": "pnpm run build",
     "lint": "eslint . --ext .ts,.tsx",
     "lint:fix": "eslint . --ext .ts,.tsx --fix",
     "format": "prettier --write \"src/**/*\"",
