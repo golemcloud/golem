@@ -194,6 +194,15 @@ pub enum DataSchema {
     Multimodal(NamedElementSchemas),
 }
 
+impl DataSchema {
+    pub fn is_unit(&self) -> bool {
+        match self {
+            DataSchema::Tuple(element_schemas) => element_schemas.elements.is_empty(),
+            DataSchema::Multimodal(element_schemas) => element_schemas.elements.is_empty(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]

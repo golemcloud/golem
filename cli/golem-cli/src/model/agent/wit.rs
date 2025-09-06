@@ -124,6 +124,7 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
+        writeln!(result, "  import wasi:logging/logging;")?;
         writeln!(result, "  export golem:agent/guest;")?;
         for interface_name in &interface_names {
             writeln!(result, "  export {interface_name};")?;
@@ -182,14 +183,14 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result, "interface {interface_name} {{")?;
         writeln!(
             result,
-            "  use golem:agent/common.{{agent-error, agent-type, binary-reference, text-reference}};"
+            "  use golem:agent/common.{{agent-type, binary-reference, text-reference}};"
         )?;
         writeln!(result)?;
 
         writeln!(result, "  /// {}", agent.constructor.description)?;
         write!(result, "  initialize: func(")?;
         self.write_parameter_list(result, &agent.constructor.input_schema, "constructor")?;
-        writeln!(result, ") -> result<_, agent-error>;")?;
+        writeln!(result, ");")?;
 
         writeln!(result)?;
         writeln!(result, "  get-definition: func() -> agent-type;")?;
@@ -200,9 +201,12 @@ impl AgentWrapperGeneratorContextState {
             writeln!(result, "  /// {}", method.description)?;
             write!(result, "  {name}: func(")?;
             self.write_parameter_list(result, &method.input_schema, &name)?;
-            write!(result, ") -> result<")?;
-            self.write_return_type(result, &method.output_schema, &name)?;
-            writeln!(result, ", agent-error>;")?;
+            writeln!(result, ")")?;
+            if !method.output_schema.is_unit() {
+                write!(result, " -> ")?;
+                self.write_return_type(result, &method.output_schema, &name)?;
+            }
+            writeln!(result, ";")?;
         }
 
         let mut used_names = self.used_names.iter().cloned().collect::<Vec<_>>();
@@ -589,6 +593,7 @@ struct ResolvedWrapper {
     golem_host_package_id: PackageId,
     wasi_clocks_package_id: PackageId,
     wasi_io_package_id: PackageId,
+    wasi_logging_package_id: PackageId,
 }
 
 impl ResolvedWrapper {
@@ -601,6 +606,7 @@ impl ResolvedWrapper {
         let golem_rpc_package_id = add_golem_rpc(&mut resolve)?;
         let golem_host_package_id = add_golem_host(&mut resolve)?;
         let golem_agent_package_id = add_golem_agent(&mut resolve)?;
+        let wasi_logging_package_id = add_wasi_logging(&mut resolve)?;
 
         let package_id = resolve
             .push_str("wrapper.wit", &package_source)
@@ -614,6 +620,7 @@ impl ResolvedWrapper {
             golem_rpc_package_id,
             wasi_clocks_package_id,
             wasi_io_package_id,
+            wasi_logging_package_id,
         })
     }
 
@@ -629,10 +636,20 @@ impl ResolvedWrapper {
                 self.wasi_clocks_package_id,
                 self.wasi_io_package_id,
                 self.golem_host_package_id,
+                self.wasi_logging_package_id,
             ],
         )?;
         Ok(wit_printer.output.to_string())
     }
+}
+
+fn add_wasi_logging(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
+    const WASI_LOGGING_WIT: &str = include_str!("../../../wit/deps/logging/logging.wit");
+    let mut source_map = SourceMap::default();
+
+    source_map.push(Path::new("wit/deps/logging/logging.wit"), WASI_LOGGING_WIT);
+    let package_group = source_map.parse()?;
+    resolve.push_group(package_group)
 }
 
 fn add_wasi_io(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
@@ -769,6 +786,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
             }
@@ -792,18 +810,18 @@ mod tests {
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
 
               /// Creates an example agent instance
-              initialize: func(a: u32, b: option<string>) -> result<_, agent-error>;
+              initialize: func(a: u32, b: option<string>);
 
               get-definition: func() -> agent-type;
 
               /// returns a random string
-              f1: func() -> result<string, agent-error>;
+              f1: func() -> string;
 
               /// adds two numbers
-              f2: func(x: u32, y: u32) -> result<u32, agent-error>;
+              f2: func(x: u32, y: u32) -> u32;
             }
 
             world agent-wrapper {
@@ -812,6 +830,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
               export agent1;
@@ -945,19 +964,19 @@ mod tests {
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{color, location, person};
 
               /// Creates an example agent instance
-              initialize: func(person: person, description: text-reference, photo: binary-reference) -> result<_, agent-error>;
+              initialize: func(person: person, description: text-reference, photo: binary-reference);
 
               get-definition: func() -> agent-type;
 
               /// returns a location
-              f1: func() -> result<location, agent-error>;
+              f1: func() -> location;
 
               /// takes a location and returns a color
-              f2: func(location: location) -> result<color, agent-error>;
+              f2: func(location: location) -> color;
             }
 
             world agent-wrapper {
@@ -966,6 +985,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
               export types;
@@ -1025,30 +1045,30 @@ mod tests {
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{location, person};
 
               /// Creates an example agent instance
-              initialize: func(person: person, description: text-reference, photo: binary-reference) -> result<_, agent-error>;
+              initialize: func(person: person, description: text-reference, photo: binary-reference);
 
               get-definition: func() -> agent-type;
 
               /// returns a location
-              f1: func() -> result<location, agent-error>;
+              f1: func() -> location;
             }
 
             /// Another example agent
             interface agent2 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{f2-input, f2-output, location, person};
 
               /// Creates another example agent instance
-              initialize: func(person-group: list<person>) -> result<_, agent-error>;
+              initialize: func(person-group: list<person>);
 
               get-definition: func() -> agent-type;
 
               /// takes a location or a color and returns a text or an image
-              f2: func(input: list<f2-input>) -> result<list<f2-output>, agent-error>;
+              f2: func(input: list<f2-input>) -> list<f2-output>;
             }
 
             world agent-wrapper {
@@ -1057,6 +1077,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
               export types;
@@ -1083,18 +1104,18 @@ mod tests {
 
             /// An example agent using WIT keywords as names
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
 
               /// Creates an example agent instance
-              initialize: func(%export: u32, %func: option<string>) -> result<_, agent-error>;
+              initialize: func(%export: u32, %func: option<string>);
 
               get-definition: func() -> agent-type;
 
               /// returns a random string
-              %import: func() -> result<string, agent-error>;
+              %import: func() -> string;
 
               /// adds two numbers
-              %package: func(%bool: u32, %char: u32, %enum: u32, %export: u32, %f32: u32, %f64: u32, %flags: u32, %func: u32, %import: u32, %interface: u32, %list: u32, %option: u32, %package: u32, %record: u32, %resource: u32, %result: u32, %s16: u32, %s32: u32, %s64: u32, %s8: u32, %static: u32, %string: u32, %tuple: u32, %type: u32, %u16: u32, %u32: u32, %u64: u32, %u8: u32, %use: u32, %variant: u32, %world: u32) -> result<_, agent-error>;
+              %package: func(%bool: u32, %char: u32, %enum: u32, %export: u32, %f32: u32, %f64: u32, %flags: u32, %func: u32, %import: u32, %interface: u32, %list: u32, %option: u32, %package: u32, %record: u32, %resource: u32, %result: u32, %s16: u32, %s32: u32, %s64: u32, %s8: u32, %static: u32, %string: u32, %tuple: u32, %type: u32, %u16: u32, %u32: u32, %u64: u32, %u8: u32, %use: u32, %variant: u32, %world: u32);
             }
 
             world agent-wrapper {
@@ -1103,6 +1124,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
               export agent1;
@@ -1140,29 +1162,29 @@ mod tests {
             
             /// AssistantAgent
             interface assistant-agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{element};
             
               /// Constructs [object Object]
-              initialize: func() -> result<_, agent-error>;
+              initialize: func();
             
               get-definition: func() -> agent-type;
             
-              ask-more: func(name: string) -> result<element, agent-error>;
+              ask-more: func(name: string) -> element;
             }
             
             /// WeatherAgent
             interface weather-agent {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{element, element1};
             
               /// Constructs [object Object]
-              initialize: func(username: string) -> result<_, agent-error>;
+              initialize: func(username: string);
             
               get-definition: func() -> agent-type;
             
               /// Weather forecast weather for you
-              get-weather: func(name: string, param2: element1) -> result<string, agent-error>;
+              get-weather: func(name: string, param2: element1) -> string;
             }
             
             world agent-wrapper {
@@ -1171,6 +1193,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
             
               export golem:agent/guest;
               export types;
@@ -1197,18 +1220,18 @@ mod tests {
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
 
               /// Creates an example agent instance
-              initialize: func(a: u32, b: option<string>) -> result<_, agent-error>;
+              initialize: func(a: u32, b: option<string>);
 
               get-definition: func() -> agent-type;
 
               /// returns a random string
-              f1: func() -> result<string, agent-error>;
+              f1: func() -> string;
 
               /// adds two numbers
-              f2: func(x: u32, y: u32) -> result<u32, agent-error>;
+              f2: func(x: u32, y: u32) -> u32;
             }
 
             world agent-wrapper {
@@ -1217,6 +1240,7 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
               export agent1;
