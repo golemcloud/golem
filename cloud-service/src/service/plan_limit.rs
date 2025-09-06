@@ -220,6 +220,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
             .monthly_gas_limit
             .checked_sub(fuel)
             .unwrap_or(0);
+
         Ok(ResourceLimits {
             available_fuel,
             max_memory_per_worker: 100 * 1024 * 1024,
