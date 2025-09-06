@@ -12,14 +12,15 @@
         "clean": "pnpm -r exec rm -rf dist node_modules .turbo packages/*/dist packages/*/node_modules packages/*/.metadata"
     },
     "devDependencies": {
-        "typescript": "^5.8.3",
-        "rollup": "^4.46.2",
-        "pnpm": "^8.10.0",
-        "tslib": "^2.8.1",
+        "@eslint/js": "^9.35.0",
         "@typescript-eslint/eslint-plugin": "^8.42.0",
         "@typescript-eslint/parser": "^8.42.0",
         "eslint": "^9.35.0",
         "globals": "^16.3.0",
-        "prettier": "^3.6.2"
+        "pnpm": "^8.10.0",
+        "prettier": "^3.6.2",
+        "rollup": "^4.46.2",
+        "tslib": "^2.8.1",
+        "typescript": "^5.8.3"
     }
 }
