@@ -398,7 +398,10 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
 
     case "others":
+
+
       const customTypeName = type.name
+
 
       if (!customTypeName) {
         return Either.left("Unsupported type (anonymous) found.");
@@ -423,7 +426,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       }
 
 
-      return Either.left(`Unsupported type \`${customTypeName}\``)
+      return Either.left(`Unsupported type \`${customTypeName}\``);
 
     case 'array':
       const name = type.name;
