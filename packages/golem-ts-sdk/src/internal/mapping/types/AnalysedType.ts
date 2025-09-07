@@ -404,7 +404,6 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         return Either.left("Unsupported type (anonymous) found.");
       }
 
-      console.log(`Custom type found: ${customTypeName}`);
       if (customTypeName === 'Date') {
         return Either.left("Unsupported type `Date`. Use a string in ISO 8601 format instead");
       }
