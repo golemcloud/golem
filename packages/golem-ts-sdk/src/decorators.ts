@@ -36,6 +36,7 @@ import { createCustomError } from './internal/agentError';
 import { AgentTypeName } from './newTypes/agentTypeName';
 
 type Type = Type.Type;
+
 /**
  * Marks a class as an Agent and registers it in the global agent registry.
  * Note that the method generates a `local` and `remote` client for the agent.
@@ -343,6 +344,23 @@ export function agent() {
   };
 }
 
+/**
+ * Associates a **prompt** with a method of an agent.
+ *
+ * A prompt is valid only for classes that are decorated with `@agent()`.
+ *
+ * Example:
+ * ```ts
+ * @agent()
+ * class WeatherAgent {
+ *   @prompt("Provide a city name")
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
+ * ```
+ *
+ * @param prompt  A hint that describes what kind of input the agentic method expects.
+ * They are especially useful for guiding other agents when deciding how to call this method.
+ */
 export function prompt(prompt: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
@@ -354,13 +372,28 @@ export function prompt(prompt: string) {
   };
 }
 
-export function description(desc: string) {
+/**
+ * Associates a **description** with a method of an agent.
+
+ * `@description` is valid only for classes that are decorated with `@agent()`.
+ *
+ * Example:
+ * ```ts
+ * @agent()
+ * class WeatherAgent {
+ *   @description("Get the current weather for a location")
+ *   getWeather(city: string): WeatherReport { ... }
+ * }
+ * ```
+ * @param description  A human-readable description of what the method does.
+ */
+export function description(description: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
     AgentMethodMetadataRegistry.setDescription(
       agentClassName,
       propertyKey,
-      desc,
+      description,
     );
   };
 }
