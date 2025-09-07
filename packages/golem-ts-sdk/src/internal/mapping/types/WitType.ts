@@ -14,7 +14,7 @@
 
 import {Type} from "@golemcloud/golem-ts-types-core";
 import {WitTypeBuilder} from "./witTypeBuilder";
-import * as Either from "effect/Either";
+import * as Either from "../../../newTypes/either";
 import {WitType} from "golem:agent/common";
 import * as AnalysedType from "./AnalysedType";
 

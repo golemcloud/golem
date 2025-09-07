@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Type } from '@golemcloud/golem-ts-types-core';
-import * as Option from 'effect/Option';
+import * as Option from '../../../newTypes/option';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
@@ -42,9 +42,9 @@ export function unhandledTypeError(
 ): string {
   const error =
     `${safeDisplay(tsValue)}` +
-    (Option.isSome(typeName) ? ` inferred as ${typeName.value}` : '') +
+    (Option.isSome(typeName) ? ` inferred as ${typeName.val}` : '') +
     ` cannot be handled. `;
-  return error + (Option.isSome(message) ? `${message.value}` : '');
+  return error + (Option.isSome(message) ? `${message.val}` : '');
 }
 
 // Unable to convert the value to the expected type in the output direction

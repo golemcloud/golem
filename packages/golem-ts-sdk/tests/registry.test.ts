@@ -20,7 +20,7 @@ import { Result } from 'golem:rpc/types@0.2.2';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { AgentInitiator } from '../src/internal/agentInitiator';
-import * as Option from 'effect/Option';
+import * as Option from '../src/newTypes/option';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentMethodMetadataRegistry } from '../src/internal/registry/agentMethodMetadataRegistry';
 

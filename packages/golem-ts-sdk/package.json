@@ -73,7 +73,6 @@
   },
   "private": false,
   "dependencies": {
-    "@golemcloud/golem-ts-types-core": "workspace:*",
-    "effect": "^3.17.6"
+    "@golemcloud/golem-ts-types-core": "workspace:*"
   }
 }

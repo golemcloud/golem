@@ -18,9 +18,9 @@ import {
   TypeMetadata,
 } from '@golemcloud/golem-ts-types-core';
 import { WasmRpc, WorkerId } from 'golem:rpc/types@0.2.2';
-import * as Either from 'effect/Either';
+import * as Either from '../newTypes/either';
 import * as WitValue from './mapping/values/WitValue';
-import * as Option from 'effect/Option';
+import * as Option from '../newTypes/option';
 import {
   getAgentType,
   makeAgentId,
@@ -48,15 +48,15 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
       );
     }
 
-    const metadata = metadataOpt.value;
+    const metadata = metadataOpt.val;
 
     const workerIdEither = getWorkerId(agentTypeName, args, metadata);
 
     if (Either.isLeft(workerIdEither)) {
-      throw new Error(workerIdEither.left);
+      throw new Error(workerIdEither.val);
     }
 
-    const workerId = workerIdEither.right;
+    const workerId = workerIdEither.val;
 
     return new Proxy(instance, {
       get(target, prop) {
@@ -109,10 +109,10 @@ function getMethodProxy(
       ? (() => {
           throw new Error(
             'Failed to create remote agent: ' +
-              JSON.stringify(parameterWitValuesEither.left),
+              JSON.stringify(parameterWitValuesEither.val),
           );
         })()
-      : parameterWitValuesEither.right;
+      : parameterWitValuesEither.val;
 
     const wasmRpc = new WasmRpc(workerId);
 
@@ -168,7 +168,7 @@ function getWorkerId(
   }
 
   const registeredAgentType: RegisteredAgentType =
-    optionalRegisteredAgentType.value;
+    optionalRegisteredAgentType.val;
 
   const constructorParamInfo = classMetadata.constructorArgs;
 
@@ -192,13 +192,13 @@ function getWorkerId(
   if (Either.isLeft(constructorParamWitValuesResult)) {
     throw new Error(
       'Failed to create remote agent: ' +
-        JSON.stringify(constructorParamWitValuesResult.left),
+        JSON.stringify(constructorParamWitValuesResult.val),
     );
   }
 
   const constructorDataValue: DataValue = {
     tag: 'tuple',
-    val: constructorParamWitValuesResult.right,
+    val: constructorParamWitValuesResult.val,
   };
 
   const agentId = makeAgentId(agentTypeName.value, constructorDataValue);

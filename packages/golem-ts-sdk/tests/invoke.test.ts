@@ -13,12 +13,12 @@
 // limitations under the License.
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import * as Either from 'effect/Either';
+import * as Either from '../src/newTypes/either';
 import {
   getDataValueFromWitValue,
   getWitValueFromDataValue,
 } from '../src/decorators';
-import * as Option from 'effect/Option';
+import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect, it } from 'vitest';
 import * as GolemApiHostModule from 'golem:api/host@1.1.7';

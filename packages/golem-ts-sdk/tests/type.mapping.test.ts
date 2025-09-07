@@ -27,8 +27,8 @@ import {
 
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 
-import * as Either from 'effect/Either';
-import * as Option from 'effect/Option';
+import * as Either from '../src/newTypes/either';
+import * as Option from '../src/newTypes/option';
 import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
 
 // Interface type indirectly tests primitive types, union, list etc
@@ -91,19 +91,19 @@ describe('TypeScript primitives to AnalysedType', () => {
   it('Boolean type is converted to AnalysedType.Bool', () => {
     const booleanType = getBooleanType();
     const result = AnalysedType.fromTsType(booleanType);
-    expect(Either.getRight(result)).toEqual(Option.some(AnalysedType.bool()));
+    expect(Either.getRight(result)).toEqual(AnalysedType.bool());
   });
 
   it('String type is converted to AnalysedType.String', () => {
     const stringType = getStringType();
     const result = AnalysedType.fromTsType(stringType);
-    expect(Either.getRight(result)).toEqual(Option.some(AnalysedType.str()));
+    expect(Either.getRight(result)).toEqual(AnalysedType.str());
   });
 
   it('Number type is converted to AnalysedType.S32', () => {
     const numberType = getNumberType();
     const result = AnalysedType.fromTsType(numberType);
-    expect(Either.getRight(result)).toEqual(Option.some(AnalysedType.s32()));
+    expect(Either.getRight(result)).toEqual(AnalysedType.s32());
   });
 });
 

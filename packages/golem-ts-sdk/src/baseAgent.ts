@@ -15,7 +15,7 @@
 import { AgentType } from 'golem:agent/common';
 import { AgentId } from './agentId';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-import * as Option from 'effect/Option';
+import * as Option from './newTypes/option';
 import { AgentClassName } from './newTypes/agentClassName';
 
 /**
@@ -69,7 +69,7 @@ export class BaseAgent {
       );
     }
 
-    return agentType.value;
+    return agentType.val;
   }
 
   /**

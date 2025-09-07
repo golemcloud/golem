@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Type } from '@golemcloud/golem-ts-types-core';
-import * as Either from 'effect/Either';
+import * as Either from '../newTypes/either';
 import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
@@ -89,21 +89,21 @@ export function getAgentMethodSchema(
 
       if (Either.isLeft(inputSchemaEither)) {
         return Either.left(
-          `Unsupported types used in method ${methodName}. ${inputSchemaEither.left}`,
+          `Unsupported types used in method ${methodName}. ${inputSchemaEither.val}`,
         );
       }
 
-      const inputSchema = inputSchemaEither.right;
+      const inputSchema = inputSchemaEither.val;
 
       const outputSchemaEither = buildOutputSchema(returnType);
 
       if (Either.isLeft(outputSchemaEither)) {
         return Either.left(
-          `Failed to construct output schema for method ${methodName}: ${outputSchemaEither.left}`,
+          `Failed to construct output schema for method ${methodName}: ${outputSchemaEither.val}`,
         );
       }
 
-      const outputSchema = outputSchemaEither.right;
+      const outputSchema = outputSchemaEither.val;
 
       return Either.right({
         name: methodName,

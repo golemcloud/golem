@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import * as Option from 'effect/Option';
+import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
 import { AssistantAgentClassName, WeatherAgentClassName } from './testUtils';
 

@@ -15,8 +15,7 @@
 import { WitNode, WitValue } from 'golem:rpc/types@0.2.2';
 
 import { Type, Symbol, Node } from '@golemcloud/golem-ts-types-core';
-import * as Either from 'effect/Either';
-import * as Option from 'effect/Option';
+import * as Option from '../../../newTypes/option';
 import {
   missingValueForKey,
   typeMismatchIn,
@@ -24,6 +23,7 @@ import {
   unhandledTypeError,
   unionTypeMatchError,
 } from './errors';
+import * as Either from '../../../newTypes/either';
 
 export type Value =
   | { kind: 'bool'; value: boolean }
@@ -656,10 +656,10 @@ function handleObject(
     const fieldVal = fromTsValue(tsValue[key], propType);
 
     if (Either.isLeft(fieldVal)) {
-      return Either.left(fieldVal.left);
+      return Either.left(fieldVal.val);
     }
 
-    values.push(fieldVal.right);
+    values.push(fieldVal.val);
   }
 
   return Either.right({ kind: 'record', value: values });

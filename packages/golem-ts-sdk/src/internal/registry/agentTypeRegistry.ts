@@ -14,7 +14,7 @@
 
 import { AgentType } from 'golem:agent/common';
 import { AgentClassName } from '../../newTypes/agentClassName';
-import * as Option from 'effect/Option';
+import * as Option from '../../newTypes/option';
 import { AgentTypeName } from '../../newTypes/agentTypeName';
 import { AgentInitiator } from '../agentInitiator';
 

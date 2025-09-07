@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
-import * as Either from "effect/Either";
+import * as Either from "../../../newTypes/either";
 import {numberToOrdinalKebab} from "./typeIndexOrdinal";
 
 type TsType = CoreType.Type;
@@ -276,7 +276,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
             possibleTypes.push({
               name: `null-type`,
-              typ: result.right
+              typ: result.val
             });
           } else {
             const result =
@@ -288,7 +288,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
             possibleTypes.push({
               name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
-              typ: result.right,
+              typ: result.val,
             });
           }
         }
@@ -317,10 +317,10 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       }));
 
       if (Either.isLeft(result)) {
-        return Either.left(result.left);
+        return Either.left(result.val);
       }
 
-      const fields = result.right;
+      const fields = result.val;
 
       if (fields.length === 0) {
         return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);

@@ -14,7 +14,7 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { WitValue } from 'golem:rpc/types@0.2.2';
-import * as Either from 'effect/Either';
+import * as Either from '../../../newTypes/either';
 import * as Value from './Value';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';

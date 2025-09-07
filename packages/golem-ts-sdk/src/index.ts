@@ -18,7 +18,7 @@ import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { createCustomError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-import * as Option from 'effect/Option';
+import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { AgentTypeName } from './newTypes/agentTypeName';
 
@@ -84,7 +84,7 @@ async function initialize(
     };
   }
 
-  const initiateResult = initiator.value.initiate(agentType, input);
+  const initiateResult = initiator.val.initiate(agentType, input);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
@@ -112,7 +112,7 @@ async function invoke(
     };
   }
 
-  return resolvedAgent.value.invoke(methodName, input);
+  return resolvedAgent.val.invoke(methodName, input);
 }
 
 async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {

@@ -21,12 +21,12 @@ import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as WitValue from './internal/mapping/values/WitValue';
-import * as Either from 'effect/Either';
+import * as Either from './newTypes/either';
 import {
   getAgentMethodSchema,
   getConstructorDataSchema,
 } from './internal/schema';
-import * as Option from 'effect/Option';
+import * as Option from './newTypes/option';
 import { AgentMethodMetadataRegistry } from './internal/registry/agentMethodMetadataRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
@@ -156,11 +156,11 @@ export function agent() {
     // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
     if (Either.isLeft(methodSchemaEither)) {
       throw new Error(
-        `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.left}`,
+        `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
       );
     }
 
-    const methods = methodSchemaEither.right;
+    const methods = methodSchemaEither.val;
 
     const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
 
@@ -229,13 +229,13 @@ export function agent() {
             getAgentType: () => {
               const agentType = AgentTypeRegistry.lookup(agentClassName);
 
-              if (Option.isNone(agentType)) {
+              if (agentType.tag === 'none') {
                 throw new Error(
                   `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
                 );
               }
 
-              return agentType.value;
+              return agentType.val;
             },
             invoke: async (method, args) => {
               const fn = instance[method];
@@ -246,7 +246,7 @@ export function agent() {
 
               const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
 
-              if (Option.isNone(agentTypeOpt)) {
+              if (agentTypeOpt.tag === 'none') {
                 const error: AgentError = {
                   tag: 'invalid-method',
                   val: `Agent type ${agentClassName} not found in registry.`,
@@ -257,7 +257,7 @@ export function agent() {
                 };
               }
 
-              const agentType = agentTypeOpt.value;
+              const agentType = agentTypeOpt.val;
 
               const methodInfo = classMetadata.methods.get(method);
 
@@ -317,7 +317,7 @@ export function agent() {
               if (Either.isLeft(returnValue)) {
                 const agentError: AgentError = {
                   tag: 'invalid-method',
-                  val: `Invalid return value from ${method}: ${Either.getLeft(returnValue)}`,
+                  val: `Invalid return value from ${method}: ${returnValue.val}`,
                 };
 
                 return {
@@ -328,7 +328,7 @@ export function agent() {
 
               return {
                 tag: 'ok',
-                val: getDataValueFromWitValue(returnValue.right),
+                val: getDataValueFromWitValue(returnValue.val),
               };
             },
           };
