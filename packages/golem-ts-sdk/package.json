@@ -37,11 +37,11 @@
     "format:check": "prettier --check \"src/**/*\" \"tests/**/*\"",
     "generate-dts": "wasm-rquickjs generate-dts --wit ../../../wit --output types",
     "clean-test-data": "rm -rf .metadata",
-    "generate-test-types-metadata": "pnpm exec golem-typegen ./tsconfig.json --files tests/**/*.ts",
+    "generate-test-types-metadata": "node ../golem-ts-typegen/dist/bin/golem-typegen ./tsconfig.json --files tests/**/*.ts",
     "prebuild": "npm run clean-test-data && pnpm run generate-dts && pnpm run generate-test-types-metadata",
     "build": "npm run prebuild && tsc --noEmit && rollup -c",
     "clean": "rm -rf .metadata dist node_modules package-lock.json && printf '\\nRun `npm install` before building again.\\n\\n'",
-    "test": "pnpm run clean-test-data && npm run generate-test-types-metadata && tsc --noEmit && vitest run",
+    "test": "pnpm run clean-test-data && pnpm run build && pnpm run generate-test-types-metadata && tsc --noEmit && vitest run",
     "dev": "rollup -c -w"
   },
   "keywords": [],
@@ -53,7 +53,6 @@
   "description": "",
   "devDependencies": {
     "@eslint/js": "^9.33.0",
-    "@golemcloud/golem-ts-typegen": "workspace:*",
     "@rollup/plugin-commonjs": "^28.0.6",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@types/node": "^24.3.0",

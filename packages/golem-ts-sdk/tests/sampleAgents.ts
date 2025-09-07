@@ -61,6 +61,9 @@ class AssistantAgent extends BaseAgent {
     listComplexType: Types.ListComplexType,
     objectType: Types.ObjectType,
     UnionOfLiterals: UnionOfLiterals,
+    voidType: void,
+    nullType: null,
+    undefinedType: undefined,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

@@ -21,18 +21,27 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
   switch (json.kind) {
     case 'others':
       return { kind: 'others', name: json.name };
+
     case 'boolean':
       return { kind: 'boolean', name: json.name };
+
     case 'number':
       return { kind: 'number', name: json.name };
+
     case 'string':
       return { kind: 'string', name: json.name };
+
     case 'bigint':
       return { kind: 'bigint', name: json.name };
+
     case 'null':
       return { kind: 'null', name: json.name };
+
     case 'undefined':
       return { kind: 'undefined', name: json.name };
+
+    case 'void':
+      return { kind: 'void', name: json.name };
 
     case 'array': {
       const elem = buildTypeFromJSON(json.element);

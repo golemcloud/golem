@@ -32,6 +32,9 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
     case 'undefined':
       return { kind: 'undefined', name: type.name };
 
+    case 'void':
+      return { kind: 'void', name: type.name };
+
     case 'array':
       const elem = Type.getArrayElementType(type);
 

@@ -19,6 +19,7 @@ export type LiteTypeJSON =
   | { kind: 'bigint'; name?: string }
   | { kind: 'null'; name?: string }
   | { kind: 'undefined'; name?: string }
+  | { kind: 'void'; name?: string }
   | { kind: 'array'; name?: string; element: LiteTypeJSON }
   | { kind: 'tuple'; name?: string; elements: LiteTypeJSON[] }
   | { kind: 'union'; name?: string; types: LiteTypeJSON[] }

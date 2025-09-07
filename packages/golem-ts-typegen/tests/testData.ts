@@ -113,6 +113,9 @@ class MyAgent {
     classType: FooBar,
     recordType: Record<string, number>,
     recordTypeAliased: RecordType,
+    voidType: void,
+    undefinedType: undefined,
+    nullType: null,
   ): PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

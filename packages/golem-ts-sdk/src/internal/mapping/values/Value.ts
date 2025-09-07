@@ -348,6 +348,9 @@ export function fromTsValue(
     case 'undefined':
       return Either.right({ kind: 'tuple', value: [] });
 
+    case 'void':
+      return Either.right({ kind: 'tuple', value: [] });
+
     case 'array':
       switch (type.name) {
         case 'Int8Array':
@@ -719,6 +722,9 @@ function matchesType(value: any, type: Type.Type): boolean {
 
     case 'undefined':
       return value === undefined;
+
+    case 'void':
+      return value === undefined || value === null;
 
     case 'array':
       const elemType = type.element;

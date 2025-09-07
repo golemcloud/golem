@@ -48,9 +48,6 @@ importers:
       '@eslint/js':
         specifier: ^9.33.0
         version: 9.35.0
-      '@golemcloud/golem-ts-typegen':
-        specifier: workspace:*
-        version: link:../golem-ts-typegen
       '@rollup/plugin-commonjs':
         specifier: ^28.0.6
         version: 28.0.6(rollup@4.50.0)

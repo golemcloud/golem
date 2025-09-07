@@ -31,6 +31,7 @@ export type Type =
   | { kind: 'map'; name?: string; key: Type; value: Type }
   | { kind: 'literal'; name?: string }
   | { kind: 'alias'; name?: string; aliasSymbol: Symbol }
+  | { kind: 'void'; name?: string }
   | { kind: 'others'; name?: string };
 
 export function getName(t: Type): string | undefined {
@@ -66,28 +67,8 @@ export function getAliasSymbol(t: Type): Symbol | undefined {
   return t.kind === 'alias' ? t.aliasSymbol : undefined;
 }
 
-// Get human-readable type name (exhaustive)
 export function getTypeName(t: Type): string {
-  switch (t.kind) {
-    case 'boolean':
-    case 'number':
-    case 'string':
-    case 'bigint':
-    case 'null':
-    case 'undefined':
-    case 'array':
-    case 'tuple':
-    case 'union':
-    case 'object':
-    case 'interface':
-    case 'promise':
-    case 'map':
-    case 'literal':
-    case 'class':
-    case 'alias':
-    case 'others':
-      return t.name ?? t.kind;
-  }
+  return t.name ? t.name : t.kind;
 }
 
 export function unwrapAlias(t: Type): Type {

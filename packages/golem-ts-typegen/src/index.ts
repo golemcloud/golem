@@ -163,6 +163,10 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
     };
   }
 
+  if (type.isVoid()) {
+    return { kind: "void", name: "void" };
+  }
+
   if (type.isBoolean() || rawName === "true" || rawName === "false") {
     return { kind: "boolean", name: "boolean" };
   }
