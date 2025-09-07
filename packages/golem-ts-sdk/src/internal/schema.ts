@@ -97,7 +97,7 @@ export function getAgentMethodSchema(
 
       if (Either.isLeft(outputSchemaEither)) {
         return Either.left(
-          `Failed to construct output schema for method ${methodName}: ${outputSchemaEither.val}`,
+          `Failed to construct output schema for method ${methodName}: ${outputSchemaEither.val}. Please simplify this with a simpler, supported type.`,
         );
       }
 
