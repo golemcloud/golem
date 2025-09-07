@@ -85,12 +85,10 @@ export function getAgentMethodSchema(
         AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
         {};
 
-      const inputSchemaEither = buildInputSchema(parameters);
+      const inputSchemaEither = buildInputSchema(methodName, parameters);
 
       if (Either.isLeft(inputSchemaEither)) {
-        return Either.left(
-          `Unsupported types used in method ${methodName}. ${inputSchemaEither.val}`,
-        );
+        return Either.left(inputSchemaEither.val);
       }
 
       const inputSchema = inputSchemaEither.val;
@@ -117,13 +115,19 @@ export function getAgentMethodSchema(
 }
 
 export function buildInputSchema(
+  methodName: string,
   paramTypes: MethodParams,
 ): Either.Either<DataSchema, string> {
   const result = Either.all(
     Array.from(paramTypes).map((parameterInfo) =>
-      Either.map(convertToElementSchema(parameterInfo[1]), (result) => {
-        return [parameterInfo[0], result] as [string, ElementSchema];
-      }),
+      Either.mapBoth(
+        convertToElementSchema(parameterInfo[1]),
+        (result) => {
+          return [parameterInfo[0], result] as [string, ElementSchema];
+        },
+        (err) =>
+          `${err}, found in method \`${methodName}\`, parameter \`${parameterInfo[0]}\`. Please replace this parameter type with a simpler, supported type"`,
+      ),
     ),
   );
 

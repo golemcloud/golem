@@ -405,7 +405,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       }
 
 
-      return Either.left(`Type "${customTypeName}" is not supported`)
+      return Either.left(`Unsupported type \`${customTypeName}\``)
 
     case 'array':
       const name = type.name;
