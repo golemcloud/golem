@@ -229,7 +229,7 @@ export function agent() {
             getAgentType: () => {
               const agentType = AgentTypeRegistry.lookup(agentClassName);
 
-              if (agentType.tag === 'none') {
+              if (Option.isNone(agentType)) {
                 throw new Error(
                   `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
                 );
@@ -246,7 +246,7 @@ export function agent() {
 
               const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
 
-              if (agentTypeOpt.tag === 'none') {
+              if (Option.isNone(agentTypeOpt)) {
                 const error: AgentError = {
                   tag: 'invalid-method',
                   val: `Agent type ${agentClassName} not found in registry.`,
