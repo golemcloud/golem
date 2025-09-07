@@ -404,6 +404,25 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         return Either.left("Unsupported type (anonymous) found.");
       }
 
+      console.log(`Custom type found: ${customTypeName}`);
+      if (customTypeName === 'Date') {
+        return Either.left("Unsupported type `Date`. Use a string in ISO 8601 format instead");
+      }
+
+
+      if (customTypeName === 'next') {
+        return Either.left("Unsupported type `Iterator`. Use `Array` type instead");
+      }
+
+      if (customTypeName.includes('iterator')) {
+        return Either.left(`Unsupported type \`Iterable\`. Use \`Array\` type instead`);
+      }
+
+
+      if (customTypeName === 'Record') {
+        return Either.left(`Unsupported type \`${customTypeName}\`. Use a plain object or a \`Map\` type instead`);
+      }
+
 
       return Either.left(`Unsupported type \`${customTypeName}\``)
 
