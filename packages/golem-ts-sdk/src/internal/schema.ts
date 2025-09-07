@@ -126,7 +126,7 @@ export function buildInputSchema(
           return [parameterInfo[0], result] as [string, ElementSchema];
         },
         (err) =>
-          `${err}, found in method \`${methodName}\`, parameter \`${parameterInfo[0]}\`. Please replace this parameter type with a simpler, supported type"`,
+          `${err}, found in method \`${methodName}\`, parameter \`${parameterInfo[0]}\`. Please replace this parameter type with a simpler, supported type."`,
       ),
     ),
   );
