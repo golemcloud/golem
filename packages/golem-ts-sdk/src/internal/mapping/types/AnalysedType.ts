@@ -396,6 +396,31 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         )
       }
 
+      if (type.name === 'Boolean') {
+        return Either.left(
+          "Unsupported type `Boolean`, use `boolean` instead"
+        )
+      }
+
+      if (type.name === 'BigInt') {
+        return Either.left(
+          "Unsupported type `BigInt`, use `bigint` instead"
+        )
+      }
+
+      if (type.name === 'Number') {
+        return Either.left(
+          "Unsupported type `Number`, use `number` instead"
+        )
+      }
+
+      if (type.name === 'Symbol') {
+        return Either.left(
+          "Unsupported type `Symbol`, use `string` if possible"
+        )
+      }
+
+
       const interfaceRsult = Either.all(type.properties.map((prop) => {
         const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
         const nodes: Node[] = prop.getDeclarations();

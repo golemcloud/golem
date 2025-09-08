@@ -14,7 +14,7 @@
 
 import { agent, BaseAgent, UnstructuredText } from '../src';
 import * as Types from './testTypes';
-import { UnionOfLiterals } from './testTypes';
+import { EitherX, EitherY, EitherZ, UnionOfLiterals } from './testTypes';
 
 @agent()
 class WeatherAgent extends BaseAgent {
@@ -40,31 +40,6 @@ export interface CustomData {
   data: string;
   value: number;
 }
-
-type EitherX = {
-  ok?: string;
-  err?: string;
-};
-
-type EitherY =
-  | {
-      tag: 'ok';
-      val: string;
-    }
-  | {
-      tag: 'err';
-      val: string;
-    };
-
-type EitherZ =
-  | {
-      tag: 'ok';
-      val: string;
-    }
-  | {
-      tag: 'err';
-      val?: string;
-    };
 
 @agent()
 class AssistantAgent extends BaseAgent {

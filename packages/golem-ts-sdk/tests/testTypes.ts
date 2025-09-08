@@ -109,3 +109,28 @@ export interface TestInterfaceType {
   // enumProp: EnumTypeAlias,
   // enumPropInlined: EnumTypeAlias,
 }
+
+export type EitherX = {
+  ok?: string;
+  err?: string;
+};
+
+export type EitherY =
+  | {
+      tag: 'ok';
+      val: string;
+    }
+  | {
+      tag: 'err';
+      val: string;
+    };
+
+export type EitherZ =
+  | {
+      tag: 'ok';
+      val: string;
+    }
+  | {
+      tag: 'err';
+      val?: string;
+    };
