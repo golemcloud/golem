@@ -23,9 +23,14 @@ export { WitType } from "golem:rpc/types@0.2.2";
 export const fromTsType = (type: Type.Type): Either.Either<WitType, string> => {
     const analysedTypeEither = AnalysedType.fromTsType(type);
     return Either.flatMap(analysedTypeEither, (analysedType) => {
-        const builder = new WitTypeBuilder();
-        builder.add(analysedType);
-        const result = builder.build();
-        return Either.right(result);
+      const witType = fromAnalysedType(analysedType);
+      return Either.right(witType);
     });
 };
+
+
+export const fromAnalysedType = (analysedType: AnalysedType.AnalysedType): WitType => {
+    const builder = new WitTypeBuilder();
+    builder.add(analysedType);
+    return builder.build();
+}

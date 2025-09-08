@@ -28,9 +28,7 @@ import {
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 
 import * as Either from '../src/newTypes/either';
-import * as Option from '../src/newTypes/option';
 import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
-import * as util from 'node:util';
 
 // Interface type indirectly tests primitive types, union, list etc
 describe('TypeScript Interface to AnalysedType', () => {
