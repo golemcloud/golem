@@ -129,19 +129,19 @@ dependencies:
     # ------------------------------------------------------------------------------------------------------------
     ## Brave
     # - type: wasm
-    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_websearch_brave-dev.wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_brave-dev.wasm
 
     ## Google
     # - type: wasm
-    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_websearch_google-dev.wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_google-dev.wasm
 
     ## Serper
     # - type: wasm
-    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_websearch_serper-dev.wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_serper-dev.wasm
 
     ## Tavily
     # - type: wasm
-    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_websearch_tavily-dev.wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_tavily-dev.wasm
 
 
 # golem-app-manifest-component-hints
