@@ -15,6 +15,7 @@
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import {numberToOrdinalKebab} from "./typeIndexOrdinal";
+import * as util from 'node:util';
 
 type TsType = CoreType.Type;
 
@@ -388,6 +389,13 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       return Either.left(`${message}. Use object instead.`)
 
     case "interface":
+
+      if (type.name === 'String') {
+        return Either.left(
+          "Unsupported type `String`, use `string` instead"
+        )
+      }
+
       const interfaceRsult = Either.all(type.properties.map((prop) => {
         const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
         const nodes: Node[] = prop.getDeclarations();
@@ -426,10 +434,10 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         list(type.name, tuple(undefined, [k, v])));
 
     case "literal":
-      const literalName = type.name;
+      const literalName = type.literalValue;
 
       if (!literalName) {
-        return Either.left(`Unable to determine the literal value. ${type}`);
+        return Either.left(`Unable to determine the literal value. ${JSON.stringify(type)}`);
       }
 
       if (literalName === 'true' || literalName === 'false') {

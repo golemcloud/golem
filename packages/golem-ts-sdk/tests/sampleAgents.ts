@@ -14,7 +14,7 @@
 
 import { agent, BaseAgent, UnstructuredText } from '../src';
 import * as Types from './testTypes';
-import { FooBar, UnionOfLiterals } from './testTypes';
+import { UnionOfLiterals } from './testTypes';
 
 @agent()
 class WeatherAgent extends BaseAgent {
@@ -23,15 +23,15 @@ class WeatherAgent extends BaseAgent {
     this.input = input;
   }
 
-  async getWeather(location: string): Types.PromiseType {
+  async fun1(location: string): Types.PromiseType {
     return Promise.resolve(`Weather in ${location} is sunny!`);
   }
 
-  async getWeatherV2(data: { value: number; data: string }): Types.PromiseType {
+  async fun2(data: { value: number; data: string }): Types.PromiseType {
     return Promise.resolve(`Weather in ${data.data} is sunny!`);
   }
 
-  async getWeatherV3(param2: CustomData): Types.PromiseType {
+  async fun3(param2: CustomData): Types.PromiseType {
     return Promise.resolve(`Weather in ${param2.data} is sunny!`);
   }
 }
@@ -40,6 +40,31 @@ export interface CustomData {
   data: string;
   value: number;
 }
+
+type EitherX = {
+  ok?: string;
+  err?: string;
+};
+
+type EitherY =
+  | {
+      tag: 'ok';
+      val: string;
+    }
+  | {
+      tag: 'err';
+      val: string;
+    };
+
+type EitherZ =
+  | {
+      tag: 'ok';
+      val: string;
+    }
+  | {
+      tag: 'err';
+      val?: string;
+    };
 
 @agent()
 class AssistantAgent extends BaseAgent {
@@ -65,7 +90,86 @@ class AssistantAgent extends BaseAgent {
     nullType: null,
     undefinedType: undefined,
     textType: UnstructuredText,
+    eitherXType: EitherX,
+    eitherYType: EitherY,
+    eitherZType: EitherZ,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
+  }
+
+  async fun3(text: string): Promise<Types.ObjectComplexType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun4(text: string): Promise<Types.UnionType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun5(text: string): Promise<Types.UnionComplexType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun6(text: string): Promise<Types.NumberType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun7(text: string): Promise<Types.StringType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun8(text: string): Promise<Types.BooleanType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun9(text: string): Promise<Types.MapType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun10(text: string): Promise<Types.TupleComplexType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun11(text: string): Promise<Types.TupleType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun12(text: string): Promise<Types.ListComplexType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun13(text: string): Promise<Types.ObjectType> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun14(text: string): Promise<Types.UnionOfLiterals> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun15(text: string): Promise<void> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun16(text: string): Promise<null> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun17(text: string): Promise<undefined> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun18(text: string): Promise<UnstructuredText> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun1(text: string): Promise<EitherX> {
+    return { ok: 'hello' };
+  }
+
+  async fun2(text: string): Promise<EitherY> {
+    return { tag: 'ok', val: 'hello' };
+  }
+
+  async fun19(text: string): Promise<EitherZ> {
+    return { tag: 'ok', val: 'hello' };
   }
 }

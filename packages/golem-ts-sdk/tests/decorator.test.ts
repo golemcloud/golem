@@ -31,7 +31,7 @@ test('Agent decorator should register the agent class and its methods into Agent
     () => new Error('WeatherAgent not found in AgentTypeRegistry'),
   );
 
-  expect(assistantAgent.methods.length).toEqual(1);
+  expect(assistantAgent.methods.length).toEqual(20);
   expect(assistantAgent.constructor.inputSchema.val.length).toEqual(1);
   expect(weatherAgent.methods.length).toEqual(3);
   expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);

@@ -121,7 +121,7 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
 
         testInvoke(
           typeRegistry,
-          'getWeather',
+          'fun1',
           'location',
           locationValue,
           resolvedAgent,
@@ -130,7 +130,7 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
 
         testInvoke(
           typeRegistry,
-          'getWeatherV2',
+          'fun2',
           'data',
           { value: number, data: locationValue },
           resolvedAgent,
@@ -139,7 +139,7 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
 
         testInvoke(
           typeRegistry,
-          'getWeatherV3',
+          'fun3',
           'param2',
           { data: locationValue, value: number },
           resolvedAgent,
@@ -163,11 +163,11 @@ function testInvoke(
   const returnTypeInfo = methodSignature?.returnType;
 
   if (!parametersInfo) {
-    throw new Error('Method getWeather not found in metadata');
+    throw new Error(`Method ${methodName} not found in metadata`);
   }
 
   if (!returnTypeInfo) {
-    throw new Error('Method getWeather not found in metadata');
+    throw new Error(`Method ${methodName} not found in metadata`);
   }
 
   const parameterType = parametersInfo.get(parameterName);
