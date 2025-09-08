@@ -165,10 +165,11 @@ httpApi:
             let result = agent.research(request.query.topic);
             {status: 200, body: result, headers: {ContentType: "text/plain"}}
 
-  deployments:
-    local:
-    - host: localhost:9006
-      definitions:
-      - research-api
+  ## Uncomment this to enable deployment of the http api
+  # deployments:
+  #   local:
+  #   - host: localhost:9006
+  #     definitions:
+  #     - research-api
 
 # golem-app-manifest-component-hints
