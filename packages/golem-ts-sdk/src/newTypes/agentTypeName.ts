@@ -26,11 +26,13 @@ export class AgentTypeName {
   }
 
   static fromAgentClassName(agentClassName: AgentClassName): AgentTypeName {
-    return new AgentTypeName(toKebabCase(agentClassName.value));
+    return new AgentTypeName(
+      convertAgentClassNameToKebab(agentClassName.value),
+    );
   }
 }
 
-function toKebabCase(str: string): string {
+function convertAgentClassNameToKebab(str: string): string {
   return (
     str
       // ts classes can have _, $ and digits - therefore

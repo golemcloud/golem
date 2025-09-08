@@ -94,7 +94,7 @@ function getMethodProxy(
   const returnType = methodSignature?.returnType;
 
   return async (...fnArgs: any[]) => {
-    const methodNameKebab = convertMethodNameToKebab(prop.toString());
+    const methodNameKebab = convertAgentMethodNameToKebab(prop.toString());
     const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
 
     const parameterWitValuesEither = Either.all(
@@ -215,7 +215,7 @@ function getWorkerId(
   });
 }
 
-function convertMethodNameToKebab(methodName: string): string {
+function convertAgentMethodNameToKebab(methodName: string): string {
   return methodName
     .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')

@@ -29,7 +29,7 @@ export type Type =
   | { kind: 'interface'; name?: string; properties: Symbol[] }
   | { kind: 'promise'; name?: string; element: Type }
   | { kind: 'map'; name?: string; key: Type; value: Type }
-  | { kind: 'literal'; name?: string }
+  | { kind: 'literal'; name?: string; literalValue: string }
   | { kind: 'alias'; name?: string; aliasSymbol: Symbol }
   | { kind: 'void'; name?: string }
   | { kind: 'others'; name?: string };

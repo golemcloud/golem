@@ -183,25 +183,25 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const u8 =  (): AnalysedType => ({ kind: 'u8' });
  export const s8 =  (): AnalysedType => ({ kind: 's8' });
 
- export const list = (inner: AnalysedType): AnalysedType => ({ kind: 'list', value: { name: undefined, owner: undefined, inner } });
-export const option = (inner: AnalysedType): AnalysedType => ({ kind: 'option', value: { name: undefined, owner: undefined, inner } });
- export const tuple =  (items: AnalysedType[]): AnalysedType => ({ kind: 'tuple', value: { name: undefined, owner: undefined, items } });
- export const record = (fields: NameTypePair[]): AnalysedType => ({ kind: 'record', value: { name: undefined, owner: undefined, fields } });
- export const flags =  (names: string[]): AnalysedType => ({ kind: 'flags', value: { name: undefined, owner: undefined, names } });
- export const enum_ = (cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: undefined, owner: undefined, cases } });
- export const variant = (cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', value: { name: undefined, owner: undefined, cases } });
+ export const list = (name: string | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
+export const option = (name: string| undefined, inner: AnalysedType): AnalysedType => ({ kind: 'option', value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
+ export const tuple =  (name: string | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple', value: { name: convertTypeNameToKebab(name), owner: undefined, items } });
+ export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record', value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
+ export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
+ export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: name, cases } });
+ export const variant = (name: string | undefined, cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
 
- export const resultOk =  (ok: AnalysedType): AnalysedType =>
-      ({ kind: 'result', value: { name: undefined, owner: undefined, ok } });
- export const resultErr = (err: AnalysedType): AnalysedType =>
-      ({ kind: 'result', value: { name: undefined, owner: undefined, err } });
+ export const resultOk =  (name: string | undefined, ok: AnalysedType): AnalysedType =>
+      ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, ok } });
+ export const resultErr = (name: string | undefined, err: AnalysedType): AnalysedType =>
+      ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, err } });
 
- export const result = (ok: AnalysedType, err: AnalysedType): AnalysedType =>
-      ({ kind: 'result', value: { name: undefined, owner: undefined, ok, err } });
+ export const result = (name: string | undefined, ok: AnalysedType, err: AnalysedType): AnalysedType =>
+      ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, ok, err } });
 
 
- export const handle =  (resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
-      ({ kind: 'handle', value: { name: undefined, owner: undefined, resourceId, mode } });
+ export const handle =  (name: string | undefined, resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
+      ({ kind: 'handle', value: { name: convertTypeNameToKebab(name), owner: undefined, resourceId, mode } });
 
 
 export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> {
@@ -214,7 +214,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =
-      record([field("restrictions", option(list(record([field("language-code", str())]))))]);
+      record("text-descriptor", [field("restrictions", option(undefined, list(undefined, record("text-type", [field("language-code", str())]))))]);
 
     return Either.right(textDescriptor);
   }
@@ -233,17 +233,17 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       return Either.right(u64())
 
     case "null":
-      return Either.right(tuple([]))
+      return Either.right(tuple("null-type", []))
 
     case "undefined":
-      return Either.right(tuple([]))
+      return Either.right(tuple("undefined-type", []))
 
     case "void":
-      return Either.right(tuple([]))
+      return Either.right(tuple("void-type", []))
 
     case "tuple":
       const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el)));
-      return Either.map(tupleElems, (items) => tuple(items));
+      return Either.map(tupleElems, (items) => tuple(type.name, items));
 
     case "union":
       let fieldIdx = 1;
@@ -264,7 +264,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
           });
         } else {
           if (t.kind === 'literal') {
-            const name = t.name;
+            const name = t.literalValue;
 
             if (!name) {
               return Either.left(`Unable to determine the literal value`);
@@ -278,7 +278,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
               name: trimQuotes(name),
             });
 
-          } else if (t.kind === 'null' || t.kind === 'undefined') {
+          } else if (t.kind === 'null') {
             const result =
               fromTsTypeInternal(t);
 
@@ -290,7 +290,20 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
               name: `null-type`,
               typ: result.val
             });
-          } else {
+          } else if (t.kind === 'undefined') {
+            const result =
+              fromTsTypeInternal(t);
+
+            if (Either.isLeft(result)) {
+              return result;
+            }
+
+            possibleTypes.push({
+              name: `undefined-type`,
+              typ: result.val
+            });
+          }
+          else {
             const result =
               fromTsTypeInternal(t);
 
@@ -306,7 +319,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         }
       }
 
-      return Either.right(variant(possibleTypes));
+      return Either.right(variant(type.name, possibleTypes));
 
     case "object":
       const result = Either.all(type.properties.map((prop) => {
@@ -319,7 +332,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
           return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), option(analysedType))
+            return field(prop.getName(), option(type.name, analysedType))
           });
         }
 
@@ -340,7 +353,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       }
 
 
-      return Either.right(record(fields))
+      return Either.right(record(type.name, fields))
 
     case "class":
       const message =
@@ -360,7 +373,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
           return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), option(analysedType))
+            return field(prop.getName(), option(undefined, analysedType))
           });
         }
 
@@ -369,7 +382,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         })
       }));
 
-      return Either.map(interfaceRsult, (fields) => record(fields));
+      return Either.map(interfaceRsult, (fields) => record(type.name, fields));
 
     case "promise":
       const inner = type.element;
@@ -384,7 +397,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
 
       return Either.zipWith(key, value, (k, v) =>
-        list(tuple([k, v])));
+        list(type.name, tuple(undefined, [k, v])));
 
     case "literal":
       const literalName = type.name;
@@ -401,7 +414,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         return Either.left("Literals of number type are not supported");
       }
 
-      return Either.right(enum_([trimQuotes(literalName)]))
+      return Either.right(enum_(type.name, [trimQuotes(literalName)]))
 
     case "alias":
       return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
@@ -441,16 +454,16 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       const name = type.name;
 
       switch (name) {
-        case "Float64Array": return Either.right(list(f64()));
-        case "Float32Array": return Either.right(list(f32()));
-        case "Int8Array":    return Either.right(list(s8()));
-        case "Uint8Array":   return Either.right(list(u8()));
-        case "Int16Array":   return Either.right(list(s16()));
-        case "Uint16Array":  return Either.right(list(u16()));
-        case "Int32Array":   return Either.right(list(s32()));
-        case "Uint32Array":  return Either.right(list(u32()));
-        case "BigInt64Array":  return Either.right(list(s64()));
-        case "BigUint64Array": return Either.right(list(u64()));
+        case "Float64Array": return Either.right(list(undefined, f64()));
+        case "Float32Array": return Either.right(list(undefined, f32()));
+        case "Int8Array":    return Either.right(list(undefined, s8()));
+        case "Uint8Array":   return Either.right(list(undefined, u8()));
+        case "Int16Array":   return Either.right(list(undefined, s16()));
+        case "Uint16Array":  return Either.right(list(undefined, u16()));
+        case "Int32Array":   return Either.right(list(undefined, s32()));
+        case "Uint32Array":  return Either.right(list(undefined, u32()));
+        case "BigInt64Array":  return Either.right(list(undefined, s64()));
+        case "BigUint64Array": return Either.right(list(undefined, u64()));
       }
 
       const arrayElementType =
@@ -462,7 +475,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
       const elemType = fromTsTypeInternal(arrayElementType);
 
-      return Either.map(elemType, (inner) => list(inner));
+      return Either.map(elemType, (inner) => list(type.name, inner));
   }
 }
 
@@ -475,4 +488,11 @@ function trimQuotes(s: string): string {
     return s.slice(1, -1);
   }
   return s;
+}
+
+function convertTypeNameToKebab(methodName: string | undefined): string | undefined{
+  return methodName  ? methodName
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
+    .replace(/[\s_]+/g, '-')
+    .toLowerCase() : undefined;
 }

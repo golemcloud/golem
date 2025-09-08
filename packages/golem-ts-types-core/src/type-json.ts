@@ -23,7 +23,7 @@ export type LiteTypeJSON =
   | { kind: 'array'; name?: string; element: LiteTypeJSON }
   | { kind: 'tuple'; name?: string; elements: LiteTypeJSON[] }
   | { kind: 'union'; name?: string; types: LiteTypeJSON[] }
-  | { kind: 'literal'; name: string }
+  | { kind: 'literal'; name?: string; literalValue: string }
   | {
       kind: 'object';
       name?: string;

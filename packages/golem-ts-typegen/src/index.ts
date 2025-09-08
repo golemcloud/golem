@@ -34,7 +34,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
   const aliasName = getAliasTypeName(type);
-  const name = aliasName ?? rawName ?? type.getText();
 
   switch (rawName) {
     case "Float64Array":
@@ -43,7 +42,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Float64Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Float32Array":
@@ -52,7 +50,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Float32Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Int8Array":
@@ -61,7 +58,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Int8Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Uint8Array":
@@ -70,7 +66,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Uint8Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Int16Array":
@@ -79,7 +74,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Int16Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Uint16Array":
@@ -88,7 +82,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Uint16Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Int32Array":
@@ -97,7 +90,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Int32Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "Uint32Array":
@@ -106,7 +98,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Uint32Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "BigInt64Array":
@@ -115,7 +106,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "BigInt64Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
     case "BigUint64Array":
@@ -124,7 +114,6 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "BigUint64Array",
         element: {
           kind: "number",
-          name: "number",
         },
       };
   }
@@ -146,7 +135,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "promise",
-      name,
+      name: aliasName,
       element: promiseType,
     };
   }
@@ -157,7 +146,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
     const value = getFromTsMorph(valT);
     return {
       kind: "map",
-      name,
+      name: aliasName,
       key: key,
       value: value,
     };
@@ -168,11 +157,12 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
   }
 
   if (type.isBoolean() || rawName === "true" || rawName === "false") {
-    return { kind: "boolean", name: "boolean" };
+    return { kind: "boolean" };
   }
 
   if (type.isLiteral()) {
-    return { kind: "literal", name: type.getText() };
+    const literalValue = type.getText();
+    return { kind: "literal", name: aliasName, literalValue: literalValue };
   }
 
   if (type.isTuple()) {
@@ -180,7 +170,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "tuple",
-      name,
+      name: aliasName,
       elements: tupleElems,
     };
   }
@@ -195,7 +185,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "array",
-      name,
+      name: aliasName,
       element,
     };
   }
@@ -205,7 +195,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "union",
-      name,
+      name: aliasName,
       unionTypes,
     };
   }
@@ -239,7 +229,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "class",
-      name,
+      name: aliasName ?? rawName,
       properties: result,
     };
   }
@@ -273,7 +263,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "interface",
-      name,
+      name: aliasName ?? rawName,
       properties: result,
     };
   }
@@ -307,32 +297,32 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
     return {
       kind: "object",
-      name,
+      name: aliasName,
       properties: result,
     };
   }
 
   if (type.isNull()) {
-    return { kind: "null", name: "null" };
+    return { kind: "null", name: aliasName };
   }
 
   if (type.isBigInt()) {
-    return { kind: "bigint", name: "bigint" };
+    return { kind: "bigint", name: aliasName };
   }
 
   if (type.isUndefined()) {
-    return { kind: "undefined", name: "undefined" };
+    return { kind: "undefined", name: aliasName };
   }
 
   if (type.isNumber()) {
-    return { kind: "number", name: "number" };
+    return { kind: "number", name: aliasName };
   }
 
   if (type.isString()) {
-    return { kind: "string", name: "string" };
+    return { kind: "string", name: aliasName };
   }
 
-  return { kind: "others", name: type.getText() };
+  return { kind: "others", name: aliasName ?? type.getText() };
 }
 
 export function getRawTypeName(type: TsMorphType): string | undefined {

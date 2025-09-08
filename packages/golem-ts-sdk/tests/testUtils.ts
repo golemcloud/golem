@@ -99,7 +99,7 @@ function fetchType(typeNameInTestData: string): Type.Type {
 
   for (const type of classMetadata) {
     const constructorArg = type.constructorArgs.find((arg) => {
-      const typeName = arg.type.name;
+      const typeName = Type.getTypeName(arg.type);
       return typeName === typeNameInTestData;
     });
 
@@ -110,12 +110,15 @@ function fetchType(typeNameInTestData: string): Type.Type {
     const methods = Array.from(type.methods.values());
 
     for (const method of methods) {
-      if (method.returnType && method.returnType.name === typeNameInTestData) {
+      if (
+        method.returnType &&
+        Type.getTypeName(method.returnType) === typeNameInTestData
+      ) {
         return method.returnType;
       }
 
       const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
-        const typeName = t.name;
+        const typeName = Type.getTypeName(t);
         return typeName === typeNameInTestData;
       });
 

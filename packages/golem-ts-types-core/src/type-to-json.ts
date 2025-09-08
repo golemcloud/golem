@@ -141,7 +141,8 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
     case 'literal':
       return {
         kind: 'literal',
-        name: type.name ?? 'literal',
+        name: type.name,
+        literalValue: type.literalValue,
       };
 
     case 'alias':

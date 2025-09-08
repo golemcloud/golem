@@ -119,7 +119,11 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
     }
 
     case 'literal':
-      return { kind: 'literal', name: json.name };
+      return {
+        kind: 'literal',
+        name: json.name,
+        literalValue: json.literalValue,
+      };
 
     case 'alias': {
       const target = buildTypeFromJSON(json.target);
