@@ -16,6 +16,7 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
 import { AssistantAgentClassName, WeatherAgentClassName } from './testUtils';
+import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set up changes, this test should fail

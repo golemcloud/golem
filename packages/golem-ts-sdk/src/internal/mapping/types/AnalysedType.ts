@@ -210,6 +210,15 @@ export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> 
 
 
 export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, string> {
+
+  if (type.name === 'UnstructuredText') {
+    // Special case for UnstructuredText
+    const textDescriptor =
+      record([field("restrictions", option(list(record([field("language-code", str())]))))]);
+
+    return Either.right(textDescriptor);
+  }
+
   switch (type.kind) {
     case "boolean":
       return Either.right(bool())

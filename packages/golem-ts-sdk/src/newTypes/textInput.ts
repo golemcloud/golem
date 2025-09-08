@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { TextReference } from 'golem:agent/common';
+
 export type TextType = {
   languageCode: string;
 };
@@ -26,25 +28,41 @@ export type UnstructuredText =
   | { tag: 'inline'; val: TextSource };
 
 export const TextInput = {
-  /**
-   * Creates a `TextInput` with a default language code of `'en'`.
-   *
-   * @param input - The text content.
-   * @param languageCode - The language code
-   * @returns A `TextInput` object with `languageCode` set to `'en'`.
-   */
-  fromText(input: string, languageCode?: string): UnstructuredText {
-    languageCode = languageCode ? languageCode : 'en';
+  fromTextReferenceDataValue(dataValue: TextReference): UnstructuredText {
+    if (dataValue.tag === 'url') {
+      return { tag: 'url', val: dataValue.val };
+    }
 
-    return { tag: 'inline', val: { data: input, textType: { languageCode } } };
+    return {
+      tag: 'inline',
+      val: {
+        data: dataValue.val.data,
+        textType: {
+          languageCode: dataValue.val.textType?.languageCode ?? 'en',
+        },
+      },
+    };
   },
 
   /**
-   * Creates a `TextInput` from a URL.
+   * Creates a `UnstructuredText` from a URL.
    *
    * @param urlValue
+   *
    */
   fromUrl(urlValue: string): UnstructuredText {
     return { tag: 'url', val: urlValue };
+  },
+
+  /**
+   * Creates a `TextInput` with a default language code of `'en'`.
+   *
+   * @param data
+   * @param languageCode - The language code
+   * @returns A `TextInput` object with `languageCode` set to `'en'`.
+   */
+  fromInline(data: string, languageCode?: string): UnstructuredText {
+    languageCode = languageCode ? languageCode : 'en';
+    return { tag: 'inline', val: { data: data, textType: { languageCode } } };
   },
 };

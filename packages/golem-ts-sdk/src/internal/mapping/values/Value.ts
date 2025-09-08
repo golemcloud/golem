@@ -18,7 +18,6 @@ import { Type, Symbol, Node } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import {
   missingObjectKey,
-  safeDisplay,
   typeMismatchIn,
   typeMismatchOut,
   unhandledTypeError,

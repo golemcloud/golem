@@ -64,6 +64,7 @@ class AssistantAgent extends BaseAgent {
     voidType: void,
     nullType: null,
     undefinedType: undefined,
+    textType: UnstructuredText,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
