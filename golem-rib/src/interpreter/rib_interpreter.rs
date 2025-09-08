@@ -4739,7 +4739,8 @@ mod tests {
                 let country = "usa";
                 let weather-agent = weather-agent("united", 1,  {city: city, country: country});
                 let first-result = weather-agent.get-weather("bar");
-                let assistant-agent = assistant-agent("my assistant");
+                let assistant-agent-input = "my assistant";
+                let assistant-agent = assistant-agent(assistant-agent-input);
                 let second-result = assistant-agent.ask("foo", "bar");
                 {weather: first-result, assistant: second-result}
             "#;
