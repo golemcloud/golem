@@ -161,7 +161,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
   }
 
   if (type.isLiteral()) {
-    const literalValue = type.getText();
+    const literalValue = type.getLiteralValue()?.toString();
     return { kind: "literal", name: aliasName, literalValue: literalValue };
   }
 

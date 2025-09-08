@@ -58,6 +58,31 @@ export class FooBar {
   }
 }
 
+export type EitherX = {
+  ok?: string;
+  err?: string;
+};
+
+export type EitherY =
+  | {
+  tag: 'ok';
+  val: string;
+}
+  | {
+  tag: 'err';
+  val: string;
+};
+
+export type EitherZ =
+  | {
+  tag: 'ok';
+  val: string;
+}
+  | {
+  tag: 'err';
+  val?: string;
+};
+
 export interface TestInterfaceType {
   numberProp: number;
   stringProp: string;
@@ -116,6 +141,9 @@ class MyAgent {
     voidType: void,
     undefinedType: undefined,
     nullType: null,
+    eitherXType: EitherX,
+    eitherYType: EitherY,
+    eitherZType: EitherZ,
   ): PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
