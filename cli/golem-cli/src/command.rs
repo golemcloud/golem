@@ -333,7 +333,7 @@ impl GolemCliCommand {
                         match positional_args.as_slice() {
                             ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
-                            ["worker"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
+                            ["agent"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
                             _ => None,
                         }
                     }
@@ -385,14 +385,14 @@ impl GolemCliCommand {
     fn invalid_arg_matchers() -> Vec<InvalidArgMatcher> {
         vec![
             InvalidArgMatcher {
-                subcommands: vec!["worker", "invoke"],
+                subcommands: vec!["agent", "invoke"],
                 found_positional_args: vec![],
-                missing_positional_arg: "worker_name",
+                missing_positional_arg: "agent_id",
                 to_partial_match: |_| GolemCliCommandPartialMatch::WorkerInvokeMissingWorkerName,
             },
             InvalidArgMatcher {
-                subcommands: vec!["worker", "invoke"],
-                found_positional_args: vec!["worker_name"],
+                subcommands: vec!["agent", "invoke"],
+                found_positional_args: vec!["agent_id"],
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
                     GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName {
