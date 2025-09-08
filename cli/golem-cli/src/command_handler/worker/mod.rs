@@ -16,7 +16,7 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName, AgentIdArgs,
+    AgentIdArgs, NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
 use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
@@ -108,8 +108,12 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
-            AgentSubcommand::Get { agent_id: worker_name } => self.cmd_get(worker_name).await,
-            AgentSubcommand::Delete { agent_id: worker_name } => self.cmd_delete(worker_name).await,
+            AgentSubcommand::Get {
+                agent_id: worker_name,
+            } => self.cmd_get(worker_name).await,
+            AgentSubcommand::Delete {
+                agent_id: worker_name,
+            } => self.cmd_delete(worker_name).await,
             AgentSubcommand::List {
                 component_name,
                 agent_type_name,
@@ -132,7 +136,9 @@ impl WorkerCommandHandler {
                 agent_id: worker_name,
                 stream_args,
             } => self.cmd_stream(worker_name, stream_args).await,
-            AgentSubcommand::Interrupt { agent_id: worker_name } => self.cmd_interrupt(worker_name).await,
+            AgentSubcommand::Interrupt {
+                agent_id: worker_name,
+            } => self.cmd_interrupt(worker_name).await,
             AgentSubcommand::Update {
                 agent_id: worker_name,
                 mode,
@@ -147,10 +153,12 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
-            AgentSubcommand::Resume { agent_id: worker_name } => self.cmd_resume(worker_name).await,
-            AgentSubcommand::SimulateCrash { agent_id: worker_name } => {
-                self.cmd_simulate_crash(worker_name).await
-            }
+            AgentSubcommand::Resume {
+                agent_id: worker_name,
+            } => self.cmd_resume(worker_name).await,
+            AgentSubcommand::SimulateCrash {
+                agent_id: worker_name,
+            } => self.cmd_simulate_crash(worker_name).await,
             AgentSubcommand::Oplog {
                 agent_id: worker_name,
                 from,
