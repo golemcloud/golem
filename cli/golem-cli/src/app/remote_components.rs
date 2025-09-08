@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::context::check_http_response_success;
-use crate::log::{log_action, LogColorize};
+use crate::log::{log_action, log_warn_action, LogColorize};
 use anyhow::{anyhow, Context};
 use base64::prelude::*;
 use std::path::PathBuf;
@@ -42,7 +42,7 @@ impl RemoteComponents {
         let path = parent_dir.join(format!("{url_hash}.wasm"));
 
         if std::fs::exists(&path)? {
-            log_action(
+            log_warn_action(
                 "Skipping",
                 format!(
                     "download of remote WASM component: {}, using a previously downloaded version",
