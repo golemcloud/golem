@@ -160,6 +160,9 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub local_server_auto_start: bool,
+
+    #[arg(skip)]
+    pub server_no_limit_change: bool,
 }
 
 impl GolemCliGlobalFlags {
@@ -230,6 +233,13 @@ impl GolemCliGlobalFlags {
 
         if let Ok(auto_start) = std::env::var("GOLEM_LOCAL_SERVER_AUTO_START") {
             self.local_server_auto_start = auto_start
+                .parse::<LenientBool>()
+                .map(|b| b.into())
+                .unwrap_or_default()
+        }
+
+        if let Ok(server_no_limit_change) = std::env::var("GOLEM_SERVER_NO_LIMIT_CHANGE") {
+            self.server_no_limit_change = server_no_limit_change
                 .parse::<LenientBool>()
                 .map(|b| b.into())
                 .unwrap_or_default()
