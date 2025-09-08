@@ -54,6 +54,34 @@ export type AnalysedType =
 
 export function getNameFromAnalysedType(typ: AnalysedType): string | undefined {
   switch (typ.kind) {
+    case "string":
+      return undefined
+    case "chr":
+      return undefined
+    case "f64":
+      return undefined
+    case "f32":
+      return undefined
+    case "u64":
+      return undefined
+    case "s64":
+      return undefined
+    case "u32":
+      return undefined
+    case "s32":
+      return undefined
+    case "u16":
+      return undefined
+    case "s16":
+      return undefined
+    case "u8":
+      return undefined
+    case "s8":
+      return undefined
+    case "bool":
+      return undefined
+    case "handle":
+      return typ.value.name;
     case 'variant':
       return typ.value.name;
     case 'result':
@@ -70,10 +98,7 @@ export function getNameFromAnalysedType(typ: AnalysedType): string | undefined {
       return typ.value.name;
     case 'list':
       return typ.value.name;
-    case 'handle':
-      return typ.value.name;
-    default:
-      return undefined;
+
   }
 }
 
@@ -310,6 +335,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
             if (Either.isLeft(result)) {
               return result;
             }
+
 
             possibleTypes.push({
               name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
