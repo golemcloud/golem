@@ -26,9 +26,9 @@ class ResearchAgent extends BaseAgent {
   @prompt("What topic do you want to research?")
   @description("This method allows the agent to research and summarize a topic for you")
   async research(topic: string): Promise<string> {
-    const model = env["GOLEM_LLM_MODEL"];
+    const model = env["LLM_MODEL"];
     if (model == null) {
-      throw "No GOLEM_LLM_MODEL env var provided"
+      throw "No LLM_MODEL env var provided"
     }
 
     const searchResult = searchWebForTopic(topic)

@@ -5,7 +5,7 @@ components:
     template: ts
     env:
       # Local ollama llm model to use
-      GOLEM_LLM_MODEL: hf.co/unsloth/gpt-oss-20b-GGUF:Q8_0
+      LLM_MODEL: hf.co/unsloth/gpt-oss-20b-GGUF:Q8_0
       # Google api key to use: https://console.cloud.google.com/apis/credentials
       GOOGLE_API_KEY: "changeme"
       # Google search engine id: https://programmablesearchengine.google.com/controlpanel/create
@@ -152,7 +152,7 @@ dependencies:
 
 httpApi:
   definitions:
-    research-api:
+    componentname-api:
       version: '1'
       routes:
       - method: GET
@@ -170,6 +170,6 @@ httpApi:
   #   local:
   #   - host: localhost:9006
   #     definitions:
-  #     - research-api
+  #     - componentname-api
 
 # golem-app-manifest-component-hints
