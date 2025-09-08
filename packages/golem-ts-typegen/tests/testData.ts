@@ -65,23 +65,23 @@ export type EitherX = {
 
 export type EitherY =
   | {
-  tag: 'ok';
-  val: string;
-}
+      tag: "ok";
+      val: string;
+    }
   | {
-  tag: 'err';
-  val: string;
-};
+      tag: "err";
+      val: string;
+    };
 
 export type EitherZ =
   | {
-  tag: 'ok';
-  val: string;
-}
+      tag: "ok";
+      val: string;
+    }
   | {
-  tag: 'err';
-  val?: string;
-};
+      tag: "err";
+      val?: string;
+    };
 
 export interface TestInterfaceType {
   numberProp: number;
