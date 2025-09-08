@@ -193,7 +193,7 @@ fn get_instance_creation_details(
 
                             while let Some(arg) = iter.next() {
                                 match arg {
-                                    Expr::Literal { .. }  | Expr::Identifier {..} => {
+                                    Expr::Literal { .. } | Expr::Identifier { .. } => {
                                         exprs.push(Expr::literal("\""));
                                         exprs.push(arg);
                                         exprs.push(Expr::literal("\""));
