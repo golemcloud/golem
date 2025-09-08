@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm_ast::analysis::AnalysedType;
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::InstanceType;
 use crate::rib_type_error::RibTypeErrorInternal;
@@ -189,21 +190,38 @@ fn get_instance_creation_details(
                                 format!("{}(", custom_instance_spec.instance_name);
 
                             let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
-                            let mut iter = args.iter().cloned().peekable();
+                            let mut args_iter = args.iter().zip(custom_instance_spec.parameter_types).peekable();
 
-                            while let Some(arg) = iter.next() {
+                            while let Some((arg, analysed_type)) = args_iter.next() {
                                 match arg {
-                                    Expr::Literal { .. } | Expr::Identifier { .. } => {
+                                    Expr::Literal { .. } => {
                                         exprs.push(Expr::literal("\""));
-                                        exprs.push(arg);
+                                        exprs.push(arg.clone());
                                         exprs.push(Expr::literal("\""));
                                     }
+
+                                    Expr::Identifier { .. } | Expr::SelectField {..}
+                                    | Expr::SelectIndex {..} | Expr::Concat {..} | Expr::ExprBlock {..}
+                                    | Expr::Cond {..} | Expr::PatternMatch {..}  | Expr::ListReduce {..} => {
+                                        // If the argument is an identifier, we need to check if its type is string
+                                        match analysed_type {
+                                            AnalysedType::Str(_) => {
+                                                exprs.push(Expr::literal("\""));
+                                                exprs.push(arg.clone());
+                                                exprs.push(Expr::literal("\""));
+                                            }
+                                            _ => {
+                                                exprs.push(arg.clone());
+                                            }
+                                        }
+                                    }
+
                                     _ => {
-                                        exprs.push(arg);
+                                        exprs.push(arg.clone());
                                     }
                                 }
 
-                                if iter.peek().is_some() {
+                                if args_iter.peek().is_some() {
                                     exprs.push(Expr::literal(","));
                                 }
                             }

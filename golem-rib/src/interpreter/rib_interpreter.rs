@@ -4506,7 +4506,7 @@ mod tests {
     #[test]
     async fn test_interpreter_durable_worker_with_resource_16() {
         let expr = r#"
-                let x = request.path.user-id;
+                let x: string = request.path.user-id;
                 let worker = instance(x);
                 let cart = worker.cart("bar");
                 let result = cart.get-cart-contents();
@@ -4737,7 +4737,9 @@ mod tests {
         let expr = r#"
                 let city = "nyc";
                 let country = "usa";
-                let weather-agent = weather-agent("united", 1,  {city: city, country: country});
+
+               let x = some("foo");
+                let weather-agent = weather-agent("united", 1, x, {city: city, country: country});
                 let first-result = weather-agent.get-weather("bar");
                 let assistant-agent-input = "my assistant";
                 let assistant-agent = assistant-agent(assistant-agent-input);
@@ -4775,7 +4777,7 @@ mod tests {
             vec![custom_spec1, custom_spec2],
         );
         let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).unwrap();
+        let compiled = compiler.compile(expr).map_err(|err| err.to_string()).unwrap();
 
         let mut rib_interpreter = test_deps.interpreter;
 

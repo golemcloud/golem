@@ -76,12 +76,6 @@ mod internal {
         match call_type {
             CallType::InstanceCreation(instance) => match instance {
                 InstanceCreationType::WitWorker { .. } => {
-                    for arg in args.iter_mut() {
-                        if arg.inferred_type().is_unknown() {
-                            arg.add_infer_type_mut(InferredType::string());
-                        }
-                    }
-
                     Ok(())
                 }
 
