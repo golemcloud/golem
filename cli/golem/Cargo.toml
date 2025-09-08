@@ -46,6 +46,7 @@ poem = { workspace = true }
 prometheus = { workspace = true }
 regex = { workspace = true }
 reqwest = { workspace = true }
+rlimit = { workspace = true }
 rustls = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }
