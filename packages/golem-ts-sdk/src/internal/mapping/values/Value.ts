@@ -17,7 +17,8 @@ import { WitNode, WitValue } from 'golem:rpc/types@0.2.2';
 import { Type, Symbol, Node } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import {
-  missingValueForKey,
+  missingObjectKey,
+  safeDisplay,
   typeMismatchIn,
   typeMismatchOut,
   unhandledTypeError,
@@ -650,7 +651,7 @@ function handleObject(
         } else if (propType.kind === 'boolean' && tsValue === false) {
           values.push({ kind: 'bool', value: false });
         } else {
-          return Either.left(missingValueForKey(key, tsValue));
+          return Either.left(missingObjectKey(key, tsValue));
         }
         continue;
       }
@@ -977,7 +978,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
       if (value.kind === 'variant') {
         const caseValue = value.caseValue;
         if (!caseValue) {
-          throw new Error(`Expected union, got ${value}`);
+          throw new Error(typeMismatchOut(value, 'union'));
         }
 
         const unionTypes = type.unionTypes;

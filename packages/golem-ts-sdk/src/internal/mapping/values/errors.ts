@@ -14,6 +14,8 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
+import * as util from 'node:util';
+import { Value } from './Value';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
@@ -21,8 +23,13 @@ export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
   return `Type mismatch. Expected ${nameOrKind}, but got ${safeDisplay(tsValue)} which is of type ${typeof tsValue}`;
 }
 
+// Unable to convert the value to the expected type in the output direction
+export function typeMismatchOut(value: Value, expectedType: string) {
+  return "Unable to convert '" + safeDisplay(value) + "' to " + expectedType;
+}
+
 // Missing keys in tsValue when converting from TS to WIT
-export function missingValueForKey(key: string, tsValue: any): string {
+export function missingObjectKey(key: string, tsValue: any): string {
   return `Missing key '${key}' in ${safeDisplay(tsValue)}`;
 }
 
@@ -47,21 +54,8 @@ export function unhandledTypeError(
   return error + (Option.isSome(message) ? `${message.val}` : '');
 }
 
-// Unable to convert the value to the expected type in the output direction
-export function typeMismatchOut(value: any, expectedType: string) {
-  return "Unable to convert '" + safeDisplay(value) + "' to " + expectedType;
-}
-
 // A best effort to display any value.
 // We return the original value only as a last resort in error messages.
-export function safeDisplay(tsValue: any): any {
-  try {
-    return JSON.stringify(tsValue);
-  } catch {
-    try {
-      return String(tsValue);
-    } catch {
-      return tsValue;
-    }
-  }
+export function safeDisplay(tsValue: any): string {
+  return util.format(tsValue);
 }
