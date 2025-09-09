@@ -166,7 +166,8 @@ impl WorkerEventService for WorkerEventServiceDefault {
                     );
                     stderr_chunks.push(line.as_bytes().to_vec());
                 }
-                InternalWorkerEvent::InvocationStart { .. } => break,
+                // We need to keep going back till the beginning of the invocation, including possible retries (which won't be live)
+                InternalWorkerEvent::InvocationStart { .. } if event.is_live => break,
                 _ => {}
             }
         }

@@ -2254,18 +2254,29 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
-/// number of entries, and at most until the first invocation start entry.
+/// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
+
+    // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
+    // have at most one pending batch we discard.
+    let mut collected_count = 0;
     let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
+    let mut current_stderr_entries_batch = Vec::new();
+    // Trace id of the first invocation we found. We are going to read all logs until the start of the next foreign invocation, then discard the last batch
+    let mut first_invocation_trace_id = None;
     loop {
         // TODO: this could be read in batches to speed up the process
         let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+        tracing::warn!("oplog entry: {:?}", oplog_entry);
+
+        // Because of retries we might have multiple invocation start entries.
+        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
         match oplog_entry.first_key_value() {
             Some((
                 _,
@@ -2275,12 +2286,23 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     ..
                 },
             )) => {
-                stderr_entries.push(message.clone());
-                if stderr_entries.len() >= max_count {
-                    break;
+                if collected_count < max_count {
+                    current_stderr_entries_batch.push(message.clone());
+                    collected_count += 1;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            Some((_, OplogEntry::ExportedFunctionInvoked { trace_id, .. })) => {
+                match &first_invocation_trace_id {
+                    None => first_invocation_trace_id = Some(trace_id.clone()),
+                    Some(first_invocation_trace_id) if first_invocation_trace_id == trace_id => {
+                        stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                        if stderr_entries.len() >= max_count {
+                            break;
+                        };
+                    }
+                    Some(_) => break,
+                }
+            }
             _ => {}
         }
         if idx > OplogIndex::INITIAL {
