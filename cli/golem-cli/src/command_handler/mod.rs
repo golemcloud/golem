@@ -321,7 +321,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     .handle_command(subcommand)
                     .await
             }
-            GolemCliSubcommand::Worker { subcommand } => {
+            GolemCliSubcommand::Agent { subcommand } => {
                 self.ctx.worker_handler().handle_command(subcommand).await
             }
             GolemCliSubcommand::Api { subcommand } => {
