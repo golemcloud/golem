@@ -196,6 +196,15 @@ fn get_instance_creation_details(
                                 format!("{}(", custom_instance_spec.instance_name);
 
                             let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
+
+                            if args.len() != custom_instance_spec.parameter_types.len() {
+                                return Err(format!(
+                                    "expected {} arguments, found {}",
+                                    custom_instance_spec.parameter_types.len(),
+                                    args.len()
+                                ));
+                            }
+
                             let mut args_iter = args
                                 .iter()
                                 .zip(custom_instance_spec.parameter_types)
@@ -203,6 +212,7 @@ fn get_instance_creation_details(
 
                             while let Some((arg, analysed_type)) = args_iter.next() {
                                 match arg {
+                                    // chances of being a string after interpretation
                                     Expr::Literal { .. }
                                     | Expr::Identifier { .. }
                                     | Expr::SelectField { .. }
@@ -218,7 +228,7 @@ fn get_instance_creation_details(
                                         quote_string(&analysed_type, &mut exprs, arg)
                                     }
 
-                                    // Can't definitely be not a string
+                                    // Can't never be a string
                                     Expr::Let { .. }
                                     | Expr::Sequence { .. }
                                     | Expr::Range { .. }
