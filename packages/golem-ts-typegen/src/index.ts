@@ -15,8 +15,9 @@
 import {
   Node as TsMorphNode,
   Scope,
-  SourceFile, SyntaxKind,
-  Type as TsMorphType
+  SourceFile,
+  SyntaxKind,
+  Type as TsMorphType,
 } from "ts-morph";
 import {
   buildJSONFromType,
@@ -413,15 +414,16 @@ export function updateMetadataFromSourceFiles(sourceFiles: SourceFile[]) {
         methods.set(method.getName(), { methodParams, returnType });
       }
 
-      const publicArrows = classDecl.getProperties().filter(
-        (p) =>
-          p.getScope() === Scope.Public &&
-          p.getType().getCallSignatures().length > 0 &&
-          p.hasInitializer() &&
-          (p.getInitializerIfKind(SyntaxKind.ArrowFunction) ||
-            p.getInitializerIfKind(SyntaxKind.FunctionExpression)),
-      )
-
+      const publicArrows = classDecl
+        .getProperties()
+        .filter(
+          (p) =>
+            p.getScope() === Scope.Public &&
+            p.getType().getCallSignatures().length > 0 &&
+            p.hasInitializer() &&
+            (p.getInitializerIfKind(SyntaxKind.ArrowFunction) ||
+              p.getInitializerIfKind(SyntaxKind.FunctionExpression)),
+        );
 
       for (const publicArrow of publicArrows) {
         const arrowType = publicArrow.getType();
@@ -444,7 +446,6 @@ export function updateMetadataFromSourceFiles(sourceFiles: SourceFile[]) {
         const returnType = getFromTsMorph(callSignature.getReturnType());
         methods.set(publicArrow.getName(), { methodParams, returnType });
       }
-
 
       TypeMetadata.update(className, constructorArgs, methods);
     }
