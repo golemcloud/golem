@@ -145,6 +145,33 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
           resolvedAgent,
           `Weather in ${locationValue} is sunny!`,
         );
+
+        testInvoke(
+          typeRegistry,
+          'fun4',
+          'location',
+          { data: locationValue, value: number },
+          resolvedAgent,
+          undefined,
+        );
+
+        testInvoke(
+          typeRegistry,
+          'fun5',
+          'location',
+          locationValue,
+          resolvedAgent,
+          `Weather in ${locationValue} is sunny!`,
+        );
+
+        testInvoke(
+          typeRegistry,
+          'fun6',
+          'location',
+          locationValue,
+          resolvedAgent,
+          undefined,
+        );
       },
     ),
   );
@@ -156,7 +183,7 @@ function testInvoke(
   parameterName: string,
   arbInput: any,
   resolvedAgent: ResolvedAgent,
-  expectedOutput: string,
+  expectedOutput: any,
 ) {
   const methodSignature = typeRegistry.methods.get(methodName);
   const parametersInfo = methodSignature?.methodParams;
