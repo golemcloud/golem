@@ -534,7 +534,6 @@ exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integ
 [tasks.template-integration-tests]
 dependencies = ["build-bins"]
 description = "Run template integration tests"
-env = { RUST_BACKTRACE = "1" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
