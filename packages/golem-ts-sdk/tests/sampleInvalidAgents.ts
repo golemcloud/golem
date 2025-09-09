@@ -34,6 +34,11 @@ class InvalidAgent extends BaseAgent {
     asyncIterator: AsyncIterator<string>,
     asyncIterable: AsyncIterable<string>,
     any: any,
+    string: String,
+    boolean: Boolean,
+    symbol: Symbol,
+    number: Number,
+    bigint: BigInt,
   ): Types.PromiseType {
     return Promise.resolve(`Weather in ${location} is sunny!`);
   }

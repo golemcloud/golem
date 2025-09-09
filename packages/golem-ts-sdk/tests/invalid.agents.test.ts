@@ -24,28 +24,33 @@ describe('Invalid types in agents', () => {
   it('should reject RegExp parameters and suggest using string', () => {
     const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
 
-    const dateType =
-      AnalysedType.fromTsType(fun1Params?.get('date')!);
+    const dateType = AnalysedType.fromTsType(fun1Params?.get('date')!);
 
-    const regExpType =
-      AnalysedType.fromTsType(fun1Params?.get('regExp')!);
+    const regExpType = AnalysedType.fromTsType(fun1Params?.get('regExp')!);
 
+    const iteratorType = AnalysedType.fromTsType(fun1Params?.get('iterator')!);
 
-    const iteratorType =
-      AnalysedType.fromTsType(fun1Params?.get('iterator')!);
+    const iterableType = AnalysedType.fromTsType(fun1Params?.get('iterable')!);
 
-    const iterableType =
-      AnalysedType.fromTsType(fun1Params?.get('iterable')!);
+    const asyncIteratorType = AnalysedType.fromTsType(
+      fun1Params?.get('asyncIterator')!,
+    );
 
-    const asyncIteratorType =
-      AnalysedType.fromTsType(fun1Params?.get('asyncIterator')!);
+    const asyncIterableType = AnalysedType.fromTsType(
+      fun1Params?.get('asyncIterable')!,
+    );
 
-    const asyncIterableType =
-      AnalysedType.fromTsType(fun1Params?.get('asyncIterable')!);
+    const anyType = AnalysedType.fromTsType(fun1Params?.get('any')!);
 
-    const anyType =
-      AnalysedType.fromTsType(fun1Params?.get('any')!);
+    const stringType = AnalysedType.fromTsType(fun1Params?.get('string')!);
 
+    const booleanType = AnalysedType.fromTsType(fun1Params?.get('boolean')!);
+
+    const symbolType = AnalysedType.fromTsType(fun1Params?.get('symbol')!);
+
+    const numberType = AnalysedType.fromTsType(fun1Params?.get('number')!);
+
+    const bigintType = AnalysedType.fromTsType(fun1Params?.get('bigint')!);
 
     expect(dateType.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
@@ -75,5 +80,24 @@ describe('Invalid types in agents', () => {
       'Unsupported type `any`. Use a specific type instead',
     );
 
+    expect(stringType.val).toBe(
+      'Unsupported type `String`, use `string` instead',
+    );
+
+    expect(booleanType.val).toBe(
+      'Unsupported type `Boolean`, use `boolean` instead',
+    );
+
+    expect(numberType.val).toBe(
+      'Unsupported type `Number`, use `number` instead',
+    );
+
+    expect(symbolType.val).toBe(
+      'Unsupported type `Symbol`, use `string` if possible',
+    );
+
+    expect(bigintType.val).toBe(
+      'Unsupported type `BigInt`, use `bigint` instead',
+    );
   });
 });
