@@ -1533,8 +1533,10 @@ mod tests {
         InterfaceName, Path, RibCompiler, RibCompilerConfig, VariableId,
     };
     use golem_wasm_ast::analysis::analysed_type::{
-        bool, f32, field, list, r#enum, record, result, s32, str, tuple, u32, u64, u8,
+        bool, case, f32, field, list, option, r#enum, record, result, result_err, result_ok, s32,
+        str, tuple, u32, u64, u8, unit_case, variant,
     };
+    use golem_wasm_ast::analysis::AnalysedType;
     use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -4735,11 +4737,18 @@ mod tests {
     #[test]
     async fn test_interpreter_custom_instance() {
         let expr = r#"
-                let city = "nyc";
-                let country = "usa";
-
-               let x = some("foo");
-                let weather-agent = weather-agent("united", 1, x, {city: city, country: country});
+                let text = "nyc";
+                let number = "usa";
+                let boolean = true;
+                let optional-str = some("optional");
+                let list-of-str = ["a", "b", "c"];
+                let tuple = (text, 1, boolean, optional-str);
+                let record = {city: text, country: number};
+                let result = ok(text);
+                let result-ok = ok(text);
+                let result-err = err(1);
+                let variant = foo("bar");
+                let weather-agent = weather-agent("text", 1, true, optional-str, list-of-str, tuple, record, result, result-ok, result-err, variant);
                 let first-result = weather-agent.get-weather("bar");
                 let assistant-agent-input = "my assistant";
                 let assistant-agent = assistant-agent(assistant-agent-input);
@@ -4747,12 +4756,27 @@ mod tests {
                 {weather: first-result, assistant: second-result}
             "#;
 
+        let weather_agent_constructor_param_types: Vec<AnalysedType> = vec![
+            str(),
+            s32(),
+            bool(),
+            option(str()),
+            list(str()),
+            tuple(vec![str(), s32(), bool(), option(str())]),
+            record(vec![field("city", str()), field("country", str())]),
+            result(str(), s32()),
+            result_ok(str()),
+            result_err(s32()),
+            variant(vec![
+                case("foo", str()),
+                case("bar", s32()),
+                unit_case("baz"),
+            ]),
+        ];
+
         let custom_spec1 = CustomInstanceSpec {
             instance_name: "weather-agent".to_string(),
-            parameter_types: vec![
-                str(),
-                record(vec![field("city", str()), field("country", str())]),
-            ],
+            parameter_types: weather_agent_constructor_param_types,
             interface_name: Some(InterfaceName {
                 name: "weather-agent".to_string(),
                 version: None,
@@ -4777,7 +4801,10 @@ mod tests {
             vec![custom_spec1, custom_spec2],
         );
         let compiler = RibCompiler::new(compiler_config);
-        let compiled = compiler.compile(expr).map_err(|err| err.to_string()).unwrap();
+        let compiled = compiler
+            .compile(expr)
+            .map_err(|err| err.to_string())
+            .unwrap();
 
         let mut rib_interpreter = test_deps.interpreter;
 
@@ -4787,7 +4814,7 @@ mod tests {
             Value::Record(vec![
                 // worker-name
                 Value::String(
-                    "weather-agent(\"united\",1,{city: \"nyc\", country: \"usa\"})".to_string(),
+                    "weather-agent(\"text\",1,true,some(\"optional\"),[\"a\", \"b\", \"c\"],(\"nyc\", 1, true, some(\"optional\")),{city: \"nyc\", country: \"usa\"},ok(\"nyc\"),ok(\"nyc\"),err(1),foo(\"bar\"))".to_string(),
                 ),
                 // function-name
                 Value::String("my:agent/weather-agent.{get-weather}".to_string()),
@@ -4981,6 +5008,15 @@ mod tests {
                 functions: vec![ask],
             });
 
+            let analysed_export3 = AnalysedExport::Function(AnalysedFunction {
+                name: "variant-param".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: variant(vec![case("foo", str()), case("bar", s32())]),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            });
+
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
@@ -4990,7 +5026,7 @@ mod tests {
 
             vec![ComponentDependency::new(
                 component_info,
-                vec![analysed_export1, analysed_export2],
+                vec![analysed_export1, analysed_export2, analysed_export3],
             )]
         }
 

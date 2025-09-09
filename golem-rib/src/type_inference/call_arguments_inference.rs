@@ -75,9 +75,7 @@ mod internal {
 
         match call_type {
             CallType::InstanceCreation(instance) => match instance {
-                InstanceCreationType::WitWorker { .. } => {
-                    Ok(())
-                }
+                InstanceCreationType::WitWorker { .. } => Ok(()),
 
                 InstanceCreationType::WitResource { resource_name, .. } => {
                     infer_resource_constructor_arguments(

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
 use crate::call_type::{CallType, InstanceCreationType};
 use crate::instance_type::InstanceType;
 use crate::rib_type_error::RibTypeErrorInternal;
@@ -22,6 +21,7 @@ use crate::{
     CustomError, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
     TypeInternal, TypeOrigin,
 };
+use golem_wasm_ast::analysis::AnalysedType;
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
@@ -186,39 +186,66 @@ fn get_instance_creation_details(
                     match custom_instance_spec {
                         None => Ok((None, None)),
                         Some(custom_instance_spec) => {
+                            // In a custom instance the worker name is then
+                            // `custom-instance-name(arg1, arg2, ...)`
+                            // Such that arg1, if ends up (after interpretation)
+                            // in a string, then it should be quoted
+                            // while arg2, if not a string, can be kept
+                            // as it is (keeping the wave syntax valid)
                             let new_worker_name_prefix =
                                 format!("{}(", custom_instance_spec.instance_name);
 
                             let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
-                            let mut args_iter = args.iter().zip(custom_instance_spec.parameter_types).peekable();
+                            let mut args_iter = args
+                                .iter()
+                                .zip(custom_instance_spec.parameter_types)
+                                .peekable();
 
                             while let Some((arg, analysed_type)) = args_iter.next() {
                                 match arg {
-                                    Expr::Literal { .. } => {
-                                        exprs.push(Expr::literal("\""));
-                                        exprs.push(arg.clone());
-                                        exprs.push(Expr::literal("\""));
+                                    Expr::Literal { .. }
+                                    | Expr::Identifier { .. }
+                                    | Expr::SelectField { .. }
+                                    | Expr::SelectIndex { .. }
+                                    | Expr::Concat { .. }
+                                    | Expr::ListReduce { .. }
+                                    | Expr::ExprBlock { .. }
+                                    | Expr::Cond { .. }
+                                    | Expr::PatternMatch { .. }
+                                    | Expr::Call { .. }
+                                    | Expr::GenerateWorkerName { .. }
+                                    | Expr::InvokeMethodLazy { .. } => {
+                                        quote_string(&analysed_type, &mut exprs, arg)
                                     }
 
-                                    Expr::Identifier { .. } | Expr::SelectField {..}
-                                    | Expr::SelectIndex {..} | Expr::Concat {..} | Expr::ExprBlock {..}
-                                    | Expr::Cond {..} | Expr::PatternMatch {..}  | Expr::ListReduce {..} => {
-                                        // If the argument is an identifier, we need to check if its type is string
-                                        match analysed_type {
-                                            AnalysedType::Str(_) => {
-                                                exprs.push(Expr::literal("\""));
-                                                exprs.push(arg.clone());
-                                                exprs.push(Expr::literal("\""));
-                                            }
-                                            _ => {
-                                                exprs.push(arg.clone());
-                                            }
-                                        }
-                                    }
-
-                                    _ => {
-                                        exprs.push(arg.clone());
-                                    }
+                                    // Can't definitely be not a string
+                                    Expr::Let { .. }
+                                    | Expr::Sequence { .. }
+                                    | Expr::Range { .. }
+                                    | Expr::Record { .. }
+                                    | Expr::Tuple { .. }
+                                    | Expr::Number { .. }
+                                    | Expr::Flags { .. }
+                                    | Expr::Boolean { .. }
+                                    | Expr::Not { .. }
+                                    | Expr::GreaterThan { .. }
+                                    | Expr::And { .. }
+                                    | Expr::Or { .. }
+                                    | Expr::GreaterThanOrEqualTo { .. }
+                                    | Expr::LessThanOrEqualTo { .. }
+                                    | Expr::Plus { .. }
+                                    | Expr::Multiply { .. }
+                                    | Expr::Minus { .. }
+                                    | Expr::Divide { .. }
+                                    | Expr::EqualTo { .. }
+                                    | Expr::LessThan { .. }
+                                    | Expr::Option { .. }
+                                    | Expr::Result { .. }
+                                    | Expr::Unwrap { .. }
+                                    | Expr::Throw { .. }
+                                    | Expr::GetTag { .. }
+                                    | Expr::ListComprehension { .. }
+                                    | Expr::Length { .. } => exprs.push(arg.clone()),
                                 }
 
                                 if args_iter.peek().is_some() {
@@ -252,6 +279,19 @@ fn get_instance_creation_details(
         }
         CallType::VariantConstructor(_) => Ok((None, None)),
         CallType::EnumConstructor(_) => Ok((None, None)),
+    }
+}
+
+fn quote_string(analysed_type: &AnalysedType, instance_args: &mut Vec<Expr>, arg: &Expr) {
+    match analysed_type {
+        AnalysedType::Str(_) => {
+            instance_args.push(Expr::literal("\""));
+            instance_args.push(arg.clone());
+            instance_args.push(Expr::literal("\""));
+        }
+        _ => {
+            instance_args.push(arg.clone());
+        }
     }
 }
 
