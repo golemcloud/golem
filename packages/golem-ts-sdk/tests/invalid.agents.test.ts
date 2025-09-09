@@ -21,7 +21,7 @@ import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 describe('Invalid types in agents', () => {
   const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 
-  it('should reject RegExp parameters and suggest using string', () => {
+  it('invalid types in method inputs will return error', () => {
     const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
 
     const dateType = AnalysedType.fromTsType(fun1Params?.get('date')!);
@@ -97,6 +97,77 @@ describe('Invalid types in agents', () => {
     );
 
     expect(bigintType.val).toBe(
+      'Unsupported type `BigInt`, use `bigint` instead',
+    );
+  });
+
+  // Act as more of a regression test
+  it('invalid types in method outputs will return error', () => {
+    const fun2ReturnType = invalidAgent?.methods.get('fun2')?.returnType;
+    const fun3ReturnType = invalidAgent?.methods.get('fun3')?.returnType;
+    const fun4ReturnType = invalidAgent?.methods.get('fun4')?.returnType;
+    const fun5ReturnType = invalidAgent?.methods.get('fun5')?.returnType;
+    const fun6ReturnType = invalidAgent?.methods.get('fun6')?.returnType;
+    const fun7ReturnType = invalidAgent?.methods.get('fun7')?.returnType;
+    const fun8ReturnType = invalidAgent?.methods.get('fun8')?.returnType;
+    const fun9ReturnType = invalidAgent?.methods.get('fun9')?.returnType;
+    const fun10ReturnType = invalidAgent?.methods.get('fun10')?.returnType;
+    const fun11ReturnType = invalidAgent?.methods.get('fun11')?.returnType;
+    const fun12ReturnType = invalidAgent?.methods.get('fun12')?.returnType;
+
+    const fun2Type = AnalysedType.fromTsType(fun2ReturnType!);
+    const fun3Type = AnalysedType.fromTsType(fun3ReturnType!);
+    const fun4Type = AnalysedType.fromTsType(fun4ReturnType!);
+    const fun5Type = AnalysedType.fromTsType(fun5ReturnType!);
+    const fun6Type = AnalysedType.fromTsType(fun6ReturnType!);
+    const fun7Type = AnalysedType.fromTsType(fun7ReturnType!);
+    const fun8Type = AnalysedType.fromTsType(fun8ReturnType!);
+    const fun9Type = AnalysedType.fromTsType(fun9ReturnType!);
+    const fun10Type = AnalysedType.fromTsType(fun10ReturnType!);
+    const fun11Type = AnalysedType.fromTsType(fun11ReturnType!);
+    const fun12Type = AnalysedType.fromTsType(fun12ReturnType!);
+
+    expect(fun2Type.val).toBe(
+      'Unsupported type `Date`. Use a `string` if possible',
+    );
+
+    expect(fun3Type.val).toBe(
+      'Unsupported type `Iterator`. Use `Array` type instead',
+    );
+
+    expect(fun4Type.val).toBe(
+      'Unsupported type `Iterable`. Use `Array` type instead',
+    );
+
+    expect(fun5Type.val).toBe(
+      'Unsupported type `Iterator`. Use `Array` type instead',
+    );
+
+    expect(fun6Type.val).toBe(
+      'Unsupported type `AsyncIterator`. Use `Array` type instead',
+    );
+
+    expect(fun7Type.val).toBe(
+      'Unsupported type `any`. Use a specific type instead',
+    );
+
+    expect(fun8Type.val).toBe(
+      'Unsupported type `String`, use `string` instead',
+    );
+
+    expect(fun9Type.val).toBe(
+      'Unsupported type `Number`, use `number` instead',
+    );
+
+    expect(fun10Type.val).toBe(
+      'Unsupported type `Boolean`, use `boolean` instead',
+    );
+
+    expect(fun11Type.val).toBe(
+      'Unsupported type `Symbol`, use `string` if possible',
+    );
+
+    expect(fun12Type.val).toBe(
       'Unsupported type `BigInt`, use `bigint` instead',
     );
   });
