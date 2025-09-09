@@ -80,6 +80,7 @@ pub struct Context {
     yes: bool,
     show_sensitive: bool,
     dev_mode: bool,
+    server_no_limit_change: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -109,6 +110,7 @@ impl Context {
         let config_dir = global_flags.config_dir();
         let local_server_auto_start = global_flags.local_server_auto_start;
         let show_sensitive = global_flags.show_sensitive;
+        let server_no_limit_change = global_flags.server_no_limit_change;
 
         let mut yes = global_flags.yes;
         let dev_mode = global_flags.dev_mode;
@@ -222,6 +224,7 @@ impl Context {
             yes,
             dev_mode,
             show_sensitive,
+            server_no_limit_change,
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -270,6 +273,10 @@ impl Context {
 
     pub fn update_or_redeploy(&self) -> &UpdateOrRedeployArgs {
         &self.update_or_redeploy
+    }
+
+    pub fn server_no_limit_change(&self) -> bool {
+        self.server_no_limit_change
     }
 
     pub async fn silence_app_context_init(&self) {

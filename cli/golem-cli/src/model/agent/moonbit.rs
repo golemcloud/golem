@@ -1405,6 +1405,7 @@ fn extract_wit_value(
 }
 
 #[cfg(test)]
+#[test_r::sequential]
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;

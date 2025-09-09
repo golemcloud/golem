@@ -40,7 +40,7 @@ mod cmd {
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
     pub static NEW: &str = "new";
-    pub static WORKER: &str = "worker";
+    pub static AGENT: &str = "agent";
     pub static INVOKE: &str = "invoke";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
@@ -485,7 +485,7 @@ fn wasm_library_dependency_type() -> anyhow::Result<()> {
     assert!(outputs.success());
 
     let outputs = ctx.cli([
-        cmd::WORKER,
+        cmd::AGENT,
         cmd::INVOKE,
         "app:main/test1",
         "run",

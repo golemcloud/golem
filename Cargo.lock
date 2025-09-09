@@ -4079,6 +4079,7 @@ dependencies = [
  "prometheus 0.13.4",
  "regex",
  "reqwest 0.12.23",
+ "rlimit",
  "rustls 0.23.31",
  "serde",
  "tempfile",
@@ -9142,6 +9143,15 @@ dependencies = [
  "crossbeam-utils",
  "portable-atomic",
  "portable-atomic-util",
+]
+
+[[package]]
+name = "rlimit"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7043b63bd0cd1aaa628e476b80e6d4023a3b50eb32789f2728908107bd0c793a"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
