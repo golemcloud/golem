@@ -12,7 +12,7 @@ import {
   send as sendToLLM
 } from 'golem:llm/llm@1.0.0'
 import { startSearch } from 'golem:web-search/web-search@1.0.0';
-import { env } from 'node:process';
+import { env } from 'process';
 
 type SearchResult = {
   url: string;
