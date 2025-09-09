@@ -4750,8 +4750,7 @@ mod tests {
                 let variant = foo("bar");
                 let weather-agent = weather-agent("text", 1, true, optional-str, list-of-str, tuple, record, result, result-ok, result-err, variant);
                 let first-result = weather-agent.get-weather("bar");
-                let assistant-agent-input = "my assistant";
-                let assistant-agent = assistant-agent(assistant-agent-input);
+                let assistant-agent = assistant-agent("my assistant");
                 let second-result = assistant-agent.ask("foo", "bar");
                 {weather: first-result, assistant: second-result}
             "#;
