@@ -496,10 +496,13 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         return Either.left("Unsupported type (anonymous) found.");
       }
 
+      if (customTypeName === 'any') {
+        return Either.left("Unsupported type `any`. Use a specific type instead");
+      }
+
       if (customTypeName === 'Date') {
         return Either.left("Unsupported type `Date`. Use a string in ISO 8601 format instead");
       }
-
 
       if (customTypeName === 'next') {
         return Either.left("Unsupported type `Iterator`. Use `Array` type instead");

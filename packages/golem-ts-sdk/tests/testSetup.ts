@@ -19,12 +19,12 @@ import { vi } from 'vitest';
 // For example, getSelfMetadata is used in some decorators, however,
 // it executes only when `initiate` is called.
 // Also, these mocks are just place-holders. We can override the behavior
-// per tests using functionalities overrides module
+// per tests by spyOn.
 vi.mock('golem:api/host@1.1.7', () => ({
   getSelfMetadata: () => ({
     workerId: {
       componentId: { uuid: { highBits: 0n, lowBits: 0n } },
-      workerName: 'change-this-by-overriding',
+      workerName: 'override-if-needed',
     },
     args: [],
     env: [],
