@@ -16,10 +16,10 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
 import { AssistantAgentClassName, WeatherAgentClassName } from './testUtils';
-import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set up changes, this test should fail
+
 test('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
   const assistantAgent = Option.getOrThrowWith(
     AgentTypeRegistry.lookup(AssistantAgentClassName),
@@ -31,7 +31,7 @@ test('Agent decorator should register the agent class and its methods into Agent
     () => new Error('WeatherAgent not found in AgentTypeRegistry'),
   );
 
-  expect(assistantAgent.methods.length).toEqual(20);
+  expect(assistantAgent.methods.length).toEqual(22);
   expect(assistantAgent.constructor.inputSchema.val.length).toEqual(1);
   expect(weatherAgent.methods.length).toEqual(3);
   expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);

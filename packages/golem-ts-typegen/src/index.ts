@@ -15,8 +15,8 @@
 import {
   Node as TsMorphNode,
   Scope,
-  SourceFile,
-  Type as TsMorphType,
+  SourceFile, SyntaxKind,
+  Type as TsMorphType
 } from "ts-morph";
 import {
   buildJSONFromType,
@@ -412,6 +412,39 @@ export function updateMetadataFromSourceFiles(sourceFiles: SourceFile[]) {
         const returnType = getFromTsMorph(method.getReturnType());
         methods.set(method.getName(), { methodParams, returnType });
       }
+
+      const publicArrows = classDecl.getProperties().filter(
+        (p) =>
+          p.getScope() === Scope.Public &&
+          p.getType().getCallSignatures().length > 0 &&
+          p.hasInitializer() &&
+          (p.getInitializerIfKind(SyntaxKind.ArrowFunction) ||
+            p.getInitializerIfKind(SyntaxKind.FunctionExpression)),
+      )
+
+
+      for (const publicArrow of publicArrows) {
+        const arrowType = publicArrow.getType();
+        const callSignature = arrowType.getCallSignatures()[0];
+        if (!callSignature) continue;
+
+        const methodParams = new Map(
+          callSignature.getParameters().map((p) => {
+            const decl = p.getDeclarations()[0];
+            if (!decl) {
+              throw new Error(
+                `No declaration found for parameter ${p.getName()} in arrow method ${publicArrow.getName()} of class ${className}`,
+              );
+            }
+            const paramType = p.getTypeAtLocation(decl);
+            return [p.getName(), getFromTsMorph(paramType)];
+          }),
+        );
+
+        const returnType = getFromTsMorph(callSignature.getReturnType());
+        methods.set(publicArrow.getName(), { methodParams, returnType });
+      }
+
 
       TypeMetadata.update(className, constructorArgs, methods);
     }
