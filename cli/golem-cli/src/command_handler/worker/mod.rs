@@ -16,9 +16,9 @@ mod stream;
 mod stream_output;
 
 use crate::command::shared_args::{
-    NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
+    AgentIdArgs, NewWorkerArgument, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
 };
-use crate::command::worker::WorkerSubcommand;
+use crate::command::worker::AgentSubcommand;
 use crate::command_handler::worker::stream::WorkerConnection;
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -81,15 +81,15 @@ impl WorkerCommandHandler {
         Self { ctx }
     }
 
-    pub async fn handle_command(&self, subcommand: WorkerSubcommand) -> anyhow::Result<()> {
+    pub async fn handle_command(&self, subcommand: AgentSubcommand) -> anyhow::Result<()> {
         match subcommand {
-            WorkerSubcommand::New {
-                worker_name,
+            AgentSubcommand::New {
+                agent_id: worker_name,
                 arguments,
                 env,
             } => self.cmd_new(worker_name, arguments, env).await,
-            WorkerSubcommand::Invoke {
-                worker_name,
+            AgentSubcommand::Invoke {
+                agent_id: worker_name,
                 function_name,
                 arguments,
                 enqueue,
@@ -108,9 +108,13 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
-            WorkerSubcommand::Get { worker_name } => self.cmd_get(worker_name).await,
-            WorkerSubcommand::Delete { worker_name } => self.cmd_delete(worker_name).await,
-            WorkerSubcommand::List {
+            AgentSubcommand::Get {
+                agent_id: worker_name,
+            } => self.cmd_get(worker_name).await,
+            AgentSubcommand::Delete {
+                agent_id: worker_name,
+            } => self.cmd_delete(worker_name).await,
+            AgentSubcommand::List {
                 component_name,
                 agent_type_name,
                 filter: filters,
@@ -128,13 +132,15 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
-            WorkerSubcommand::Stream {
-                worker_name,
+            AgentSubcommand::Stream {
+                agent_id: worker_name,
                 stream_args,
             } => self.cmd_stream(worker_name, stream_args).await,
-            WorkerSubcommand::Interrupt { worker_name } => self.cmd_interrupt(worker_name).await,
-            WorkerSubcommand::Update {
-                worker_name,
+            AgentSubcommand::Interrupt {
+                agent_id: worker_name,
+            } => self.cmd_interrupt(worker_name).await,
+            AgentSubcommand::Update {
+                agent_id: worker_name,
                 mode,
                 target_version,
                 r#await,
@@ -147,25 +153,27 @@ impl WorkerCommandHandler {
                 )
                 .await
             }
-            WorkerSubcommand::Resume { worker_name } => self.cmd_resume(worker_name).await,
-            WorkerSubcommand::SimulateCrash { worker_name } => {
-                self.cmd_simulate_crash(worker_name).await
-            }
-            WorkerSubcommand::Oplog {
-                worker_name,
+            AgentSubcommand::Resume {
+                agent_id: worker_name,
+            } => self.cmd_resume(worker_name).await,
+            AgentSubcommand::SimulateCrash {
+                agent_id: worker_name,
+            } => self.cmd_simulate_crash(worker_name).await,
+            AgentSubcommand::Oplog {
+                agent_id: worker_name,
                 from,
                 query,
             } => self.cmd_oplog(worker_name, from, query).await,
-            WorkerSubcommand::Revert {
-                worker_name,
+            AgentSubcommand::Revert {
+                agent_id: worker_name,
                 last_oplog_index,
                 number_of_invocations,
             } => {
                 self.cmd_revert(worker_name, last_oplog_index, number_of_invocations)
                     .await
             }
-            WorkerSubcommand::CancelInvocation {
-                worker_name,
+            AgentSubcommand::CancelInvocation {
+                agent_id: worker_name,
                 idempotency_key,
             } => {
                 self.cmd_cancel_invocation(worker_name, idempotency_key)
@@ -176,13 +184,13 @@ impl WorkerCommandHandler {
 
     async fn cmd_new(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         arguments: Vec<NewWorkerArgument>,
         env: Vec<(String, String)>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
 
-        let worker_name = worker_name.worker_name;
+        let worker_name = worker_name.agent_id;
         let worker_name_match = self.match_worker_name(worker_name).await?;
         let component = self
             .ctx
@@ -225,7 +233,7 @@ impl WorkerCommandHandler {
 
     async fn cmd_invoke(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         function_name: &WorkerFunctionName,
         arguments: Vec<WorkerFunctionArgument>,
         enqueue: bool,
@@ -259,7 +267,7 @@ impl WorkerCommandHandler {
             None => new_idempotency_key(),
         };
 
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
 
         let component = self
             .ctx
@@ -398,11 +406,11 @@ impl WorkerCommandHandler {
 
     async fn cmd_stream(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         stream_args: StreamArgs,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -429,9 +437,9 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_simulate_crash(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_simulate_crash(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -460,12 +468,12 @@ impl WorkerCommandHandler {
 
     async fn cmd_oplog(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         from: Option<u64>,
         query: Option<String>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -519,7 +527,7 @@ impl WorkerCommandHandler {
 
     async fn cmd_revert(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         last_oplog_index: Option<u64>,
         number_of_invocations: Option<u64>,
     ) -> anyhow::Result<()> {
@@ -533,7 +541,7 @@ impl WorkerCommandHandler {
         }
 
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -582,11 +590,11 @@ impl WorkerCommandHandler {
 
     async fn cmd_cancel_invocation(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         idempotency_key: IdempotencyKey,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -736,9 +744,9 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_interrupt(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_interrupt(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -759,9 +767,9 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_resume(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_resume(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -783,13 +791,13 @@ impl WorkerCommandHandler {
 
     async fn cmd_update(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         mode: WorkerUpdateMode,
         target_version: Option<u64>,
         await_update: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -834,9 +842,9 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_get(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_get(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -863,9 +871,9 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_delete(&self, worker_name: WorkerNameArg) -> anyhow::Result<()> {
+    async fn cmd_delete(&self, worker_name: AgentIdArgs) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;

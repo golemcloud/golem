@@ -18,7 +18,7 @@ use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
 use crate::command::plugin::PluginSubcommand;
 use crate::command::profile::ProfileSubcommand;
-use crate::command::worker::WorkerSubcommand;
+use crate::command::worker::AgentSubcommand;
 use crate::config::{BuildProfileName, ProfileName};
 use crate::log::LogColorize;
 use crate::model::{Format, WorkerName};
@@ -333,7 +333,7 @@ impl GolemCliCommand {
                         match positional_args.as_slice() {
                             ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
-                            ["worker"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
+                            ["agent"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
                             _ => None,
                         }
                     }
@@ -385,14 +385,14 @@ impl GolemCliCommand {
     fn invalid_arg_matchers() -> Vec<InvalidArgMatcher> {
         vec![
             InvalidArgMatcher {
-                subcommands: vec!["worker", "invoke"],
+                subcommands: vec!["agent", "invoke"],
                 found_positional_args: vec![],
-                missing_positional_arg: "worker_name",
+                missing_positional_arg: "agent_id",
                 to_partial_match: |_| GolemCliCommandPartialMatch::WorkerInvokeMissingWorkerName,
             },
             InvalidArgMatcher {
-                subcommands: vec!["worker", "invoke"],
-                found_positional_args: vec!["worker_name"],
+                subcommands: vec!["agent", "invoke"],
+                found_positional_args: vec!["agent_id"],
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
                     GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName {
@@ -516,10 +516,10 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ComponentSubcommand,
     },
-    /// Invoke and manage workers
-    Worker {
+    /// Invoke and manage agents
+    Agent {
         #[clap(subcommand)]
-        subcommand: WorkerSubcommand,
+        subcommand: AgentSubcommand,
     },
     /// Manage API gateway objects
     Api {
@@ -653,15 +653,15 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct WorkerNameArg {
+    pub struct AgentIdArgs {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Worker name, accepted formats:
-        ///   - <WORKER>
-        ///   - <COMPONENT>/<WORKER>
-        ///   - <PROJECT>/<COMPONENT>/<WORKER>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<WORKER>
+        /// Agent ID, accepted formats:
+        ///   - <AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
-        pub worker_name: WorkerName,
+        pub agent_id: WorkerName,
     }
 
     #[derive(Debug, Args)]
@@ -1015,33 +1015,33 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        ComponentOptionalComponentName, NewWorkerArgument, OptionalAgentTypeName, StreamArgs,
-        WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
+        AgentIdArgs, ComponentOptionalComponentName, NewWorkerArgument, OptionalAgentTypeName,
+        StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
     use crate::model::{IdempotencyKey, WorkerUpdateMode};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
 
     #[derive(Debug, Subcommand)]
-    pub enum WorkerSubcommand {
-        /// Create new worker
+    pub enum AgentSubcommand {
+        /// Create new agent
         New {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
-            /// Worker arguments
+            agent_id: AgentIdArgs,
+            /// Command-line arguments visible for the agent
             arguments: Vec<NewWorkerArgument>,
-            /// Worker environment variables
+            /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
         },
         // TODO: json args
-        /// Invoke (or enqueue invocation for) worker
+        /// Invoke (or enqueue invocation for) agent
         Invoke {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
-            /// Worker function name to invoke
+            agent_id: AgentIdArgs,
+            /// Agent function name to invoke
             function_name: WorkerFunctionName,
-            /// Worker function arguments in WAVE format
+            /// Agent function arguments in WAVE format
             arguments: Vec<WorkerFunctionArgument>,
             /// Enqueue invocation, and do not wait for it
             #[clap(long, short)]
@@ -1050,23 +1050,22 @@ pub mod worker {
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
-            /// Connect to the worker before invoke (the worker must already exist)
-            /// and live stream its standard output, error and log channels
+            /// Connect to the agent before the invocation and live stream its standard output, error and log channels
             stream: bool,
             #[command(flatten)]
             stream_args: StreamArgs,
         },
-        /// Get worker metadata
+        /// Get agent metadata
         Get {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Deletes a worker
+        /// Delete an agent
         Delete {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// List worker metadata
+        /// List agents
         List {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
@@ -1074,9 +1073,9 @@ pub mod worker {
             #[command(flatten)]
             agent_type_name: OptionalAgentTypeName,
 
-            /// Filter for worker metadata in form of `property op value`.
+            /// Filter for agent metadata in form of `property op value`.
             ///
-            /// Filter examples: `name = worker-name`, `version >= 0`, `status = Running`, `env.var1 = value`.
+            /// Filter examples: `name = my-agent(1, 2, 3)`, `version >= 0`, `status = Running`, `env.var1 = value`.
             /// Can be used multiple times (AND condition is applied between them)
             #[arg(long)]
             filter: Vec<String>,
@@ -1087,54 +1086,54 @@ pub mod worker {
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
-            /// The maximum the number of returned workers, returns all values is not specified.
+            /// The maximum the number of returned agents, returns all values is not specified.
             /// When multiple component is selected, then the limit it is applied separately
             #[arg(long, short)]
             max_count: Option<u64>,
-            /// When set to true it queries for most up-to-date status for each worker, default is false
+            /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
         },
-        /// Connect to a worker and live stream its standard output, error and log channels
+        /// Connect to an agent and live stream its standard output, error and log channels
         Stream {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             #[command(flatten)]
             stream_args: StreamArgs,
         },
-        /// Updates a worker
+        /// Updates an agent
         Update {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
             mode: Option<WorkerUpdateMode>,
-            /// The new version of the updated worker (default is the latest version)
+            /// The new version of the updated agent (default is the latest version)
             target_version: Option<u64>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
         },
-        /// Interrupts a running worker
+        /// Interrupts a running agent
         Interrupt {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Resume an interrupted worker
+        /// Resume an interrupted agent
         Resume {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Simulates a crash on a worker for testing purposes.
+        /// Simulates a crash on an agent for testing purposes.
         ///
-        /// The worker starts recovering and resuming immediately.
+        /// The agent starts recovering and resuming immediately.
         SimulateCrash {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Queries and dumps a worker's full oplog
+        /// Queries and dumps an agent's full oplog
         Oplog {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Index of the first oplog entry to get. If missing, the whole oplog is returned
             #[arg(long, conflicts_with = "query")]
             from: Option<u64>,
@@ -1142,10 +1141,10 @@ pub mod worker {
             #[arg(long, conflicts_with = "from")]
             query: Option<String>,
         },
-        /// Reverts a worker by undoing its last recorded operations
+        /// Reverts an agent by undoing its last recorded operations
         Revert {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Revert by oplog index
             #[arg(long, conflicts_with = "number_of_invocations")]
             last_oplog_index: Option<u64>,
@@ -1156,7 +1155,7 @@ pub mod worker {
         /// Cancels an enqueued invocation if it has not started yet
         CancelInvocation {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Idempotency key of the invocation to be cancelled
             idempotency_key: IdempotencyKey,
         },
