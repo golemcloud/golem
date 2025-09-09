@@ -420,6 +420,14 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         )
       }
 
+      if (type.name === 'Date') {
+        return Either.left("Unsupported type `Date`. Use a `string` if possible");
+      }
+
+      if (type.name === 'RegExp') {
+        return Either.left("Unsupported type `RegExp`. Use a `string` if possible");
+      }
+
 
       const interfaceRsult = Either.all(type.properties.map((prop) => {
         const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
@@ -497,10 +505,17 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         return Either.left("Unsupported type `Iterator`. Use `Array` type instead");
       }
 
+      if (customTypeName.includes('asyncIterator')) {
+        return Either.left(`Unsupported type \`AsyncIterator\`. Use \`Array\` type instead`);
+      }
+
       if (customTypeName.includes('iterator')) {
         return Either.left(`Unsupported type \`Iterable\`. Use \`Array\` type instead`);
       }
 
+      if (customTypeName.includes('asyncIterable')) {
+        return Either.left(`Unsupported type \`AsyncIterable\`. Use \`Array\` type instead`);
+      }
 
       if (customTypeName === 'Record') {
         return Either.left(`Unsupported type \`${customTypeName}\`. Use a plain object or a \`Map\` type instead`);
