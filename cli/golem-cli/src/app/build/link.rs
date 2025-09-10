@@ -27,7 +27,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
     let _indent = LogIndent::new();
 
     for component_name in ctx.selected_component_names() {
-        let static_dependencies = ctx
+        let static_wasm_rpc_dependencies = ctx
             .application
             .component_dependencies(component_name)
             .iter()
@@ -39,7 +39,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::Wasm)
             .collect::<BTreeSet<_>>();
-        let dynamic_dependencies = ctx
+        let dynamic_wasm_rpc_dependencies = ctx
             .application
             .component_dependencies(component_name)
             .iter()
@@ -47,7 +47,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             .collect::<BTreeSet<_>>();
 
         let mut wasms_to_compose_with = Vec::new();
-        for static_dep in &static_dependencies {
+        for static_dep in &static_wasm_rpc_dependencies {
             let path = ctx.resolve_binary_component_source(static_dep).await?;
             wasms_to_compose_with.push(path);
         }
@@ -65,16 +65,18 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             &ctx.application.task_result_marker_dir(),
             LinkRpcMarkerHash {
                 component_name,
-                dependencies: &static_dependencies,
+                static_wasm_rpc_dependencies: &static_wasm_rpc_dependencies,
+                dynamic_wasm_rpc_dependencies: &dynamic_wasm_rpc_dependencies,
+                library_dependencies: &library_dependencies,
             },
         )?;
 
-        if !dynamic_dependencies.is_empty() {
+        if !dynamic_wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Found",
                 format!(
                     "dynamic WASM RPC dependencies ({}) for {}",
-                    dynamic_dependencies
+                    dynamic_wasm_rpc_dependencies
                         .iter()
                         .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
@@ -83,12 +85,12 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             );
         }
 
-        if !static_dependencies.is_empty() {
+        if !static_wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Found",
                 format!(
                     "static WASM RPC dependencies ({}) for {}",
-                    static_dependencies
+                    static_wasm_rpc_dependencies
                         .iter()
                         .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
@@ -144,7 +146,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                         "Linking",
                         format!(
                             "static dependencies ({}) into {}",
-                            static_dependencies
+                            static_wasm_rpc_dependencies
                                 .iter()
                                 .map(|s| s.source.to_string().log_color_highlight())
                                 .chain(
