@@ -46,6 +46,7 @@ export function getTypeFromTsMorph(
         name: "Float64Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Float32Array":
@@ -54,6 +55,7 @@ export function getTypeFromTsMorph(
         name: "Float32Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Int8Array":
@@ -62,6 +64,7 @@ export function getTypeFromTsMorph(
         name: "Int8Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Uint8Array":
@@ -70,6 +73,7 @@ export function getTypeFromTsMorph(
         name: "Uint8Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Int16Array":
@@ -78,6 +82,7 @@ export function getTypeFromTsMorph(
         name: "Int16Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Uint16Array":
@@ -86,6 +91,7 @@ export function getTypeFromTsMorph(
         name: "Uint16Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Int32Array":
@@ -94,6 +100,7 @@ export function getTypeFromTsMorph(
         name: "Int32Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "Uint32Array":
@@ -102,6 +109,7 @@ export function getTypeFromTsMorph(
         name: "Uint32Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "BigInt64Array":
@@ -110,6 +118,7 @@ export function getTypeFromTsMorph(
         name: "BigInt64Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
     case "BigUint64Array":
@@ -118,6 +127,7 @@ export function getTypeFromTsMorph(
         name: "BigUint64Array",
         element: {
           kind: "number",
+          optional: false
         },
       };
   }
@@ -430,7 +440,7 @@ export function updateMetadataFromSourceFiles(
           ? []
           : publicConstructors[0].getParameters().map((p) => ({
               name: p.getName(),
-              type: getTypeFromTsMorph(p.getType()),
+              type: getTypeFromTsMorph(p.getType(), p.isOptional()),
             }));
 
       const methods = new Map();
@@ -449,7 +459,7 @@ export function updateMetadataFromSourceFiles(
           }),
         );
 
-        const returnType = getTypeFromTsMorph(method.getReturnType());
+        const returnType = getTypeFromTsMorph(method.getReturnType(), false);
         methods.set(method.getName(), { methodParams, returnType });
       }
 

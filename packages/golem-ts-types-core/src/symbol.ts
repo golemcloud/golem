@@ -35,6 +35,7 @@ export class Symbol {
     this._typeAtLocation = args.typeAtLocation ?? {
       kind: 'undefined',
       name: 'undefined',
+      optional: false,
     };
     this._aliasTarget = args.aliasTarget;
   }
