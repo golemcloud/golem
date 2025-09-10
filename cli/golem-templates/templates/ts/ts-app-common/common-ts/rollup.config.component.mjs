@@ -34,7 +34,7 @@ import { Metadata } from '../../golem-temp/ts-metadata/${componentName}/.metadat
 
 TypescriptTypeRegistry.register(Metadata);
 
-// Using an sync function to prevent rollup from reordering registration and main import.
+// Using an async function to prevent rollup from reordering registration and main import.
 export default (async () => { return await import("./src/main");})();
 `,
                         moduleSideEffects: true,
