@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
+use crate::common::{mysql_host, postgres_host, start, TestContext};
 use crate::{LastUniqueId, Tracing, Deps};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
@@ -34,7 +34,7 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, test_dep};
+use test_r::{inherit_test_dep, test};
 use tokio::task::JoinSet;
 use tracing::Instrument;
 use try_match::try_match;
@@ -170,9 +170,9 @@ impl RdbmsTest {
 async fn rdbms_postgres_crud(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
-    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
+	let postgres = postgres_host(None).await;
     let db_address = postgres.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -517,9 +517,9 @@ fn postgres_get_expected(expected_values: Vec<(Uuid, String, String)>) -> serde_
 async fn rdbms_postgres_select1(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
-    postgres: &DockerPostgresRdb,
     _tracing: &Tracing,
 ) {
+	let postgres = postgres_host(None).await;
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(1));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -556,9 +556,9 @@ async fn rdbms_postgres_select1(
 async fn rdbms_mysql_crud(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
-    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
+    let mysql = mysql_host(None).await;
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -699,9 +699,9 @@ async fn rdbms_mysql_crud(
 async fn rdbms_mysql_idempotency(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
-    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
+    let mysql = mysql_host(None).await;
     let db_address = mysql.public_connection_string();
 
     let context = TestContext::new(last_unique_id);
@@ -887,9 +887,9 @@ fn mysql_get_expected(expected_values: Vec<(String, String)>) -> serde_json::Val
 async fn rdbms_mysql_select1(
     last_unique_id: &LastUniqueId,
     deps: &Deps,
-    mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
 ) {
+    let mysql = mysql_host(None).await;
     let test1 = StatementTest::execute_test("SELECT 1", vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({

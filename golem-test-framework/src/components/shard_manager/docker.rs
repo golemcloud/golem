@@ -153,7 +153,7 @@ impl Image for ShardManagerImage {
 
     fn ready_conditions(&self) -> Vec<WaitFor> {
         vec![WaitFor::message_on_stdout(
-            "Shard Manager is fully operational",
+            "All registered pods are healthy",
         )]
     }
 

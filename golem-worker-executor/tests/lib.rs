@@ -33,12 +33,12 @@ use golem_test_framework::config::{
 };
 use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
-use tracing::Level;
 use uuid::Uuid;
 
 mod common;
@@ -254,6 +254,7 @@ pub async fn test_dependencies(_tracing: &Tracing) -> Deps {
 
     let deps2 = TestDependenciesDsl {
         deps,
+        default_project_id: ProjectId::new_v4(),
         account_id: AccountId {
             value: "".to_string(),
         },
@@ -278,7 +279,10 @@ pub fn last_unique_id() -> LastUniqueId {
 
 #[test_dep(tagged_as = "golem_host")]
 pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
+    let binding = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "../wit" ]);
+    let wit_path = binding.as_path();
+
     SharedAnalysedTypeResolve::new(
-        AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
+        AnalysedTypeResolve::from_wit_directory(wit_path).unwrap(),
     )
 }

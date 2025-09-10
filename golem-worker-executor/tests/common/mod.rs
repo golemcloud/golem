@@ -1,5 +1,5 @@
 use crate::Deps;
-use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorPerTestDependencies};
+use crate::{LastUniqueId, WorkerExecutorPerTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
