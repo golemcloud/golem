@@ -320,7 +320,7 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
-wasm-rquickjs = "0.0.10"
+wasm-rquickjs = "0.0.11"
 wasm-wave = "0.235"
 wasmparser = "0.235.0"
 wasmprinter = "0.219.1"
