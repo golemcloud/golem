@@ -16,6 +16,7 @@ import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import {numberToOrdinalKebab} from "./typeIndexOrdinal";
+import { TypeMappingScope } from './scope';
 
 type TsType = CoreType.Type;
 
@@ -230,16 +231,11 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
       ({ kind: 'handle', value: { name: convertTypeNameToKebab(name), owner: undefined, resourceId, mode } });
 
 
-export type ParamInfo = {
-  paramName: string,
-  optional: boolean
-}
-
 export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> {
   return fromTsTypeInternal(tsType, Option.none());
 }
 
-export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<ParamInfo>): Either.Either<AnalysedType, string> {
+export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =
@@ -274,94 +270,104 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
       const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
       return Either.map(tupleElems, (items) => tuple(type.name, items));
 
-    case "union":
+    case "union": {
       let fieldIdx = 1;
-
       const possibleTypes: NameOptionTypePair[] = [];
-
       let boolTracked = false;
 
       for (const t of type.unionTypes) {
-        if (t.kind === 'boolean' || t.name === "false" || t.name === "true") {
+        if (t.kind === "boolean" || t.name === "false" || t.name === "true") {
           if (boolTracked) {
             continue;
           }
           boolTracked = true;
           possibleTypes.push({
             name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
-            typ: bool()
+            typ: bool(),
           });
-        } else {
-          if (t.kind === 'literal') {
-            const name = t.literalValue;
+          continue;
+        }
 
-            if (!name) {
-              return Either.left(`Unable to determine the literal value`);
-            }
+        if (t.kind === "literal") {
+          const name = t.literalValue;
+          if (!name) {
+            return Either.left(`Unable to determine the literal value`);
+          }
+          if (isNumberString(name)) {
+            return Either.left("Literals of number type are not supported");
+          }
+          possibleTypes.push({
+            name: trimQuotes(name),
+          });
+          continue;
+        }
 
-            if (isNumberString(name)) {
-              return Either.left("Literals of number type are not supported");
-            }
+        if (t.kind === "null") {
+          const result = fromTsTypeInternal(t, Option.none());
+          if (Either.isLeft(result)) {
+            return result;
+          }
+          possibleTypes.push({
+            name: `null-type`,
+            typ: result.val,
+          });
+          continue;
+        }
 
-            possibleTypes.push({
-              name: trimQuotes(name),
-            });
+        if (t.kind === "undefined") {
+          // If undefined is part of optional parameter, this is already tagged
+          // as optional and therefore we can ignore its undefined variant.
+          if (!isOptionalParam(optionalParamInParam)) {
+            const paramNameOpt: Option.Option<string> = Option.isSome(optionalParamInParam)
+              ? TypeMappingScope.paramName(optionalParamInParam.val) : Option.none();
 
-          } else if (t.kind === 'null') {
-            const result =
-              fromTsTypeInternal(t, Option.none());
+            if (Option.isSome(paramNameOpt) && type.unionTypes.length === 2) {
+              const paramName = paramNameOpt.val;
 
-            if (Either.isLeft(result)) {
-              return result;
-            }
-
-            possibleTypes.push({
-              name: `null-type`,
-              typ: result.val
-            });
-          } else if (t.kind === 'undefined') {
-            // If undefined is part of optional parameter, this is already tagged as
-            // optional and therefore forget about it's undefined variant.
-            if (!(isOptionalParam(optionalParamInParam))) {
-              const paramValue = Option.isSome(optionalParamInParam) ? optionalParamInParam.val.paramName : undefined;
-
-              if (paramValue && type.unionTypes.length === 2) {
-                const alternate: CoreType.Type  | undefined  = type.unionTypes.find(ut => ut.kind !== 'undefined');
-
-                if (alternate) {
-                  return Either.left(
-                      `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants . Consider changing \`${paramValue}:\` to  \`${paramValue}?:\` and remove undefined, to consider it as an optional type`,
-                    )
-                  }
-                    return Either.left(
-                      `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants`
-                    )
-
+              const alternate = type.unionTypes.find(
+                (ut) => ut.kind !== "undefined",
+              );
+              if (alternate) {
+                return Either.left(
+                  `Parameter \`${paramName}\` has a union type with \`undefined\` as one of the variants . Consider changing \`${paramName}:\` to  \`${paramName}?:\` and remove undefined, to consider it as an optional type`,
+                );
               }
+              return Either.left(
+                `Parameter \`${paramName}\` has a union type with \`undefined\` as one of the variants`,
+              );
+            }
+
+            if (Option.isSome(paramNameOpt)) {
+              const paramName = paramNameOpt.val;
 
               return Either.left(
-                `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. Try removing \`undefined\` from the union`
-              )
-            }
-          }
-          else {
-            const result =
-              fromTsTypeInternal(t, Option.none());
-
-            if (Either.isLeft(result)) {
-              return result;
+                `Parameter \`${paramName}\` has a union type with \`undefined\` as one of the variants. Try removing \`undefined\` from the union`,
+              );
             }
 
+            return Either.left(
+              `Union  type with \`undefined\` is not supported. Try removing \`undefined\` from the union`,
+            )
 
-            possibleTypes.push({
-              name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
-              typ: result.val,
-            });
           }
+          continue;
         }
+
+        const result = fromTsTypeInternal(t, Option.none());
+
+        if (Either.isLeft(result)) {
+          return result;
+        }
+
+        possibleTypes.push({
+          name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
+          typ: result.val,
+        });
       }
 
       return Either.right(variant(type.name, possibleTypes));
+    }
+
 
     case "object":
       const result = Either.all(type.properties.map((prop) => {
@@ -370,22 +376,26 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
 
+        const entityName = type.name ?? type.kind;
+
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(type, Option.some({
-            paramName: prop.getName(),
-            optional: true
-          }));
+          const tsType = fromTsTypeInternal(type, Option.some(TypeMappingScope.object(
+            entityName,
+            prop.getName(),
+            true
+          )));
 
           return Either.map(tsType, (analysedType) => {
             return field(prop.getName(), option(type.name, analysedType))
           });
         }
 
-        const tsType = fromTsTypeInternal(type, Option.some({
-          paramName: prop.getName(),
-          optional: false
-        }));
+        const tsType = fromTsTypeInternal(type, Option.some(TypeMappingScope.object(
+          entityName,
+          prop.getName(),
+          false
+        )));
 
         return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
@@ -459,10 +469,11 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(type, Option.some({
-            paramName: prop.getName(),
-            optional: true
-          }));
+          const tsType = fromTsTypeInternal(type, Option.some(TypeMappingScope.interface(
+            type.name ?? type.kind,
+            prop.getName(),
+            true
+          )));
 
           return Either.map(tsType, (analysedType) => {
             return field(prop.getName(), option(undefined, analysedType))
@@ -470,10 +481,11 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
         }
 
         const tsType =
-          fromTsTypeInternal(type, Option.some({
-            paramName: prop.getName(),
-            optional: false
-          }));
+          fromTsTypeInternal(type, Option.some(TypeMappingScope.interface(
+            type.name ?? type.kind,
+            prop.getName(),
+            false
+          )));
 
         return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
@@ -587,8 +599,8 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
   }
 }
 
-function isOptionalParam(param: Option.Option<ParamInfo>) {
-  return Option.isSome(param) && param.val.optional;
+function isOptionalParam(param: Option.Option<TypeMappingScope>) {
+  return Option.isSome(param) && TypeMappingScope.isOptionalParam(param.val)
 }
 
 function isNumberString(name: string): boolean {
