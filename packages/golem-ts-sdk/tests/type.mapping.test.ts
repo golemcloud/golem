@@ -220,17 +220,6 @@ test('Union of literals to AnalysedType', () => {
     value: {
       cases: [
         {
-          name: 'null-type',
-          typ: {
-            kind: 'tuple',
-            value: {
-              items: [],
-              name: 'null-type',
-              owner: undefined,
-            },
-          },
-        },
-        {
           name: 'type-first',
           typ: {
             kind: 'bool',
@@ -260,7 +249,6 @@ function checkPrimitiveFields(fields: any[]) {
     stringProp: { kind: 'string' },
     booleanProp: { kind: 'bool' },
     bigintProp: { kind: 'u64' },
-    nullProp: { kind: 'tuple', value: { items: [] } },
     trueProp: { kind: 'bool' },
     falseProp: { kind: 'bool' },
   };

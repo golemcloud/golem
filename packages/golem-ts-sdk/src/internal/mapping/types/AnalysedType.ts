@@ -16,7 +16,6 @@ import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import {numberToOrdinalKebab} from "./typeIndexOrdinal";
-import * as util from 'node:util';
 
 type TsType = CoreType.Type;
 
@@ -235,7 +234,6 @@ export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> 
   return fromTsTypeInternal(tsType, Option.none());
 }
 
-
 export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<string>): Either.Either<AnalysedType, string> {
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
@@ -277,7 +275,7 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
       const possibleTypes: NameOptionTypePair[] = [];
 
       let boolTracked = false;
-      
+
       for (const t of type.unionTypes) {
         if (t.kind === 'boolean' || t.name === "false" || t.name === "true") {
           if (boolTracked) {

@@ -143,7 +143,6 @@ export const baseArb = fc.record({
   listProp: listArb,
   mapProp: mapArb,
   nestedProp: fc.record({ n: fc.integer() }),
-  nullProp: fc.constant(null),
   numberProp: fc.integer(),
   objectProp: objectArb,
   objectComplexProp: objectComplexArb,

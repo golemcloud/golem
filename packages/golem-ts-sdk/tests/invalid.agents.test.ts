@@ -52,6 +52,18 @@ describe('Invalid types in agents', () => {
 
     const bigintType = AnalysedType.fromTsType(fun1Params?.get('bigint')!);
 
+    const nullType = AnalysedType.fromTsType(fun1Params?.get('nullParam')!);
+
+    const undefinedType = AnalysedType.fromTsType(
+      fun1Params?.get('undefined')!,
+    );
+
+    const voidType = AnalysedType.fromTsType(fun1Params?.get('voidParam')!);
+
+    const unionWithNullType = AnalysedType.fromTsType(
+      fun1Params?.get('unionWithNull')!,
+    );
+
     expect(dateType.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
     );
@@ -99,6 +111,14 @@ describe('Invalid types in agents', () => {
     expect(bigintType.val).toBe(
       'Unsupported type `BigInt`, use `bigint` instead',
     );
+
+    expect(nullType.val).toBe('Unsupported type `null`');
+
+    expect(undefinedType.val).toBe('Unsupported type `undefined`');
+
+    expect(voidType.val).toBe('Unsupported type `void`');
+
+    expect(unionWithNullType.val).toBe('Unsupported type `null`');
   });
 
   // Act as more of a regression test

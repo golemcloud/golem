@@ -143,9 +143,7 @@ export function buildInputSchema(
 export function buildOutputSchema(
   returnType: Type.Type,
 ): Either.Either<DataSchema, string> {
-
-  const undefinedSchema =
-    handleUndefinedReturnType(returnType);
+  const undefinedSchema = handleUndefinedReturnType(returnType);
 
   if (Option.isSome(undefinedSchema)) {
     return Either.right(undefinedSchema.val);
@@ -162,8 +160,6 @@ export function buildOutputSchema(
 function convertToElementSchema(
   type: Type.Type,
 ): Either.Either<ElementSchema, string> {
-
-
   return Either.map(WitType.fromTsType(type), (witType) => {
     return {
       tag: 'component-model',
@@ -172,19 +168,20 @@ function convertToElementSchema(
   });
 }
 
-
-function handleUndefinedReturnType(returnType: Type.Type): Option.Option<DataSchema> {
+function handleUndefinedReturnType(
+  returnType: Type.Type,
+): Option.Option<DataSchema> {
   switch (returnType.kind) {
     case 'null':
-      return Option.some({tag: 'tuple', val : [] })
+      return Option.some({ tag: 'tuple', val: [] });
 
-    case "undefined":
-      return Option.some({tag: 'tuple', val : [] })
+    case 'undefined':
+      return Option.some({ tag: 'tuple', val: [] });
 
     case 'void':
       return Option.some({ tag: 'tuple', val: [] });
 
-    case "promise":
+    case 'promise':
       const elementType = returnType.element;
       return handleUndefinedReturnType(elementType);
 
