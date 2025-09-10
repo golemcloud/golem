@@ -4159,6 +4159,7 @@ dependencies = [
  "log",
  "minijinja",
  "moonbit-component-generator",
+ "nanoid",
  "native-tls",
  "nondestructive",
  "phf",

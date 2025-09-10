@@ -75,6 +75,7 @@ lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
+nanoid = { workspace = true }
 nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }

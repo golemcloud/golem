@@ -16,35 +16,42 @@ mod plugins;
 
 use crate::test_r_get_dep_tracing;
 use crate::Tracing;
-use assert2::{assert, check};
+use assert2::{assert, check, let_assert};
 use colored::Colorize;
 use golem_cli::fs;
 use golem_cli::model::invoke_result_view::InvokeResultView;
 use golem_templates::model::GuestLanguage;
+use heck::ToKebabCase;
 use indoc::indoc;
 use itertools::Itertools;
+use nanoid::nanoid;
 use std::collections::HashSet;
 use std::ffi::OsStr;
+use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus};
+use std::process::{ExitStatus, Stdio};
 use strum::IntoEnumIterator;
 use tempfile::TempDir;
 use test_r::test;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
 use tracing::info;
 
 mod cmd {
     pub static ADD_DEPENDENCY: &str = "add-dependency";
+    pub static AGENT: &str = "agent";
     pub static APP: &str = "app";
     pub static BUILD: &str = "build";
     pub static COMPLETION: &str = "completion";
     pub static COMPONENT: &str = "component";
     pub static DEPLOY: &str = "deploy";
-    pub static NEW: &str = "new";
-    pub static AGENT: &str = "agent";
+    pub static GET: &str = "get";
     pub static INVOKE: &str = "invoke";
+    pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
-    pub static GET: &str = "get";
+    pub static TEMPLATES: &str = "templates";
 }
 
 mod flag {
@@ -62,9 +69,9 @@ mod pattern {
 }
 
 #[test]
-fn app_help_in_empty_folder(_tracing: &Tracing) {
+async fn app_help_in_empty_folder(_tracing: &Tracing) {
     let ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
     check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
@@ -74,22 +81,28 @@ fn app_help_in_empty_folder(_tracing: &Tracing) {
 }
 
 #[test]
-fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) {
+async fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "typescript", "rust"]);
+    let outputs = ctx
+        .cli([cmd::APP, cmd::NEW, app_name, "typescript", "rust"])
+        .await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "typescript", "app:typescript"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "typescript", "app:typescript"])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     check!(outputs.stderr_contains(pattern::HELP_USAGE));
     check!(outputs.stderr_contains(pattern::HELP_COMMANDS));
@@ -103,20 +116,22 @@ fn app_new_with_many_components_and_then_help_in_app_folder(_tracing: &Tracing) 
 }
 
 #[test]
-fn app_build_with_rust_component(_tracing: &Tracing) {
+async fn app_build_with_rust_component(_tracing: &Tracing) {
     let app_name = "test-app-name";
 
     let mut ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .await;
     assert!(outputs.success());
 
     // First build
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stderr_contains("Compiling app_rust v0.0.1"));
@@ -129,44 +144,44 @@ fn app_build_with_rust_component(_tracing: &Tracing) {
     );
 
     // Rebuild - 1
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 2
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD, flag::FORCE_BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD, flag::FORCE_BUILD]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(outputs.stderr_contains("Finished `dev` profile"));
 
     // Rebuild - 4
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
 
     // Clean
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
 
     // Rebuild - 5
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
     check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
 }
 
 #[test]
-fn app_new_language_hints(_tracing: &Tracing) {
+async fn app_new_language_hints(_tracing: &Tracing) {
     let ctx = TestContext::new();
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, "dummy-app-name"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, "dummy-app-name"]).await;
     assert!(!outputs.success());
     check!(outputs.stdout_contains("Available languages:"));
 
@@ -182,39 +197,43 @@ fn app_new_language_hints(_tracing: &Tracing) {
 }
 
 #[test]
-fn completion(_tracing: &Tracing) {
+async fn completion(_tracing: &Tracing) {
     let ctx = TestContext::new();
 
-    let outputs = ctx.cli([cmd::COMPLETION, "bash"]);
+    let outputs = ctx.cli([cmd::COMPLETION, "bash"]).await;
     assert!(outputs.success(), "bash");
 
-    let outputs = ctx.cli([cmd::COMPLETION, "elvish"]);
+    let outputs = ctx.cli([cmd::COMPLETION, "elvish"]).await;
     assert!(outputs.success(), "elvish");
 
-    let outputs = ctx.cli([cmd::COMPLETION, "fish"]);
+    let outputs = ctx.cli([cmd::COMPLETION, "fish"]).await;
     assert!(outputs.success(), "fish");
 
-    let outputs = ctx.cli([cmd::COMPLETION, "powershell"]);
+    let outputs = ctx.cli([cmd::COMPLETION, "powershell"]).await;
     assert!(outputs.success(), "powershell");
 
-    let outputs = ctx.cli([cmd::COMPLETION, "zsh"]);
+    let outputs = ctx.cli([cmd::COMPLETION, "zsh"]).await;
     assert!(outputs.success(), "zsh");
 }
 
 #[test]
-fn basic_dependencies_build(_tracing: &Tracing) {
+async fn basic_dependencies_build(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-other"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-other"])
+        .await;
     assert!(outputs.success());
 
     fs::append_str(
@@ -251,26 +270,28 @@ fn basic_dependencies_build(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     check!(outputs.stderr_count_lines_containing("- app:rust (wasm-rpc)") == 2);
     check!(outputs.stderr_count_lines_containing("- app:rust-other (wasm-rpc)") == 2);
 
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
 }
 
 #[test]
-fn basic_ifs_deploy(_tracing: &Tracing) {
+async fn basic_ifs_deploy(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .await;
     assert!(outputs.success());
 
     fs::write_str(
@@ -299,7 +320,7 @@ fn basic_ifs_deploy(_tracing: &Tracing) {
 
     ctx.start_server();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Creating component app:rust"));
     check!(outputs.stdout_contains("ro /Cargo.toml"));
@@ -329,7 +350,7 @@ fn basic_ifs_deploy(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Updating component app:rust"));
     check!(!outputs.stdout_contains("ro /Cargo.toml"));
@@ -337,22 +358,24 @@ fn basic_ifs_deploy(_tracing: &Tracing) {
     check!(!outputs.stdout_contains("rw /src/lib.rs"));
     check!(outputs.stdout_contains("ro /src/lib.rs"));
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains("Skipping deploying component app:rust"));
 }
 
 #[test]
-fn custom_app_subcommand_with_builtin_name() {
+async fn custom_app_subcommand_with_builtin_name() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust"])
+        .await;
     assert!(outputs.success());
 
     fs::append_str(
@@ -365,29 +388,31 @@ fn custom_app_subcommand_with_builtin_name() {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     check!(outputs.stderr_contains(":new"));
 
-    let outputs = ctx.cli([cmd::APP, ":new"]);
+    let outputs = ctx.cli([cmd::APP, ":new"]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo tree'"));
 }
 
 #[test]
-fn wasm_library_dependency_type() -> anyhow::Result<()> {
+async fn wasm_library_dependency_type() -> anyhow::Result<()> {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:main"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:main"])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:lib"]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:lib"]).await;
     assert!(outputs.success());
 
     // Changing the `app:lib` component type to be a library
@@ -481,17 +506,19 @@ fn wasm_library_dependency_type() -> anyhow::Result<()> {
 
     ctx.start_server();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::AGENT,
-        cmd::INVOKE,
-        "app:main/test1",
-        "run",
-        "--format",
-        "json",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            "app:main/test1",
+            "run",
+            "--format",
+            "json",
+        ])
+        .await;
     assert!(outputs.success());
 
     let result: InvokeResultView = serde_json::from_str(&outputs.stdout[0])?;
@@ -501,64 +528,74 @@ fn wasm_library_dependency_type() -> anyhow::Result<()> {
 }
 
 #[test]
-fn adding_and_changing_rpc_deps_retriggers_build() {
+async fn adding_and_changing_rpc_deps_retriggers_build() {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
     // Setup app
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-a"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-a"])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-b"]);
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:rust-b"])
+        .await;
     assert!(outputs.success());
 
     // Build app
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
 
     // Add wasm-rpc dependencies
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-a",
-        "--target-component-name",
-        "app:rust-b",
-        "--dependency-type",
-        "wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-a",
+            "--target-component-name",
+            "app:rust-b",
+            "--dependency-type",
+            "wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-b",
-        "--target-component-name",
-        "app:rust-a",
-        "--dependency-type",
-        "wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-b",
+            "--target-component-name",
+            "app:rust-a",
+            "--dependency-type",
+            "wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-a",
-        "--target-component-name",
-        "app:rust-a",
-        "--dependency-type",
-        "wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-a",
+            "--target-component-name",
+            "app:rust-a",
+            "--dependency-type",
+            "wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains_ordered([
         "Application components:",
@@ -572,7 +609,7 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with dynamic deps
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -583,7 +620,7 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build again with dynamic deps, now it should skip
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -594,43 +631,49 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Update deps to static
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-a",
-        "--target-component-name",
-        "app:rust-b",
-        "--dependency-type",
-        "static-wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-a",
+            "--target-component-name",
+            "app:rust-b",
+            "--dependency-type",
+            "static-wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-b",
-        "--target-component-name",
-        "app:rust-a",
-        "--dependency-type",
-        "static-wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-b",
+            "--target-component-name",
+            "app:rust-a",
+            "--dependency-type",
+            "static-wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-a",
-        "--target-component-name",
-        "app:rust-a",
-        "--dependency-type",
-        "static-wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-a",
+            "--target-component-name",
+            "app:rust-a",
+            "--dependency-type",
+            "static-wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains_ordered([
         "Application components:",
@@ -644,7 +687,7 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with static deps
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -655,7 +698,7 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with static deps again, should skip
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -666,43 +709,49 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Switching back to dynamic deps
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-a",
-        "--target-component-name",
-        "app:rust-b",
-        "--dependency-type",
-        "wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-a",
+            "--target-component-name",
+            "app:rust-b",
+            "--dependency-type",
+            "wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-b",
-        "--target-component-name",
-        "app:rust-a",
-        "--dependency-type",
-        "wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-b",
+            "--target-component-name",
+            "app:rust-a",
+            "--dependency-type",
+            "wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([
-        cmd::COMPONENT,
-        cmd::ADD_DEPENDENCY,
-        "--component-name",
-        "app:rust-a",
-        "--target-component-name",
-        "app:rust-a",
-        "--dependency-type",
-        "wasm-rpc",
-    ]);
+    let outputs = ctx
+        .cli([
+            cmd::COMPONENT,
+            cmd::ADD_DEPENDENCY,
+            "--component-name",
+            "app:rust-a",
+            "--target-component-name",
+            "app:rust-a",
+            "--dependency-type",
+            "wasm-rpc",
+        ])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::APP]);
+    let outputs = ctx.cli([cmd::APP]).await;
     assert!(!outputs.success());
     assert!(outputs.stderr_contains_ordered([
         "Application components:",
@@ -716,7 +765,7 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build with dynamic deps, should not skip
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -727,7 +776,7 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 
     // Build again with dynamic deps, now it should skip again
-    let outputs = ctx.cli([cmd::APP, cmd::BUILD]);
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "Linking dependencies",
@@ -738,6 +787,68 @@ fn adding_and_changing_rpc_deps_retriggers_build() {
     ]));
 }
 
+#[test]
+async fn build_all_templates() {
+    let mut ctx = TestContext::new();
+    let app_name = "all-templates-app";
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::TEMPLATES, flag::DEV_MODE])
+        .await;
+    assert!(outputs.success());
+
+    let template_prefix = "  - ";
+
+    let templates = outputs
+        .stdout
+        .iter()
+        .filter_map(|line| {
+            (line.starts_with(template_prefix) && line.contains(':')).then(|| {
+                let template_with_desc = line.as_str().strip_prefix(template_prefix);
+                let_assert!(Some(template_with_desc) = template_with_desc, "{}", line);
+                let separator_index = template_with_desc.find(":");
+                let_assert!(
+                    Some(separator_index) = separator_index,
+                    "{}",
+                    template_with_desc
+                );
+
+                &template_with_desc[..separator_index]
+            })
+        })
+        .collect::<Vec<_>>();
+
+    println!("{templates:#?}");
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let alphabet: [char; 8] = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+    for template in templates {
+        for _ in 0..2 {
+            let component_name = format!(
+                "app:{}-{}",
+                template.to_kebab_case(),
+                nanoid!(10, &alphabet),
+            );
+            let outputs = ctx
+                .cli([cmd::COMPONENT, cmd::NEW, template, &component_name])
+                .await;
+            assert!(outputs.success());
+        }
+    }
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success())
+}
+
+enum CommandOutput {
+    Stdout(String),
+    Stderr(String),
+}
+
 pub struct Output {
     pub status: ExitStatus,
     pub stdout: Vec<String>,
@@ -745,6 +856,61 @@ pub struct Output {
 }
 
 impl Output {
+    pub async fn stream_and_collect(prefix: &str, child: &mut Child) -> io::Result<Self> {
+        let stdout = child
+            .stdout
+            .take()
+            .unwrap_or_else(|| panic!("Can't get {prefix} stdout"));
+
+        let stderr = child
+            .stderr
+            .take()
+            .unwrap_or_else(|| panic!("Can't get {prefix} stderr"));
+
+        let (tx, mut rx) = mpsc::unbounded_channel();
+
+        tokio::spawn({
+            let prefix = format!("> {} - stdout:", prefix).green().bold();
+            let tx = tx.clone();
+            async move {
+                let mut lines = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    println!("{prefix} {line}");
+                    tx.send(CommandOutput::Stdout(line)).unwrap();
+                }
+            }
+        });
+
+        tokio::spawn({
+            let prefix = format!("> {} - stderr:", prefix).red().bold();
+            let tx = tx.clone();
+            async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    println!("{prefix} {line}");
+                    tx.send(CommandOutput::Stderr(line)).unwrap();
+                }
+            }
+        });
+
+        drop(tx);
+
+        let mut stdout = vec![];
+        let mut stderr = vec![];
+        while let Some(item) = rx.recv().await {
+            match item {
+                CommandOutput::Stdout(line) => stdout.push(line),
+                CommandOutput::Stderr(line) => stderr.push(line),
+            }
+        }
+
+        Ok(Self {
+            status: child.wait().await?,
+            stdout,
+            stderr,
+        })
+    }
+
     #[must_use]
     fn success(&self) -> bool {
         self.status.success()
@@ -841,7 +1007,13 @@ struct TestContext {
 
 impl Drop for TestContext {
     fn drop(&mut self) {
-        self.stop_server();
+        let server_process = self.server_process.take();
+        tokio::spawn(async move {
+            if let Some(mut server_process) = server_process {
+                println!("{}", "> stopping golem server".bold());
+                server_process.kill().await.unwrap();
+            }
+        });
     }
 }
 
@@ -862,11 +1034,11 @@ impl TestContext {
             golem_cli_path: PathBuf::from("../../target/debug/golem-cli")
                 .canonicalize()
                 .unwrap_or_else(|_| {
-                panic!(
-                    "golem binary not found in ../../target/debug/golem-cli, with current dir: {:?}",
-                    std::env::current_dir().unwrap()
-                );
-            }),
+                    panic!(
+                        "golem binary not found in ../../target/debug/golem-cli, with current dir: {:?}",
+                        std::env::current_dir().unwrap()
+                    );
+                }),
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
@@ -880,7 +1052,7 @@ impl TestContext {
     }
 
     #[must_use]
-    fn cli<I, S>(&self, args: I) -> Output
+    async fn cli<I, S>(&self, args: I) -> Output
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -906,32 +1078,17 @@ impl TestContext {
         );
         println!("{} {}", "> golem-cli".bold(), args.iter().join(" ").blue());
 
-        let output: Output = Command::new(&self.golem_cli_path)
+        let mut child = Command::new(&self.golem_cli_path)
             .args(args)
             .current_dir(working_dir)
-            .output()
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+
+        Output::stream_and_collect("golem-cli", &mut child)
+            .await
             .unwrap()
-            .into();
-
-        let status_prefix = {
-            let status_prefix = "> status:".bold();
-            if output.success() {
-                status_prefix.green()
-            } else {
-                status_prefix.red()
-            }
-        };
-        println!("{} {}", status_prefix, output.status);
-        let stdout_prefix = "> stdout:".green().bold();
-        for line in &output.stdout {
-            println!("{stdout_prefix} {line}");
-        }
-        let stderr_prefix = "> stderr:".red().bold();
-        for line in &output.stderr {
-            println!("{stderr_prefix} {line}");
-        }
-
-        output
     }
 
     fn start_server(&mut self) {
@@ -963,14 +1120,6 @@ impl TestContext {
                 .spawn()
                 .unwrap(),
         )
-    }
-
-    fn stop_server(&mut self) {
-        let server_process = self.server_process.take();
-        if let Some(mut server_process) = server_process {
-            println!("{}", "> stopping golem server".bold());
-            server_process.kill().unwrap();
-        }
     }
 
     fn cd<P: AsRef<Path>>(&mut self, path: P) {

@@ -36,15 +36,15 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     let mut ctx = TestContext::new();
     let app_name = "test-app-name";
 
-    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]);
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
     assert!(outputs.success());
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust1"]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust1"]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust2"]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust2"]).await;
     assert!(outputs.success());
 
     fs::write_str(
@@ -67,7 +67,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     ctx.start_server();
     let plugin_transformer = TestPlugin::new().await;
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
 
     let plugin_manifest_path = "plugin.yaml";
@@ -96,7 +96,7 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path]);
+    let outputs = ctx.cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path]).await;
     assert!(outputs.success());
 
     let plugin_manifest_path2 = "plugin2.yaml";
@@ -121,10 +121,10 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path2]);
+    let outputs = ctx.cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path2]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
     assert!(outputs.success());
     check!(outputs.stdout.len() == 5);
 
@@ -150,10 +150,10 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
     assert!(outputs.success());
     check!(outputs.stdout.len() == 7);
     check!(outputs.stdout_contains("component-transformer-1"));
@@ -190,10 +190,10 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains_row_with_cells(&["component-transformer-1", "v1", "0", "z: 3"]));
     check!(outputs.stdout_contains_row_with_cells(&["component-transformer-2", "0.0.1", "1"]));
@@ -231,10 +231,10 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]);
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]);
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;
     assert!(outputs.success());
     check!(outputs.stdout.len() == 7);
     check!(outputs.stdout_contains("component-transformer-2"));
