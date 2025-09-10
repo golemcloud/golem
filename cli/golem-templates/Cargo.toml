@@ -41,11 +41,6 @@ assert2 = { workspace = true }
 path = "src/lib.rs"
 harness = false
 
-[[bin]]
-name = "golem-templates-test-cli"
-path = "src/test/main.rs"
-test = false
-
 [[test]]
 name = "integration"
 path = "tests/integration.rs"
