@@ -129,11 +129,11 @@ describe('Invalid types in agents', () => {
     expect(unionWithNullType.val).toBe('Unsupported type `null`');
 
     expect(objectWithInvalidUnion1.val).toBe(
-      'Parameter `a` has a union type with `undefined` as one of the variants. This is not supported. Consider changing `a:` to  `a?:` and remove undefined',
+      'Parameter `a` has a union type with `undefined` as one of the variants . Consider changing `a:` to  `a?:` and remove undefined, to consider it as an optional type',
     );
 
     expect(objectWithInvalidUnion2.val).toBe(
-      'Parameter `a` has a union type with `undefined` as one of the variants. This is not supported. Consider changing `a:` to  `a?:` and remove undefined',
+      'Parameter `a` has a union type with `undefined` as one of the variants. Try removing `undefined` from the union',
     );
   });
 

@@ -24,8 +24,8 @@ type ObjectWithInvalidUnion1 = {
 };
 
 type ObjectWithInvalidUnion2 = {
-  a: string | number | undefined
-}
+  a: string | number | undefined;
+};
 
 @agent()
 class InvalidAgent extends BaseAgent {

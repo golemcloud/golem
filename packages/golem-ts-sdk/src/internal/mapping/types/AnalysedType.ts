@@ -326,13 +326,12 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
               const paramValue = Option.isSome(optionalParamInParam) ? optionalParamInParam.val.paramName : undefined;
 
               if (paramValue) {
-
                 if (type.unionTypes.length === 2) {
-                  const alternate = type.unionTypes.find(ut => ut.kind !== 'undefined');
+                  const alternate: CoreType.Type  | undefined  = type.unionTypes.find(ut => ut.kind !== 'undefined');
 
                   if (alternate) {
                     return Either.left(
-                      `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. This is not supported. Consider changing \`${paramValue}:\` to  \`${paramValue}?:\` and remove undefined`,
+                      `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants . Consider changing \`${paramValue}:\` to  \`${paramValue}?:\` and remove undefined, to consider it as an optional type`,
                     )
                   } else {
                     return Either.left(
