@@ -25,9 +25,7 @@ export class AgentTypeName {
     this.value = externalValue;
   }
 
-  static fromAgentClassName(
-    agentClassName: AgentClassName,
-  ): AgentTypeName {
+  static fromAgentClassName(agentClassName: AgentClassName): AgentTypeName {
     return new AgentTypeName(
       convertAgentClassNameToKebab(agentClassName.value),
     );

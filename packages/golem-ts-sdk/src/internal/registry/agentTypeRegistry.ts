@@ -20,16 +20,10 @@ import { AgentInitiator } from '../agentInitiator';
 
 type AgentClassNameString = string;
 
-const agentTypeRegistry = new Map<
-  AgentClassNameString,
-  AgentType
->();
+const agentTypeRegistry = new Map<AgentClassNameString, AgentType>();
 
 export const AgentTypeRegistry = {
-  register(
-    agentClassName: AgentClassName,
-    agentType: AgentType,
-  ): void {
+  register(agentClassName: AgentClassName, agentType: AgentType): void {
     agentTypeRegistry.set(agentClassName.value, agentType);
   },
 
@@ -37,10 +31,7 @@ export const AgentTypeRegistry = {
     return Array.from(agentTypeRegistry.entries())
       .map(
         ([name, agentType]) =>
-          [new AgentClassName(name), agentType] as [
-            AgentClassName,
-            AgentType,
-          ],
+          [new AgentClassName(name), agentType] as [AgentClassName, AgentType],
       )
       [Symbol.iterator]();
   },
@@ -49,12 +40,8 @@ export const AgentTypeRegistry = {
     return Array.from(agentTypeRegistry.values());
   },
 
-  lookup(
-    agentClassName: AgentClassName,
-  ): Option.Option<AgentType> {
-    return Option.fromNullable(
-      agentTypeRegistry.get(agentClassName.value),
-    );
+  lookup(agentClassName: AgentClassName): Option.Option<AgentType> {
+    return Option.fromNullable(agentTypeRegistry.get(agentClassName.value));
   },
 
   exists(agentClassName: AgentClassName): boolean {

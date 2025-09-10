@@ -19,28 +19,18 @@ import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 
 describe('Invalid types in agents', () => {
-  const invalidAgent =
-    TypeMetadata.getAll().get('InvalidAgent');
+  const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 
   it('invalid types in method inputs will return error', () => {
-    const fun1Params =
-      invalidAgent?.methods.get('fun1')?.methodParams;
+    const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
 
-    const dateType = AnalysedType.fromTsType(
-      fun1Params?.get('date')!,
-    );
+    const dateType = AnalysedType.fromTsType(fun1Params?.get('date')!);
 
-    const regExpType = AnalysedType.fromTsType(
-      fun1Params?.get('regExp')!,
-    );
+    const regExpType = AnalysedType.fromTsType(fun1Params?.get('regExp')!);
 
-    const iteratorType = AnalysedType.fromTsType(
-      fun1Params?.get('iterator')!,
-    );
+    const iteratorType = AnalysedType.fromTsType(fun1Params?.get('iterator')!);
 
-    const iterableType = AnalysedType.fromTsType(
-      fun1Params?.get('iterable')!,
-    );
+    const iterableType = AnalysedType.fromTsType(fun1Params?.get('iterable')!);
 
     const asyncIteratorType = AnalysedType.fromTsType(
       fun1Params?.get('asyncIterator')!,
@@ -50,41 +40,25 @@ describe('Invalid types in agents', () => {
       fun1Params?.get('asyncIterable')!,
     );
 
-    const anyType = AnalysedType.fromTsType(
-      fun1Params?.get('any')!,
-    );
+    const anyType = AnalysedType.fromTsType(fun1Params?.get('any')!);
 
-    const stringType = AnalysedType.fromTsType(
-      fun1Params?.get('string')!,
-    );
+    const stringType = AnalysedType.fromTsType(fun1Params?.get('string')!);
 
-    const booleanType = AnalysedType.fromTsType(
-      fun1Params?.get('boolean')!,
-    );
+    const booleanType = AnalysedType.fromTsType(fun1Params?.get('boolean')!);
 
-    const symbolType = AnalysedType.fromTsType(
-      fun1Params?.get('symbol')!,
-    );
+    const symbolType = AnalysedType.fromTsType(fun1Params?.get('symbol')!);
 
-    const numberType = AnalysedType.fromTsType(
-      fun1Params?.get('number')!,
-    );
+    const numberType = AnalysedType.fromTsType(fun1Params?.get('number')!);
 
-    const bigintType = AnalysedType.fromTsType(
-      fun1Params?.get('bigint')!,
-    );
+    const bigintType = AnalysedType.fromTsType(fun1Params?.get('bigint')!);
 
-    const nullType = AnalysedType.fromTsType(
-      fun1Params?.get('nullParam')!,
-    );
+    const nullType = AnalysedType.fromTsType(fun1Params?.get('nullParam')!);
 
     const undefinedType = AnalysedType.fromTsType(
       fun1Params?.get('undefined')!,
     );
 
-    const voidType = AnalysedType.fromTsType(
-      fun1Params?.get('voidParam')!,
-    );
+    const voidType = AnalysedType.fromTsType(fun1Params?.get('voidParam')!);
 
     const unionWithNullType = AnalysedType.fromTsType(
       fun1Params?.get('unionWithNull')!,
@@ -148,9 +122,7 @@ describe('Invalid types in agents', () => {
 
     expect(nullType.val).toBe('Unsupported type `null`');
 
-    expect(undefinedType.val).toBe(
-      'Unsupported type `undefined`',
-    );
+    expect(undefinedType.val).toBe('Unsupported type `undefined`');
 
     expect(voidType.val).toBe('Unsupported type `void`');
 
@@ -169,62 +141,29 @@ describe('Invalid types in agents', () => {
 
   // Act as more of a regression test
   it('invalid types in method outputs will return error', () => {
-    const fun2ReturnType =
-      invalidAgent?.methods.get('fun2')?.returnType;
-    const fun3ReturnType =
-      invalidAgent?.methods.get('fun3')?.returnType;
-    const fun4ReturnType =
-      invalidAgent?.methods.get('fun4')?.returnType;
-    const fun5ReturnType =
-      invalidAgent?.methods.get('fun5')?.returnType;
-    const fun6ReturnType =
-      invalidAgent?.methods.get('fun6')?.returnType;
-    const fun7ReturnType =
-      invalidAgent?.methods.get('fun7')?.returnType;
-    const fun8ReturnType =
-      invalidAgent?.methods.get('fun8')?.returnType;
-    const fun9ReturnType =
-      invalidAgent?.methods.get('fun9')?.returnType;
-    const fun10ReturnType =
-      invalidAgent?.methods.get('fun10')?.returnType;
-    const fun11ReturnType =
-      invalidAgent?.methods.get('fun11')?.returnType;
-    const fun12ReturnType =
-      invalidAgent?.methods.get('fun12')?.returnType;
+    const fun2ReturnType = invalidAgent?.methods.get('fun2')?.returnType;
+    const fun3ReturnType = invalidAgent?.methods.get('fun3')?.returnType;
+    const fun4ReturnType = invalidAgent?.methods.get('fun4')?.returnType;
+    const fun5ReturnType = invalidAgent?.methods.get('fun5')?.returnType;
+    const fun6ReturnType = invalidAgent?.methods.get('fun6')?.returnType;
+    const fun7ReturnType = invalidAgent?.methods.get('fun7')?.returnType;
+    const fun8ReturnType = invalidAgent?.methods.get('fun8')?.returnType;
+    const fun9ReturnType = invalidAgent?.methods.get('fun9')?.returnType;
+    const fun10ReturnType = invalidAgent?.methods.get('fun10')?.returnType;
+    const fun11ReturnType = invalidAgent?.methods.get('fun11')?.returnType;
+    const fun12ReturnType = invalidAgent?.methods.get('fun12')?.returnType;
 
-    const fun2Type = AnalysedType.fromTsType(
-      fun2ReturnType!,
-    );
-    const fun3Type = AnalysedType.fromTsType(
-      fun3ReturnType!,
-    );
-    const fun4Type = AnalysedType.fromTsType(
-      fun4ReturnType!,
-    );
-    const fun5Type = AnalysedType.fromTsType(
-      fun5ReturnType!,
-    );
-    const fun6Type = AnalysedType.fromTsType(
-      fun6ReturnType!,
-    );
-    const fun7Type = AnalysedType.fromTsType(
-      fun7ReturnType!,
-    );
-    const fun8Type = AnalysedType.fromTsType(
-      fun8ReturnType!,
-    );
-    const fun9Type = AnalysedType.fromTsType(
-      fun9ReturnType!,
-    );
-    const fun10Type = AnalysedType.fromTsType(
-      fun10ReturnType!,
-    );
-    const fun11Type = AnalysedType.fromTsType(
-      fun11ReturnType!,
-    );
-    const fun12Type = AnalysedType.fromTsType(
-      fun12ReturnType!,
-    );
+    const fun2Type = AnalysedType.fromTsType(fun2ReturnType!);
+    const fun3Type = AnalysedType.fromTsType(fun3ReturnType!);
+    const fun4Type = AnalysedType.fromTsType(fun4ReturnType!);
+    const fun5Type = AnalysedType.fromTsType(fun5ReturnType!);
+    const fun6Type = AnalysedType.fromTsType(fun6ReturnType!);
+    const fun7Type = AnalysedType.fromTsType(fun7ReturnType!);
+    const fun8Type = AnalysedType.fromTsType(fun8ReturnType!);
+    const fun9Type = AnalysedType.fromTsType(fun9ReturnType!);
+    const fun10Type = AnalysedType.fromTsType(fun10ReturnType!);
+    const fun11Type = AnalysedType.fromTsType(fun11ReturnType!);
+    const fun12Type = AnalysedType.fromTsType(fun12ReturnType!);
 
     expect(fun2Type.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',

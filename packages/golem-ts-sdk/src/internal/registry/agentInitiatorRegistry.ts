@@ -22,24 +22,15 @@ import { AgentTypeName } from '../../newTypes/agentTypeName';
 const agentInitiators = new Map<string, AgentInitiator>();
 
 export const AgentInitiatorRegistry = {
-  register(
-    agentName: AgentTypeName,
-    agentInitiator: AgentInitiator,
-  ): void {
+  register(agentName: AgentTypeName, agentInitiator: AgentInitiator): void {
     agentInitiators.set(agentName.value, agentInitiator);
   },
 
-  lookup(
-    agentName: AgentTypeName,
-  ): Option.Option<AgentInitiator> {
-    return Option.fromNullable(
-      agentInitiators.get(agentName.value),
-    );
+  lookup(agentName: AgentTypeName): Option.Option<AgentInitiator> {
+    return Option.fromNullable(agentInitiators.get(agentName.value));
   },
 
-  entries(): IterableIterator<
-    [AgentTypeName, AgentInitiator]
-  > {
+  entries(): IterableIterator<[AgentTypeName, AgentInitiator]> {
     return Array.from(agentInitiators.entries())
       .map(
         ([name, initiator]) =>

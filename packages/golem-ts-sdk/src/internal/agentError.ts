@@ -15,9 +15,7 @@
 import { AgentError } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
 
-export function createCustomError(
-  error: string,
-): AgentError {
+export function createCustomError(error: string): AgentError {
   return {
     tag: 'custom-error',
     val: {

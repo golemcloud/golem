@@ -56,9 +56,7 @@ class InvalidAgent extends BaseAgent {
     objectWithUndefinedUnion1: ObjectWithInvalidUnion1,
     objectWithUndefinedUnion2: ObjectWithInvalidUnion2,
   ): Types.PromiseType {
-    return Promise.resolve(
-      `Weather in ${location} is sunny!`,
-    );
+    return Promise.resolve(`Weather in ${location} is sunny!`);
   }
 
   async fun2(input: string): Promise<Date> {
@@ -75,15 +73,11 @@ class InvalidAgent extends BaseAgent {
     return array;
   }
 
-  async fun5(
-    input: string,
-  ): Promise<AsyncIterator<string>> {
+  async fun5(input: string): Promise<AsyncIterator<string>> {
     throw new Error('Unimplemented');
   }
 
-  async fun6(
-    input: string,
-  ): Promise<AsyncIterable<string>> {
+  async fun6(input: string): Promise<AsyncIterable<string>> {
     throw new Error('Unimplemented');
   }
 

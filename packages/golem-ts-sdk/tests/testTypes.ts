@@ -16,12 +16,7 @@ interface SimpleInterfaceType {
   n: number;
 }
 
-export type UnionOfLiterals =
-  | 'a'
-  | 'b'
-  | 'c'
-  | true
-  | false;
+export type UnionOfLiterals = 'a' | 'b' | 'c' | true | false;
 
 export type PromiseType = Promise<string>;
 
@@ -31,11 +26,7 @@ export type ObjectType = {
   c: boolean;
 };
 
-export type UnionType =
-  | number
-  | string
-  | boolean
-  | ObjectType;
+export type UnionType = number | string | boolean | ObjectType;
 
 export type ListType = Array<string>;
 

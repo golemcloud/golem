@@ -47,45 +47,38 @@ const specialChars = [
 ];
 
 //Ts class names can have $ and _ and digits
-export const agentClassNameArb: fc.Arbitrary<AgentClassName> =
-  fc
-    .array(fc.constantFrom(...specialChars), {
-      maxLength: 5,
-    })
-    .map((extraChars) => {
-      const chars = base.split('');
-      extraChars.forEach((c) => {
-        const index = Math.floor(
-          Math.random() * (chars.length + 1),
-        );
-        chars.splice(index, 0, c);
-      });
-      return new AgentClassName(chars.join(''));
+export const agentClassNameArb: fc.Arbitrary<AgentClassName> = fc
+  .array(fc.constantFrom(...specialChars), {
+    maxLength: 5,
+  })
+  .map((extraChars) => {
+    const chars = base.split('');
+    extraChars.forEach((c) => {
+      const index = Math.floor(Math.random() * (chars.length + 1));
+      chars.splice(index, 0, c);
     });
+    return new AgentClassName(chars.join(''));
+  });
 
 export const mapArb: fc.Arbitrary<MapType> = fc
   .dictionary(fc.string(), fc.integer())
   .map((obj) => new Map(Object.entries(obj)));
 
-export const objectArb: fc.Arbitrary<ObjectType> =
+export const objectArb: fc.Arbitrary<ObjectType> = fc.record({
+  a: fc.string(),
+  b: fc.integer(),
+  c: fc.boolean(),
+});
+
+export const listArb: fc.Arbitrary<ListType> = fc.array(fc.string());
+
+export const listComplexArb: fc.Arbitrary<ListComplexType> = fc.array(
   fc.record({
     a: fc.string(),
     b: fc.integer(),
     c: fc.boolean(),
-  });
-
-export const listArb: fc.Arbitrary<ListType> = fc.array(
-  fc.string(),
+  }),
 );
-
-export const listComplexArb: fc.Arbitrary<ListComplexType> =
-  fc.array(
-    fc.record({
-      a: fc.string(),
-      b: fc.integer(),
-      c: fc.boolean(),
-    }),
-  );
 
 export const unionArb: fc.Arbitrary<UnionType> = fc.oneof(
   fc.integer(),
@@ -104,53 +97,45 @@ export const tupleArb: fc.Arbitrary<TupleType> = fc.tuple(
   fc.boolean(),
 );
 
-export const tupleComplexArb: fc.Arbitrary<TupleComplexType> =
-  fc.tuple(
-    fc.string(),
-    fc.integer(),
-    fc.record({
-      a: fc.string(),
-      b: fc.integer(),
-      c: fc.boolean(),
-    }),
-  );
-
-export const objectComplexArb: fc.Arbitrary<ObjectComplexType> =
+export const tupleComplexArb: fc.Arbitrary<TupleComplexType> = fc.tuple(
+  fc.string(),
+  fc.integer(),
   fc.record({
     a: fc.string(),
     b: fc.integer(),
     c: fc.boolean(),
-    d: objectArb,
-    e: fc.oneof(
-      fc.integer(),
-      fc.string(),
-      fc.boolean(),
-      objectArb,
-    ),
-    f: listArb,
-    g: listComplexArb,
-    h: tupleArb,
-    i: tupleComplexArb,
-    j: mapArb,
-    k: fc.record({ n: fc.integer() }),
-  });
+  }),
+);
 
-export const unionComplexArb: fc.Arbitrary<UnionComplexType> =
-  fc.oneof(
-    fc.integer(),
-    fc.string(),
-    fc.boolean(),
-    objectComplexArb,
-    unionArb,
-    listArb,
-    listComplexArb,
-    tupleArb,
-    tupleComplexArb,
-    mapArb,
-    fc.record({
-      n: fc.integer(),
-    }),
-  );
+export const objectComplexArb: fc.Arbitrary<ObjectComplexType> = fc.record({
+  a: fc.string(),
+  b: fc.integer(),
+  c: fc.boolean(),
+  d: objectArb,
+  e: fc.oneof(fc.integer(), fc.string(), fc.boolean(), objectArb),
+  f: listArb,
+  g: listComplexArb,
+  h: tupleArb,
+  i: tupleComplexArb,
+  j: mapArb,
+  k: fc.record({ n: fc.integer() }),
+});
+
+export const unionComplexArb: fc.Arbitrary<UnionComplexType> = fc.oneof(
+  fc.integer(),
+  fc.string(),
+  fc.boolean(),
+  objectComplexArb,
+  unionArb,
+  listArb,
+  listComplexArb,
+  tupleArb,
+  tupleComplexArb,
+  mapArb,
+  fc.record({
+    n: fc.integer(),
+  }),
+);
 
 export const baseArb = fc.record({
   bigintProp: fc.bigInt(),
@@ -222,13 +207,12 @@ export const baseArb = fc.record({
 const optionalPropArb = fc
   .option(fc.integer())
   .map((opt) =>
-    opt === undefined || opt === null
-      ? {}
-      : { optionalProp: opt },
+    opt === undefined || opt === null ? {} : { optionalProp: opt },
   );
 
-export const interfaceArb: fc.Arbitrary<TestInterfaceType> =
-  fc.tuple(baseArb, optionalPropArb).map(
+export const interfaceArb: fc.Arbitrary<TestInterfaceType> = fc
+  .tuple(baseArb, optionalPropArb)
+  .map(
     ([base, optional]) =>
       ({
         ...base,

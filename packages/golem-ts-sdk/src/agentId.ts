@@ -39,8 +39,8 @@ export class AgentId {
     params: any[],
   ): AgentId {
     // Only placeholder implementation
-    const paramsConcatenated: string[] = params.map(
-      (param) => param.toString(),
+    const paramsConcatenated: string[] = params.map((param) =>
+      param.toString(),
     );
 
     const param = paramsConcatenated.join(',');

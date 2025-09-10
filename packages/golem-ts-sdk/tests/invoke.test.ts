@@ -12,10 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  ClassMetadata,
-  TypeMetadata,
-} from '@golemcloud/golem-ts-types-core';
+import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
 import {
   getDataValueFromWitValue,
@@ -44,24 +41,16 @@ test("AssistantAgent can be successfully initiated and the methods can be invoke
       (weatherAgentConstructorValue, locationValue) => {
         overrideSelfMetadataImpl();
 
-        const typeRegistry = TypeMetadata.get(
-          AssistantAgentClassName.value,
-        );
+        const typeRegistry = TypeMetadata.get(AssistantAgentClassName.value);
 
         if (!typeRegistry) {
-          throw new Error(
-            'WeatherAgent type metadata not found',
-          );
+          throw new Error('WeatherAgent type metadata not found');
         }
 
-        const constructorInfo =
-          typeRegistry.constructorArgs[0].type;
+        const constructorInfo = typeRegistry.constructorArgs[0].type;
 
         const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValue(
-            weatherAgentConstructorValue,
-            constructorInfo,
-          ),
+          WitValue.fromTsValue(weatherAgentConstructorValue, constructorInfo),
           (error) =>
             new Error(
               `Failed to convert constructor arg to WitValue. ${error}`,
@@ -70,10 +59,7 @@ test("AssistantAgent can be successfully initiated and the methods can be invoke
 
         const agentInitiator = Option.getOrThrowWith(
           AgentInitiatorRegistry.lookup(AssistantAgentName),
-          () =>
-            new Error(
-              'WeatherAgent not found in AgentInitiatorRegistry',
-            ),
+          () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
         );
 
         const result = agentInitiator.initiate(
@@ -96,18 +82,13 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
       (arbData, locationValue, number) => {
         overrideSelfMetadataImpl();
 
-        const typeRegistry = TypeMetadata.get(
-          WeatherAgentClassName.value,
-        );
+        const typeRegistry = TypeMetadata.get(WeatherAgentClassName.value);
 
         if (!typeRegistry) {
-          throw new Error(
-            'WeatherAgent type metadata not found',
-          );
+          throw new Error('WeatherAgent type metadata not found');
         }
 
-        const constructorInfo =
-          typeRegistry.constructorArgs[0].type;
+        const constructorInfo = typeRegistry.constructorArgs[0].type;
 
         const witValue = Either.getOrThrowWith(
           WitValue.fromTsValue(arbData, constructorInfo),
@@ -117,15 +98,11 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
             ),
         );
 
-        const constructorParams =
-          getDataValueFromWitValue(witValue);
+        const constructorParams = getDataValueFromWitValue(witValue);
 
         const agentInitiator = Option.getOrThrowWith(
           AgentInitiatorRegistry.lookup(WeatherAgentName),
-          () =>
-            new Error(
-              'WeatherAgent not found in AgentInitiatorRegistry',
-            ),
+          () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
         );
 
         const result = agentInitiator.initiate(
@@ -217,21 +194,16 @@ function testInvoke(
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
 ) {
-  const methodSignature =
-    typeRegistry.methods.get(methodName);
+  const methodSignature = typeRegistry.methods.get(methodName);
   const parametersInfo = methodSignature?.methodParams;
   const returnTypeInfo = methodSignature?.returnType;
 
   if (!parametersInfo) {
-    throw new Error(
-      `Method ${methodName} not found in metadata`,
-    );
+    throw new Error(`Method ${methodName} not found in metadata`);
   }
 
   if (!returnTypeInfo) {
-    throw new Error(
-      `Method ${methodName} not found in metadata`,
-    );
+    throw new Error(`Method ${methodName} not found in metadata`);
   }
 
   const parameterType = parametersInfo.get(parameterName);
@@ -248,35 +220,23 @@ function testInvoke(
   );
 
   resolvedAgent
-    .invoke(
-      methodName,
-      getDataValueFromWitValue(parameterWitValue),
-    )
+    .invoke(methodName, getDataValueFromWitValue(parameterWitValue))
     .then((invokeResult) => {
       const invokeDataValue =
         invokeResult.tag === 'ok'
           ? invokeResult.val
           : (() => {
-              throw new Error(
-                'Failed to convert method arg to WitValue. ',
-              );
+              throw new Error('Failed to convert method arg to WitValue. ');
             })();
-      const witValue =
-        getWitValueFromDataValue(invokeDataValue)[0];
-      const result = WitValue.toTsValue(
-        witValue,
-        returnTypeInfo,
-      );
+      const witValue = getWitValueFromDataValue(invokeDataValue)[0];
+      const result = WitValue.toTsValue(witValue, returnTypeInfo);
 
       expect(result).toEqual(expectedOutput);
     });
 }
 
 function overrideSelfMetadataImpl() {
-  vi.spyOn(
-    GolemApiHostModule,
-    'getSelfMetadata',
-  ).mockImplementation(() => ({
+  vi.spyOn(GolemApiHostModule, 'getSelfMetadata').mockImplementation(() => ({
     workerId: {
       componentId: {
         uuid: {

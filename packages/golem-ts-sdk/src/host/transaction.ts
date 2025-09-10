@@ -12,15 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  executeWithDrop,
-  markAtomicOperation,
-} from './guard';
-import {
-  type OplogIndex,
-  getOplogIndex,
-  setOplogIndex,
-} from './hostapi';
+import { executeWithDrop, markAtomicOperation } from './guard';
+import { type OplogIndex, getOplogIndex, setOplogIndex } from './hostapi';
 import { Result } from './result';
 
 /**
@@ -60,26 +53,17 @@ export function operation<In, Out, Err>(
   return new OperationImpl(execute, compensate);
 }
 
-class OperationImpl<In, Out, Err>
-  implements Operation<In, Out, Err>
-{
+class OperationImpl<In, Out, Err> implements Operation<In, Out, Err> {
   constructor(
-    public readonly execute: (
-      input: In,
-    ) => Result<Out, Err>,
-    public readonly compensate: (
-      input: In,
-      result: Out,
-    ) => Result<void, Err>,
+    public readonly execute: (input: In) => Result<Out, Err>,
+    public readonly compensate: (input: In, result: Out) => Result<void, Err>,
   ) {}
 }
 
 class InfallibleTransaction {
   private compensations: (() => void)[] = [];
 
-  constructor(
-    private readonly beginOplogIndex: OplogIndex,
-  ) {}
+  constructor(private readonly beginOplogIndex: OplogIndex) {}
 
   /**
    * Executes an operation within the infallible transaction.
@@ -87,19 +71,13 @@ class InfallibleTransaction {
    * @param input - The input to the operation.
    * @returns The result of the operation.
    */
-  execute<In, Out, Err>(
-    operation: Operation<In, Out, Err>,
-    input: In,
-  ): Out {
+  execute<In, Out, Err>(operation: Operation<In, Out, Err>, input: In): Out {
     const result = operation.execute(input);
     if (result.isOk()) {
       this.compensations.push(
         // Compensations cannot fail in infallible transactions.
         () => {
-          const compensationResult = operation.compensate(
-            input,
-            result.val,
-          );
+          const compensationResult = operation.compensate(input, result.val);
           if (compensationResult.isErr()) {
             throw new Error('Compensation action failed');
           }
@@ -114,11 +92,7 @@ class InfallibleTransaction {
 
   private retry(): void {
     // Rollback all the compensations in reverse order
-    for (
-      let i = this.compensations.length - 1;
-      i >= 0;
-      i--
-    ) {
+    for (let i = this.compensations.length - 1; i >= 0; i--) {
       this.compensations[i]();
     }
     setOplogIndex(this.beginOplogIndex);
@@ -155,11 +129,7 @@ class FallibleTransaction<Err> {
    * @returns The transaction failure result.
    */
   onFailure(error: Err): TransactionFailure<Err> {
-    for (
-      let i = this.compensations.length - 1;
-      i >= 0;
-      i--
-    ) {
+    for (let i = this.compensations.length - 1; i >= 0; i--) {
       const compensationResult = this.compensations[i]();
       if (compensationResult.isErr()) {
         return {
@@ -176,10 +146,7 @@ class FallibleTransaction<Err> {
   }
 }
 
-export type TransactionResult<Out, Err> = Result<
-  Out,
-  TransactionFailure<Err>
->;
+export type TransactionResult<Out, Err> = Result<Out, TransactionFailure<Err>>;
 
 export type TransactionFailure<Err> =
   | {
@@ -268,14 +235,6 @@ export function fallibleTransaction<Out, Err>(
  * ```
  *
  */
-export type OperationErrors<
-  T extends Operation<any, any, any>[],
-> = {
-  [K in keyof T]: T[K] extends Operation<
-    any,
-    any,
-    infer Err
-  >
-    ? Err
-    : never;
+export type OperationErrors<T extends Operation<any, any, any>[]> = {
+  [K in keyof T]: T[K] extends Operation<any, any, infer Err> ? Err : never;
 }[number];

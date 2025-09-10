@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  AgentError,
-  AgentType,
-  DataValue,
-} from 'golem:agent/common';
+import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentInternal } from './agentInternal';
 import { AgentId } from '../agentId';
@@ -53,10 +49,7 @@ export class ResolvedAgent {
   getDefinition(): AgentType {
     return Option.getOrThrowWith(
       AgentTypeRegistry.lookup(this.agentClassName),
-      () =>
-        new Error(
-          `Agent class ${this.agentClassName} is not registered.`,
-        ),
+      () => new Error(`Agent class ${this.agentClassName} is not registered.`),
     );
   }
 }

@@ -14,12 +14,7 @@
 
 import { agent, BaseAgent, UnstructuredText } from '../src';
 import * as Types from './testTypes';
-import {
-  EitherX,
-  EitherY,
-  EitherZ,
-  UnionOfLiterals,
-} from './testTypes';
+import { EitherX, EitherY, EitherZ, UnionOfLiterals } from './testTypes';
 
 @agent()
 class WeatherAgent extends BaseAgent {
@@ -29,24 +24,15 @@ class WeatherAgent extends BaseAgent {
   }
 
   async fun1(location: string): Types.PromiseType {
-    return Promise.resolve(
-      `Weather in ${location} is sunny!`,
-    );
+    return Promise.resolve(`Weather in ${location} is sunny!`);
   }
 
-  async fun2(data: {
-    value: number;
-    data: string;
-  }): Types.PromiseType {
-    return Promise.resolve(
-      `Weather in ${data.data} is sunny!`,
-    );
+  async fun2(data: { value: number; data: string }): Types.PromiseType {
+    return Promise.resolve(`Weather in ${data.data} is sunny!`);
   }
 
   async fun3(param2: CustomData): Types.PromiseType {
-    return Promise.resolve(
-      `Weather in ${param2.data} is sunny!`,
-    );
+    return Promise.resolve(`Weather in ${param2.data} is sunny!`);
   }
 
   async fun4(location: CustomData) {
@@ -54,9 +40,7 @@ class WeatherAgent extends BaseAgent {
   }
 
   fun5 = (location: string) => {
-    return Promise.resolve(
-      `Weather in ${location} is sunny!`,
-    );
+    return Promise.resolve(`Weather in ${location} is sunny!`);
   };
 
   fun6 = (location: string) => {
@@ -71,9 +55,7 @@ export interface CustomData {
 
 @agent()
 class AssistantAgent extends BaseAgent {
-  constructor(
-    readonly testInterfaceType: Types.TestInterfaceType,
-  ) {
+  constructor(readonly testInterfaceType: Types.TestInterfaceType) {
     super();
     this.testInterfaceType = testInterfaceType;
   }
@@ -97,14 +79,10 @@ class AssistantAgent extends BaseAgent {
     eitherZType: EitherZ,
     optionalParamType?: string,
   ): Types.PromiseType {
-    return Promise.resolve(
-      `Weather for ${location} is sunny!`,
-    );
+    return Promise.resolve(`Weather for ${location} is sunny!`);
   }
 
-  async fun3(
-    text: string,
-  ): Promise<Types.ObjectComplexType> {
+  async fun3(text: string): Promise<Types.ObjectComplexType> {
     throw new Error('Unimplemented');
   }
 
@@ -112,9 +90,7 @@ class AssistantAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun5(
-    text: string,
-  ): Promise<Types.UnionComplexType> {
+  async fun5(text: string): Promise<Types.UnionComplexType> {
     throw new Error('Unimplemented');
   }
 
@@ -134,9 +110,7 @@ class AssistantAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun10(
-    text: string,
-  ): Promise<Types.TupleComplexType> {
+  async fun10(text: string): Promise<Types.TupleComplexType> {
     throw new Error('Unimplemented');
   }
 
@@ -144,9 +118,7 @@ class AssistantAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun12(
-    text: string,
-  ): Promise<Types.ListComplexType> {
+  async fun12(text: string): Promise<Types.ListComplexType> {
     throw new Error('Unimplemented');
   }
 
@@ -154,9 +126,7 @@ class AssistantAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun14(
-    text: string,
-  ): Promise<Types.UnionOfLiterals> {
+  async fun14(text: string): Promise<Types.UnionOfLiterals> {
     throw new Error('Unimplemented');
   }
 

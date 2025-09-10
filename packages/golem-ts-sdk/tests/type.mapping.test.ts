@@ -36,14 +36,11 @@ describe('TypeScript Interface to AnalysedType', () => {
   const analysed = Either.getOrThrowWith(
     AnalysedType.fromTsType(interfaceType),
     (err) => {
-      throw new Error(
-        `Failed to construct analysed type: ${err}`,
-      );
+      throw new Error(`Failed to construct analysed type: ${err}`);
     },
   );
 
-  const recordFields =
-    getRecordFieldsFromAnalysedType(analysed)!;
+  const recordFields = getRecordFieldsFromAnalysedType(analysed)!;
 
   it('Interface should be AnalysedType.Record', () => {
     expect(analysed).toBeDefined();
@@ -93,25 +90,19 @@ describe('TypeScript primitives to AnalysedType', () => {
   it('Boolean type is converted to AnalysedType.Bool', () => {
     const booleanType = getBooleanType();
     const result = AnalysedType.fromTsType(booleanType);
-    expect(Either.getRight(result)).toEqual(
-      AnalysedType.bool(),
-    );
+    expect(Either.getRight(result)).toEqual(AnalysedType.bool());
   });
 
   it('String type is converted to AnalysedType.String', () => {
     const stringType = getStringType();
     const result = AnalysedType.fromTsType(stringType);
-    expect(Either.getRight(result)).toEqual(
-      AnalysedType.str(),
-    );
+    expect(Either.getRight(result)).toEqual(AnalysedType.str());
   });
 
   it('Number type is converted to AnalysedType.S32', () => {
     const numberType = getNumberType();
     const result = AnalysedType.fromTsType(numberType);
-    expect(Either.getRight(result)).toEqual(
-      AnalysedType.s32(),
-    );
+    expect(Either.getRight(result)).toEqual(AnalysedType.s32());
   });
 });
 
@@ -123,9 +114,7 @@ describe('TypeScript Promise type to AnalysedType', () => {
     const result = Either.getOrElse(
       AnalysedType.fromTsType(promiseType),
       (error) => {
-        throw new Error(
-          `Failed to construct analysed type: ${error}`,
-        );
+        throw new Error(`Failed to construct analysed type: ${error}`);
       },
     );
 
@@ -136,15 +125,12 @@ describe('TypeScript Promise type to AnalysedType', () => {
 describe('TypeScript Object to AnalysedType', () => {
   it('transforms object with different properties successfully to analysed type', () => {
     const interfaceType = getTestObjectType();
-    const analysed = Either.getOrThrow(
-      AnalysedType.fromTsType(interfaceType),
-    );
+    const analysed = Either.getOrThrow(AnalysedType.fromTsType(interfaceType));
 
     expect(analysed).toBeDefined();
     expect(analysed.kind).toBe('record');
 
-    const recordFields =
-      getRecordFieldsFromAnalysedType(analysed)!;
+    const recordFields = getRecordFieldsFromAnalysedType(analysed)!;
 
     const expected: NameTypePair[] = [
       {
@@ -171,9 +157,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
     const analysedType = Either.getOrElse(
       AnalysedType.fromTsType(enumType),
       (error) => {
-        throw new Error(
-          `Failed to construct analysed type: ${error}`,
-        );
+        throw new Error(`Failed to construct analysed type: ${error}`);
       },
     );
 
@@ -278,9 +262,7 @@ function checkPrimitiveFields(fields: any[]) {
     falseProp: { kind: 'bool' },
   };
 
-  for (const [name, expectedType] of Object.entries(
-    expected,
-  )) {
+  for (const [name, expectedType] of Object.entries(expected)) {
     const field = fields.find((f) => f.name === name);
     expect(field).toBeDefined();
     expect(field.typ).toMatchObject(expectedType);
@@ -288,9 +270,7 @@ function checkPrimitiveFields(fields: any[]) {
 }
 
 function checkOptionalFields(fields: NameTypePair[]) {
-  const optionalFields = fields.filter((f) =>
-    f.name.startsWith('optional'),
-  );
+  const optionalFields = fields.filter((f) => f.name.startsWith('optional'));
 
   optionalFields.forEach((field) => {
     expect(field.typ.kind).toBe('option');
@@ -652,11 +632,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             typ: {
               kind: 'tuple',
               value: {
-                items: [
-                  { kind: 'string' },
-                  { kind: 's32' },
-                  { kind: 'bool' },
-                ],
+                items: [{ kind: 'string' }, { kind: 's32' }, { kind: 'bool' }],
                 name: 'tuple-type',
                 owner: undefined,
               },
@@ -789,9 +765,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
 }
 
 function checkUnionFields(fields: any[]) {
-  const unionFields = fields.filter((f) =>
-    f.name.startsWith('unionProp'),
-  );
+  const unionFields = fields.filter((f) => f.name.startsWith('unionProp'));
   expect(unionFields.length).toBeGreaterThan(0);
 
   const expectedCases: NameTypePair[] = [
@@ -847,9 +821,7 @@ function checkUnionFields(fields: any[]) {
 }
 
 function checkObjectFields(fields: any[]) {
-  const objectFields = fields.filter((f) =>
-    f.name.startsWith('objectProp'),
-  );
+  const objectFields = fields.filter((f) => f.name.startsWith('objectProp'));
   expect(objectFields.length).toBeGreaterThan(0);
 
   const expected = [
@@ -871,9 +843,7 @@ function checkObjectFields(fields: any[]) {
 }
 
 function checkListFields(fields: any[]) {
-  const listFields = fields.filter((f) =>
-    f.name.startsWith('listProp'),
-  );
+  const listFields = fields.filter((f) => f.name.startsWith('listProp'));
   expect(listFields.length).toBeGreaterThan(0);
 
   listFields.forEach((field) => {
@@ -891,17 +861,13 @@ function checkListObjectFields(fields: any[]) {
   listObjectFields.forEach((field) => {
     expect(field.typ.kind).toBe('list');
     expect(field.typ.value.inner.kind).toBe('record');
-    const innerFields = getRecordFieldsFromAnalysedType(
-      field.typ.value.inner,
-    )!;
+    const innerFields = getRecordFieldsFromAnalysedType(field.typ.value.inner)!;
     expect(innerFields.length).toBe(3); // Assuming 3 fields in the object type
   });
 }
 
 function checkTupleFields(fields: any[]) {
-  const tupleFields = fields.filter((f) =>
-    f.name.startsWith('tupleProp'),
-  );
+  const tupleFields = fields.filter((f) => f.name.startsWith('tupleProp'));
 
   tupleFields.forEach((field) => {
     expect(field.typ.kind).toBe('tuple');
@@ -958,9 +924,7 @@ function checkTupleWithObjectFields(fields: any[]) {
 }
 
 function checkMapFields(fields: any[]) {
-  const mapFields = fields.filter((f) =>
-    f.name.startsWith('mapProp'),
-  );
+  const mapFields = fields.filter((f) => f.name.startsWith('mapProp'));
   expect(mapFields.length).toBeGreaterThan(0);
 
   // list of tuples, where each tuple is a key-value pair
@@ -1119,11 +1083,7 @@ function checkObjectComplexFields(fields: any[]) {
       typ: {
         kind: 'tuple',
         value: {
-          items: [
-            { kind: 'string' },
-            { kind: 's32' },
-            { kind: 'bool' },
-          ],
+          items: [{ kind: 'string' }, { kind: 's32' }, { kind: 'bool' }],
           name: 'tuple-type',
           owner: undefined,
         },

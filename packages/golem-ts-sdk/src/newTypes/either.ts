@@ -12,24 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type Either<T, E> =
-  | { tag: 'right'; val: T }
-  | { tag: 'left'; val: E };
+export type Either<T, E> = { tag: 'right'; val: T } | { tag: 'left'; val: E };
 
 export function right<T, E = never>(val: T): Either<T, E> {
   return { tag: 'right', val };
 }
 
-export function left<T = never, E = unknown>(
-  val: E,
-): Either<T, E> {
+export function left<T = never, E = unknown>(val: E): Either<T, E> {
   return { tag: 'left', val };
 }
 
-export function map<T, E, U>(
-  r: Either<T, E>,
-  f: (t: T) => U,
-): Either<U, E> {
+export function map<T, E, U>(r: Either<T, E>, f: (t: T) => U): Either<U, E> {
   return r.tag === 'right' ? right(f(r.val)) : r;
 }
 
@@ -53,9 +46,7 @@ export function getOrElse<T, E, U>(
 
 export function getOrThrow<T, E>(e: Either<T, E>): T {
   if (e.tag === 'right') return e.val;
-  throw new Error(
-    `Called getOrThrow on an Err value: ${e.val}`,
-  );
+  throw new Error(`Called getOrThrow on an Err value: ${e.val}`);
 }
 
 export function getOrThrowWith<T, E>(
@@ -66,15 +57,11 @@ export function getOrThrowWith<T, E>(
   throw onErr(e.val);
 }
 
-export function isLeft<T, E>(
-  r: Either<T, E>,
-): r is { tag: 'left'; val: E } {
+export function isLeft<T, E>(r: Either<T, E>): r is { tag: 'left'; val: E } {
   return r.tag === 'left';
 }
 
-export function isRight<T, E>(
-  r: Either<T, E>,
-): r is { tag: 'right'; val: T } {
+export function isRight<T, E>(r: Either<T, E>): r is { tag: 'right'; val: T } {
   return r.tag === 'right';
 }
 
@@ -83,9 +70,7 @@ export function mapBoth<T, E, U, F>(
   onOk: (t: T) => U,
   onErr: (e: E) => F,
 ): Either<U, F> {
-  return r.tag === 'right'
-    ? right(onOk(r.val))
-    : left(onErr(r.val));
+  return r.tag === 'right' ? right(onOk(r.val)) : left(onErr(r.val));
 }
 
 export function zipWith<A, B, C, E>(
@@ -117,9 +102,7 @@ export function zipBoth<A, B, E>(
   return right([ra.val, rb.val]);
 }
 
-export function all<T, E>(
-  results: Either<T, E>[],
-): Either<T[], E> {
+export function all<T, E>(results: Either<T, E>[]): Either<T[], E> {
   const vals: T[] = [];
   for (const r of results) {
     if (r.tag === 'left') return r;

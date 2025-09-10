@@ -18,11 +18,7 @@ import { AgentClassName } from '../src';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { Result } from 'golem:rpc/types@0.2.2';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import {
-  AgentError,
-  AgentType,
-  DataValue,
-} from 'golem:agent/common';
+import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { AgentInitiator } from '../src/internal/agentInitiator';
 import * as Option from '../src/newTypes/option';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
@@ -30,11 +26,8 @@ import { AgentMethodMetadataRegistry } from '../src/internal/registry/agentMetho
 
 describe('AgentType look up', () => {
   it('AgentInitiatorRegistry should return the initiator when looking up by string representation of agentType', () => {
-    const agentClassName = new AgentClassName(
-      'AssistantAgent',
-    );
-    const agentTypeName =
-      AgentTypeName.fromAgentClassName(agentClassName);
+    const agentClassName = new AgentClassName('AssistantAgent');
+    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
 
     const FailingAgentInitiator: AgentInitiator = {
       initiate: (
@@ -51,26 +44,18 @@ describe('AgentType look up', () => {
       },
     };
 
-    AgentInitiatorRegistry.register(
-      agentTypeName,
-      FailingAgentInitiator,
-    );
+    AgentInitiatorRegistry.register(agentTypeName, FailingAgentInitiator);
 
     const lookupResult = AgentInitiatorRegistry.lookup(
       new AgentTypeName('assistant-agent'),
     );
 
-    expect(lookupResult).toEqual(
-      Option.some(FailingAgentInitiator),
-    );
+    expect(lookupResult).toEqual(Option.some(FailingAgentInitiator));
   });
 
   it('AgentTypeRegistry should return the agent-type when looking up by string representation of agentClassName', () => {
-    const agentClassName = new AgentClassName(
-      'AssistantAgent',
-    );
-    const agentTypeName =
-      AgentTypeName.fromAgentClassName(agentClassName);
+    const agentClassName = new AgentClassName('AssistantAgent');
+    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
     const AgentTypeSample: AgentType = {
       typeName: agentTypeName.value,
       description: 'An assistant agent',
@@ -87,24 +72,17 @@ describe('AgentType look up', () => {
       dependencies: [],
     };
 
-    AgentTypeRegistry.register(
-      agentClassName,
-      AgentTypeSample,
-    );
+    AgentTypeRegistry.register(agentClassName, AgentTypeSample);
 
     const lookupResult = AgentTypeRegistry.lookup(
       new AgentClassName('AssistantAgent'),
     );
 
-    expect(lookupResult).toEqual(
-      Option.some(AgentTypeSample),
-    );
+    expect(lookupResult).toEqual(Option.some(AgentTypeSample));
   });
 
   it('AgentMethodMetadataRegistry should return method details when looking up by string representation of agentClassName', () => {
-    const agentClassName = new AgentClassName(
-      'AssistantAgent',
-    );
+    const agentClassName = new AgentClassName('AssistantAgent');
 
     AgentMethodMetadataRegistry.setDescription(
       agentClassName,
@@ -125,8 +103,7 @@ describe('AgentType look up', () => {
     expect(lookupResult?.size).toEqual(1);
 
     const prompt = lookupResult?.get('foo')?.prompt;
-    const description =
-      lookupResult?.get('foo')?.description;
+    const description = lookupResult?.get('foo')?.description;
 
     expect(prompt).toEqual('sample prompt');
     expect(description).toEqual('sample desc');

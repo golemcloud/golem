@@ -28,9 +28,7 @@ export type UnstructuredText =
   | { tag: 'inline'; val: TextSource };
 
 export const TextInput = {
-  fromTextReferenceDataValue(
-    dataValue: TextReference,
-  ): UnstructuredText {
+  fromTextReferenceDataValue(dataValue: TextReference): UnstructuredText {
     if (dataValue.tag === 'url') {
       return {
         tag: 'url',
@@ -43,8 +41,7 @@ export const TextInput = {
       val: {
         data: dataValue.val.data,
         textType: {
-          languageCode:
-            dataValue.val.textType?.languageCode ?? 'en',
+          languageCode: dataValue.val.textType?.languageCode ?? 'en',
         },
       },
     };
@@ -70,10 +67,7 @@ export const TextInput = {
    * @param languageCode - The language code
    * @returns A `TextInput` object with `languageCode` set to `'en'`.
    */
-  fromInline(
-    data: string,
-    languageCode?: string,
-  ): UnstructuredText {
+  fromInline(data: string, languageCode?: string): UnstructuredText {
     languageCode = languageCode ? languageCode : 'en';
     return {
       tag: 'inline',
