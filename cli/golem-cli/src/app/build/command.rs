@@ -428,6 +428,13 @@ pub fn execute_external_command(
         .as_ref()
         .map(|dir| base_command_dir.join(dir))
         .unwrap_or_else(|| base_command_dir.to_path_buf());
+    if !std::fs::exists(&build_dir)? {
+        log_action(
+            "Creating",
+            format!("directory {}", build_dir.log_color_highlight()),
+        );
+        std::fs::create_dir_all(&build_dir)?
+    }
 
     // NOTE: cannot use new_task_up_to_date_check yet, because of the special source and target handling
     let task_result_marker = TaskResultMarker::new(

@@ -844,6 +844,38 @@ async fn build_all_templates() {
     assert!(outputs.success())
 }
 
+#[test]
+async fn test_ts_weather_agent() {
+    let mut ctx = TestContext::new();
+    let app_name = "all-templates-app";
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
+        .await;
+    assert!(outputs.success());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "app:weather-agent/assistant-agent()",
+            "ask",
+            "hello",
+        ])
+        .await;
+    assert!(outputs.success());
+
+    assert!(outputs.stdout_contains("Weather in hello is sunny"));
+}
+
 enum CommandOutput {
     Stdout(String),
     Stderr(String),

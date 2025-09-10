@@ -1,11 +1,10 @@
 import alias from "@rollup/plugin-alias";
-import json from "@rollup/plugin-json";
 import nodeResolve from "@rollup/plugin-node-resolve";
-import path from "node:path";
 import typescript from "@rollup/plugin-typescript";
 import url from "node:url";
+import path from "node:path";
 
-export default function componentRollupConfig() {
+export default function componentRollupConfig(componentName) {
     const dir = path.dirname(url.fileURLToPath(import.meta.url));
 
     const externalPackages = (id) => {
@@ -15,16 +14,47 @@ export default function componentRollupConfig() {
         );
     };
 
+    const virtualAgentMainId = "virtual:agent-main";
+    const resolvedVirtualAgentMainId = "\0virtual:agent-main";
+
+    const virtualAgentMainPlugin = () => {
+        return {
+            name: "agent-main",
+            resolveId(id) {
+                if (id === virtualAgentMainId) {
+                    return resolvedVirtualAgentMainId;
+                }
+            },
+            load(id) {
+                if (id === resolvedVirtualAgentMainId) {
+                    return {
+                        code: `
+import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
+import { Metadata } from '../../golem-temp/ts-metadata/${componentName}/.metadata/generated-types';
+
+TypescriptTypeRegistry.register(Metadata);
+
+// Using an sync function to prevent rollup from reordering registration and main import.
+export default (async () => { return await import("./src/main");})();
+`,
+                        moduleSideEffects: true,
+                    }
+                }
+            }
+        };
+    }
+
     return {
-        input: ".agent/main.ts",
+        input: virtualAgentMainId,
         output: {
-            file: "dist/main.js",
+            file: `../../golem-temp/ts-dist/${componentName}/main.js`,
             format: "esm",
             inlineDynamicImports: true,
             sourcemap: false,
         },
         external: externalPackages,
         plugins: [
+            virtualAgentMainPlugin(),
             alias({
                 entries: [
                     {
@@ -34,7 +64,7 @@ export default function componentRollupConfig() {
                 ],
             }),
             nodeResolve({
-                extensions: [".mjs", ".js", ".json", ".node", ".ts"],
+                extensions: [".mjs", ".js", ".node", ".ts"],
             }),
             typescript({
                 noEmitOnError: true,
@@ -45,7 +75,6 @@ export default function componentRollupConfig() {
                     "../../common-ts/src/**/*.ts",
                 ],
             }),
-            json(),
         ],
     };
 }
