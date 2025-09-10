@@ -296,17 +296,11 @@ mod tests {
 
     #[test]
     fn test_query_params_with_plus_encoded_spaces() -> anyhow::Result<()> {
-        // Construct a Poem request with query string containing `+`
         let uri: Uri = "/search?q=hello+world&lang=rust".parse()?;
         let req = poem::Request::builder().uri(uri).finish();
-
-        // Wrap it in RichRequest
         let rich_req = RichRequest::new(req);
-
-        // Get parsed query params
         let params = rich_req.query_params();
 
-        // Assertions
         assert_eq!(params.get("q"), Some(&"hello world".to_string())); // '+' decoded to space
         assert_eq!(params.get("lang"), Some(&"rust".to_string()));
 
