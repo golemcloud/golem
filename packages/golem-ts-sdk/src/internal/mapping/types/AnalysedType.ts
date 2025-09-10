@@ -303,53 +303,55 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
         }
 
         if (t.kind === "null") {
-          const result = fromTsTypeInternal(t, Option.none());
-          if (Either.isLeft(result)) {
-            return result;
+
+          if (isOptionalParam(optionalParamInParam)) {
+            // If it's already an optional parameter, forget about adding `undefined`
+            continue;
           }
-          possibleTypes.push({
-            name: `null-type`,
-            typ: result.val,
-          });
+
+          const errorMessage =
+            getErrorMessageForInvalidUnion(optionalParamInParam, type.unionTypes, t)
+
+          if (Either.isLeft(errorMessage)) {
+            return errorMessage;
+          }
+
+          continue;
+        }
+
+        if (t.kind === "void") {
+
+          if (isOptionalParam(optionalParamInParam)) {
+            // If it's already an optional parameter, forget about adding `undefined`
+            continue;
+          }
+
+          const errorMessage =
+            getErrorMessageForInvalidUnion(optionalParamInParam, type.unionTypes, t)
+
+          if (Either.isLeft(errorMessage)) {
+            return errorMessage;
+          }
+
           continue;
         }
 
         if (t.kind === "undefined") {
           // If undefined is part of optional parameter, this is already tagged
           // as optional and therefore we can ignore its undefined variant.
-          if (!isOptionalParam(optionalParamInParam)) {
-            const paramNameOpt: Option.Option<string> = Option.isSome(optionalParamInParam)
-              ? TypeMappingScope.paramName(optionalParamInParam.val) : Option.none();
 
-            if (Option.isSome(paramNameOpt) && type.unionTypes.length === 2) {
-              const paramName = paramNameOpt.val;
-
-              const alternate = type.unionTypes.find(
-                (ut) => ut.kind !== "undefined",
-              );
-              if (alternate) {
-                return Either.left(
-                  `Parameter \`${paramName}\` has a union type with \`undefined\` as one of the variants . Consider changing \`${paramName}:\` to  \`${paramName}?:\` and remove undefined, to consider it as an optional type`,
-                );
-              }
-              return Either.left(
-                `Parameter \`${paramName}\` has a union type with \`undefined\` as one of the variants`,
-              );
-            }
-
-            if (Option.isSome(paramNameOpt)) {
-              const paramName = paramNameOpt.val;
-
-              return Either.left(
-                `Parameter \`${paramName}\` has a union type with \`undefined\` as one of the variants. Try removing \`undefined\` from the union`,
-              );
-            }
-
-            return Either.left(
-              `Union  type with \`undefined\` is not supported. Try removing \`undefined\` from the union`,
-            )
-
+          if (isOptionalParam(optionalParamInParam)) {
+            // If it's already an optional parameter, forget about adding `undefined`
+            continue;
           }
+
+          const errorMessage =
+            getErrorMessageForInvalidUnion(optionalParamInParam, type.unionTypes, t)
+
+          if (Either.isLeft(errorMessage)) {
+            return errorMessage;
+          }
+
           continue;
         }
 
@@ -371,7 +373,7 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
     case "object":
       const result = Either.all(type.properties.map((prop) => {
-        const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+        const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
 
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
@@ -380,18 +382,18 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(type, Option.some(TypeMappingScope.object(
+          const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
             entityName,
             prop.getName(),
             true
           )));
 
           return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), option(type.name, analysedType))
+            return field(prop.getName(), option(internalType.name, analysedType))
           });
         }
 
-        const tsType = fromTsTypeInternal(type, Option.some(TypeMappingScope.object(
+        const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
           entityName,
           prop.getName(),
           false
@@ -463,14 +465,14 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
 
       const interfaceResult = Either.all(type.properties.map((prop) => {
-        const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+        const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
 
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(type, Option.some(TypeMappingScope.interface(
-            type.name ?? type.kind,
+          const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
+            internalType.name ?? internalType.kind,
             prop.getName(),
             true
           )));
@@ -481,7 +483,7 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
         }
 
         const tsType =
-          fromTsTypeInternal(type, Option.some(TypeMappingScope.interface(
+          fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
             type.name ?? type.kind,
             prop.getName(),
             false
@@ -530,10 +532,7 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
       return Either.left(`Type aliases are not supported. Found alias: ${type.name ?? "<anonymous>"}`);
 
     case "others":
-
-
       const customTypeName = type.name
-
 
       if (!customTypeName) {
         return Either.left("Unsupported type (anonymous) found.");
@@ -601,6 +600,56 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
 function isOptionalParam(param: Option.Option<TypeMappingScope>) {
   return Option.isSome(param) && TypeMappingScope.isOptionalParam(param.val)
+}
+
+function getScopeName(param: Option.Option<TypeMappingScope>): string | undefined {
+  if (Option.isSome(param)) {
+    const scope = param.val;
+
+    return scope.name
+  }
+  return undefined;
+}
+
+
+function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<TypeMappingScope>, unionTypes: TsType[], unionElemType: TsType): Either.Either<never, string> {
+  const scopeName = getScopeName(optionalParamInParam);
+
+  const unionElemTypeKind = unionElemType.kind;
+
+  const paramNameOpt: Option.Option<string> = Option.isSome(optionalParamInParam)
+    ? TypeMappingScope.paramName(optionalParamInParam.val) : Option.none();
+
+  if (Option.isSome(paramNameOpt) && unionTypes.length === 2) {
+    const paramName = paramNameOpt.val;
+
+
+    const alternate = unionTypes.find(
+      (ut) => ut.kind !== "undefined",
+    );
+
+    if (alternate) {
+      return Either.left(
+        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. \`${unionElemTypeKind}\` type is not supported. Consider changing \`${paramName}:\` to  \`${paramName}?:\` in ${scopeName} and remove undefined`,
+      );
+    }
+
+    return Either.left(
+      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. \`undefined\` is not supported`,
+    );
+  }
+
+  if (Option.isSome(paramNameOpt)) {
+    const paramName = paramNameOpt.val;
+
+    return Either.left(
+      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includs \`${unionElemTypeKind}\`. Try removing \`${unionElemTypeKind}\` from the union`,
+    );
+  }
+
+  return Either.left(
+    `Union  type with \`${unionElemTypeKind}\` is not supported. Try removing \`${unionElemTypeKind}\``,
+  )
 }
 
 function isNumberString(name: string): boolean {
