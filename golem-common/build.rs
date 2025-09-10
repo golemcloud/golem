@@ -16,14 +16,29 @@ use shadow_rs::{BuildPattern, SdResult, ShadowBuilder};
 use std::fs::File;
 use std::io::Write;
 use std::process::Command;
+use std::env;
 
 fn main() {
+    check_abort_flag();
+
     ShadowBuilder::builder()
         .hook(append_write_git_describe_tags_hook)
         .build_pattern(BuildPattern::Lazy)
         .build()
         .unwrap();
 }
+
+#[cfg(windows)]
+fn check_abort_flag() {
+    let panic_setting = env::var("CARGO_CFG_PANIC").unwrap_or_default();
+    if panic_setting == "abort" {
+        println!("cargo:warning=This crate is configured with 'panic=abort', which is not supported.");
+        panic!("Compilation with 'panic=abort' is not supported.");
+    }
+}
+
+#[cfg(not(windows))]
+fn check_abort_flag() {}
 
 fn append_write_git_describe_tags_hook(file: &File) -> SdResult<()> {
     append_write_git_describe_tags(file)?;
