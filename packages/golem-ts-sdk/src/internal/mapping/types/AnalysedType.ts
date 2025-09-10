@@ -14,6 +14,7 @@
 
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
+import * as Option from "../../../newTypes/option";
 import {numberToOrdinalKebab} from "./typeIndexOrdinal";
 import * as util from 'node:util';
 
@@ -231,12 +232,11 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
 
 
 export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> {
-  return fromTsTypeInternal(tsType);
+  return fromTsTypeInternal(tsType, Option.none());
 }
 
 
-export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, string> {
-
+export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<string>): Either.Either<AnalysedType, string> {
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =
@@ -259,16 +259,16 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       return Either.right(u64())
 
     case "null":
-      return Either.right(tuple("null-type", []))
+      return Either.left("Unsupported type `null`");
 
     case "undefined":
-      return Either.right(tuple("undefined-type", []))
+      return Either.left("Unsupported type `undefined`");
 
     case "void":
-      return Either.right(tuple("void-type", []))
+      return Either.left("Unsupported type `void`");
 
     case "tuple":
-      const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el)));
+      const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
       return Either.map(tupleElems, (items) => tuple(type.name, items));
 
     case "union":
@@ -277,7 +277,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
       const possibleTypes: NameOptionTypePair[] = [];
 
       let boolTracked = false;
-
+      
       for (const t of type.unionTypes) {
         if (t.kind === 'boolean' || t.name === "false" || t.name === "true") {
           if (boolTracked) {
@@ -306,7 +306,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
           } else if (t.kind === 'null') {
             const result =
-              fromTsTypeInternal(t);
+              fromTsTypeInternal(t, Option.none());
 
             if (Either.isLeft(result)) {
               return result;
@@ -317,21 +317,23 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
               typ: result.val
             });
           } else if (t.kind === 'undefined') {
-            const result =
-              fromTsTypeInternal(t);
+            // This undefined is just part of an optional parameter
+            if (Option.isNone(optionalParamInParam)) {
+              const result =  fromTsTypeInternal(t, Option.none());
 
-            if (Either.isLeft(result)) {
-              return result;
+              if (Either.isLeft(result)) {
+                return result;
+              }
+
+              possibleTypes.push({
+                name: `undefined-type`,
+                typ: result.val
+              });
             }
-
-            possibleTypes.push({
-              name: `undefined-type`,
-              typ: result.val
-            });
           }
           else {
             const result =
-              fromTsTypeInternal(t);
+              fromTsTypeInternal(t, Option.none());
 
             if (Either.isLeft(result)) {
               return result;
@@ -355,13 +357,16 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
 
-        const tsType = fromTsTypeInternal(type);
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
+          const tsType = fromTsTypeInternal(type, Option.some(prop.getName()));
+
           return Either.map(tsType, (analysedType) => {
             return field(prop.getName(), option(type.name, analysedType))
           });
         }
+
+        const tsType = fromTsTypeInternal(type, Option.none());
 
         return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
@@ -434,17 +439,19 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
 
-        const tsType = fromTsTypeInternal(type);
-
-
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
+          const tsType = fromTsTypeInternal(type, Option.some(prop.getName()));
+
           return Either.map(tsType, (analysedType) => {
             return field(prop.getName(), option(undefined, analysedType))
           });
         }
 
-        return Either.map(fromTsTypeInternal(type), (analysedType) => {
+        const tsType =
+          fromTsTypeInternal(type, Option.none());
+
+        return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
         })
       }));
@@ -453,14 +460,14 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
 
     case "promise":
       const inner = type.element;
-      return fromTsTypeInternal(inner);
+      return fromTsTypeInternal(inner, Option.none());
 
     case "map":
       const keyT = type.key;
       const valT = type.value;
 
-      const key = fromTsTypeInternal(keyT);
-      const value = fromTsTypeInternal(valT);
+      const key = fromTsTypeInternal(keyT, Option.none());
+      const value = fromTsTypeInternal(valT, Option.none());
 
 
       return Either.zipWith(key, value, (k, v) =>
@@ -550,7 +557,7 @@ export function fromTsTypeInternal(type: TsType): Either.Either<AnalysedType, st
         return Either.left("Unable to determine the array element type");
       }
 
-      const elemType = fromTsTypeInternal(arrayElementType);
+      const elemType = fromTsTypeInternal(arrayElementType, Option.none());
 
       return Either.map(elemType, (inner) => list(type.name, inner));
   }

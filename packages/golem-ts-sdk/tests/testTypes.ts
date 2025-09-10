@@ -16,7 +16,7 @@ interface SimpleInterfaceType {
   n: number;
 }
 
-export type UnionOfLiterals = 'a' | 'b' | 'c' | true | false | null;
+export type UnionOfLiterals = 'a' | 'b' | 'c' | true | false;
 
 export type PromiseType = Promise<string>;
 
@@ -72,7 +72,6 @@ export interface TestInterfaceType {
   stringProp: string;
   booleanProp: boolean;
   bigintProp: bigint;
-  nullProp: null;
   trueProp: true;
   falseProp: false;
   optionalProp?: number;

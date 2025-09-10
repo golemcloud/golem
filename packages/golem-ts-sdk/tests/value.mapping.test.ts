@@ -141,7 +141,6 @@ describe('typescript value to wit value round-trip conversions', () => {
         // m: Either.left('failed')
       },
       unionComplexProp: 1,
-      nullProp: null,
       numberProp: 0,
       objectProp: { a: '', b: 0, c: false },
       stringProp: '',
@@ -181,7 +180,6 @@ describe('typescript value to wit value round-trip conversions', () => {
       listProp: [],
       mapProp: new Map<string, number>(),
       nestedProp: { n: 0 },
-      nullProp: null,
       numberProp: 0,
       objectProp: { a: '', b: 0, c: false },
       stringProp: '',
@@ -240,7 +238,6 @@ describe('typescript value to wit value round-trip conversions', () => {
       listProp: [],
       mapProp: new Map<string, number>(),
       nestedProp: { n: 0 },
-      nullProp: null,
       numberProp: 0,
       objectProp: { a: '', b: 0, c: false },
       stringProp: '',

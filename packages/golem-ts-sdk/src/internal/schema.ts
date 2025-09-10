@@ -14,6 +14,7 @@
 
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../newTypes/either';
+import * as Option from '../newTypes/option';
 import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
@@ -142,6 +143,14 @@ export function buildInputSchema(
 export function buildOutputSchema(
   returnType: Type.Type,
 ): Either.Either<DataSchema, string> {
+
+  const undefinedSchema =
+    handleUndefinedReturnType(returnType);
+
+  if (Option.isSome(undefinedSchema)) {
+    return Either.right(undefinedSchema.val);
+  }
+
   return Either.map(convertToElementSchema(returnType), (result) => {
     return {
       tag: 'tuple',
@@ -153,10 +162,33 @@ export function buildOutputSchema(
 function convertToElementSchema(
   type: Type.Type,
 ): Either.Either<ElementSchema, string> {
+
+
   return Either.map(WitType.fromTsType(type), (witType) => {
     return {
       tag: 'component-model',
       val: witType,
     };
   });
+}
+
+
+function handleUndefinedReturnType(returnType: Type.Type): Option.Option<DataSchema> {
+  switch (returnType.kind) {
+    case 'null':
+      return Option.some({tag: 'tuple', val : [] })
+
+    case "undefined":
+      return Option.some({tag: 'tuple', val : [] })
+
+    case 'void':
+      return Option.some({ tag: 'tuple', val: [] });
+
+    case "promise":
+      const elementType = returnType.element;
+      return handleUndefinedReturnType(elementType);
+
+    default:
+      return Option.none();
+  }
 }
