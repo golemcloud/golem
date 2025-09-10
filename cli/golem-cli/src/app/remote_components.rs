@@ -15,7 +15,6 @@
 use crate::context::check_http_response_success;
 use crate::log::{log_action, log_warn_action, LogColorize};
 use anyhow::{anyhow, Context};
-use base64::prelude::*;
 use std::path::PathBuf;
 use url::Url;
 

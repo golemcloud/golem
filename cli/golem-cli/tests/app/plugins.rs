@@ -41,10 +41,14 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
 
     ctx.cd(app_name);
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust1"]).await;
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust1"])
+        .await;
     assert!(outputs.success());
 
-    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust2"]).await;
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "test:rust2"])
+        .await;
     assert!(outputs.success());
 
     fs::write_str(
@@ -96,7 +100,9 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path]).await;
+    let outputs = ctx
+        .cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path])
+        .await;
     assert!(outputs.success());
 
     let plugin_manifest_path2 = "plugin2.yaml";
@@ -121,7 +127,9 @@ async fn plugin_installation_test1(_tracing: &Tracing) {
     )
     .unwrap();
 
-    let outputs = ctx.cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path2]).await;
+    let outputs = ctx
+        .cli([cmd::PLUGIN, cmd::REGISTER, plugin_manifest_path2])
+        .await;
     assert!(outputs.success());
 
     let outputs = ctx.cli([cmd::COMPONENT, cmd::PLUGIN, cmd::GET]).await;

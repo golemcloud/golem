@@ -27,8 +27,7 @@ export default function componentRollupConfig(componentName) {
             },
             load(id) {
                 if (id === resolvedVirtualAgentMainId) {
-                    return {
-                        code: `
+                    return `
 import { TypescriptTypeRegistry } from '@golemcloud/golem-ts-sdk';
 import { Metadata } from '../../golem-temp/ts-metadata/${componentName}/.metadata/generated-types';
 
@@ -36,9 +35,7 @@ TypescriptTypeRegistry.register(Metadata);
 
 // Using an async function to prevent rollup from reordering registration and main import.
 export default (async () => { return await import("./src/main");})();
-`,
-                        moduleSideEffects: true,
-                    }
+`
                 }
             }
         };
