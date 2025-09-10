@@ -20,28 +20,28 @@ import { Type } from './type-lite';
 export function buildTypeFromJSON(json: LiteTypeJSON): Type {
   switch (json.kind) {
     case 'others':
-      return { kind: 'others', name: json.name };
+      return { kind: 'others', name: json.name, optional: json.optional };
 
     case 'boolean':
-      return { kind: 'boolean', name: json.name };
+      return { kind: 'boolean', name: json.name, optional: json.optional };
 
     case 'number':
-      return { kind: 'number', name: json.name };
+      return { kind: 'number', name: json.name, optional: json.optional };
 
     case 'string':
-      return { kind: 'string', name: json.name };
+      return { kind: 'string', name: json.name, optional: json.optional };
 
     case 'bigint':
-      return { kind: 'bigint', name: json.name };
+      return { kind: 'bigint', name: json.name, optional: json.optional };
 
     case 'null':
-      return { kind: 'null', name: json.name };
+      return { kind: 'null', name: json.name, optional: json.optional };
 
     case 'undefined':
-      return { kind: 'undefined', name: json.name };
+      return { kind: 'undefined', name: json.name, optional: json.optional };
 
     case 'void':
-      return { kind: 'void', name: json.name };
+      return { kind: 'void', name: json.name, optional: json.optional };
 
     case 'array': {
       const elem = buildTypeFromJSON(json.element);
@@ -49,6 +49,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'array',
         name: json.name,
         element: elem,
+        optional: json.optional,
       };
     }
 
@@ -58,6 +59,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'tuple',
         name: json.name,
         elements: elems,
+        optional: json.optional,
       };
     }
 
@@ -67,6 +69,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'union',
         name: json.name,
         unionTypes: types,
+        optional: json.optional,
       };
     }
 
@@ -83,6 +86,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'class',
         name: json.name,
         properties: props,
+        optional: json.optional,
       };
     }
 
@@ -99,6 +103,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'object',
         name: json.name,
         properties: props,
+        optional: json.optional,
       };
     }
 
@@ -115,6 +120,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'interface',
         name: json.name,
         properties: props,
+        optional: json.optional,
       };
     }
 
@@ -123,6 +129,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'literal',
         name: json.name,
         literalValue: json.literalValue,
+        optional: json.optional,
       };
 
     case 'alias': {
@@ -137,6 +144,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'alias',
         name: json.name,
         aliasSymbol: aliasSym,
+        optional: json.optional,
       };
     }
 
@@ -146,6 +154,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         kind: 'promise',
         name: json.name ?? 'Promise',
         element: elemType,
+        optional: json.optional,
       };
 
     case 'map':
@@ -162,6 +171,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         name: json.name,
         key: typeArgs[0],
         value: typeArgs[1],
+        optional: json.optional,
       };
   }
 }

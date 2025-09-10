@@ -31,7 +31,10 @@ import {
 import * as fs from "node:fs";
 import path from "path";
 
-export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
+export function getTypeFromTsMorph(
+  tsMorphType: TsMorphType,
+  isOptional: boolean,
+): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
   const aliasName = getAliasTypeName(type);
@@ -439,7 +442,10 @@ export function updateMetadataFromSourceFiles(
       for (const method of publicMethods) {
         const methodParams = new Map(
           method.getParameters().map((p) => {
-            return [p.getName(), getTypeFromTsMorph(p.getType())];
+            return [
+              p.getName(),
+              getTypeFromTsMorph(p.getType(), p.isOptional()),
+            ];
           }),
         );
 

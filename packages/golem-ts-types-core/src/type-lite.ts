@@ -15,24 +15,30 @@
 import { Symbol } from './symbol';
 
 export type Type =
-  | { kind: 'boolean'; name?: string }
-  | { kind: 'number'; name?: string }
-  | { kind: 'string'; name?: string }
-  | { kind: 'bigint'; name?: string }
-  | { kind: 'null'; name?: string }
-  | { kind: 'undefined'; name?: string }
-  | { kind: 'array'; name?: string; element: Type }
-  | { kind: 'tuple'; name?: string; elements: Type[] }
-  | { kind: 'union'; name?: string; unionTypes: Type[] }
-  | { kind: 'object'; name?: string; properties: Symbol[] }
-  | { kind: 'class'; name?: string; properties: Symbol[] }
-  | { kind: 'interface'; name?: string; properties: Symbol[] }
-  | { kind: 'promise'; name?: string; element: Type }
-  | { kind: 'map'; name?: string; key: Type; value: Type }
-  | { kind: 'literal'; name?: string; literalValue?: string }
-  | { kind: 'alias'; name?: string; aliasSymbol: Symbol }
-  | { kind: 'void'; name?: string }
-  | { kind: 'others'; name?: string };
+  | { kind: 'boolean'; name?: string; optional: boolean }
+  | { kind: 'number'; name?: string; optional: boolean }
+  | { kind: 'string'; name?: string; optional: boolean }
+  | { kind: 'bigint'; name?: string; optional: boolean }
+  | { kind: 'null'; name?: string; optional: boolean }
+  | { kind: 'undefined'; name?: string; optional: boolean }
+  | { kind: 'array'; name?: string; element: Type; optional: boolean }
+  | { kind: 'null'; name?: string; element: Type; optional: boolean }
+  | { kind: 'tuple'; name?: string; elements: Type[]; optional: boolean }
+  | { kind: 'union'; name?: string; unionTypes: Type[]; optional: boolean }
+  | { kind: 'object'; name?: string; properties: Symbol[]; optional: boolean }
+  | { kind: 'class'; name?: string; properties: Symbol[]; optional: boolean }
+  | {
+      kind: 'interface';
+      name?: string;
+      properties: Symbol[];
+      optional: boolean;
+    }
+  | { kind: 'promise'; name?: string; element: Type; optional: boolean }
+  | { kind: 'map'; name?: string; key: Type; value: Type; optional: boolean }
+  | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
+  | { kind: 'alias'; name?: string; aliasSymbol: Symbol; optional: boolean }
+  | { kind: 'void'; name?: string; optional: boolean }
+  | { kind: 'others'; name?: string; optional: boolean };
 
 export function getName(t: Type): string | undefined {
   if (t.kind === 'others') return t.name;

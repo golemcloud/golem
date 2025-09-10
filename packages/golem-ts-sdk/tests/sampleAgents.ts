@@ -95,6 +95,7 @@ class AssistantAgent extends BaseAgent {
     eitherXType: EitherX,
     eitherYType: EitherY,
     eitherZType: EitherZ,
+    optionalParamType?: string,
   ): Types.PromiseType {
     return Promise.resolve(
       `Weather for ${location} is sunny!`,

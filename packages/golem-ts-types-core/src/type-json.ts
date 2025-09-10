@@ -13,17 +13,22 @@
 // limitations under the License.
 
 export type LiteTypeJSON =
-  | { kind: 'boolean'; name?: string }
-  | { kind: 'number'; name?: string }
-  | { kind: 'string'; name?: string }
-  | { kind: 'bigint'; name?: string }
-  | { kind: 'null'; name?: string }
-  | { kind: 'undefined'; name?: string }
-  | { kind: 'void'; name?: string }
-  | { kind: 'array'; name?: string; element: LiteTypeJSON }
-  | { kind: 'tuple'; name?: string; elements: LiteTypeJSON[] }
-  | { kind: 'union'; name?: string; types: LiteTypeJSON[] }
-  | { kind: 'literal'; name?: string; literalValue?: string }
+  | { kind: 'boolean'; name?: string; optional: boolean }
+  | { kind: 'number'; name?: string; optional: boolean }
+  | { kind: 'string'; name?: string; optional: boolean }
+  | { kind: 'bigint'; name?: string; optional: boolean }
+  | { kind: 'null'; name?: string; optional: boolean }
+  | { kind: 'undefined'; name?: string; optional: boolean }
+  | { kind: 'void'; name?: string; optional: boolean }
+  | { kind: 'array'; name?: string; element: LiteTypeJSON; optional: boolean }
+  | {
+      kind: 'tuple';
+      name?: string;
+      elements: LiteTypeJSON[];
+      optional: boolean;
+    }
+  | { kind: 'union'; name?: string; types: LiteTypeJSON[]; optional: boolean }
+  | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
   | {
       kind: 'object';
       name?: string;
@@ -32,6 +37,7 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
+      optional: boolean;
     }
   | {
       kind: 'class';
@@ -41,6 +47,7 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
+      optional: boolean;
     }
   | {
       kind: 'interface';
@@ -50,20 +57,24 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
+      optional: boolean;
     }
   | {
       kind: 'promise';
       name?: string;
       element: LiteTypeJSON;
+      optional: boolean;
     }
   | {
       kind: 'alias';
       name: string;
       target: LiteTypeJSON;
+      optional: boolean;
     }
   | {
       kind: 'map';
       name?: string;
       typeArgs?: LiteTypeJSON[];
+      optional: boolean;
     }
-  | { kind: 'others'; name?: string };
+  | { kind: 'others'; name?: string; optional: boolean };
