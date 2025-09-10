@@ -39,8 +39,8 @@ declare module 'golem:video-generation/types@1.0.0' {
   };
   export type Reference = {
     data: InputImage;
-    prompt: string | undefined;
-    role: ImageRole | undefined;
+    prompt?: string;
+    role?: ImageRole;
   };
   export type BaseVideo = {
     data: MediaData;
@@ -102,31 +102,31 @@ declare module 'golem:video-generation/types@1.0.0' {
     value: string;
   };
   export type GenerationConfig = {
-    negativePrompt: string | undefined;
-    seed: bigint | undefined;
-    scheduler: string | undefined;
-    guidanceScale: number | undefined;
-    aspectRatio: AspectRatio | undefined;
-    durationSeconds: number | undefined;
-    resolution: Resolution | undefined;
-    model: string | undefined;
-    enableAudio: boolean | undefined;
-    enhancePrompt: boolean | undefined;
-    providerOptions: Kv[] | undefined;
-    lastframe: InputImage | undefined;
-    staticMask: StaticMask | undefined;
-    dynamicMask: DynamicMask | undefined;
-    cameraControl: CameraMovement | undefined;
+    negativePrompt?: string;
+    seed?: bigint;
+    scheduler?: string;
+    guidanceScale?: number;
+    aspectRatio?: AspectRatio;
+    durationSeconds?: number;
+    resolution?: Resolution;
+    model?: string;
+    enableAudio?: boolean;
+    enhancePrompt?: boolean;
+    providerOptions?: Kv[];
+    lastframe?: InputImage;
+    staticMask?: StaticMask;
+    dynamicMask?: DynamicMask;
+    cameraControl?: CameraMovement;
   };
   export type Video = {
-    uri: string | undefined;
-    base64Bytes: Uint8Array | undefined;
+    uri?: string;
+    base64Bytes?: Uint8Array;
     mimeType: string;
-    width: number | undefined;
-    height: number | undefined;
-    fps: number | undefined;
-    durationSeconds: number | undefined;
-    generationId: string | undefined;
+    width?: number;
+    height?: number;
+    fps?: number;
+    durationSeconds?: number;
+    generationId?: string;
   };
   export type JobStatus = {
     tag: 'pending'
@@ -143,7 +143,7 @@ declare module 'golem:video-generation/types@1.0.0' {
   };
   export type VideoResult = {
     status: JobStatus;
-    videos: Video[] | undefined;
+    videos?: Video[];
   };
   export type VoiceLanguage = "en" | "zh";
   export type TextToSpeech = {
@@ -164,7 +164,7 @@ declare module 'golem:video-generation/types@1.0.0' {
     voiceId: string;
     name: string;
     language: VoiceLanguage;
-    previewUrl: string | undefined;
+    previewUrl?: string;
   };
   export type SingleImageEffects = "bloombloom" | "dizzydizzy" | "fuzzyfuzzy" | "squish" | "expansion" | "anime-figure" | "rocketrocket";
   export type DualImageEffects = "hug" | "kiss" | "heart-gesture";

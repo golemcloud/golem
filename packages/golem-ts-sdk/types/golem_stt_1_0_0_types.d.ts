@@ -50,8 +50,8 @@ declare module 'golem:stt/types@1.0.0' {
   export type AudioFormat = "wav" | "mp3" | "flac" | "ogg" | "aac" | "pcm";
   export type AudioConfig = {
     format: AudioFormat;
-    sampleRate: number | undefined;
-    channels: number | undefined;
+    sampleRate?: number;
+    channels?: number;
   };
   export type TimingInfo = {
     startTimeSeconds: number;
@@ -59,21 +59,21 @@ declare module 'golem:stt/types@1.0.0' {
   };
   export type WordSegment = {
     text: string;
-    timingInfo: TimingInfo | undefined;
-    confidence: number | undefined;
-    speakerId: string | undefined;
+    timingInfo?: TimingInfo;
+    confidence?: number;
+    speakerId?: string;
   };
   export type TranscriptionMetadata = {
     durationSeconds: number;
     audioSizeBytes: number;
     requestId: string;
-    model: string | undefined;
+    model?: string;
     language: LanguageCode;
   };
   export type TranscriptionSegment = {
     transcript: string;
-    timingInfo: TimingInfo | undefined;
-    speakerId: string | undefined;
+    timingInfo?: TimingInfo;
+    speakerId?: string;
     words: WordSegment[];
   };
   export type TranscriptionChannel = {

@@ -114,7 +114,7 @@ declare module 'golem:graph/transactions@1.0.0' {
    */
   export type VertexSpec = {
     vertexType: string;
-    additionalLabels: string[] | undefined;
+    additionalLabels?: string[];
     properties: PropertyMap;
   };
   /**

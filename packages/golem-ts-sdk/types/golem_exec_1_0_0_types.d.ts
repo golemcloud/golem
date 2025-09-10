@@ -5,7 +5,7 @@ declare module 'golem:exec/types@1.0.0' {
    */
   export type Language = {
     kind: LanguageKind;
-    version: string | undefined;
+    version?: string;
   };
   /**
    * Supported encodings for file contents
@@ -17,16 +17,16 @@ declare module 'golem:exec/types@1.0.0' {
   export type File = {
     name: string;
     content: Uint8Array;
-    encoding: Encoding | undefined;
+    encoding?: Encoding;
   };
   /**
    * Resource limits and execution constraints
    */
   export type Limits = {
-    timeMs: bigint | undefined;
-    memoryBytes: bigint | undefined;
-    fileSizeBytes: bigint | undefined;
-    maxProcesses: number | undefined;
+    timeMs?: bigint;
+    memoryBytes?: bigint;
+    fileSizeBytes?: bigint;
+    maxProcesses?: number;
   };
   /**
    * Execution outcome per stage
@@ -34,17 +34,17 @@ declare module 'golem:exec/types@1.0.0' {
   export type StageResult = {
     stdout: string;
     stderr: string;
-    exitCode: number | undefined;
-    signal: string | undefined;
+    exitCode?: number;
+    signal?: string;
   };
   /**
    * Complete execution result
    */
   export type ExecResult = {
-    compile: StageResult | undefined;
+    compile?: StageResult;
     run: StageResult;
-    timeMs: bigint | undefined;
-    memoryBytes: bigint | undefined;
+    timeMs?: bigint;
+    memoryBytes?: bigint;
   };
   /**
    * Execution error types

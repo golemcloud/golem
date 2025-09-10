@@ -9,7 +9,7 @@ declare module 'golem:agent/common' {
   };
   export type TextSource = {
     data: string;
-    textType: TextType | undefined;
+    textType?: TextType;
   };
   export type TextReference = {
     tag: 'url'
@@ -20,13 +20,13 @@ declare module 'golem:agent/common' {
     val: TextSource
   };
   export type TextDescriptor = {
-    restrictions: TextType[] | undefined;
+    restrictions?: TextType[];
   };
   export type BinaryType = {
     mimeType: string;
   };
   export type BinaryDescriptor = {
-    restrictions: BinaryType[] | undefined;
+    restrictions?: BinaryType[];
   };
   export type ElementSchema = {
     tag: 'component-model'
@@ -51,19 +51,19 @@ declare module 'golem:agent/common' {
   export type AgentMethod = {
     name: string;
     description: string;
-    promptHint: string | undefined;
+    promptHint?: string;
     inputSchema: DataSchema;
     outputSchema: DataSchema;
   };
   export type AgentConstructor = {
-    name: string | undefined;
+    name?: string;
     description: string;
-    promptHint: string | undefined;
+    promptHint?: string;
     inputSchema: DataSchema;
   };
   export type AgentDependency = {
     typeName: string;
-    description: string | undefined;
+    description?: string;
     constructor: AgentConstructor;
     methods: AgentMethod[];
   };

@@ -8,29 +8,29 @@ declare module 'golem:stt/transcription@1.0.0' {
   export type LanguageCode = golemStt100Types.LanguageCode;
   export type Phrase = {
     value: string;
-    boost: number | undefined;
+    boost?: number;
   };
   export type Vocabulary = {
     phrases: Phrase[];
   };
   export type DiarizationOptions = {
     enabled: boolean;
-    minSpeakerCount: number | undefined;
-    maxSpeakerCount: number | undefined;
+    minSpeakerCount?: number;
+    maxSpeakerCount?: number;
   };
   export type TranscribeOptions = {
-    language: LanguageCode | undefined;
-    model: string | undefined;
-    profanityFilter: boolean | undefined;
-    vocabulary: Vocabulary | undefined;
-    diarization: DiarizationOptions | undefined;
-    enableMultiChannel: boolean | undefined;
+    language?: LanguageCode;
+    model?: string;
+    profanityFilter?: boolean;
+    vocabulary?: Vocabulary;
+    diarization?: DiarizationOptions;
+    enableMultiChannel?: boolean;
   };
   export type TranscriptionRequest = {
     requestId: string;
     audio: Uint8Array;
     config: AudioConfig;
-    options: TranscribeOptions | undefined;
+    options?: TranscribeOptions;
   };
   export type FailedTranscription = {
     requestId: string;

@@ -37,22 +37,22 @@ declare module 'golem:graph/connection@1.0.0' {
    */
   export type ConnectionConfig = {
     hosts: string[];
-    port: number | undefined;
-    databaseName: string | undefined;
-    username: string | undefined;
-    password: string | undefined;
-    timeoutSeconds: number | undefined;
-    maxConnections: number | undefined;
+    port?: number;
+    databaseName?: string;
+    username?: string;
+    password?: string;
+    timeoutSeconds?: number;
+    maxConnections?: number;
     providerConfig: [string, string][];
   };
   /**
    * Basic graph statistics
    */
   export type GraphStatistics = {
-    vertexCount: bigint | undefined;
-    edgeCount: bigint | undefined;
-    labelCount: number | undefined;
-    propertyCount: bigint | undefined;
+    vertexCount?: bigint;
+    edgeCount?: bigint;
+    labelCount?: number;
+    propertyCount?: bigint;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

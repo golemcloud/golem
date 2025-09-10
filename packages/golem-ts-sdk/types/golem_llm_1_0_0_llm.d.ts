@@ -21,12 +21,12 @@ declare module 'golem:llm/llm@1.0.0' {
    */
   export type ImageUrl = {
     url: string;
-    detail: ImageDetail | undefined;
+    detail?: ImageDetail;
   };
   export type ImageSource = {
     data: Uint8Array;
     mimeType: string;
-    detail: ImageDetail | undefined;
+    detail?: ImageDetail;
   };
   export type ImageReference = {
     tag: 'url'
@@ -46,7 +46,7 @@ declare module 'golem:llm/llm@1.0.0' {
   };
   export type Message = {
     role: Role;
-    name: string | undefined;
+    name?: string;
     content: ContentPart[];
   };
   /**
@@ -54,7 +54,7 @@ declare module 'golem:llm/llm@1.0.0' {
    */
   export type ToolDefinition = {
     name: string;
-    description: string | undefined;
+    description?: string;
     parametersSchema: string;
   };
   export type ToolCall = {
@@ -66,13 +66,13 @@ declare module 'golem:llm/llm@1.0.0' {
     id: string;
     name: string;
     resultJson: string;
-    executionTimeMs: number | undefined;
+    executionTimeMs?: number;
   };
   export type ToolFailure = {
     id: string;
     name: string;
     errorMessage: string;
-    errorCode: string | undefined;
+    errorCode?: string;
   };
   export type ToolResult = {
     tag: 'success'
@@ -91,27 +91,27 @@ declare module 'golem:llm/llm@1.0.0' {
   };
   export type Config = {
     model: string;
-    temperature: number | undefined;
-    maxTokens: number | undefined;
-    stopSequences: string[] | undefined;
+    temperature?: number;
+    maxTokens?: number;
+    stopSequences?: string[];
     tools: ToolDefinition[];
-    toolChoice: string | undefined;
+    toolChoice?: string;
     providerOptions: Kv[];
   };
   /**
    * --- Usage / Metadata ---
    */
   export type Usage = {
-    inputTokens: number | undefined;
-    outputTokens: number | undefined;
-    totalTokens: number | undefined;
+    inputTokens?: number;
+    outputTokens?: number;
+    totalTokens?: number;
   };
   export type ResponseMetadata = {
-    finishReason: FinishReason | undefined;
-    usage: Usage | undefined;
-    providerId: string | undefined;
-    timestamp: string | undefined;
-    providerMetadataJson: string | undefined;
+    finishReason?: FinishReason;
+    usage?: Usage;
+    providerId?: string;
+    timestamp?: string;
+    providerMetadataJson?: string;
   };
   export type CompleteResponse = {
     id: string;
@@ -125,7 +125,7 @@ declare module 'golem:llm/llm@1.0.0' {
   export type Error = {
     code: ErrorCode;
     message: string;
-    providerErrorJson: string | undefined;
+    providerErrorJson?: string;
   };
   /**
    * --- Chat Response Variants ---
@@ -146,8 +146,8 @@ declare module 'golem:llm/llm@1.0.0' {
    * --- Streaming ---
    */
   export type StreamDelta = {
-    content: ContentPart[] | undefined;
-    toolCalls: ToolCall[] | undefined;
+    content?: ContentPart[];
+    toolCalls?: ToolCall[];
   };
   export type StreamEvent = {
     tag: 'delta'

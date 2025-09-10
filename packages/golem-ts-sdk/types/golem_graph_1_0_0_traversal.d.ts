@@ -37,11 +37,11 @@ declare module 'golem:graph/traversal@1.0.0' {
    * Path finding options
    */
   export type PathOptions = {
-    maxDepth: number | undefined;
-    edgeTypes: string[] | undefined;
-    vertexTypes: string[] | undefined;
-    vertexFilters: FilterCondition[] | undefined;
-    edgeFilters: FilterCondition[] | undefined;
+    maxDepth?: number;
+    edgeTypes?: string[];
+    vertexTypes?: string[];
+    vertexFilters?: FilterCondition[];
+    edgeFilters?: FilterCondition[];
   };
   /**
    * Neighborhood exploration options
@@ -49,8 +49,8 @@ declare module 'golem:graph/traversal@1.0.0' {
   export type NeighborhoodOptions = {
     depth: number;
     direction: Direction;
-    edgeTypes: string[] | undefined;
-    maxVertices: number | undefined;
+    edgeTypes?: string[];
+    maxVertices?: number;
   };
   /**
    * Subgraph containing related vertices and edges

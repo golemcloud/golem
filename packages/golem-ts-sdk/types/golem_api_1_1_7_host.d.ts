@@ -182,7 +182,7 @@ declare module 'golem:api/host@1.1.7' {
     minDelay: Duration;
     maxDelay: Duration;
     multiplier: number;
-    maxJitterFactor: number | undefined;
+    maxJitterFactor?: number;
   };
   /**
    * Configurable persistence level for workers

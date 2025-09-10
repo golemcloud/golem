@@ -133,8 +133,8 @@ declare module 'golem:rpc/types@0.2.2' {
     val: [ResourceId, ResourceMode]
   };
   export type NamedWitTypeNode = {
-    name: string | undefined;
-    owner: string | undefined;
+    name?: string;
+    owner?: string;
     type: WitTypeNode;
   };
   export type WitType = {

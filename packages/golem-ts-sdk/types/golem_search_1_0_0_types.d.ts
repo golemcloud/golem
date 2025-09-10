@@ -43,55 +43,55 @@ declare module 'golem:search/types@1.0.0' {
    */
   export type HighlightConfig = {
     fields: string[];
-    preTag: string | undefined;
-    postTag: string | undefined;
-    maxLength: number | undefined;
+    preTag?: string;
+    postTag?: string;
+    maxLength?: number;
   };
   /**
    * Advanced search tuning
    */
   export type SearchConfig = {
-    timeoutMs: number | undefined;
+    timeoutMs?: number;
     boostFields: [string, number][];
     attributesToRetrieve: string[];
-    language: string | undefined;
-    typoTolerance: boolean | undefined;
-    exactMatchBoost: number | undefined;
-    providerParams: Json | undefined;
+    language?: string;
+    typoTolerance?: boolean;
+    exactMatchBoost?: number;
+    providerParams?: Json;
   };
   /**
    * Search request
    */
   export type SearchQuery = {
-    q: string | undefined;
+    q?: string;
     filters: string[];
     sort: string[];
     facets: string[];
-    page: number | undefined;
-    perPage: number | undefined;
-    offset: number | undefined;
-    highlight: HighlightConfig | undefined;
-    config: SearchConfig | undefined;
+    page?: number;
+    perPage?: number;
+    offset?: number;
+    highlight?: HighlightConfig;
+    config?: SearchConfig;
   };
   /**
    * Search hit
    */
   export type SearchHit = {
     id: DocumentId;
-    score: number | undefined;
-    content: Json | undefined;
-    highlights: Json | undefined;
+    score?: number;
+    content?: Json;
+    highlights?: Json;
   };
   /**
    * Search result set
    */
   export type SearchResults = {
-    total: number | undefined;
-    page: number | undefined;
-    perPage: number | undefined;
+    total?: number;
+    page?: number;
+    perPage?: number;
     hits: SearchHit[];
-    facets: Json | undefined;
-    tookMs: number | undefined;
+    facets?: Json;
+    tookMs?: number;
   };
   /**
    * Field schema types
@@ -113,6 +113,6 @@ declare module 'golem:search/types@1.0.0' {
    */
   export type Schema = {
     fields: SchemaField[];
-    primaryKey: string | undefined;
+    primaryKey?: string;
   };
 }

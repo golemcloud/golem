@@ -86,7 +86,7 @@ declare module 'golem:graph/schema@1.0.0' {
     propertyType: PropertyType;
     required: boolean;
     unique: boolean;
-    defaultValue: PropertyValue | undefined;
+    defaultValue?: PropertyValue;
   };
   /**
    * Vertex label schema
@@ -94,7 +94,7 @@ declare module 'golem:graph/schema@1.0.0' {
   export type VertexLabelSchema = {
     label: string;
     properties: PropertyDefinition[];
-    container: string | undefined;
+    container?: string;
   };
   /**
    * Edge label schema
@@ -102,9 +102,9 @@ declare module 'golem:graph/schema@1.0.0' {
   export type EdgeLabelSchema = {
     label: string;
     properties: PropertyDefinition[];
-    fromLabels: string[] | undefined;
-    toLabels: string[] | undefined;
-    container: string | undefined;
+    fromLabels?: string[];
+    toLabels?: string[];
+    container?: string;
   };
   /**
    * Index definition
@@ -115,7 +115,7 @@ declare module 'golem:graph/schema@1.0.0' {
     properties: string[];
     indexType: IndexType;
     unique: boolean;
-    container: string | undefined;
+    container?: string;
   };
   /**
    * Definition for an edge type in a structural graph database.
@@ -135,7 +135,7 @@ declare module 'golem:graph/schema@1.0.0' {
   export type ContainerInfo = {
     name: string;
     containerType: ContainerType;
-    elementCount: bigint | undefined;
+    elementCount?: bigint;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

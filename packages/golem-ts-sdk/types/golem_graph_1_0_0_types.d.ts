@@ -19,7 +19,7 @@ declare module 'golem:graph/types@1.0.0' {
   export type Datetime = {
     date: Date;
     time: Time;
-    timezoneOffsetMinutes: number | undefined;
+    timezoneOffsetMinutes?: number;
   };
   export type Duration = {
     seconds: bigint;
@@ -31,14 +31,14 @@ declare module 'golem:graph/types@1.0.0' {
   export type Point = {
     longitude: number;
     latitude: number;
-    altitude: number | undefined;
+    altitude?: number;
   };
   export type Linestring = {
     coordinates: Point[];
   };
   export type Polygon = {
     exterior: Point[];
-    holes: Point[][] | undefined;
+    holes?: Point[][];
   };
   /**
    * Universal property value types that can be represented across all graph databases

@@ -46,8 +46,8 @@ declare module 'golem:graph/query@1.0.0' {
    * Query execution options
    */
   export type QueryOptions = {
-    timeoutSeconds: number | undefined;
-    maxResults: number | undefined;
+    timeoutSeconds?: number;
+    maxResults?: number;
     explain: boolean;
     profile: boolean;
   };
@@ -56,10 +56,10 @@ declare module 'golem:graph/query@1.0.0' {
    */
   export type QueryExecutionResult = {
     queryResultValue: QueryResult;
-    executionTimeMs: number | undefined;
-    rowsAffected: number | undefined;
-    explanation: string | undefined;
-    profileData: string | undefined;
+    executionTimeMs?: number;
+    rowsAffected?: number;
+    explanation?: string;
+    profileData?: string;
   };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

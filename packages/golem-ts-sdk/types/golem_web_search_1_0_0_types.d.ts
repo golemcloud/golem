@@ -4,7 +4,7 @@ declare module 'golem:web-search/types@1.0.0' {
    */
   export type ImageResult = {
     url: string;
-    description: string | undefined;
+    description?: string;
   };
   /**
    * Core structure for a single search result
@@ -13,13 +13,13 @@ declare module 'golem:web-search/types@1.0.0' {
     title: string;
     url: string;
     snippet: string;
-    displayUrl: string | undefined;
-    source: string | undefined;
-    score: number | undefined;
-    htmlSnippet: string | undefined;
-    datePublished: string | undefined;
-    images: ImageResult[] | undefined;
-    contentChunks: string[] | undefined;
+    displayUrl?: string;
+    source?: string;
+    score?: number;
+    htmlSnippet?: string;
+    datePublished?: string;
+    images?: ImageResult[];
+    contentChunks?: string[];
   };
   /**
    * Safe search settings
@@ -38,13 +38,13 @@ declare module 'golem:web-search/types@1.0.0' {
    */
   export type SearchMetadata = {
     query: string;
-    totalResults: bigint | undefined;
-    searchTimeMs: number | undefined;
-    safeSearch: SafeSearchLevel | undefined;
-    language: string | undefined;
-    region: string | undefined;
-    nextPageToken: string | undefined;
-    rateLimits: RateLimitInfo | undefined;
+    totalResults?: bigint;
+    searchTimeMs?: number;
+    safeSearch?: SafeSearchLevel;
+    language?: string;
+    region?: string;
+    nextPageToken?: string;
+    rateLimits?: RateLimitInfo;
     currentPage: number;
   };
   /**
@@ -56,16 +56,16 @@ declare module 'golem:web-search/types@1.0.0' {
    */
   export type SearchParams = {
     query: string;
-    safeSearch: SafeSearchLevel | undefined;
-    language: string | undefined;
-    region: string | undefined;
-    maxResults: number | undefined;
-    timeRange: TimeRange | undefined;
-    includeDomains: string[] | undefined;
-    excludeDomains: string[] | undefined;
-    includeImages: boolean | undefined;
-    includeHtml: boolean | undefined;
-    advancedAnswer: boolean | undefined;
+    safeSearch?: SafeSearchLevel;
+    language?: string;
+    region?: string;
+    maxResults?: number;
+    timeRange?: TimeRange;
+    includeDomains?: string[];
+    excludeDomains?: string[];
+    includeImages?: boolean;
+    includeHtml?: boolean;
+    advancedAnswer?: boolean;
   };
   /**
    * Structured search error
