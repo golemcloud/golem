@@ -18,38 +18,63 @@ program
   .description("Generate type metadata from TypeScript sources")
   .argument("<tsconfig>", "Path to tsconfig.json")
   .option("-f, --files <patterns...>", "File globs to include", ["src/**/*"])
-  .action((tsconfig: string, options: { files: string[] }) => {
-    console.log(
-      logSymbols.info,
-      chalk.cyan("Starting type metadata generation…"),
-    );
+  .option(
+    "--include-class-decorators <names...>",
+    "Only include classes decorated with these decorators (space separated)",
+    [],
+  )
+  .option(
+    "--include-only-public-scope",
+    "Include all types regardless of decorator",
+    true,
+  )
+  .action(
+    (
+      tsconfig: string,
+      options: {
+        files: string[];
+        includeClassDecorators: string[];
+        includeOnlyPublicScope: boolean;
+      },
+    ) => {
+      console.log(
+        logSymbols.info,
+        chalk.cyan("Starting type metadata generation…"),
+      );
 
-    const project = new Project({ tsConfigFilePath: path.resolve(tsconfig) });
-    const sourceFiles = project.getSourceFiles(options.files);
+      const project = new Project({ tsConfigFilePath: path.resolve(tsconfig) });
+      const sourceFiles = project.getSourceFiles(options.files);
 
-    console.log(
-      logSymbols.info,
-      chalk.blue(`Processing ${sourceFiles.length} source files…`),
-    );
+      console.log(
+        logSymbols.info,
+        chalk.blue(`Processing ${sourceFiles.length} source files…`),
+      );
 
-    updateMetadataFromSourceFiles(sourceFiles);
+      const genConfig = {
+        sourceFiles: sourceFiles,
+        classDecorators: options.includeClassDecorators,
+        includeOnlyPublicScope: options.includeOnlyPublicScope,
+      };
 
-    const result = TypeMetadata.getAll();
+      updateMetadataFromSourceFiles(genConfig);
 
-    console.log(
-      logSymbols.success,
-      chalk.green(
-        `Metadata tracked for: ${Array.from(result.keys()).join(", ")}`,
-      ),
-    );
+      const result = TypeMetadata.getAll();
 
-    console.log(logSymbols.info, chalk.yellow("Saving metadata…"));
-    const filePath = saveAndClearInMemoryMetadata();
+      console.log(
+        logSymbols.success,
+        chalk.green(
+          `Metadata tracked for: ${Array.from(result.keys()).join(", ")}`,
+        ),
+      );
 
-    console.log(
-      logSymbols.success,
-      chalk.green(`Metadata saved successfully in ${filePath}!`),
-    );
-  });
+      console.log(logSymbols.info, chalk.yellow("Saving metadata…"));
+      const filePath = saveAndClearInMemoryMetadata();
+
+      console.log(
+        logSymbols.success,
+        chalk.green(`Metadata saved successfully in ${filePath}!`),
+      );
+    },
+  );
 
 program.parse();

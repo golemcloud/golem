@@ -31,7 +31,7 @@ import {
 import * as fs from "node:fs";
 import path from "path";
 
-export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
+export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
   const aliasName = getAliasTypeName(type);
@@ -132,7 +132,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
   if (rawName === "Promise" && type.getTypeArguments().length === 1) {
     const inner = type.getTypeArguments()[0];
-    const promiseType = getFromTsMorph(inner);
+    const promiseType = getTypeFromTsMorph(inner);
 
     return {
       kind: "promise",
@@ -143,8 +143,8 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
 
   if (rawName === "Map" && type.getTypeArguments().length === 2) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getFromTsMorph(keyT);
-    const value = getFromTsMorph(valT);
+    const key = getTypeFromTsMorph(keyT);
+    const value = getTypeFromTsMorph(valT);
     return {
       kind: "map",
       name: aliasName,
@@ -167,7 +167,9 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
   }
 
   if (type.isTuple()) {
-    const tupleElems = type.getTupleElements().map((el) => getFromTsMorph(el));
+    const tupleElems = type
+      .getTupleElements()
+      .map((el) => getTypeFromTsMorph(el));
 
     return {
       kind: "tuple",
@@ -182,7 +184,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       throw new Error("Array type without element type");
     }
 
-    const element = getFromTsMorph(elementType);
+    const element = getTypeFromTsMorph(elementType);
 
     return {
       kind: "array",
@@ -192,7 +194,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
   }
 
   if (type.isUnion()) {
-    const unionTypes = type.getUnionTypes().map((t) => getFromTsMorph(t));
+    const unionTypes = type.getUnionTypes().map((t) => getTypeFromTsMorph(t));
 
     return {
       kind: "union",
@@ -206,7 +208,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getFromTsMorph(type);
+      const tsType = getTypeFromTsMorph(type);
       const propName = prop.getName();
 
       if (
@@ -240,7 +242,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getFromTsMorph(type);
+      const tsType = getTypeFromTsMorph(type);
       const propName = prop.getName();
 
       if (
@@ -274,7 +276,7 @@ export function getFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getFromTsMorph(type);
+      const tsType = getTypeFromTsMorph(type);
       const propName = prop.getName();
 
       if (
@@ -372,53 +374,88 @@ export function unwrapAlias(type: TsMorphType): TsMorphType {
   return current;
 }
 
-export function generateMetadata(sourceFiles: SourceFile[]) {
-  updateMetadataFromSourceFiles(sourceFiles);
+/**
+ *
+ * Configuration for generating class metadata.
+ * - sourceFiles: Array of ts-morph SourceFile objects to extract metadata from.
+ * - classDecorators: Array of decorator names to filter classes. If empty, all classes are included.
+ * - includeOnlyPublicScope: If true, only public constructors and methods are included
+ */
+export type ClassMetadataGenConfig = {
+  sourceFiles: SourceFile[];
+  classDecorators: string[];
+  includeOnlyPublicScope: boolean;
+};
+
+export function generateClassMetadata(
+  classMetadataGenConfig: ClassMetadataGenConfig,
+) {
+  updateMetadataFromSourceFiles(classMetadataGenConfig);
   return saveAndClearInMemoryMetadata();
 }
 
-export function updateMetadataFromSourceFiles(sourceFiles: SourceFile[]) {
-  for (const sourceFile of sourceFiles) {
+export function updateMetadataFromSourceFiles(
+  classMetadataGenConfig: ClassMetadataGenConfig,
+) {
+  for (const sourceFile of classMetadataGenConfig.sourceFiles) {
     const classes = sourceFile.getClasses();
 
     for (const classDecl of classes) {
+      if (classMetadataGenConfig.classDecorators.length > 0) {
+        const hasAnyConfiguredDecorator = classDecl
+          .getDecorators()
+          .some((d) =>
+            classMetadataGenConfig.classDecorators.includes(d.getName()),
+          );
+
+        if (!hasAnyConfiguredDecorator) {
+          continue;
+        }
+      }
+
       const className = classDecl.getName();
       if (!className) continue;
 
-      const publicConstructors = classDecl
-        .getConstructors()
-        .filter((ctor) => ctor.getScope() === Scope.Public);
+      const publicConstructors = classMetadataGenConfig.includeOnlyPublicScope
+        ? classDecl
+            .getConstructors()
+            .filter((ctor) => ctor.getScope() === Scope.Public)
+        : classDecl.getConstructors();
 
       const constructorArgs =
         publicConstructors.length === 0
           ? []
           : publicConstructors[0].getParameters().map((p) => ({
               name: p.getName(),
-              type: getFromTsMorph(p.getType()),
+              type: getTypeFromTsMorph(p.getType()),
             }));
 
       const methods = new Map();
 
-      const publicMethods = classDecl
-        .getMethods()
-        .filter((m) => m.getScope() === Scope.Public);
+      const publicMethods = classMetadataGenConfig.includeOnlyPublicScope
+        ? classDecl.getMethods().filter((m) => m.getScope() === Scope.Public)
+        : classDecl.getMethods();
 
       for (const method of publicMethods) {
         const methodParams = new Map(
           method.getParameters().map((p) => {
-            return [p.getName(), getFromTsMorph(p.getType())];
+            return [p.getName(), getTypeFromTsMorph(p.getType())];
           }),
         );
 
-        const returnType = getFromTsMorph(method.getReturnType());
+        const returnType = getTypeFromTsMorph(method.getReturnType());
         methods.set(method.getName(), { methodParams, returnType });
       }
+
+      const isScopeAllowed = (decl: { getScope: () => Scope }) =>
+        !classMetadataGenConfig.includeOnlyPublicScope ||
+        decl.getScope() === Scope.Public;
 
       const publicArrows = classDecl
         .getProperties()
         .filter(
           (p) =>
-            p.getScope() === Scope.Public &&
+            isScopeAllowed(p) &&
             p.getType().getCallSignatures().length > 0 &&
             p.hasInitializer() &&
             (p.getInitializerIfKind(SyntaxKind.ArrowFunction) ||
@@ -439,11 +476,11 @@ export function updateMetadataFromSourceFiles(sourceFiles: SourceFile[]) {
               );
             }
             const paramType = p.getTypeAtLocation(decl);
-            return [p.getName(), getFromTsMorph(paramType)];
+            return [p.getName(), getTypeFromTsMorph(paramType)];
           }),
         );
 
-        const returnType = getFromTsMorph(callSignature.getReturnType());
+        const returnType = getTypeFromTsMorph(callSignature.getReturnType());
         methods.set(publicArrow.getName(), { methodParams, returnType });
       }
 
