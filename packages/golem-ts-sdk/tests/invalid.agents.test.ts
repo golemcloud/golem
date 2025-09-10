@@ -32,13 +32,9 @@ describe('Invalid types in agents', () => {
 
     const iterableType = AnalysedType.fromTsType(fun1Params?.get('iterable')!);
 
-    const asyncIteratorType = AnalysedType.fromTsType(
-      fun1Params?.get('asyncIterator')!,
-    );
+    const asyncIteratorType = AnalysedType.fromTsType(fun1Params?.get('asyncIterator')!);
 
-    const asyncIterableType = AnalysedType.fromTsType(
-      fun1Params?.get('asyncIterable')!,
-    );
+    const asyncIterableType = AnalysedType.fromTsType(fun1Params?.get('asyncIterable')!);
 
     const anyType = AnalysedType.fromTsType(fun1Params?.get('any')!);
 
@@ -54,15 +50,11 @@ describe('Invalid types in agents', () => {
 
     const nullType = AnalysedType.fromTsType(fun1Params?.get('nullParam')!);
 
-    const undefinedType = AnalysedType.fromTsType(
-      fun1Params?.get('undefined')!,
-    );
+    const undefinedType = AnalysedType.fromTsType(fun1Params?.get('undefined')!);
 
     const voidType = AnalysedType.fromTsType(fun1Params?.get('voidParam')!);
 
-    const unionWithNullType = AnalysedType.fromTsType(
-      fun1Params?.get('unionWithNull')!,
-    );
+    const unionWithNullType = AnalysedType.fromTsType(fun1Params?.get('unionWithNull')!);
 
     const objectWithInvalidUnion1 = AnalysedType.fromTsType(
       fun1Params?.get('objectWithUndefinedUnion1')!,
@@ -72,53 +64,31 @@ describe('Invalid types in agents', () => {
       fun1Params?.get('objectWithUndefinedUnion2')!,
     );
 
-    expect(dateType.val).toBe(
-      'Unsupported type `Date`. Use a `string` if possible',
-    );
+    expect(dateType.val).toBe('Unsupported type `Date`. Use a `string` if possible');
 
-    expect(regExpType.val).toBe(
-      'Unsupported type `RegExp`. Use a `string` if possible',
-    );
+    expect(regExpType.val).toBe('Unsupported type `RegExp`. Use a `string` if possible');
 
-    expect(iteratorType.val).toBe(
-      'Unsupported type `Iterator`. Use `Array` type instead',
-    );
+    expect(iteratorType.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
 
-    expect(iterableType.val).toBe(
-      'Unsupported type `Iterable`. Use `Array` type instead',
-    );
+    expect(iterableType.val).toBe('Unsupported type `Iterable`. Use `Array` type instead');
 
-    expect(asyncIteratorType.val).toBe(
-      'Unsupported type `Iterator`. Use `Array` type instead',
-    );
+    expect(asyncIteratorType.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
 
     expect(asyncIterableType.val).toBe(
       'Unsupported type `AsyncIterator`. Use `Array` type instead',
     );
 
-    expect(anyType.val).toBe(
-      'Unsupported type `any`. Use a specific type instead',
-    );
+    expect(anyType.val).toBe('Unsupported type `any`. Use a specific type instead');
 
-    expect(stringType.val).toBe(
-      'Unsupported type `String`, use `string` instead',
-    );
+    expect(stringType.val).toBe('Unsupported type `String`, use `string` instead');
 
-    expect(booleanType.val).toBe(
-      'Unsupported type `Boolean`, use `boolean` instead',
-    );
+    expect(booleanType.val).toBe('Unsupported type `Boolean`, use `boolean` instead');
 
-    expect(numberType.val).toBe(
-      'Unsupported type `Number`, use `number` instead',
-    );
+    expect(numberType.val).toBe('Unsupported type `Number`, use `number` instead');
 
-    expect(symbolType.val).toBe(
-      'Unsupported type `Symbol`, use `string` if possible',
-    );
+    expect(symbolType.val).toBe('Unsupported type `Symbol`, use `string` if possible');
 
-    expect(bigintType.val).toBe(
-      'Unsupported type `BigInt`, use `bigint` instead',
-    );
+    expect(bigintType.val).toBe('Unsupported type `BigInt`, use `bigint` instead');
 
     expect(nullType.val).toBe('Unsupported type `null`');
 
@@ -163,48 +133,26 @@ describe('Invalid types in agents', () => {
     const fun11Type = AnalysedType.fromTsType(fun11ReturnType!);
     const fun12Type = AnalysedType.fromTsType(fun12ReturnType!);
 
-    expect(fun2Type.val).toBe(
-      'Unsupported type `Date`. Use a `string` if possible',
-    );
+    expect(fun2Type.val).toBe('Unsupported type `Date`. Use a `string` if possible');
 
-    expect(fun3Type.val).toBe(
-      'Unsupported type `Iterator`. Use `Array` type instead',
-    );
+    expect(fun3Type.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
 
-    expect(fun4Type.val).toBe(
-      'Unsupported type `Iterable`. Use `Array` type instead',
-    );
+    expect(fun4Type.val).toBe('Unsupported type `Iterable`. Use `Array` type instead');
 
-    expect(fun5Type.val).toBe(
-      'Unsupported type `Iterator`. Use `Array` type instead',
-    );
+    expect(fun5Type.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
 
-    expect(fun6Type.val).toBe(
-      'Unsupported type `AsyncIterator`. Use `Array` type instead',
-    );
+    expect(fun6Type.val).toBe('Unsupported type `AsyncIterator`. Use `Array` type instead');
 
-    expect(fun7Type.val).toBe(
-      'Unsupported type `any`. Use a specific type instead',
-    );
+    expect(fun7Type.val).toBe('Unsupported type `any`. Use a specific type instead');
 
-    expect(fun8Type.val).toBe(
-      'Unsupported type `String`, use `string` instead',
-    );
+    expect(fun8Type.val).toBe('Unsupported type `String`, use `string` instead');
 
-    expect(fun9Type.val).toBe(
-      'Unsupported type `Number`, use `number` instead',
-    );
+    expect(fun9Type.val).toBe('Unsupported type `Number`, use `number` instead');
 
-    expect(fun10Type.val).toBe(
-      'Unsupported type `Boolean`, use `boolean` instead',
-    );
+    expect(fun10Type.val).toBe('Unsupported type `Boolean`, use `boolean` instead');
 
-    expect(fun11Type.val).toBe(
-      'Unsupported type `Symbol`, use `string` if possible',
-    );
+    expect(fun11Type.val).toBe('Unsupported type `Symbol`, use `string` if possible');
 
-    expect(fun12Type.val).toBe(
-      'Unsupported type `BigInt`, use `bigint` instead',
-    );
+    expect(fun12Type.val).toBe('Unsupported type `BigInt`, use `bigint` instead');
   });
 });

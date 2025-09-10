@@ -37,21 +37,13 @@ export const AgentMethodMetadataRegistry = {
     return agentMethodMetadataRegistry.get(agentClassName.value);
   },
 
-  setPromptName(
-    agentClassName: AgentClassName,
-    method: string,
-    prompt: string,
-  ) {
+  setPromptName(agentClassName: AgentClassName, method: string, prompt: string) {
     AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.prompt = prompt;
   },
 
-  setDescription(
-    agentClassName: AgentClassName,
-    method: string,
-    description: string,
-  ) {
+  setDescription(agentClassName: AgentClassName, method: string, description: string) {
     AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.description = description;

@@ -33,12 +33,9 @@ import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
 // Interface type indirectly tests primitive types, union, list etc
 describe('TypeScript Interface to AnalysedType', () => {
   const interfaceType = getTestInterfaceType();
-  const analysed = Either.getOrThrowWith(
-    AnalysedType.fromTsType(interfaceType),
-    (err) => {
-      throw new Error(`Failed to construct analysed type: ${err}`);
-    },
-  );
+  const analysed = Either.getOrThrowWith(AnalysedType.fromTsType(interfaceType), (err) => {
+    throw new Error(`Failed to construct analysed type: ${err}`);
+  });
 
   const recordFields = getRecordFieldsFromAnalysedType(analysed)!;
 
@@ -111,12 +108,9 @@ describe('TypeScript primitives to AnalysedType', () => {
 describe('TypeScript Promise type to AnalysedType', () => {
   it('Promise type is converted to AnalysedType', () => {
     const promiseType = getPromiseType();
-    const result = Either.getOrElse(
-      AnalysedType.fromTsType(promiseType),
-      (error) => {
-        throw new Error(`Failed to construct analysed type: ${error}`);
-      },
-    );
+    const result = Either.getOrElse(AnalysedType.fromTsType(promiseType), (error) => {
+      throw new Error(`Failed to construct analysed type: ${error}`);
+    });
 
     expect(result).toEqual(AnalysedType.str());
   });
@@ -154,12 +148,9 @@ describe('TypeScript Object to AnalysedType', () => {
 describe('TypeScript Union to AnalysedType.Variant', () => {
   it('Union is converted to Variant with the name of the type as case name', () => {
     const enumType = getUnionType();
-    const analysedType = Either.getOrElse(
-      AnalysedType.fromTsType(enumType),
-      (error) => {
-        throw new Error(`Failed to construct analysed type: ${error}`);
-      },
-    );
+    const analysedType = Either.getOrElse(AnalysedType.fromTsType(enumType), (error) => {
+      throw new Error(`Failed to construct analysed type: ${error}`);
+    });
 
     const expected: AnalysedType.AnalysedType = {
       kind: 'variant',
@@ -211,9 +202,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
 test('Union of literals to AnalysedType', () => {
   const unstructuredTextType = getUnionOfLiterals();
 
-  const analysedType = Either.getOrThrow(
-    AnalysedType.fromTsType(unstructuredTextType),
-  );
+  const analysedType = Either.getOrThrow(AnalysedType.fromTsType(unstructuredTextType));
 
   const expectedAnalysedType: AnalysedType.AnalysedType = {
     kind: 'variant',
@@ -269,9 +258,7 @@ function checkOptionalFields(fields: NameTypePair[]) {
 }
 
 function checkUnionComplexFields(fields: NameTypePair[]) {
-  const unionComplexFields = fields.filter((f) =>
-    f.name.startsWith('unionComplexProp'),
-  )[0];
+  const unionComplexFields = fields.filter((f) => f.name.startsWith('unionComplexProp'))[0];
 
   const expected: NameTypePair = {
     name: 'unionComplexProp',
@@ -400,11 +387,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     typ: {
                       kind: 'tuple',
                       value: {
-                        items: [
-                          { kind: 'string' },
-                          { kind: 's32' },
-                          { kind: 'bool' },
-                        ],
+                        items: [{ kind: 'string' }, { kind: 's32' }, { kind: 'bool' }],
                         name: 'tuple-type',
                         owner: undefined,
                       },
@@ -667,9 +650,7 @@ function checkListFields(fields: any[]) {
 }
 
 function checkListObjectFields(fields: any[]) {
-  const listObjectFields = fields.filter((f) =>
-    f.name.startsWith('listObjectProp'),
-  );
+  const listObjectFields = fields.filter((f) => f.name.startsWith('listObjectProp'));
   expect(listObjectFields.length).toBeGreaterThan(0);
 
   listObjectFields.forEach((field) => {
@@ -697,9 +678,7 @@ function checkTupleFields(fields: any[]) {
 }
 
 function checkTupleWithObjectFields(fields: any[]) {
-  const tupleObjectFields = fields.filter((f) =>
-    f.name.startsWith('tupleObjectProp'),
-  );
+  const tupleObjectFields = fields.filter((f) => f.name.startsWith('tupleObjectProp'));
   expect(tupleObjectFields.length).toBeGreaterThan(0);
 
   tupleObjectFields.forEach((field) => {
@@ -744,9 +723,7 @@ function checkMapFields(fields: any[]) {
 }
 
 function checkObjectComplexFields(fields: any[]) {
-  const objectFields = fields.filter((f) =>
-    f.name.startsWith('objectComplexProp'),
-  );
+  const objectFields = fields.filter((f) => f.name.startsWith('objectComplexProp'));
   expect(objectFields.length).toBeGreaterThan(0);
 
   const expected = [

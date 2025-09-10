@@ -19,39 +19,29 @@ import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { AgentMethodMetadataRegistry } from './registry/agentMethodMetadataRegistry';
-import {
-  ClassMetadata,
-  ConstructorArg,
-  MethodParams,
-} from '@golemcloud/golem-ts-types-core';
+import { ClassMetadata, ConstructorArg, MethodParams } from '@golemcloud/golem-ts-types-core';
 
 export function getConstructorDataSchema(
   classType: ClassMetadata,
 ): Either.Either<DataSchema, string> {
-  const constructorParamInfos: readonly ConstructorArg[] =
-    classType.constructorArgs;
+  const constructorParamInfos: readonly ConstructorArg[] = classType.constructorArgs;
 
   const constructorParamTypes = Either.all(
-    constructorParamInfos.map((paramInfo) =>
-      WitType.fromTsType(paramInfo.type),
-    ),
+    constructorParamInfos.map((paramInfo) => WitType.fromTsType(paramInfo.type)),
   );
 
-  const constructDataSchemaResult = Either.map(
-    constructorParamTypes,
-    (paramType) => {
-      return paramType.map((paramType, idx) => {
-        const paramName = constructorParamInfos[idx].name;
-        return [
-          paramName,
-          {
-            tag: 'component-model',
-            val: paramType,
-          },
-        ] as [string, ElementSchema];
-      });
-    },
-  );
+  const constructDataSchemaResult = Either.map(constructorParamTypes, (paramType) => {
+    return paramType.map((paramType, idx) => {
+      const paramName = constructorParamInfos[idx].name;
+      return [
+        paramName,
+        {
+          tag: 'component-model',
+          val: paramType,
+        },
+      ] as [string, ElementSchema];
+    });
+  });
 
   return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
     return {
@@ -66,9 +56,7 @@ export function getAgentMethodSchema(
   agentClassName: AgentClassName,
 ): Either.Either<AgentMethod[], string> {
   if (!classMetadata) {
-    return Either.left(
-      `No metadata found for agent class ${agentClassName.value}`,
-    );
+    return Either.left(`No metadata found for agent class ${agentClassName.value}`);
   }
 
   const methodMetadata = Array.from(classMetadata.methods.entries());
@@ -82,9 +70,7 @@ export function getAgentMethodSchema(
 
       const returnType: Type.Type = signature.returnType;
 
-      const baseMeta =
-        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
-        {};
+      const baseMeta = AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ?? {};
 
       const inputSchemaEither = buildInputSchema(methodName, parameters);
 
@@ -126,8 +112,7 @@ export function buildInputSchema(
         (result) => {
           return [parameterInfo[0], result] as [string, ElementSchema];
         },
-        (err) =>
-          `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
+        (err) => `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
       ),
     ),
   );
@@ -140,9 +125,7 @@ export function buildInputSchema(
   });
 }
 
-export function buildOutputSchema(
-  returnType: Type.Type,
-): Either.Either<DataSchema, string> {
+export function buildOutputSchema(returnType: Type.Type): Either.Either<DataSchema, string> {
   const undefinedSchema = handleUndefinedReturnType(returnType);
 
   if (Option.isSome(undefinedSchema)) {
@@ -157,9 +140,7 @@ export function buildOutputSchema(
   });
 }
 
-function convertToElementSchema(
-  type: Type.Type,
-): Either.Either<ElementSchema, string> {
+function convertToElementSchema(type: Type.Type): Either.Either<ElementSchema, string> {
   return Either.map(WitType.fromTsType(type), (witType) => {
     return {
       tag: 'component-model',
@@ -168,9 +149,7 @@ function convertToElementSchema(
   });
 }
 
-function handleUndefinedReturnType(
-  returnType: Type.Type,
-): Option.Option<DataSchema> {
+function handleUndefinedReturnType(returnType: Type.Type): Option.Option<DataSchema> {
   switch (returnType.kind) {
     case 'null':
       return Option.some({ tag: 'tuple', val: [] });
