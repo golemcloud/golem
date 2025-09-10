@@ -15,7 +15,7 @@
 import * as Option from '../../../newTypes/option';
 
 export type TypeMappingScope = {
-  scope: 'interface' | 'object' | 'method';
+  scope: 'interface' | 'object' | 'method' | 'constructor';
   name: string;
   parameterName: string
   optional: boolean
@@ -29,13 +29,13 @@ export const TypeMappingScope = {
   isOptionalParam(scope: TypeMappingScope) {
     return (scope.scope === 'interface' ||
       scope.scope === 'object' ||
-      scope.scope === 'method') && scope.optional;
+      scope.scope === 'method' || scope.scope === 'constructor') && scope.optional;
   },
 
   paramName(scope: TypeMappingScope): Option.Option<string> {
     if (scope.scope === 'interface' ||
       scope.scope === 'object' ||
-      scope.scope === 'method') {
+      scope.scope === 'method' || scope.scope === 'constructor') {
       return Option.some(scope.parameterName);
     }
 
@@ -68,6 +68,16 @@ export const TypeMappingScope = {
       parameterName,
       optional,
     };
+  },
+
+  constructor(name: string, parameterName: string, optional: boolean): TypeMappingScope {
+    return {
+      scope: 'constructor',
+      name: name,
+      parameterName: parameterName,
+      optional: optional,
+    }
+
   },
 
   others(name: string): TypeMappingScope {

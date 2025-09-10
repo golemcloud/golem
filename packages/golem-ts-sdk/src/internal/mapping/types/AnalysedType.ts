@@ -231,8 +231,8 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
       ({ kind: 'handle', value: { name: convertTypeNameToKebab(name), owner: undefined, resourceId, mode } });
 
 
-export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> {
-  return fromTsTypeInternal(tsType, Option.none());
+export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+  return fromTsTypeInternal(tsType, scope);
 }
 
 export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {

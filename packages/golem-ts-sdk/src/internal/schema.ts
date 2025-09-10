@@ -24,8 +24,10 @@ import {
   ConstructorArg,
   MethodParams,
 } from '@golemcloud/golem-ts-types-core';
+import { TypeMappingScope } from './mapping/types/scope';
 
 export function getConstructorDataSchema(
+  agentClassName: AgentClassName,
   classType: ClassMetadata,
 ): Either.Either<DataSchema, string> {
   const constructorParamInfos: readonly ConstructorArg[] =
@@ -33,7 +35,11 @@ export function getConstructorDataSchema(
 
   const constructorParamTypes = Either.all(
     constructorParamInfos.map((paramInfo) =>
-      WitType.fromTsType(paramInfo.type),
+      WitType.fromTsType(paramInfo.type, Option.some(TypeMappingScope.constructor(
+        agentClassName.value,
+        paramInfo.name,
+        paramInfo.type.optional
+      ))),
     ),
   );
 
@@ -86,7 +92,7 @@ export function getAgentMethodSchema(
         AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
         {};
 
-      const inputSchemaEither = buildInputSchema(methodName, parameters);
+      const inputSchemaEither = buildMethodInputSchema(methodName, parameters);
 
       if (Either.isLeft(inputSchemaEither)) {
         return Either.left(inputSchemaEither.val);
@@ -115,14 +121,18 @@ export function getAgentMethodSchema(
   );
 }
 
-export function buildInputSchema(
+export function buildMethodInputSchema(
   methodName: string,
   paramTypes: MethodParams,
 ): Either.Either<DataSchema, string> {
   const result = Either.all(
     Array.from(paramTypes).map((parameterInfo) =>
       Either.mapBoth(
-        convertToElementSchema(parameterInfo[1]),
+        convertToElementSchema(parameterInfo[1], Option.some(TypeMappingScope.method(
+          methodName,
+          parameterInfo[0],
+          parameterInfo[1].optional
+        ))),
         (result) => {
           return [parameterInfo[0], result] as [string, ElementSchema];
         },
@@ -149,7 +159,7 @@ export function buildOutputSchema(
     return Either.right(undefinedSchema.val);
   }
 
-  return Either.map(convertToElementSchema(returnType), (result) => {
+  return Either.map(convertToElementSchema(returnType, Option.none()), (result) => {
     return {
       tag: 'tuple',
       val: [['return-value', result]],
@@ -159,8 +169,9 @@ export function buildOutputSchema(
 
 function convertToElementSchema(
   type: Type.Type,
+  scope: Option.Option<TypeMappingScope>
 ): Either.Either<ElementSchema, string> {
-  return Either.map(WitType.fromTsType(type), (witType) => {
+  return Either.map(WitType.fromTsType(type, scope), (witType) => {
     return {
       tag: 'component-model',
       val: witType,

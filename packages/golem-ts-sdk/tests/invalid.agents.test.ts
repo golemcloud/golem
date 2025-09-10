@@ -15,61 +15,68 @@
 // Interface type indirectly tests primitive types, union, list etc
 
 import { describe, expect } from 'vitest';
-import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata, Type } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
+import { TypeMappingScope } from '../src/internal/mapping/types/scope';
+import * as Option from '../src/newTypes/option';
+import * as Either from '../src/newTypes/either';
+
+const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
+const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
+
+
 
 describe('Invalid types in agents', () => {
-  const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
+
 
   it('invalid types in method inputs will return error', () => {
-    const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
 
-    const dateType = AnalysedType.fromTsType(fun1Params?.get('date')!);
+    const dateType = getAnalysedTypeInFun1('date');
 
-    const regExpType = AnalysedType.fromTsType(fun1Params?.get('regExp')!);
+    const regExpType = getAnalysedTypeInFun1('regExp');
 
-    const iteratorType = AnalysedType.fromTsType(fun1Params?.get('iterator')!);
+    const iteratorType = getAnalysedTypeInFun1('iterator');
 
-    const iterableType = AnalysedType.fromTsType(fun1Params?.get('iterable')!);
+    const iterableType = getAnalysedTypeInFun1('iterable');
 
-    const asyncIteratorType = AnalysedType.fromTsType(
-      fun1Params?.get('asyncIterator')!,
+    const asyncIteratorType = getAnalysedTypeInFun1(
+      'asyncIterator',
     );
 
-    const asyncIterableType = AnalysedType.fromTsType(
-      fun1Params?.get('asyncIterable')!,
+    const asyncIterableType = getAnalysedTypeInFun1(
+      'asyncIterable',
     );
 
-    const anyType = AnalysedType.fromTsType(fun1Params?.get('any')!);
+    const anyType = getAnalysedTypeInFun1('any');
 
-    const stringType = AnalysedType.fromTsType(fun1Params?.get('string')!);
+    const stringType = getAnalysedTypeInFun1('string');
 
-    const booleanType = AnalysedType.fromTsType(fun1Params?.get('boolean')!);
+    const booleanType = getAnalysedTypeInFun1('boolean');
 
-    const symbolType = AnalysedType.fromTsType(fun1Params?.get('symbol')!);
+    const symbolType = getAnalysedTypeInFun1('symbol');
 
-    const numberType = AnalysedType.fromTsType(fun1Params?.get('number')!);
+    const numberType = getAnalysedTypeInFun1('number');
 
-    const bigintType = AnalysedType.fromTsType(fun1Params?.get('bigint')!);
+    const bigintType = getAnalysedTypeInFun1('bigint');
 
-    const nullType = AnalysedType.fromTsType(fun1Params?.get('nullParam')!);
+    const nullType = getAnalysedTypeInFun1('nullParam');
 
-    const undefinedType = AnalysedType.fromTsType(
-      fun1Params?.get('undefined')!,
+    const undefinedType = getAnalysedTypeInFun1(
+      'undefined',
     );
 
-    const voidType = AnalysedType.fromTsType(fun1Params?.get('voidParam')!);
+    const voidType = getAnalysedTypeInFun1('voidParam');
 
-    const unionWithNullType = AnalysedType.fromTsType(
-      fun1Params?.get('unionWithNull')!,
+    const unionWithNullType = getAnalysedTypeInFun1(
+      'unionWithNull',
     );
 
-    const objectWithInvalidUnion1 = AnalysedType.fromTsType(
-      fun1Params?.get('objectWithUndefinedUnion1')!,
+    const objectWithInvalidUnion1 = getAnalysedTypeInFun1(
+      'objectWithUndefinedUnion1',
     );
 
-    const objectWithInvalidUnion2 = AnalysedType.fromTsType(
-      fun1Params?.get('objectWithUndefinedUnion2')!,
+    const objectWithInvalidUnion2 = getAnalysedTypeInFun1(
+      'objectWithUndefinedUnion2',
     );
 
     expect(dateType.val).toBe(
@@ -153,17 +160,17 @@ describe('Invalid types in agents', () => {
     const fun11ReturnType = invalidAgent?.methods.get('fun11')?.returnType;
     const fun12ReturnType = invalidAgent?.methods.get('fun12')?.returnType;
 
-    const fun2Type = AnalysedType.fromTsType(fun2ReturnType!);
-    const fun3Type = AnalysedType.fromTsType(fun3ReturnType!);
-    const fun4Type = AnalysedType.fromTsType(fun4ReturnType!);
-    const fun5Type = AnalysedType.fromTsType(fun5ReturnType!);
-    const fun6Type = AnalysedType.fromTsType(fun6ReturnType!);
-    const fun7Type = AnalysedType.fromTsType(fun7ReturnType!);
-    const fun8Type = AnalysedType.fromTsType(fun8ReturnType!);
-    const fun9Type = AnalysedType.fromTsType(fun9ReturnType!);
-    const fun10Type = AnalysedType.fromTsType(fun10ReturnType!);
-    const fun11Type = AnalysedType.fromTsType(fun11ReturnType!);
-    const fun12Type = AnalysedType.fromTsType(fun12ReturnType!);
+    const fun2Type = AnalysedType.fromTsType(fun2ReturnType!, Option.none());
+    const fun3Type = AnalysedType.fromTsType(fun3ReturnType!, Option.none());
+    const fun4Type = AnalysedType.fromTsType(fun4ReturnType!, Option.none());
+    const fun5Type = AnalysedType.fromTsType(fun5ReturnType!, Option.none());
+    const fun6Type = AnalysedType.fromTsType(fun6ReturnType!, Option.none());
+    const fun7Type = AnalysedType.fromTsType(fun7ReturnType!, Option.none());
+    const fun8Type = AnalysedType.fromTsType(fun8ReturnType!, Option.none());
+    const fun9Type = AnalysedType.fromTsType(fun9ReturnType!, Option.none());
+    const fun10Type = AnalysedType.fromTsType(fun10ReturnType!, Option.none());
+    const fun11Type = AnalysedType.fromTsType(fun11ReturnType!, Option.none());
+    const fun12Type = AnalysedType.fromTsType(fun12ReturnType!, Option.none());
 
     expect(fun2Type.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
@@ -210,3 +217,13 @@ describe('Invalid types in agents', () => {
     );
   });
 });
+
+
+function getAnalysedTypeInFun1(parameterName: string): Either.Either<AnalysedType.AnalysedType, string> {
+  const type = fun1Params?.get(parameterName)!;
+  return AnalysedType.fromTsType(type, Option.some(TypeMappingScope.method(
+    'fun1',
+    parameterName,
+    type.optional
+  )))
+}

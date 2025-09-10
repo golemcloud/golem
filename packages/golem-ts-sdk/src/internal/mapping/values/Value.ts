@@ -724,7 +724,8 @@ function handleTypedArray<
     : Either.left(
         typeMismatchIn(tsValue, {
           kind: 'array',
-          element: { kind: 'number' },
+          element: { kind: 'number', optional: false},
+          optional: false
         }),
       );
 }
@@ -739,6 +740,7 @@ function handleBooleanType(tsValue: any): Either.Either<Value, string> {
     return Either.left(
       typeMismatchIn(tsValue, {
         kind: 'boolean',
+        optional: false,
       }),
     );
   }
@@ -753,6 +755,7 @@ function handleArrayType(
       typeMismatchIn(tsValue, {
         kind: 'array',
         element: elementType,
+        optional: false
       }),
     );
   }
@@ -775,6 +778,7 @@ function handleTupleType(
       typeMismatchIn(tsValue, {
         kind: 'tuple',
         elements: types,
+        optional: false,
       }),
     );
   }
