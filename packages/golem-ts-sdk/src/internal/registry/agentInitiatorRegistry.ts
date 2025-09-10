@@ -34,7 +34,10 @@ export const AgentInitiatorRegistry = {
     return Array.from(agentInitiators.entries())
       .map(
         ([name, initiator]) =>
-          [new AgentTypeName(name), initiator] as [AgentTypeName, AgentInitiator],
+          [new AgentTypeName(name), initiator] as [
+            AgentTypeName,
+            AgentInitiator,
+          ],
       )
       [Symbol.iterator]();
   },

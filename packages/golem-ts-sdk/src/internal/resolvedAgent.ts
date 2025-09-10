@@ -39,7 +39,10 @@ export class ResolvedAgent {
     return this.agentInternal.getId();
   }
 
-  invoke(methodName: string, args: DataValue): Promise<Result<DataValue, AgentError>> {
+  invoke(
+    methodName: string,
+    args: DataValue,
+  ): Promise<Result<DataValue, AgentError>> {
     return this.agentInternal.invoke(methodName, args);
   }
 

@@ -19,7 +19,10 @@ import * as Value from './Value';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';
 
-export const fromTsValue = (tsValue: any, tsType: Type.Type): Either.Either<WitValue, string> => {
+export const fromTsValue = (
+  tsValue: any,
+  tsType: Type.Type,
+): Either.Either<WitValue, string> => {
   const valueEither = Value.fromTsValue(tsValue, tsType);
   return Either.map(valueEither, Value.toWitValue);
 };

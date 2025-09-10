@@ -41,14 +41,24 @@ let resolvedAgent: Option.Option<ResolvedAgent> = Option.none();
 
 const UninitiatedAgentErrorMessage: string = 'Agent is not initialized';
 
-const UninitializedAgentError: AgentError = createCustomError(UninitiatedAgentErrorMessage);
+const UninitializedAgentError: AgentError = createCustomError(
+  UninitiatedAgentErrorMessage,
+);
 
 // An error can happen if the user agent is not composed (which will initialize the agent with precompiled wasm)
-function getResolvedAgentOrThrow(resolvedAgent: Option.Option<ResolvedAgent>): ResolvedAgent {
-  return Option.getOrThrowWith(resolvedAgent, () => new Error(UninitiatedAgentErrorMessage));
+function getResolvedAgentOrThrow(
+  resolvedAgent: Option.Option<ResolvedAgent>,
+): ResolvedAgent {
+  return Option.getOrThrowWith(
+    resolvedAgent,
+    () => new Error(UninitiatedAgentErrorMessage),
+  );
 }
 
-async function initialize(agentType: string, input: DataValue): Promise<Result<void, AgentError>> {
+async function initialize(
+  agentType: string,
+  input: DataValue,
+): Promise<Result<void, AgentError>> {
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
@@ -62,11 +72,15 @@ async function initialize(agentType: string, input: DataValue): Promise<Result<v
   const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
 
   if (Option.isNone(initiator)) {
-    const entries = Array.from(AgentInitiatorRegistry.entries()).map((entry) => entry[0].value);
+    const entries = Array.from(AgentInitiatorRegistry.entries()).map(
+      (entry) => entry[0].value,
+    );
 
     return {
       tag: 'err',
-      val: createCustomError(`Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`),
+      val: createCustomError(
+        `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`,
+      ),
     };
   }
 

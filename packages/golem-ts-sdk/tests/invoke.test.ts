@@ -14,7 +14,10 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
-import { getDataValueFromWitValue, getWitValueFromDataValue } from '../src/decorators';
+import {
+  getDataValueFromWitValue,
+  getWitValueFromDataValue,
+} from '../src/decorators';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect, it } from 'vitest';
@@ -32,120 +35,145 @@ import { ResolvedAgent } from '../src/internal/resolvedAgent';
 
 test("AssistantAgent can be successfully initiated and the methods can be invoked'", () => {
   fc.assert(
-    fc.property(interfaceArb, fc.string(), (weatherAgentConstructorValue, locationValue) => {
-      overrideSelfMetadataImpl();
+    fc.property(
+      interfaceArb,
+      fc.string(),
+      (weatherAgentConstructorValue, locationValue) => {
+        overrideSelfMetadataImpl();
 
-      const typeRegistry = TypeMetadata.get(AssistantAgentClassName.value);
+        const typeRegistry = TypeMetadata.get(AssistantAgentClassName.value);
 
-      if (!typeRegistry) {
-        throw new Error('WeatherAgent type metadata not found');
-      }
+        if (!typeRegistry) {
+          throw new Error('WeatherAgent type metadata not found');
+        }
 
-      const constructorInfo = typeRegistry.constructorArgs[0].type;
+        const constructorInfo = typeRegistry.constructorArgs[0].type;
 
-      const witValue = Either.getOrThrowWith(
-        WitValue.fromTsValue(weatherAgentConstructorValue, constructorInfo),
-        (error) => new Error(`Failed to convert constructor arg to WitValue. ${error}`),
-      );
+        const witValue = Either.getOrThrowWith(
+          WitValue.fromTsValue(weatherAgentConstructorValue, constructorInfo),
+          (error) =>
+            new Error(
+              `Failed to convert constructor arg to WitValue. ${error}`,
+            ),
+        );
 
-      const agentInitiator = Option.getOrThrowWith(
-        AgentInitiatorRegistry.lookup(AssistantAgentName),
-        () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
-      );
+        const agentInitiator = Option.getOrThrowWith(
+          AgentInitiatorRegistry.lookup(AssistantAgentName),
+          () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
+        );
 
-      const result = agentInitiator.initiate(
-        WeatherAgentName.value,
-        getDataValueFromWitValue(witValue),
-      );
+        const result = agentInitiator.initiate(
+          WeatherAgentName.value,
+          getDataValueFromWitValue(witValue),
+        );
 
-      expect(result.tag).toEqual('ok');
-    }),
+        expect(result.tag).toEqual('ok');
+      },
+    ),
   );
 });
 
 test('WeatherAgent can be successfully initiated and the methods can be invoked', () => {
   fc.assert(
-    fc.property(fc.string(), fc.string(), fc.integer(), (arbData, locationValue, number) => {
-      overrideSelfMetadataImpl();
+    fc.property(
+      fc.string(),
+      fc.string(),
+      fc.integer(),
+      (arbData, locationValue, number) => {
+        overrideSelfMetadataImpl();
 
-      const typeRegistry = TypeMetadata.get(WeatherAgentClassName.value);
+        const typeRegistry = TypeMetadata.get(WeatherAgentClassName.value);
 
-      if (!typeRegistry) {
-        throw new Error('WeatherAgent type metadata not found');
-      }
+        if (!typeRegistry) {
+          throw new Error('WeatherAgent type metadata not found');
+        }
 
-      const constructorInfo = typeRegistry.constructorArgs[0].type;
+        const constructorInfo = typeRegistry.constructorArgs[0].type;
 
-      const witValue = Either.getOrThrowWith(
-        WitValue.fromTsValue(arbData, constructorInfo),
-        (error) => new Error(`Failed to convert constructor arg to WitValue. ${error}`),
-      );
+        const witValue = Either.getOrThrowWith(
+          WitValue.fromTsValue(arbData, constructorInfo),
+          (error) =>
+            new Error(
+              `Failed to convert constructor arg to WitValue. ${error}`,
+            ),
+        );
 
-      const constructorParams = getDataValueFromWitValue(witValue);
+        const constructorParams = getDataValueFromWitValue(witValue);
 
-      const agentInitiator = Option.getOrThrowWith(
-        AgentInitiatorRegistry.lookup(WeatherAgentName),
-        () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
-      );
+        const agentInitiator = Option.getOrThrowWith(
+          AgentInitiatorRegistry.lookup(WeatherAgentName),
+          () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
+        );
 
-      const result = agentInitiator.initiate(WeatherAgentName.value, constructorParams);
+        const result = agentInitiator.initiate(
+          WeatherAgentName.value,
+          constructorParams,
+        );
 
-      expect(result.tag).toEqual('ok');
+        expect(result.tag).toEqual('ok');
 
-      const resolvedAgent =
-        result.tag === 'ok'
-          ? result.val
-          : (() => {
-              throw new Error('Agent initiation failed');
-            })();
+        const resolvedAgent =
+          result.tag === 'ok'
+            ? result.val
+            : (() => {
+                throw new Error('Agent initiation failed');
+              })();
 
-      testInvoke(
-        typeRegistry,
-        'fun1',
-        'location',
-        locationValue,
-        resolvedAgent,
-        'Weather in ' + locationValue + ' is sunny!',
-      );
+        testInvoke(
+          typeRegistry,
+          'fun1',
+          'location',
+          locationValue,
+          resolvedAgent,
+          'Weather in ' + locationValue + ' is sunny!',
+        );
 
-      testInvoke(
-        typeRegistry,
-        'fun2',
-        'data',
-        { value: number, data: locationValue },
-        resolvedAgent,
-        `Weather in ${locationValue} is sunny!`,
-      );
+        testInvoke(
+          typeRegistry,
+          'fun2',
+          'data',
+          { value: number, data: locationValue },
+          resolvedAgent,
+          `Weather in ${locationValue} is sunny!`,
+        );
 
-      testInvoke(
-        typeRegistry,
-        'fun3',
-        'param2',
-        { data: locationValue, value: number },
-        resolvedAgent,
-        `Weather in ${locationValue} is sunny!`,
-      );
+        testInvoke(
+          typeRegistry,
+          'fun3',
+          'param2',
+          { data: locationValue, value: number },
+          resolvedAgent,
+          `Weather in ${locationValue} is sunny!`,
+        );
 
-      testInvoke(
-        typeRegistry,
-        'fun4',
-        'location',
-        { data: locationValue, value: number },
-        resolvedAgent,
-        undefined,
-      );
+        testInvoke(
+          typeRegistry,
+          'fun4',
+          'location',
+          { data: locationValue, value: number },
+          resolvedAgent,
+          undefined,
+        );
 
-      testInvoke(
-        typeRegistry,
-        'fun5',
-        'location',
-        locationValue,
-        resolvedAgent,
-        `Weather in ${locationValue} is sunny!`,
-      );
+        testInvoke(
+          typeRegistry,
+          'fun5',
+          'location',
+          locationValue,
+          resolvedAgent,
+          `Weather in ${locationValue} is sunny!`,
+        );
 
-      testInvoke(typeRegistry, 'fun6', 'location', locationValue, resolvedAgent, undefined);
-    }),
+        testInvoke(
+          typeRegistry,
+          'fun6',
+          'location',
+          locationValue,
+          resolvedAgent,
+          undefined,
+        );
+      },
+    ),
   );
 });
 
@@ -172,7 +200,9 @@ function testInvoke(
   const parameterType = parametersInfo.get(parameterName);
 
   if (!parameterType) {
-    throw new Error('Parameter location not found in method getWeather metadata');
+    throw new Error(
+      'Parameter location not found in method getWeather metadata',
+    );
   }
 
   const parameterWitValue = Either.getOrThrowWith(

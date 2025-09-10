@@ -46,7 +46,9 @@ describe('AgentType look up', () => {
 
     AgentInitiatorRegistry.register(agentTypeName, FailingAgentInitiator);
 
-    const lookupResult = AgentInitiatorRegistry.lookup(new AgentTypeName('assistant-agent'));
+    const lookupResult = AgentInitiatorRegistry.lookup(
+      new AgentTypeName('assistant-agent'),
+    );
 
     expect(lookupResult).toEqual(Option.some(FailingAgentInitiator));
   });
@@ -72,7 +74,9 @@ describe('AgentType look up', () => {
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);
 
-    const lookupResult = AgentTypeRegistry.lookup(new AgentClassName('AssistantAgent'));
+    const lookupResult = AgentTypeRegistry.lookup(
+      new AgentClassName('AssistantAgent'),
+    );
 
     expect(lookupResult).toEqual(Option.some(AgentTypeSample));
   });
@@ -80,11 +84,21 @@ describe('AgentType look up', () => {
   it('AgentMethodMetadataRegistry should return method details when looking up by string representation of agentClassName', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
 
-    AgentMethodMetadataRegistry.setDescription(agentClassName, 'foo', 'sample desc');
+    AgentMethodMetadataRegistry.setDescription(
+      agentClassName,
+      'foo',
+      'sample desc',
+    );
 
-    AgentMethodMetadataRegistry.setPromptName(agentClassName, 'foo', 'sample prompt');
+    AgentMethodMetadataRegistry.setPromptName(
+      agentClassName,
+      'foo',
+      'sample prompt',
+    );
 
-    const lookupResult = AgentMethodMetadataRegistry.lookup(new AgentClassName('AssistantAgent'));
+    const lookupResult = AgentMethodMetadataRegistry.lookup(
+      new AgentClassName('AssistantAgent'),
+    );
 
     expect(lookupResult?.size).toEqual(1);
 

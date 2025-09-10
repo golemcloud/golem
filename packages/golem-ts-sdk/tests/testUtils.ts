@@ -13,7 +13,10 @@
 // limitations under the License.
 
 import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { AnalysedType, NameTypePair } from '../src/internal/mapping/types/AnalysedType';
+import {
+  AnalysedType,
+  NameTypePair,
+} from '../src/internal/mapping/types/AnalysedType';
 import { AgentClassName } from '../src';
 import { AgentTypeName } from '../src/newTypes/agentTypeName';
 
@@ -21,9 +24,13 @@ export const AssistantAgentClassName = new AgentClassName('AssistantAgent');
 
 export const WeatherAgentClassName = new AgentClassName('WeatherAgent');
 
-export const WeatherAgentName = AgentTypeName.fromAgentClassName(WeatherAgentClassName);
+export const WeatherAgentName = AgentTypeName.fromAgentClassName(
+  WeatherAgentClassName,
+);
 
-export const AssistantAgentName = AgentTypeName.fromAgentClassName(AssistantAgentClassName);
+export const AssistantAgentName = AgentTypeName.fromAgentClassName(
+  AssistantAgentClassName,
+);
 
 export function getAll() {
   return TypeMetadata.getAll();
@@ -103,7 +110,10 @@ function fetchType(typeNameInTestData: string): Type.Type {
     const methods = Array.from(type.methods.values());
 
     for (const method of methods) {
-      if (method.returnType && Type.getTypeName(method.returnType) === typeNameInTestData) {
+      if (
+        method.returnType &&
+        Type.getTypeName(method.returnType) === typeNameInTestData
+      ) {
         return method.returnType;
       }
 

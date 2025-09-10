@@ -26,7 +26,9 @@ export class AgentTypeName {
   }
 
   static fromAgentClassName(agentClassName: AgentClassName): AgentTypeName {
-    return new AgentTypeName(convertAgentClassNameToKebab(agentClassName.value));
+    return new AgentTypeName(
+      convertAgentClassNameToKebab(agentClassName.value),
+    );
   }
 }
 
