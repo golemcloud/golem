@@ -27,7 +27,10 @@ export const fromTsValue = (
   return Either.map(valueEither, Value.toWitValue);
 };
 
-export const toTsValue = (witValue: WitValue, expectedType: Type.Type): any => {
+export const toTsValue = (
+  witValue: WitValue,
+  expectedType: Type.Type,
+): any => {
   const value = Value.fromWitValue(witValue);
   return Value.toTsValue(value, expectedType);
 };

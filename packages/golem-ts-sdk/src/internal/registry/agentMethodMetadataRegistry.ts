@@ -19,22 +19,40 @@ type AgentMethodNameString = string;
 
 const agentMethodMetadataRegistry = new Map<
   AgentClassNameString,
-  Map<AgentMethodNameString, { prompt?: string; description?: string }>
+  Map<
+    AgentMethodNameString,
+    {
+      prompt?: string;
+      description?: string;
+    }
+  >
 >();
 
 export const AgentMethodMetadataRegistry = {
-  ensureMeta(agentClassName: AgentClassName, method: string) {
-    if (!agentMethodMetadataRegistry.has(agentClassName.value)) {
-      agentMethodMetadataRegistry.set(agentClassName.value, new Map());
+  ensureMeta(
+    agentClassName: AgentClassName,
+    method: string,
+  ) {
+    if (
+      !agentMethodMetadataRegistry.has(agentClassName.value)
+    ) {
+      agentMethodMetadataRegistry.set(
+        agentClassName.value,
+        new Map(),
+      );
     }
-    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    const classMeta = agentMethodMetadataRegistry.get(
+      agentClassName.value,
+    )!;
     if (!classMeta.has(method)) {
       classMeta.set(method, {});
     }
   },
 
   lookup(agentClassName: AgentClassName) {
-    return agentMethodMetadataRegistry.get(agentClassName.value);
+    return agentMethodMetadataRegistry.get(
+      agentClassName.value,
+    );
   },
 
   setPromptName(
@@ -42,8 +60,13 @@ export const AgentMethodMetadataRegistry = {
     method: string,
     prompt: string,
   ) {
-    AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    AgentMethodMetadataRegistry.ensureMeta(
+      agentClassName,
+      method,
+    );
+    const classMeta = agentMethodMetadataRegistry.get(
+      agentClassName.value,
+    )!;
     classMeta.get(method)!.prompt = prompt;
   },
 
@@ -52,8 +75,13 @@ export const AgentMethodMetadataRegistry = {
     method: string,
     description: string,
   ) {
-    AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    AgentMethodMetadataRegistry.ensureMeta(
+      agentClassName,
+      method,
+    );
+    const classMeta = agentMethodMetadataRegistry.get(
+      agentClassName.value,
+    )!;
     classMeta.get(method)!.description = description;
   },
 };

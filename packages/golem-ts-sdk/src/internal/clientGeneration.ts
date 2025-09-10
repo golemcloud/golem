@@ -28,19 +28,25 @@ import {
 } from 'golem:agent/host';
 import { AgentTypeName } from '../newTypes/agentTypeName';
 import { AgentClassName } from '../newTypes/agentClassName';
-import { DataValue, ElementValue } from 'golem:agent/common';
+import {
+  DataValue,
+  ElementValue,
+} from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
 
-export function getRemoteClient<T extends new (...args: any[]) => any>(
-  ctor: T,
-) {
+export function getRemoteClient<
+  T extends new (...args: any[]) => any,
+>(ctor: T) {
   return (...args: any[]) => {
     const instance = new ctor(...args);
 
     const agentClassName = new AgentClassName(ctor.name);
-    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
+    const agentTypeName =
+      AgentTypeName.fromAgentClassName(agentClassName);
 
-    const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
+    const metadataOpt = Option.fromNullable(
+      TypeMetadata.get(ctor.name),
+    );
 
     if (Option.isNone(metadataOpt)) {
       throw new Error(
@@ -50,7 +56,11 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 
     const metadata = metadataOpt.val;
 
-    const workerIdEither = getWorkerId(agentTypeName, args, metadata);
+    const workerIdEither = getWorkerId(
+      agentTypeName,
+      args,
+      metadata,
+    );
 
     if (Either.isLeft(workerIdEither)) {
       throw new Error(workerIdEither.val);
@@ -63,7 +73,12 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
         const val = target[prop];
 
         if (typeof val === 'function') {
-          return getMethodProxy(metadata, prop, agentTypeName, workerId);
+          return getMethodProxy(
+            metadata,
+            prop,
+            agentTypeName,
+            workerId,
+          );
         }
         return val;
       },
@@ -77,7 +92,9 @@ function getMethodProxy(
   agentTypeName: AgentTypeName,
   workerId: WorkerId,
 ) {
-  const methodSignature = classMetadata.methods.get(prop.toString());
+  const methodSignature = classMetadata.methods.get(
+    prop.toString(),
+  );
 
   const methodParams = methodSignature?.methodParams;
 
@@ -94,7 +111,9 @@ function getMethodProxy(
   const returnType = methodSignature?.returnType;
 
   return async (...fnArgs: any[]) => {
-    const methodNameKebab = convertAgentMethodNameToKebab(prop.toString());
+    const methodNameKebab = convertAgentMethodNameToKebab(
+      prop.toString(),
+    );
     const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
 
     const parameterWitValuesEither = Either.all(
@@ -105,7 +124,9 @@ function getMethodProxy(
       }),
     );
 
-    const parameterWitValues = Either.isLeft(parameterWitValuesEither)
+    const parameterWitValues = Either.isLeft(
+      parameterWitValuesEither,
+    )
       ? (() => {
           throw new Error(
             'Failed to create remote agent: ' +
@@ -137,12 +158,16 @@ function getMethodProxy(
       rpcResult.tag === 'err'
         ? (() => {
             throw new Error(
-              'Failed to invoke function: ' + JSON.stringify(rpcResult.val),
+              'Failed to invoke function: ' +
+                JSON.stringify(rpcResult.val),
             );
           })()
         : rpcResult.val;
 
-    return Value.toTsValue(unwrapResult(rpcWitValue), returnType);
+    return Value.toTsValue(
+      unwrapResult(rpcWitValue),
+      returnType,
+    );
   };
 }
 
@@ -164,30 +189,40 @@ function getWorkerId(
   );
 
   if (Option.isNone(optionalRegisteredAgentType)) {
-    return Either.left(`There are no components implementing ${agentTypeName}`);
+    return Either.left(
+      `There are no components implementing ${agentTypeName}`,
+    );
   }
 
   const registeredAgentType: RegisteredAgentType =
     optionalRegisteredAgentType.val;
 
-  const constructorParamInfo = classMetadata.constructorArgs;
+  const constructorParamInfo =
+    classMetadata.constructorArgs;
 
-  const constructorParamTypes = constructorParamInfo.map((param) => param.type);
+  const constructorParamTypes = constructorParamInfo.map(
+    (param) => param.type,
+  );
 
-  const constructorParamWitValuesResult: Either.Either<ElementValue[], string> =
-    Either.all(
-      constructorArgs.map((arg, index) => {
-        const typ = constructorParamTypes[index];
-        return Either.map(WitValue.fromTsValue(arg, typ), (witValue) => {
+  const constructorParamWitValuesResult: Either.Either<
+    ElementValue[],
+    string
+  > = Either.all(
+    constructorArgs.map((arg, index) => {
+      const typ = constructorParamTypes[index];
+      return Either.map(
+        WitValue.fromTsValue(arg, typ),
+        (witValue) => {
           let elementValue: ElementValue = {
             tag: 'component-model',
             val: witValue,
           };
 
           return elementValue;
-        });
-      }),
-    );
+        },
+      );
+    }),
+  );
 
   if (Either.isLeft(constructorParamWitValuesResult)) {
     throw new Error(
@@ -201,7 +236,10 @@ function getWorkerId(
     val: constructorParamWitValuesResult.val,
   };
 
-  const agentId = makeAgentId(agentTypeName.value, constructorDataValue);
+  const agentId = makeAgentId(
+    agentTypeName.value,
+    constructorDataValue,
+  );
 
   if (agentId.tag === 'err') {
     return Either.left(
@@ -215,18 +253,24 @@ function getWorkerId(
   });
 }
 
-function convertAgentMethodNameToKebab(methodName: string): string {
+function convertAgentMethodNameToKebab(
+  methodName: string,
+): string {
   return methodName
     .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')
     .toLowerCase();
 }
 
-function unwrapResult(witValue: WitValue.WitValue): Value.Value {
+function unwrapResult(
+  witValue: WitValue.WitValue,
+): Value.Value {
   const value = Value.fromWitValue(witValue);
 
   const innerResult =
-    value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
+    value.kind === 'tuple' && value.value.length > 0
+      ? value.value[0]
+      : value;
 
   return innerResult.kind === 'result'
     ? innerResult.value.ok

@@ -15,7 +15,11 @@
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { Result } from 'golem:rpc/types@0.2.2';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common';
+import {
+  AgentError,
+  AgentType,
+  DataValue,
+} from 'golem:agent/common';
 import { createCustomError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
@@ -37,13 +41,14 @@ export * from './host/guard';
 export * from './host/result';
 export * from './host/transaction';
 
-let resolvedAgent: Option.Option<ResolvedAgent> = Option.none();
+let resolvedAgent: Option.Option<ResolvedAgent> =
+  Option.none();
 
-const UninitiatedAgentErrorMessage: string = 'Agent is not initialized';
+const UninitiatedAgentErrorMessage: string =
+  'Agent is not initialized';
 
-const UninitializedAgentError: AgentError = createCustomError(
-  UninitiatedAgentErrorMessage,
-);
+const UninitializedAgentError: AgentError =
+  createCustomError(UninitiatedAgentErrorMessage);
 
 // An error can happen if the user agent is not composed (which will initialize the agent with precompiled wasm)
 function getResolvedAgentOrThrow(
@@ -65,16 +70,20 @@ async function initialize(
   if (Option.isSome(resolvedAgent)) {
     return {
       tag: 'err',
-      val: createCustomError(`Agent is already initialized in this container`),
+      val: createCustomError(
+        `Agent is already initialized in this container`,
+      ),
     };
   }
 
-  const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
+  const initiator = AgentInitiatorRegistry.lookup(
+    new AgentTypeName(agentType),
+  );
 
   if (Option.isNone(initiator)) {
-    const entries = Array.from(AgentInitiatorRegistry.entries()).map(
-      (entry) => entry[0].value,
-    );
+    const entries = Array.from(
+      AgentInitiatorRegistry.entries(),
+    ).map((entry) => entry[0].value);
 
     return {
       tag: 'err',
@@ -84,7 +93,10 @@ async function initialize(
     };
   }
 
-  const initiateResult = initiator.val.initiate(agentType, input);
+  const initiateResult = initiator.val.initiate(
+    agentType,
+    input,
+  );
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
@@ -115,12 +127,16 @@ async function invoke(
   return resolvedAgent.val.invoke(methodName, input);
 }
 
-async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
+async function discoverAgentTypes(): Promise<
+  bindings.guest.AgentType[]
+> {
   return AgentTypeRegistry.getRegisteredAgents();
 }
 
 async function getDefinition(): Promise<AgentType> {
-  return getResolvedAgentOrThrow(resolvedAgent).getDefinition();
+  return getResolvedAgentOrThrow(
+    resolvedAgent,
+  ).getDefinition();
 }
 
 export const guest: typeof bindings.guest = {

@@ -91,25 +91,33 @@ describe('typescript value to wit value round-trip conversions', () => {
 
   it('should correctly perform round-trip conversion for arbitrary values of complex tuple', () => {
     fc.assert(
-      fc.property(tupleArb, tupleComplexArb, (tupleData, tupleComplexData) => {
-        const simpleType = getTupleType();
-        runRoundTripTest(tupleData, simpleType);
+      fc.property(
+        tupleArb,
+        tupleComplexArb,
+        (tupleData, tupleComplexData) => {
+          const simpleType = getTupleType();
+          runRoundTripTest(tupleData, simpleType);
 
-        const complexType = getTupleComplexType();
-        runRoundTripTest(tupleComplexData, complexType);
-      }),
+          const complexType = getTupleComplexType();
+          runRoundTripTest(tupleComplexData, complexType);
+        },
+      ),
     );
   });
 
   it('should correctly perform round-trip conversion for arbitrary values of union', () => {
     fc.assert(
-      fc.property(unionArb, unionComplexArb, (unionData, unionComplexData) => {
-        const simpleType = getUnionType();
-        runRoundTripTest(unionData, simpleType);
+      fc.property(
+        unionArb,
+        unionComplexArb,
+        (unionData, unionComplexData) => {
+          const simpleType = getUnionType();
+          runRoundTripTest(unionData, simpleType);
 
-        const complexType = getUnionComplexType();
-        runRoundTripTest(unionComplexData, complexType);
-      }),
+          const complexType = getUnionComplexType();
+          runRoundTripTest(unionComplexData, complexType);
+        },
+      ),
     );
   });
 
@@ -142,7 +150,11 @@ describe('typescript value to wit value round-trip conversions', () => {
       },
       unionComplexProp: 1,
       numberProp: 0,
-      objectProp: { a: '', b: 0, c: false },
+      objectProp: {
+        a: '',
+        b: 0,
+        c: false,
+      },
       stringProp: '',
       trueProp: true,
       tupleObjectProp: ['', 0, { a: '', b: 0, c: false }],
@@ -181,7 +193,11 @@ describe('typescript value to wit value round-trip conversions', () => {
       mapProp: new Map<string, number>(),
       nestedProp: { n: 0 },
       numberProp: 0,
-      objectProp: { a: '', b: 0, c: false },
+      objectProp: {
+        a: '',
+        b: 0,
+        c: false,
+      },
       stringProp: '',
       trueProp: true,
       tupleObjectProp: ['', 0, { a: '', b: 0, c: false }],
@@ -239,12 +255,20 @@ describe('typescript value to wit value round-trip conversions', () => {
       mapProp: new Map<string, number>(),
       nestedProp: { n: 0 },
       numberProp: 0,
-      objectProp: { a: '', b: 0, c: false },
+      objectProp: {
+        a: '',
+        b: 0,
+        c: false,
+      },
       stringProp: '',
       trueProp: true,
       tupleObjectProp: ['', 0, { a: '', b: 0, c: false }],
       tupleProp: ['', 0, false],
-      unionProp: { a: 'test', b: 42, c: true }, // Using an object as a union type
+      unionProp: {
+        a: 'test',
+        b: 42,
+        c: true,
+      }, // Using an object as a union type
       optionalProp: 2,
       unionComplexProp: 1,
       uint8ArrayProp: new Uint8Array([1, 2, 3]),
@@ -291,9 +315,12 @@ describe('typescript value to wit value round-trip conversions', () => {
 function runRoundTripTest<T>(data: T, type: Type.Type) {
   const witValueEither = WitValue.fromTsValue(data, type);
 
-  const witValue = EffectEither.getOrElse(witValueEither, (err) => {
-    throw new Error(err);
-  });
+  const witValue = EffectEither.getOrElse(
+    witValueEither,
+    (err) => {
+      throw new Error(err);
+    },
+  );
 
   // Round trip wit-value -> value -> wit-value
   const value = Value.fromWitValue(witValue);
@@ -301,7 +328,10 @@ function runRoundTripTest<T>(data: T, type: Type.Type) {
   expect(witValueReturned).toEqual(witValue);
 
   // Round trip ts-value -> wit-value -> ts-value
-  const tsValueReturned = WitValue.toTsValue(witValueReturned, type);
+  const tsValueReturned = WitValue.toTsValue(
+    witValueReturned,
+    type,
+  );
 
   expect(tsValueReturned).toEqual(data);
 }

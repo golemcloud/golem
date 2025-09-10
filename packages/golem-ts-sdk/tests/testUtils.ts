@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import {
+  Type,
+  TypeMetadata,
+} from '@golemcloud/golem-ts-types-core';
 import {
   AnalysedType,
   NameTypePair,
@@ -20,17 +23,19 @@ import {
 import { AgentClassName } from '../src';
 import { AgentTypeName } from '../src/newTypes/agentTypeName';
 
-export const AssistantAgentClassName = new AgentClassName('AssistantAgent');
-
-export const WeatherAgentClassName = new AgentClassName('WeatherAgent');
-
-export const WeatherAgentName = AgentTypeName.fromAgentClassName(
-  WeatherAgentClassName,
+export const AssistantAgentClassName = new AgentClassName(
+  'AssistantAgent',
 );
 
-export const AssistantAgentName = AgentTypeName.fromAgentClassName(
-  AssistantAgentClassName,
+export const WeatherAgentClassName = new AgentClassName(
+  'WeatherAgent',
 );
+
+export const WeatherAgentName =
+  AgentTypeName.fromAgentClassName(WeatherAgentClassName);
+
+export const AssistantAgentName =
+  AgentTypeName.fromAgentClassName(AssistantAgentClassName);
 
 export function getAll() {
   return TypeMetadata.getAll();
@@ -91,17 +96,23 @@ export function getUnionOfLiterals(): Type.Type {
 export function getRecordFieldsFromAnalysedType(
   analysedType: AnalysedType,
 ): NameTypePair[] | undefined {
-  return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
+  return analysedType.kind === 'record'
+    ? analysedType.value.fields
+    : undefined;
 }
 
 function fetchType(typeNameInTestData: string): Type.Type {
-  const classMetadata = Array.from(getAll()).map(([_, v]) => v);
+  const classMetadata = Array.from(getAll()).map(
+    ([_, v]) => v,
+  );
 
   for (const type of classMetadata) {
-    const constructorArg = type.constructorArgs.find((arg) => {
-      const typeName = Type.getTypeName(arg.type);
-      return typeName === typeNameInTestData;
-    });
+    const constructorArg = type.constructorArgs.find(
+      (arg) => {
+        const typeName = Type.getTypeName(arg.type);
+        return typeName === typeNameInTestData;
+      },
+    );
 
     if (constructorArg) {
       return constructorArg.type;
@@ -112,12 +123,15 @@ function fetchType(typeNameInTestData: string): Type.Type {
     for (const method of methods) {
       if (
         method.returnType &&
-        Type.getTypeName(method.returnType) === typeNameInTestData
+        Type.getTypeName(method.returnType) ===
+          typeNameInTestData
       ) {
         return method.returnType;
       }
 
-      const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
+      const param = Array.from(
+        method.methodParams.entries(),
+      ).find(([_, t]) => {
         const typeName = Type.getTypeName(t);
         return typeName === typeNameInTestData;
       });
@@ -128,5 +142,7 @@ function fetchType(typeNameInTestData: string): Type.Type {
     }
   }
 
-  throw new Error(`Type ${typeNameInTestData} not found in metadata`);
+  throw new Error(
+    `Type ${typeNameInTestData} not found in metadata`,
+  );
 }

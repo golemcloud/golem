@@ -47,7 +47,9 @@ export class BaseAgent {
    * @throws Will throw if accessed before the agent is initialized.
    */
   getId(): AgentId {
-    throw new Error('An agent ID will be created at runtime');
+    throw new Error(
+      'An agent ID will be created at runtime',
+    );
   }
 
   /**
@@ -59,9 +61,12 @@ export class BaseAgent {
    * @throws Will throw if metadata is missing or the agent is not properly registered.
    */
   getAgentType(): AgentType {
-    const agentClassName = new AgentClassName(this.constructor.name);
+    const agentClassName = new AgentClassName(
+      this.constructor.name,
+    );
 
-    const agentType = AgentTypeRegistry.lookup(agentClassName);
+    const agentType =
+      AgentTypeRegistry.lookup(agentClassName);
 
     if (Option.isNone(agentType)) {
       throw new Error(
@@ -89,6 +94,8 @@ export class BaseAgent {
     this: T,
     ...args: ConstructorParameters<T>
   ): InstanceType<T> {
-    throw new Error('A remote client will be created at runtime');
+    throw new Error(
+      'A remote client will be created at runtime',
+    );
   }
 }

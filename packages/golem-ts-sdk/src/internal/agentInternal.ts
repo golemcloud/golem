@@ -13,7 +13,11 @@
 // limitations under the License.
 
 import { Result } from 'golem:rpc/types@0.2.2';
-import { AgentError, AgentType, DataValue } from 'golem:agent/common';
+import {
+  AgentError,
+  AgentType,
+  DataValue,
+} from 'golem:agent/common';
 import { AgentId } from '../agentId';
 
 /**

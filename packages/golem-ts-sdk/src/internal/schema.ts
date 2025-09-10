@@ -15,7 +15,11 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../newTypes/either';
 import * as Option from '../newTypes/option';
-import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
+import {
+  AgentMethod,
+  DataSchema,
+  ElementSchema,
+} from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { AgentMethodMetadataRegistry } from './registry/agentMethodMetadataRegistry';
@@ -53,12 +57,15 @@ export function getConstructorDataSchema(
     },
   );
 
-  return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
-    return {
-      tag: 'tuple',
-      val: nameAndElementSchema,
-    };
-  });
+  return Either.map(
+    constructDataSchemaResult,
+    (nameAndElementSchema) => {
+      return {
+        tag: 'tuple',
+        val: nameAndElementSchema,
+      };
+    },
+  );
 }
 
 export function getAgentMethodSchema(
@@ -71,22 +78,29 @@ export function getAgentMethodSchema(
     );
   }
 
-  const methodMetadata = Array.from(classMetadata.methods.entries());
+  const methodMetadata = Array.from(
+    classMetadata.methods.entries(),
+  );
 
   return Either.all(
     methodMetadata.map((methodInfo) => {
       const methodName = methodInfo[0];
       const signature = methodInfo[1];
 
-      const parameters: MethodParams = signature.methodParams;
+      const parameters: MethodParams =
+        signature.methodParams;
 
       const returnType: Type.Type = signature.returnType;
 
       const baseMeta =
-        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
-        {};
+        AgentMethodMetadataRegistry.lookup(
+          agentClassName,
+        )?.get(methodName) ?? {};
 
-      const inputSchemaEither = buildInputSchema(methodName, parameters);
+      const inputSchemaEither = buildInputSchema(
+        methodName,
+        parameters,
+      );
 
       if (Either.isLeft(inputSchemaEither)) {
         return Either.left(inputSchemaEither.val);
@@ -94,7 +108,8 @@ export function getAgentMethodSchema(
 
       const inputSchema = inputSchemaEither.val;
 
-      const outputSchemaEither = buildOutputSchema(returnType);
+      const outputSchemaEither =
+        buildOutputSchema(returnType);
 
       if (Either.isLeft(outputSchemaEither)) {
         return Either.left(
@@ -124,7 +139,10 @@ export function buildInputSchema(
       Either.mapBoth(
         convertToElementSchema(parameterInfo[1]),
         (result) => {
-          return [parameterInfo[0], result] as [string, ElementSchema];
+          return [parameterInfo[0], result] as [
+            string,
+            ElementSchema,
+          ];
         },
         (err) =>
           `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
@@ -143,18 +161,22 @@ export function buildInputSchema(
 export function buildOutputSchema(
   returnType: Type.Type,
 ): Either.Either<DataSchema, string> {
-  const undefinedSchema = handleUndefinedReturnType(returnType);
+  const undefinedSchema =
+    handleUndefinedReturnType(returnType);
 
   if (Option.isSome(undefinedSchema)) {
     return Either.right(undefinedSchema.val);
   }
 
-  return Either.map(convertToElementSchema(returnType), (result) => {
-    return {
-      tag: 'tuple',
-      val: [['return-value', result]],
-    };
-  });
+  return Either.map(
+    convertToElementSchema(returnType),
+    (result) => {
+      return {
+        tag: 'tuple',
+        val: [['return-value', result]],
+      };
+    },
+  );
 }
 
 function convertToElementSchema(
@@ -173,13 +195,22 @@ function handleUndefinedReturnType(
 ): Option.Option<DataSchema> {
   switch (returnType.kind) {
     case 'null':
-      return Option.some({ tag: 'tuple', val: [] });
+      return Option.some({
+        tag: 'tuple',
+        val: [],
+      });
 
     case 'undefined':
-      return Option.some({ tag: 'tuple', val: [] });
+      return Option.some({
+        tag: 'tuple',
+        val: [],
+      });
 
     case 'void':
-      return Option.some({ tag: 'tuple', val: [] });
+      return Option.some({
+        tag: 'tuple',
+        val: [],
+      });
 
     case 'promise':
       const elementType = returnType.element;

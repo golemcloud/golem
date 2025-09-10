@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type Option<T> = { tag: 'some'; val: T } | { tag: 'none' };
+export type Option<T> =
+  | { tag: 'some'; val: T }
+  | { tag: 'none' };
 
 // Constructors
 export function some<T>(val: T): Option<T> {
@@ -23,32 +25,53 @@ export function none<T = never>(): Option<T> {
   return { tag: 'none' };
 }
 
-export function fromNullable<T>(val: T | null | undefined): Option<T> {
-  return val === null || val === undefined ? none() : some(val);
+export function fromNullable<T>(
+  val: T | null | undefined,
+): Option<T> {
+  return val === null || val === undefined
+    ? none()
+    : some(val);
 }
 
-export function isSome<T>(opt: Option<T>): opt is { tag: 'some'; val: T } {
+export function isSome<T>(
+  opt: Option<T>,
+): opt is { tag: 'some'; val: T } {
   return opt.tag === 'some';
 }
 
-export function isNone<T>(opt: Option<T>): opt is { tag: 'none' } {
+export function isNone<T>(
+  opt: Option<T>,
+): opt is { tag: 'none' } {
   return opt.tag === 'none';
 }
 
-export function getOrElse<T, U>(opt: Option<T>, onNone: () => U): T | U {
+export function getOrElse<T, U>(
+  opt: Option<T>,
+  onNone: () => U,
+): T | U {
   return opt.tag === 'some' ? opt.val : onNone();
 }
 
-export function getOrThrowWith<T>(opt: Option<T>, onNone: () => Error): T {
+export function getOrThrowWith<T>(
+  opt: Option<T>,
+  onNone: () => Error,
+): T {
   if (opt.tag === 'some') return opt.val;
   throw onNone();
 }
 
-export function map<T, U>(opt: Option<T>, f: (t: T) => U): Option<U> {
+export function map<T, U>(
+  opt: Option<T>,
+  f: (t: T) => U,
+): Option<U> {
   return opt.tag === 'some' ? some(f(opt.val)) : none();
 }
 
-export function mapOr<T, U>(opt: Option<T>, def: U, f: (t: T) => U): U {
+export function mapOr<T, U>(
+  opt: Option<T>,
+  def: U,
+  f: (t: T) => U,
+): U {
   return opt.tag === 'some' ? f(opt.val) : def;
 }
 

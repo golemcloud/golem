@@ -43,7 +43,9 @@ export class PersistenceLevelGuard {
  * @param level - The persistence level to set.
  * @returns A PersistenceLevelGuard instance.
  */
-export function usePersistenceLevel(level: PersistenceLevel) {
+export function usePersistenceLevel(
+  level: PersistenceLevel,
+) {
   const originalLevel = getOplogPersistenceLevel();
   setOplogPersistenceLevel(level);
   return new PersistenceLevelGuard(originalLevel);
@@ -80,7 +82,9 @@ export class IdempotenceModeGuard {
  * @param mode - The idempotence mode to set.
  * @returns An IdempotenceModeGuard instance.
  */
-export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
+export function useIdempotenceMode(
+  mode: boolean,
+): IdempotenceModeGuard {
   const original = getIdempotenceMode();
   setIdempotenceMode(mode);
   return new IdempotenceModeGuard(original);
@@ -92,7 +96,10 @@ export function useIdempotenceMode(mode: boolean): IdempotenceModeGuard {
  * @param f - The function to execute.
  * @returns The result of the executed function.
  */
-export function withIdempotenceMode<R>(mode: boolean, f: () => R): R {
+export function withIdempotenceMode<R>(
+  mode: boolean,
+  f: () => R,
+): R {
   const guard = useIdempotenceMode(mode);
   return executeWithDrop([guard], f);
 }
@@ -114,7 +121,9 @@ export class RetryPolicyGuard {
  * @param policy - The retry policy to set.
  * @returns A RetryPolicyGuard instance.
  */
-export function useRetryPolicy(policy: RetryPolicy): RetryPolicyGuard {
+export function useRetryPolicy(
+  policy: RetryPolicy,
+): RetryPolicyGuard {
   const original = getRetryPolicy();
   setRetryPolicy(policy);
   return new RetryPolicyGuard(original);
@@ -126,7 +135,10 @@ export function useRetryPolicy(policy: RetryPolicy): RetryPolicyGuard {
  * @param f - The function to execute.
  * @returns The result of the executed function.
  */
-export function withRetryPolicy<R>(policy: RetryPolicy, f: () => R): R {
+export function withRetryPolicy<R>(
+  policy: RetryPolicy,
+  f: () => R,
+): R {
   const guard = useRetryPolicy(policy);
   return executeWithDrop([guard], f);
 }
@@ -168,10 +180,10 @@ export function atomically<T>(f: () => T): T {
  * @param fn - The function to execute.
  * @returns The result of the executed function.
  */
-export function executeWithDrop<Resource extends { drop: () => void }, R>(
-  resources: [Resource],
-  fn: () => R,
-): R {
+export function executeWithDrop<
+  Resource extends { drop: () => void },
+  R,
+>(resources: [Resource], fn: () => R): R {
   try {
     const result = fn();
     dropAll(true, resources);
@@ -187,10 +199,9 @@ export function executeWithDrop<Resource extends { drop: () => void }, R>(
  * @param resources - An array of resources to be dropped.
  * @throws DropError if any errors occur during the dropping process.
  */
-export function dropAll<Resource extends { drop: () => void }>(
-  throwOnError: boolean,
-  resources: [Resource],
-) {
+export function dropAll<
+  Resource extends { drop: () => void },
+>(throwOnError: boolean, resources: [Resource]) {
   const errors = [];
   for (const resource of resources) {
     try {

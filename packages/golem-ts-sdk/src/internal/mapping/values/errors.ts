@@ -18,18 +18,32 @@ import * as util from 'node:util';
 import { Value } from './Value';
 
 // type mismatch in tsValue when converting from TS to WIT
-export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
+export function typeMismatchIn(
+  tsValue: any,
+  expectedType: Type.Type,
+): string {
   const nameOrKind = expectedType.name ?? expectedType.kind;
   return `Type mismatch. Expected ${nameOrKind}, but got ${safeDisplay(tsValue)} which is of type ${typeof tsValue}`;
 }
 
 // Unable to convert the value to the expected type in the output direction
-export function typeMismatchOut(value: Value, expectedType: string) {
-  return "Unable to convert '" + safeDisplay(value) + "' to " + expectedType;
+export function typeMismatchOut(
+  value: Value,
+  expectedType: string,
+) {
+  return (
+    "Unable to convert '" +
+    safeDisplay(value) +
+    "' to " +
+    expectedType
+  );
 }
 
 // Missing keys in tsValue when converting from TS to WIT
-export function missingObjectKey(key: string, tsValue: any): string {
+export function missingObjectKey(
+  key: string,
+  tsValue: any,
+): string {
   return `Missing key '${key}' in ${safeDisplay(tsValue)}`;
 }
 
@@ -49,9 +63,13 @@ export function unhandledTypeError(
 ): string {
   const error =
     `${safeDisplay(tsValue)}` +
-    (Option.isSome(typeName) ? ` inferred as ${typeName.val}` : '') +
+    (Option.isSome(typeName)
+      ? ` inferred as ${typeName.val}`
+      : '') +
     ` cannot be handled. `;
-  return error + (Option.isSome(message) ? `${message.val}` : '');
+  return (
+    error + (Option.isSome(message) ? `${message.val}` : '')
+  );
 }
 
 // A best effort to display any value.

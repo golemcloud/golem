@@ -23,7 +23,12 @@ import { vi } from 'vitest';
 vi.mock('golem:api/host@1.1.7', () => ({
   getSelfMetadata: () => ({
     workerId: {
-      componentId: { uuid: { highBits: 0n, lowBits: 0n } },
+      componentId: {
+        uuid: {
+          highBits: 0n,
+          lowBits: 0n,
+        },
+      },
       workerName: 'override-if-needed',
     },
     args: [],

@@ -123,7 +123,9 @@ const prototype = {
 } as const;
 
 /** Type representing success or failure. */
-export type Result<T, E = unknown> = Result.Ok<T> | Result.Err<E>;
+export type Result<T, E = unknown> =
+  | Result.Ok<T>
+  | Result.Err<E>;
 
 export namespace Result {
   /**
@@ -150,20 +152,28 @@ export namespace Result {
    * Create a successful result.
    */
   export function ok<T>(value: T): Result.Ok<T> {
-    return withPrototype({ tag: 'ok', val: value }, prototype);
+    return withPrototype(
+      { tag: 'ok', val: value },
+      prototype,
+    );
   }
 
   /**
    * Create an error result.
    */
   export function err<E>(error: E): Err<E> {
-    return withPrototype({ tag: 'err', val: error }, prototype);
+    return withPrototype(
+      { tag: 'err', val: error },
+      prototype,
+    );
   }
 
   /**
    * Create a result from a function that may throw an error.
    */
-  export function tryCatch<T>(f: () => T): Result<T, unknown> {
+  export function tryCatch<T>(
+    f: () => T,
+  ): Result<T, unknown> {
     try {
       return ok(f());
     } catch (error) {
@@ -171,24 +181,44 @@ export namespace Result {
     }
   }
 
-  export function fromNullish(value: null): Result.Err<null>;
-  export function fromNullish(value: undefined): Result.Err<undefined>;
+  export function fromNullish(
+    value: null,
+  ): Result.Err<null>;
+  export function fromNullish(
+    value: undefined,
+  ): Result.Err<undefined>;
   export function fromNullish(
     value: null | undefined,
   ): Result.Err<null | undefined>;
-  export function fromNullish<T extends {}>(value: T): Result.Ok<T>;
-  export function fromNullish<T>(value: T | null): Result<T, null>;
-  export function fromNullish<T>(value: T | undefined): Result<T, undefined>;
+  export function fromNullish<T extends {}>(
+    value: T,
+  ): Result.Ok<T>;
+  export function fromNullish<T>(
+    value: T | null,
+  ): Result<T, null>;
+  export function fromNullish<T>(
+    value: T | undefined,
+  ): Result<T, undefined>;
   export function fromNullish<T>(
     value: T | null | undefined,
   ): Result<T, null | undefined>;
-  export function fromNullish<T>(value: T | null | undefined) {
-    return value !== null ? Result.ok(value) : Result.err(value);
+  export function fromNullish<T>(
+    value: T | null | undefined,
+  ) {
+    return value !== null
+      ? Result.ok(value)
+      : Result.err(value);
   }
 
-  export function all<T>(results: readonly Result.Ok<T>[]): Result.Ok<T[]>;
-  export function all<T, E>(results: readonly Result<T, E>[]): Result<T[], E>;
-  export function all<T, E>(results: readonly Result<T, E>[]): Result<T[], E> {
+  export function all<T>(
+    results: readonly Result.Ok<T>[],
+  ): Result.Ok<T[]>;
+  export function all<T, E>(
+    results: readonly Result<T, E>[],
+  ): Result<T[], E>;
+  export function all<T, E>(
+    results: readonly Result<T, E>[],
+  ): Result<T[], E> {
     const values: T[] = [];
     for (const result of results) {
       if (result.isErr()) return result;
@@ -205,11 +235,15 @@ function withPrototype<T, P extends {}>(
   return Object.assign(Object.create(prototype), target);
 }
 
-function isOk<T, E>(this: Result<T, E>): this is Result.Ok<T> {
+function isOk<T, E>(
+  this: Result<T, E>,
+): this is Result.Ok<T> {
   return this.tag === 'ok';
 }
 
-function isErr<T, E>(this: Result<T, E>): this is Result.Err<E> {
+function isErr<T, E>(
+  this: Result<T, E>,
+): this is Result.Err<E> {
   return this.tag === 'err';
 }
 
@@ -226,7 +260,10 @@ function unwrap<E>(this: Result.Err<E>): never;
 function unwrap<T, E>(this: Result<T, E>): T;
 function unwrap<T, E>(this: Result<T, E>): T {
   if (this.isOk()) return this.val;
-  else throw new TypeError(`unwrap·called·on·Err·result:·${this.val}`);
+  else
+    throw new TypeError(
+      `unwrap·called·on·Err·result:·${this.val}`,
+    );
 }
 
 function unwrapErr<T>(this: Result.Ok<T>): never;
@@ -234,7 +271,9 @@ function unwrapErr<E>(this: Result.Err<E>): E;
 function unwrapErr<T, E>(this: Result<T, E>): E;
 function unwrapErr<T, E>(this: Result<T, E>): E {
   if (this.isOk())
-    throw new TypeError(`unwrapErr·called·on·Ok·result:·${this.val}`);
+    throw new TypeError(
+      `unwrapErr·called·on·Ok·result:·${this.val}`,
+    );
   else return this.val;
 }
 
@@ -270,10 +309,22 @@ function match<T, E, T2, E2>(
   else return g(this.val);
 }
 
-function map<T, T2>(this: Result.Ok<T>, f: (value: T) => T2): Result.Ok<T2>;
-function map<T, E, T2>(this: Result.Err<E>, f: (value: T) => T2): Result.Err<E>;
-function map<T, E, T2>(this: Result<T, E>, f: (value: T) => T2): Result<T2, E>;
-function map<T, E, T2>(this: Result<T, E>, f: (value: T) => T2): Result<T2, E> {
+function map<T, T2>(
+  this: Result.Ok<T>,
+  f: (value: T) => T2,
+): Result.Ok<T2>;
+function map<T, E, T2>(
+  this: Result.Err<E>,
+  f: (value: T) => T2,
+): Result.Err<E>;
+function map<T, E, T2>(
+  this: Result<T, E>,
+  f: (value: T) => T2,
+): Result<T2, E>;
+function map<T, E, T2>(
+  this: Result<T, E>,
+  f: (value: T) => T2,
+): Result<T2, E> {
   if (this.isErr()) return this;
   else return Result.ok(f(this.val));
 }
@@ -298,10 +349,22 @@ function mapError<T, E, E2>(
   else return Result.err(f(this.val));
 }
 
-function tap<E>(this: Result.Err<E>, f: (error: E) => void): Result.Err<E>;
-function tap<T>(this: Result.Ok<T>, f: (value: T) => void): Result.Ok<T>;
-function tap<T, E>(this: Result<T, E>, f: (value: T) => void): Result<T, E>;
-function tap<T, E>(this: Result<T, E>, f: (value: T) => void): Result<T, E> {
+function tap<E>(
+  this: Result.Err<E>,
+  f: (error: E) => void,
+): Result.Err<E>;
+function tap<T>(
+  this: Result.Ok<T>,
+  f: (value: T) => void,
+): Result.Ok<T>;
+function tap<T, E>(
+  this: Result<T, E>,
+  f: (value: T) => void,
+): Result<T, E>;
+function tap<T, E>(
+  this: Result<T, E>,
+  f: (value: T) => void,
+): Result<T, E> {
   if (this.isOk()) f(this.val);
   return this;
 }
@@ -343,30 +406,55 @@ function flatMap<T, E, T2, E2>(
 }
 
 function flatten<E>(this: Result.Err<E>): Result.Err<E>;
-function flatten<E>(this: Result.Ok<Result.Err<E>>): Result.Err<E>;
-function flatten<T>(this: Result.Ok<Result.Ok<T>>): Result.Ok<T>;
-function flatten<T, E>(this: Result.Ok<Result<T, E>>): Result<T, E>;
-function flatten<T, E>(this: Result<Result.Ok<T>, E>): Result<T, E>;
-function flatten<E, E2>(this: Result<Result.Err<E>, E2>): Result.Err<E | E2>;
-function flatten<T, E, E2>(this: Result<Result<T, E>, E2>): Result<T, E | E2>;
-function flatten<T, E, E2>(this: Result<Result<T, E>, E2>): Result<T, E | E2> {
+function flatten<E>(
+  this: Result.Ok<Result.Err<E>>,
+): Result.Err<E>;
+function flatten<T>(
+  this: Result.Ok<Result.Ok<T>>,
+): Result.Ok<T>;
+function flatten<T, E>(
+  this: Result.Ok<Result<T, E>>,
+): Result<T, E>;
+function flatten<T, E>(
+  this: Result<Result.Ok<T>, E>,
+): Result<T, E>;
+function flatten<E, E2>(
+  this: Result<Result.Err<E>, E2>,
+): Result.Err<E | E2>;
+function flatten<T, E, E2>(
+  this: Result<Result<T, E>, E2>,
+): Result<T, E | E2>;
+function flatten<T, E, E2>(
+  this: Result<Result<T, E>, E2>,
+): Result<T, E | E2> {
   if (this.isErr()) return this;
   else return this.val;
 }
 
-function assertErrorInstanceOf<T, C extends abstract new (..._: any) => any>(
-  this: Result.Ok<T>,
-  constructor: C,
-): Result.Ok<T>;
-function assertErrorInstanceOf<E, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<
+  T,
+  C extends abstract new (..._: any) => any,
+>(this: Result.Ok<T>, constructor: C): Result.Ok<T>;
+function assertErrorInstanceOf<
+  E,
+  C extends abstract new (..._: any) => any,
+>(
   this: Result.Err<E>,
   constructor: C,
 ): Result.Err<E & InstanceType<C>>;
-function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<
+  T,
+  E,
+  C extends abstract new (..._: any) => any,
+>(
   this: Result<T, E>,
   constructor: C,
 ): Result<T, E & InstanceType<C>>;
-function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
+function assertErrorInstanceOf<
+  T,
+  E,
+  C extends abstract new (..._: any) => any,
+>(
   this: Result<T, E>,
   constructor: C,
 ): Result<T, E & InstanceType<C>> {

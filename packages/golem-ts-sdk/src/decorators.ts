@@ -12,10 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentError } from 'golem:agent/common';
+import {
+  AgentType,
+  DataValue,
+  AgentError,
+} from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { MethodParams, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import {
+  MethodParams,
+  TypeMetadata,
+} from '@golemcloud/golem-ts-types-core';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
@@ -120,7 +127,9 @@ type Type = Type.Type;
  * ```
  */
 export function agent() {
-  return function <T extends new (...args: any[]) => any>(ctor: T) {
+  return function <T extends new (...args: any[]) => any>(
+    ctor: T,
+  ) {
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
@@ -130,7 +139,9 @@ export function agent() {
     let classMetadata = Option.getOrElse(
       Option.fromNullable(TypeMetadata.get(ctor.name)),
       () => {
-        const availableAgents = Array.from(TypeMetadata.getAll().entries())
+        const availableAgents = Array.from(
+          TypeMetadata.getAll().entries(),
+        )
           .map(([key, _]) => key)
           .join(', ');
         throw new Error(
@@ -163,7 +174,8 @@ export function agent() {
 
     const methods = methodSchemaEither.val;
 
-    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
+    const agentTypeName =
+      AgentTypeName.fromAgentClassName(agentClassName);
 
     const agentType: AgentType = {
       typeName: agentTypeName.value,
@@ -185,25 +197,33 @@ export function agent() {
     AgentInitiatorRegistry.register(
       AgentTypeName.fromAgentClassName(agentClassName),
       {
-        initiate: (agentName: string, constructorParams: DataValue) => {
-          const constructorInfo = classMetadata.constructorArgs;
+        initiate: (
+          agentName: string,
+          constructorParams: DataValue,
+        ) => {
+          const constructorInfo =
+            classMetadata.constructorArgs;
 
-          const constructorParamTypes: Type[] = constructorInfo.map(
-            (p) => p.type,
-          );
+          const constructorParamTypes: Type[] =
+            constructorInfo.map((p) => p.type);
 
           const constructorParamWitValues =
             getWitValueFromDataValue(constructorParams);
 
-          const convertedConstructorArgs = constructorParamWitValues.map(
-            (witVal, idx) => {
-              return WitValue.toTsValue(witVal, constructorParamTypes[idx]);
-            },
+          const convertedConstructorArgs =
+            constructorParamWitValues.map((witVal, idx) => {
+              return WitValue.toTsValue(
+                witVal,
+                constructorParamTypes[idx],
+              );
+            });
+
+          const instance = new ctor(
+            ...convertedConstructorArgs,
           );
 
-          const instance = new ctor(...convertedConstructorArgs);
-
-          const containerName = getSelfMetadata().workerId.workerName;
+          const containerName =
+            getSelfMetadata().workerId.workerName;
 
           if (!containerName.startsWith(agentName)) {
             const error = createCustomError(
@@ -221,14 +241,16 @@ export function agent() {
           // Example: weather-agent-{"US", celsius}
           const uniqueAgentId = new AgentId(containerName);
 
-          (instance as BaseAgent).getId = () => uniqueAgentId;
+          (instance as BaseAgent).getId = () =>
+            uniqueAgentId;
 
           const agentInternal: AgentInternal = {
             getId: () => {
               return uniqueAgentId;
             },
             getAgentType: () => {
-              const agentType = AgentTypeRegistry.lookup(agentClassName);
+              const agentType =
+                AgentTypeRegistry.lookup(agentClassName);
 
               if (Option.isNone(agentType)) {
                 throw new Error(
@@ -245,7 +267,8 @@ export function agent() {
                   `Method ${method} not found on agent ${agentClassName}`,
                 );
 
-              const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
+              const agentTypeOpt =
+                AgentTypeRegistry.lookup(agentClassName);
 
               if (Option.isNone(agentTypeOpt)) {
                 const error: AgentError = {
@@ -260,7 +283,8 @@ export function agent() {
 
               const agentType = agentTypeOpt.val;
 
-              const methodInfo = classMetadata.methods.get(method);
+              const methodInfo =
+                classMetadata.methods.get(method);
 
               if (!methodInfo) {
                 const error: AgentError = {
@@ -273,20 +297,33 @@ export function agent() {
                 };
               }
 
-              const paramTypes: MethodParams = methodInfo.methodParams;
+              const paramTypes: MethodParams =
+                methodInfo.methodParams;
 
-              const argsWitValues = getWitValueFromDataValue(args);
+              const argsWitValues =
+                getWitValueFromDataValue(args);
 
-              const returnType: Type = methodInfo.returnType;
+              const returnType: Type =
+                methodInfo.returnType;
 
-              const paramTypeArray = Array.from(paramTypes.values());
+              const paramTypeArray = Array.from(
+                paramTypes.values(),
+              );
 
-              const convertedArgs = argsWitValues.map((witVal, idx) => {
-                const paramType = paramTypeArray[idx];
-                return WitValue.toTsValue(witVal, paramType);
-              });
+              const convertedArgs = argsWitValues.map(
+                (witVal, idx) => {
+                  const paramType = paramTypeArray[idx];
+                  return WitValue.toTsValue(
+                    witVal,
+                    paramType,
+                  );
+                },
+              );
 
-              const result = await fn.apply(instance, convertedArgs);
+              const result = await fn.apply(
+                instance,
+                convertedArgs,
+              );
 
               const methodDef = agentType.methods.find(
                 (m) => m.name === method,
@@ -313,7 +350,10 @@ export function agent() {
                 };
               }
 
-              const returnValue = WitValue.fromTsValue(result, returnType);
+              const returnValue = WitValue.fromTsValue(
+                result,
+                returnType,
+              );
 
               if (Either.isLeft(returnValue)) {
                 const agentError: AgentError = {
@@ -329,14 +369,20 @@ export function agent() {
 
               return {
                 tag: 'ok',
-                val: getDataValueFromWitValue(returnValue.val),
+                val: getDataValueFromWitValue(
+                  returnValue.val,
+                ),
               };
             },
           };
 
           return {
             tag: 'ok',
-            val: new ResolvedAgent(agentClassName, agentInternal, instance),
+            val: new ResolvedAgent(
+              agentClassName,
+              agentInternal,
+              instance,
+            ),
           };
         },
       },
@@ -363,7 +409,9 @@ export function agent() {
  */
 export function prompt(prompt: string) {
   return function (target: Object, propertyKey: string) {
-    const agentClassName = new AgentClassName(target.constructor.name);
+    const agentClassName = new AgentClassName(
+      target.constructor.name,
+    );
     AgentMethodMetadataRegistry.setPromptName(
       agentClassName,
       propertyKey,
@@ -389,7 +437,9 @@ export function prompt(prompt: string) {
  */
 export function description(description: string) {
   return function (target: Object, propertyKey: string) {
-    const agentClassName = new AgentClassName(target.constructor.name);
+    const agentClassName = new AgentClassName(
+      target.constructor.name,
+    );
     AgentMethodMetadataRegistry.setDescription(
       agentClassName,
       propertyKey,
@@ -407,11 +457,15 @@ export function getWitValueFromDataValue(
       if (elem.tag === 'component-model') {
         return elem.val;
       } else {
-        throw new Error(`Unsupported element type: ${elem.tag}`);
+        throw new Error(
+          `Unsupported element type: ${elem.tag}`,
+        );
       }
     });
   } else {
-    throw new Error(`Unsupported DataValue type: ${dataValue.tag}`);
+    throw new Error(
+      `Unsupported DataValue type: ${dataValue.tag}`,
+    );
   }
 }
 
