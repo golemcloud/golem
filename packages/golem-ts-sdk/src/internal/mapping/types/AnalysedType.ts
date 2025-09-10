@@ -230,11 +230,16 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
       ({ kind: 'handle', value: { name: convertTypeNameToKebab(name), owner: undefined, resourceId, mode } });
 
 
+export type ParamInfo = {
+  paramName: string,
+  optional: boolean
+}
+
 export function fromTsType(tsType: TsType): Either.Either<AnalysedType, string> {
   return fromTsTypeInternal(tsType, Option.none());
 }
 
-export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<string>): Either.Either<AnalysedType, string> {
+export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<ParamInfo>): Either.Either<AnalysedType, string> {
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =
@@ -315,18 +320,32 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
               typ: result.val
             });
           } else if (t.kind === 'undefined') {
-            // This undefined is just part of an optional parameter
-            if (Option.isNone(optionalParamInParam)) {
-              const result =  fromTsTypeInternal(t, Option.none());
+            // If undefined is part of optional parameter, this is already tagged as
+            // optional and therefore forget about it's undefined variant.
+            if (!(isOptionalParam(optionalParamInParam))) {
+              const paramValue = Option.isSome(optionalParamInParam) ? optionalParamInParam.val.paramName : undefined;
 
-              if (Either.isLeft(result)) {
-                return result;
+              if (paramValue) {
+
+                if (type.unionTypes.length === 2) {
+                  const alternate = type.unionTypes.find(ut => ut.kind !== 'undefined');
+
+                  if (alternate) {
+                    return Either.left(
+                      `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. This is not supported. Consider changing \`${paramValue}:\` to  \`${paramValue}?:\` and remove undefined`,
+                    )
+                  } else {
+                    return Either.left(
+                      `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants`
+                    )
+                  }
+                }
+
+              } else {
+                return Either.left(
+                  `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. This is not supported. Use optional parameter instead.`,
+                )
               }
-
-              possibleTypes.push({
-                name: `undefined-type`,
-                typ: result.val
-              });
             }
           }
           else {
@@ -357,14 +376,20 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(type, Option.some(prop.getName()));
+          const tsType = fromTsTypeInternal(type, Option.some({
+            paramName: prop.getName(),
+            optional: true
+          }));
 
           return Either.map(tsType, (analysedType) => {
             return field(prop.getName(), option(type.name, analysedType))
           });
         }
 
-        const tsType = fromTsTypeInternal(type, Option.none());
+        const tsType = fromTsTypeInternal(type, Option.some({
+          paramName: prop.getName(),
+          optional: false
+        }));
 
         return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
@@ -381,7 +406,6 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
         return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);
 
       }
-
 
       return Either.right(record(type.name, fields))
 
@@ -432,14 +456,17 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
       }
 
 
-      const interfaceRsult = Either.all(type.properties.map((prop) => {
+      const interfaceResult = Either.all(type.properties.map((prop) => {
         const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
 
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(type, Option.some(prop.getName()));
+          const tsType = fromTsTypeInternal(type, Option.some({
+            paramName: prop.getName(),
+            optional: true
+          }));
 
           return Either.map(tsType, (analysedType) => {
             return field(prop.getName(), option(undefined, analysedType))
@@ -447,14 +474,17 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
         }
 
         const tsType =
-          fromTsTypeInternal(type, Option.none());
+          fromTsTypeInternal(type, Option.some({
+            paramName: prop.getName(),
+            optional: false
+          }));
 
         return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
         })
       }));
 
-      return Either.map(interfaceRsult, (fields) => record(type.name, fields));
+      return Either.map(interfaceResult, (fields) => record(type.name, fields));
 
     case "promise":
       const inner = type.element;
@@ -559,6 +589,10 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
       return Either.map(elemType, (inner) => list(type.name, inner));
   }
+}
+
+function isOptionalParam(param: Option.Option<ParamInfo>) {
+  return Option.isSome(param) && param.val.optional;
 }
 
 function isNumberString(name: string): boolean {

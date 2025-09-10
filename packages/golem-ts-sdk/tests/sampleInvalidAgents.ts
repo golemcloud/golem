@@ -19,6 +19,10 @@ import * as Types from './testTypes';
 // Note that this file is not "imported" anywhere like `sampleAgents.ts`
 // as decorators will fail and none of the tests will run
 
+type ObjectWithInvalidUnion = {
+  a: string | undefined;
+};
+
 @agent()
 class InvalidAgent extends BaseAgent {
   constructor(readonly input: Date) {
@@ -45,6 +49,7 @@ class InvalidAgent extends BaseAgent {
     unionWithNull: string | number | null,
     unionWithUndefined: string | number | undefined,
     unionWithVoid: string | number | void,
+    objectWithUndefinedUnion: ObjectWithInvalidUnion,
   ): Types.PromiseType {
     return Promise.resolve(`Weather in ${location} is sunny!`);
   }
