@@ -64,8 +64,12 @@ describe('Invalid types in agents', () => {
       fun1Params?.get('unionWithNull')!,
     );
 
-    const objectWithInvalidUnion = AnalysedType.fromTsType(
-      fun1Params?.get('objectWithUndefinedUnion')!,
+    const objectWithInvalidUnion1 = AnalysedType.fromTsType(
+      fun1Params?.get('objectWithUndefinedUnion1')!,
+    );
+
+    const objectWithInvalidUnion2 = AnalysedType.fromTsType(
+      fun1Params?.get('objectWithUndefinedUnion2')!,
     );
 
     expect(dateType.val).toBe(
@@ -124,7 +128,11 @@ describe('Invalid types in agents', () => {
 
     expect(unionWithNullType.val).toBe('Unsupported type `null`');
 
-    expect(objectWithInvalidUnion.val).toBe(
+    expect(objectWithInvalidUnion1.val).toBe(
+      'Parameter `a` has a union type with `undefined` as one of the variants. This is not supported. Consider changing `a:` to  `a?:` and remove undefined',
+    );
+
+    expect(objectWithInvalidUnion2.val).toBe(
       'Parameter `a` has a union type with `undefined` as one of the variants. This is not supported. Consider changing `a:` to  `a?:` and remove undefined',
     );
   });

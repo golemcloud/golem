@@ -339,11 +339,15 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
                       `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants`
                     )
                   }
+                } else {
+                  return Either.left(
+                    `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. Try removing \`undefined\` from the union`
+                  )
                 }
 
               } else {
                 return Either.left(
-                  `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. This is not supported. Use optional parameter instead.`,
+                  `Parameter \`${paramValue}\` has a union type with \`undefined\` as one of the variants. Try removing \`undefined\` from the union`
                 )
               }
             }
