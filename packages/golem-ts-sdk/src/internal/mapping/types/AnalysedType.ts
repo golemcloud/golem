@@ -643,7 +643,7 @@ function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<Type
     const paramName = paramNameOpt.val;
 
     return Either.left(
-      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includs \`${unionElemTypeKind}\`. Try removing \`${unionElemTypeKind}\` from the union`,
+      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. Try removing \`${unionElemTypeKind}\` from it`,
     );
   }
 

@@ -163,7 +163,7 @@ describe('Invalid types in agents', () => {
     );
 
     expect(objectWithInvalidUnion2.val).toBe(
-      'Parameter `a` in `ObjectWithInvalidUnion2` has a union type that includs `undefined`. Try removing `undefined` from the union',
+      'Parameter `a` in `ObjectWithInvalidUnion2` has a union type that includes `undefined`. Try removing `undefined` from it',
     );
   });
 
