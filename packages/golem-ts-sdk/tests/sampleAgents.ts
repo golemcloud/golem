@@ -168,3 +168,13 @@ class AssistantAgent extends BaseAgent {
     console.log('Hello World');
   };
 }
+
+// If this class is decorated with agent, it will fail
+// This is kept here to ensure that any internal user class is not part of metadata generation.
+// See package.json for metadata generation command.
+class InternalClass {
+  async fun1(input: string): Promise<Iterator<string>> {
+    const array = ['a', 'b', 'c'];
+    return array[Symbol.iterator]();
+  }
+}
