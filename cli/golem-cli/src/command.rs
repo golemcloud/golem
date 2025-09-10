@@ -676,18 +676,18 @@ pub mod shared_args {
 
     #[derive(Debug, Args)]
     pub struct UpdateOrRedeployArgs {
-        /// Update existing workers with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers", "redeploy_all"], num_args = 0..=1
+        /// Update existing agents with auto or manual update mode
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"], num_args = 0..=1
         )]
-        pub update_workers: Option<WorkerUpdateMode>,
-        /// Delete and recreate existing workers
-        #[clap(long, conflicts_with_all = ["update_workers"])]
-        pub redeploy_workers: bool,
+        pub update_agents: Option<WorkerUpdateMode>,
+        /// Delete and recreate existing agents
+        #[clap(long, conflicts_with_all = ["update_agents"])]
+        pub redeploy_agents: bool,
         /// Delete and recreate HTTP API definitions and deployment
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
         /// Delete and recreate components and HTTP APIs
-        #[clap(long, short, conflicts_with_all = ["update_workers", "redeploy_workers", "redeploy_http_api"]
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"]
         )]
         pub redeploy_all: bool,
     }
@@ -695,8 +695,8 @@ pub mod shared_args {
     impl UpdateOrRedeployArgs {
         pub fn none() -> Self {
             UpdateOrRedeployArgs {
-                update_workers: None,
-                redeploy_workers: false,
+                update_agents: None,
+                redeploy_agents: false,
                 redeploy_http_api: false,
                 redeploy_all: false,
             }
@@ -704,9 +704,9 @@ pub mod shared_args {
 
         pub fn redeploy_workers(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
             profile_args.redeploy_all
-                || profile_args.redeploy_workers
+                || profile_args.redeploy_agents
                 || self.redeploy_all
-                || self.redeploy_workers
+                || self.redeploy_agents
         }
 
         pub fn redeploy_http_api(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
@@ -816,8 +816,8 @@ pub mod app {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
-        /// Try to automatically update all existing workers of the application to the latest version
-        UpdateWorkers {
+        /// Try to automatically update all existing agents of the application to the latest version
+        UpdateAgents {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
             /// Update mode - auto or manual, defaults to "auto"
@@ -827,8 +827,8 @@ pub mod app {
             #[arg(long, default_value_t = false)]
             r#await: bool,
         },
-        /// Redeploy all workers of the application using the latest version
-        RedeployWorkers {
+        /// Redeploy all agents of the application using the latest version
+        RedeployAgents {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
@@ -923,8 +923,8 @@ pub mod component {
             /// Optional component version to get
             version: Option<u64>,
         },
-        /// Try to automatically update all existing workers of the selected component to the latest version
-        UpdateWorkers {
+        /// Try to automatically update all existing agents of the selected component to the latest version
+        UpdateAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
             /// Update mode - auto or manual, defaults to "auto"
@@ -934,8 +934,8 @@ pub mod component {
             #[arg(long, default_value_t = false)]
             r#await: bool,
         },
-        /// Redeploy all workers of the selected component using the latest version
-        RedeployWorkers {
+        /// Redeploy all agents of the selected component using the latest version
+        RedeployAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
         },
