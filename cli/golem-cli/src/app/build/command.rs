@@ -31,6 +31,7 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use crate::wasm_rpc_stubgen::commands;
+use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use std::collections::HashMap;
@@ -181,7 +182,10 @@ async fn execute_compose_agent_wrapper(
 
                 commands::composition::compose(
                     wrapper_wasm_path.as_std_path(),
-                    &[user_component.as_std_path().to_path_buf()],
+                    vec![Plug {
+                        name: user_component.to_string(),
+                        wasm: user_component.as_std_path().to_path_buf(),
+                    }],
                     target_component.as_std_path(),
                 )
                 .await
@@ -235,7 +239,10 @@ async fn execute_inject_to_prebuilt_quick_js(
 
                 commands::composition::compose(
                     base_wasm.as_std_path(),
-                    &[js_module_wasm.as_std_path().to_path_buf()],
+                    vec![Plug {
+                        name: "JS module".to_string(),
+                        wasm: js_module_wasm.as_std_path().to_path_buf(),
+                    }],
                     target.as_std_path(),
                 )
                 .await?;
