@@ -15,7 +15,7 @@
 // Interface type indirectly tests primitive types, union, list etc
 
 import { describe, expect } from 'vitest';
-import { TypeMetadata, Type } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 import { TypeMappingScope } from '../src/internal/mapping/types/scope';
 import * as Option from '../src/newTypes/option';
@@ -134,7 +134,7 @@ describe('Invalid types in agents', () => {
     expect(voidType.val).toBe('Unsupported type `void`');
 
     expect(unionWithNullType.val).toBe(
-      'Union  type with `null` is not supported. Try removing `null`',
+      'Parameter `unionWithNull` in `fun1` has a union type that includes `null`. Try removing `null` from it',
     );
 
     expect(objectWithInvalidUnion1.val).toBe(
