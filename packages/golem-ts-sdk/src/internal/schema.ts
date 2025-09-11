@@ -19,7 +19,11 @@ import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { AgentMethodMetadataRegistry } from './registry/agentMethodMetadataRegistry';
-import { ClassMetadata, ConstructorArg, MethodParams } from '@golemcloud/golem-ts-types-core';
+import {
+  ClassMetadata,
+  ConstructorArg,
+  MethodParams,
+} from '@golemcloud/golem-ts-types-core';
 import { TypeMappingScope } from './mapping/types/scope';
 
 export function getConstructorDataSchema(
@@ -83,7 +87,8 @@ export function getAgentMethodSchema(
 
       const returnType: Type.Type = signature.returnType;
 
-      const baseMeta = AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ?? {};
+      const baseMeta =
+        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ?? {};
 
       const inputSchemaEither = buildMethodInputSchema(methodName, parameters);
 
@@ -124,13 +129,18 @@ export function buildMethodInputSchema(
         convertToElementSchema(
           parameterInfo[1],
           Option.some(
-            TypeMappingScope.method(methodName, parameterInfo[0], parameterInfo[1].optional),
+            TypeMappingScope.method(
+              methodName,
+              parameterInfo[0],
+              parameterInfo[1].optional,
+            ),
           ),
         ),
         (result) => {
           return [parameterInfo[0], result] as [string, ElementSchema];
         },
-        (err) => `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
+        (err) =>
+          `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
       ),
     ),
   );
@@ -143,7 +153,9 @@ export function buildMethodInputSchema(
   });
 }
 
-export function buildOutputSchema(returnType: Type.Type): Either.Either<DataSchema, string> {
+export function buildOutputSchema(
+  returnType: Type.Type,
+): Either.Either<DataSchema, string> {
   const undefinedSchema = handleUndefinedReturnType(returnType);
 
   if (Option.isSome(undefinedSchema)) {

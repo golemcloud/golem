@@ -46,7 +46,9 @@ describe('AgentType look up', () => {
 
     AgentInitiatorRegistry.register(agentTypeName, FailingAgentInitiator);
 
-    const lookupResult = AgentInitiatorRegistry.lookup(new AgentTypeName('assistant-agent'));
+    const lookupResult = AgentInitiatorRegistry.lookup(
+      new AgentTypeName('assistant-agent'),
+    );
 
     expect(lookupResult).toEqual(Option.some(FailingAgentInitiator));
   });
@@ -84,7 +86,9 @@ describe('AgentType look up', () => {
 
     AgentMethodMetadataRegistry.setPromptName(agentClassName, 'foo', 'sample prompt');
 
-    const lookupResult = AgentMethodMetadataRegistry.lookup(new AgentClassName('AssistantAgent'));
+    const lookupResult = AgentMethodMetadataRegistry.lookup(
+      new AgentClassName('AssistantAgent'),
+    );
 
     expect(lookupResult?.size).toEqual(1);
 

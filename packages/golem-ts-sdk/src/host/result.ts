@@ -177,7 +177,9 @@ export namespace Result {
   export function fromNullish<T extends {}>(value: T): Result.Ok<T>;
   export function fromNullish<T>(value: T | null): Result<T, null>;
   export function fromNullish<T>(value: T | undefined): Result<T, undefined>;
-  export function fromNullish<T>(value: T | null | undefined): Result<T, null | undefined>;
+  export function fromNullish<T>(
+    value: T | null | undefined,
+  ): Result<T, null | undefined>;
   export function fromNullish<T>(value: T | null | undefined) {
     return value !== null ? Result.ok(value) : Result.err(value);
   }
@@ -238,9 +240,21 @@ function toUnion<T, E>(this: Result<T, E>): T | E {
   else return this.val;
 }
 
-function match<T, E, T2, E2>(this: Result.Ok<T>, f: (value: T) => T2, g: (error: E) => E2): T2;
-function match<T, E, T2, E2>(this: Result.Err<E>, f: (value: T) => T2, g: (error: E) => E2): E2;
-function match<T, E, T2, E2>(this: Result<T, E>, f: (value: T) => T2, g: (error: E) => E2): T2 | E2;
+function match<T, E, T2, E2>(
+  this: Result.Ok<T>,
+  f: (value: T) => T2,
+  g: (error: E) => E2,
+): T2;
+function match<T, E, T2, E2>(
+  this: Result.Err<E>,
+  f: (value: T) => T2,
+  g: (error: E) => E2,
+): E2;
+function match<T, E, T2, E2>(
+  this: Result<T, E>,
+  f: (value: T) => T2,
+  g: (error: E) => E2,
+): T2 | E2;
 function match<T, E, T2, E2>(
   this: Result<T, E>,
   f: (value: T) => T2,
@@ -274,11 +288,26 @@ function tap<T, E>(this: Result<T, E>, f: (value: T) => void): Result<T, E> {
   return this;
 }
 
-function flatMap<T, T2>(this: Result.Ok<T>, f: (value: T) => Result.Ok<T2>): Result.Ok<T2>;
-function flatMap<T, E2>(this: Result.Ok<T>, f: (value: T) => Result.Err<E2>): Result.Err<E2>;
-function flatMap<T, T2, E2>(this: Result.Ok<T>, f: (value: T) => Result<T2, E2>): Result<T2, E2>;
-function flatMap<T, E, T2, E2>(this: Result.Err<E>, f: (value: T) => Result<T2, E2>): Result.Err<E>;
-function flatMap<T, E, T2>(this: Result<T, E>, f: (value: T) => Result.Ok<T2>): Result<T2, E>;
+function flatMap<T, T2>(
+  this: Result.Ok<T>,
+  f: (value: T) => Result.Ok<T2>,
+): Result.Ok<T2>;
+function flatMap<T, E2>(
+  this: Result.Ok<T>,
+  f: (value: T) => Result.Err<E2>,
+): Result.Err<E2>;
+function flatMap<T, T2, E2>(
+  this: Result.Ok<T>,
+  f: (value: T) => Result<T2, E2>,
+): Result<T2, E2>;
+function flatMap<T, E, T2, E2>(
+  this: Result.Err<E>,
+  f: (value: T) => Result<T2, E2>,
+): Result.Err<E>;
+function flatMap<T, E, T2>(
+  this: Result<T, E>,
+  f: (value: T) => Result.Ok<T2>,
+): Result<T2, E>;
 function flatMap<T, E, T2, E2>(
   this: Result<T, E>,
   f: (value: T) => Result.Err<E2>,
@@ -324,5 +353,7 @@ function assertErrorInstanceOf<T, E, C extends abstract new (..._: any) => any>(
 
   if (this.val instanceof constructor) return this as any;
 
-  throw new TypeError(`Assertion failed: Expected error to be an instance of ${constructor.name}.`);
+  throw new TypeError(
+    `Assertion failed: Expected error to be an instance of ${constructor.name}.`,
+  );
 }

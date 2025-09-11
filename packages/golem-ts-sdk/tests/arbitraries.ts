@@ -78,7 +78,11 @@ export const unionArb: fc.Arbitrary<UnionType> = fc.oneof(
   }),
 );
 
-export const tupleArb: fc.Arbitrary<TupleType> = fc.tuple(fc.string(), fc.integer(), fc.boolean());
+export const tupleArb: fc.Arbitrary<TupleType> = fc.tuple(
+  fc.string(),
+  fc.integer(),
+  fc.boolean(),
+);
 
 export const tupleComplexArb: fc.Arbitrary<TupleComplexType> = fc.tuple(
   fc.string(),
@@ -191,10 +195,12 @@ const optionalPropArb = fc
   .option(fc.integer())
   .map((opt) => (opt === undefined || opt === null ? {} : { optionalProp: opt }));
 
-export const interfaceArb: fc.Arbitrary<TestInterfaceType> = fc.tuple(baseArb, optionalPropArb).map(
-  ([base, optional]) =>
-    ({
-      ...base,
-      ...optional,
-    }) as TestInterfaceType,
-);
+export const interfaceArb: fc.Arbitrary<TestInterfaceType> = fc
+  .tuple(baseArb, optionalPropArb)
+  .map(
+    ([base, optional]) =>
+      ({
+        ...base,
+        ...optional,
+      }) as TestInterfaceType,
+  );

@@ -30,7 +30,10 @@ export function getRight<T, E>(r: Either<T, E>): T | null {
   return r.tag === 'right' ? r.val : null;
 }
 
-export function flatMap<T, E, U>(e: Either<T, E>, f: (t: T) => Either<U, E>): Either<U, E> {
+export function flatMap<T, E, U>(
+  e: Either<T, E>,
+  f: (t: T) => Either<U, E>,
+): Either<U, E> {
   return e.tag === 'right' ? f(e.val) : e;
 }
 

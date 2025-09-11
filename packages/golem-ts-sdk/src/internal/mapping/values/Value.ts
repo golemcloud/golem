@@ -622,7 +622,11 @@ export function fromTsValue(tsValue: any, type: Type.Type): Either.Either<Value,
 
     case 'class':
       return Either.left(
-        unhandledTypeError(tsValue, Option.none(), Option.some('Classes are not supported')),
+        unhandledTypeError(
+          tsValue,
+          Option.none(),
+          Option.some('Classes are not supported'),
+        ),
       );
 
     case 'interface':
@@ -723,7 +727,10 @@ function handleBooleanType(tsValue: any): Either.Either<Value, string> {
   }
 }
 
-function handleArrayType(tsValue: any, elementType: Type.Type): Either.Either<Value, string> {
+function handleArrayType(
+  tsValue: any,
+  elementType: Type.Type,
+): Either.Either<Value, string> {
   if (!Array.isArray(tsValue)) {
     return Either.left(
       typeMismatchIn(tsValue, {
@@ -1138,7 +1145,9 @@ export function toTsValue(value: Value, type: Type.Type): any {
     case 'tuple':
       const typeArg = type.elements;
       if (value.kind === 'tuple') {
-        return value.value.map((item: Value, idx: number) => toTsValue(item, typeArg[idx]));
+        return value.value.map((item: Value, idx: number) =>
+          toTsValue(item, typeArg[idx]),
+        );
       } else {
         throw new Error(typeMismatchOut(value, 'tuple'));
       }
@@ -1176,7 +1185,9 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'class':
-      throw new Error(unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()));
+      throw new Error(
+        unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()),
+      );
 
     case 'interface':
       if (value.kind === 'record') {
@@ -1209,10 +1220,10 @@ export function toTsValue(value: Value, type: Type.Type): any {
             throw new Error(`Internal Error: Expected tuple of two items, got ${item}`);
           }
 
-          return [toTsValue(item.value[0], type.key), toTsValue(item.value[1], type.value)] as [
-            any,
-            any,
-          ];
+          return [
+            toTsValue(item.value[0], type.key),
+            toTsValue(item.value[1], type.value),
+          ] as [any, any];
         });
         return new Map(entries);
       } else {
@@ -1221,17 +1232,24 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
     case 'literal':
       const literalValue = type.name;
-      if (value.kind === 'bool' && (literalValue === 'true' || literalValue === 'false')) {
+      if (
+        value.kind === 'bool' &&
+        (literalValue === 'true' || literalValue === 'false')
+      ) {
         return value.value;
       } else {
         throw new Error(typeMismatchOut(value, 'boolean'));
       }
 
     case 'alias':
-      throw new Error(unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()));
+      throw new Error(
+        unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()),
+      );
 
     case 'others':
-      throw new Error(unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()));
+      throw new Error(
+        unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()),
+      );
   }
 }
 

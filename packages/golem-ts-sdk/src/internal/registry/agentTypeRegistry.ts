@@ -30,7 +30,8 @@ export const AgentTypeRegistry = {
   entries(): IterableIterator<[AgentClassName, AgentType]> {
     return Array.from(agentTypeRegistry.entries())
       .map(
-        ([name, agentType]) => [new AgentClassName(name), agentType] as [AgentClassName, AgentType],
+        ([name, agentType]) =>
+          [new AgentClassName(name), agentType] as [AgentClassName, AgentType],
       )
       [Symbol.iterator]();
   },

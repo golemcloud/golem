@@ -98,7 +98,8 @@ function getMethodProxy(
     const parameterWitValues = Either.isLeft(parameterWitValuesEither)
       ? (() => {
           throw new Error(
-            'Failed to create remote agent: ' + JSON.stringify(parameterWitValuesEither.val),
+            'Failed to create remote agent: ' +
+              JSON.stringify(parameterWitValuesEither.val),
           );
         })()
       : parameterWitValuesEither.val;
@@ -122,7 +123,9 @@ function getMethodProxy(
     const rpcWitValue =
       rpcResult.tag === 'err'
         ? (() => {
-            throw new Error('Failed to invoke function: ' + JSON.stringify(rpcResult.val));
+            throw new Error(
+              'Failed to invoke function: ' + JSON.stringify(rpcResult.val),
+            );
           })()
         : rpcResult.val;
 
@@ -143,7 +146,9 @@ function getWorkerId(
   // We need a host function - given an agent-type, it should return a component-id as proved in the prototype.
   // But we don't have that functionality yet, hence just retrieving the current
   // component-id (for now)
-  const optionalRegisteredAgentType = Option.fromNullable(getAgentType(agentTypeName.value));
+  const optionalRegisteredAgentType = Option.fromNullable(
+    getAgentType(agentTypeName.value),
+  );
 
   if (Option.isNone(optionalRegisteredAgentType)) {
     return Either.left(`There are no components implementing ${agentTypeName}`);
@@ -155,23 +160,25 @@ function getWorkerId(
 
   const constructorParamTypes = constructorParamInfo.map((param) => param.type);
 
-  const constructorParamWitValuesResult: Either.Either<ElementValue[], string> = Either.all(
-    constructorArgs.map((arg, index) => {
-      const typ = constructorParamTypes[index];
-      return Either.map(WitValue.fromTsValue(arg, typ), (witValue) => {
-        let elementValue: ElementValue = {
-          tag: 'component-model',
-          val: witValue,
-        };
+  const constructorParamWitValuesResult: Either.Either<ElementValue[], string> =
+    Either.all(
+      constructorArgs.map((arg, index) => {
+        const typ = constructorParamTypes[index];
+        return Either.map(WitValue.fromTsValue(arg, typ), (witValue) => {
+          let elementValue: ElementValue = {
+            tag: 'component-model',
+            val: witValue,
+          };
 
-        return elementValue;
-      });
-    }),
-  );
+          return elementValue;
+        });
+      }),
+    );
 
   if (Either.isLeft(constructorParamWitValuesResult)) {
     throw new Error(
-      'Failed to create remote agent: ' + JSON.stringify(constructorParamWitValuesResult.val),
+      'Failed to create remote agent: ' +
+        JSON.stringify(constructorParamWitValuesResult.val),
     );
   }
 
@@ -204,13 +211,16 @@ function convertAgentMethodNameToKebab(methodName: string): string {
 function unwrapResult(witValue: WitValue.WitValue): Value.Value {
   const value = Value.fromWitValue(witValue);
 
-  const innerResult = value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
+  const innerResult =
+    value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
 
   return innerResult.kind === 'result'
     ? innerResult.value.ok
       ? innerResult.value.ok
       : (() => {
-          throw new Error(`Remote invocation failed: ${JSON.stringify(innerResult.value.err)}`);
+          throw new Error(
+            `Remote invocation failed: ${JSON.stringify(innerResult.value.err)}`,
+          );
         })()
     : innerResult;
 }

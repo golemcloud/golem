@@ -103,7 +103,10 @@ function fetchType(typeNameInTestData: string): Type.Type {
     const methods = Array.from(type.methods.values());
 
     for (const method of methods) {
-      if (method.returnType && Type.getTypeName(method.returnType) === typeNameInTestData) {
+      if (
+        method.returnType &&
+        Type.getTypeName(method.returnType) === typeNameInTestData
+      ) {
         return method.returnType;
       }
 

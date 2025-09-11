@@ -66,11 +66,17 @@ describe('Invalid types in agents', () => {
 
     expect(regExpType.val).toBe('Unsupported type `RegExp`. Use a `string` if possible');
 
-    expect(iteratorType.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
+    expect(iteratorType.val).toBe(
+      'Unsupported type `Iterator`. Use `Array` type instead',
+    );
 
-    expect(iterableType.val).toBe('Unsupported type `Iterable`. Use `Array` type instead');
+    expect(iterableType.val).toBe(
+      'Unsupported type `Iterable`. Use `Array` type instead',
+    );
 
-    expect(asyncIteratorType.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
+    expect(asyncIteratorType.val).toBe(
+      'Unsupported type `Iterator`. Use `Array` type instead',
+    );
 
     expect(asyncIterableType.val).toBe(
       'Unsupported type `AsyncIterator`. Use `Array` type instead',
@@ -141,7 +147,9 @@ describe('Invalid types in agents', () => {
 
     expect(fun5Type.val).toBe('Unsupported type `Iterator`. Use `Array` type instead');
 
-    expect(fun6Type.val).toBe('Unsupported type `AsyncIterator`. Use `Array` type instead');
+    expect(fun6Type.val).toBe(
+      'Unsupported type `AsyncIterator`. Use `Array` type instead',
+    );
 
     expect(fun7Type.val).toBe('Unsupported type `any`. Use a specific type instead');
 
