@@ -13,7 +13,10 @@
 // limitations under the License.
 
 import { Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { AnalysedType, NameTypePair } from '../src/internal/mapping/types/AnalysedType';
+import {
+  AnalysedType,
+  NameTypePair,
+} from '../src/internal/mapping/types/AnalysedType';
 import { AgentClassName } from '../src';
 import { AgentTypeName } from '../src/newTypes/agentTypeName';
 
@@ -21,9 +24,11 @@ export const ComplexAgentClassName = new AgentClassName('ComplexAgent');
 
 export const SimpleAgentClassName = new AgentClassName('SimpleAgent');
 
-export const SimpleAgentName = AgentTypeName.fromAgentClassName(SimpleAgentClassName);
+export const SimpleAgentName =
+  AgentTypeName.fromAgentClassName(SimpleAgentClassName);
 
-export const ComplexAgentName = AgentTypeName.fromAgentClassName(ComplexAgentClassName);
+export const ComplexAgentName =
+  AgentTypeName.fromAgentClassName(ComplexAgentClassName);
 
 export function getAll() {
   return TypeMetadata.getAll();

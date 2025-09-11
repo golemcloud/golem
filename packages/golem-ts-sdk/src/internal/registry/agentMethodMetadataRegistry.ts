@@ -49,7 +49,11 @@ export const AgentMethodMetadataRegistry = {
     classMeta.get(method)!.prompt = prompt;
   },
 
-  setDescription(agentClassName: AgentClassName, method: string, description: string) {
+  setDescription(
+    agentClassName: AgentClassName,
+    method: string,
+    description: string,
+  ) {
     AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.description = description;

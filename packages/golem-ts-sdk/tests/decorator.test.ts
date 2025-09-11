@@ -156,7 +156,9 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
   const optionalParamInput = dataSchema.val.find((s) => s[0] === parameterName);
 
   if (!optionalParamInput) {
-    throw new Error(`${parameterName} not found in scheme ${util.format(dataSchema)}`);
+    throw new Error(
+      `${parameterName} not found in scheme ${util.format(dataSchema)}`,
+    );
   }
 
   const optionalParamInputElement = optionalParamInput[1];

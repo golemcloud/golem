@@ -47,18 +47,21 @@ export function getConstructorDataSchema(
     ),
   );
 
-  const constructDataSchemaResult = Either.map(constructorParamTypes, (paramType) => {
-    return paramType.map((paramType, idx) => {
-      const paramName = constructorParamInfos[idx].name;
-      return [
-        paramName,
-        {
-          tag: 'component-model',
-          val: paramType,
-        },
-      ] as [string, ElementSchema];
-    });
-  });
+  const constructDataSchemaResult = Either.map(
+    constructorParamTypes,
+    (paramType) => {
+      return paramType.map((paramType, idx) => {
+        const paramName = constructorParamInfos[idx].name;
+        return [
+          paramName,
+          {
+            tag: 'component-model',
+            val: paramType,
+          },
+        ] as [string, ElementSchema];
+      });
+    },
+  );
 
   return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
     return {
@@ -182,7 +185,9 @@ function convertToElementSchema(
   });
 }
 
-function handleUndefinedReturnType(returnType: Type.Type): Option.Option<DataSchema> {
+function handleUndefinedReturnType(
+  returnType: Type.Type,
+): Option.Option<DataSchema> {
   switch (returnType.kind) {
     case 'null':
       return Option.some({

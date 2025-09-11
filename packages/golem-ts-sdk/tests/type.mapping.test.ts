@@ -884,7 +884,9 @@ function checkTupleFields(fields: any[]) {
 }
 
 function checkTupleWithObjectFields(fields: any[]) {
-  const tupleObjectFields = fields.filter((f) => f.name.startsWith('tupleObjectProp'));
+  const tupleObjectFields = fields.filter((f) =>
+    f.name.startsWith('tupleObjectProp'),
+  );
   expect(tupleObjectFields.length).toBeGreaterThan(0);
 
   tupleObjectFields.forEach((field) => {

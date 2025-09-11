@@ -106,7 +106,10 @@ function getMethodProxy(
 
     const wasmRpc = new WasmRpc(workerId);
 
-    const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(functionName, parameterWitValues);
+    const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(
+      functionName,
+      parameterWitValues,
+    );
 
     const rpcResultPollable = rpcResultFuture.subscribe();
 

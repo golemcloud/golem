@@ -77,7 +77,10 @@ export function zipWith<A, B, C, E>(
   return right(f(ra.val, rb.val));
 }
 
-export function zipBoth<A, B, E>(ra: Either<A, E>, rb: Either<B, E>): Either<[A, B], E> {
+export function zipBoth<A, B, E>(
+  ra: Either<A, E>,
+  rb: Either<B, E>,
+): Either<[A, B], E> {
   if (ra.tag === 'left') {
     return {
       tag: 'left',

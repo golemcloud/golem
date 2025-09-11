@@ -196,7 +196,10 @@ export namespace Result {
   }
 }
 
-function withPrototype<T, P extends {}>(target: T, prototype: P): T & Omit<P, keyof T> {
+function withPrototype<T, P extends {}>(
+  target: T,
+  prototype: P,
+): T & Omit<P, keyof T> {
   return Object.assign(Object.create(prototype), target);
 }
 

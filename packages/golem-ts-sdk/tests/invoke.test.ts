@@ -109,7 +109,8 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
 
         const witValue = Either.getOrThrowWith(
           WitValue.fromTsValue(arbData, constructorInfo),
-          (error) => new Error(`Failed to convert constructor arg to WitValue. ${error}`),
+          (error) =>
+            new Error(`Failed to convert constructor arg to WitValue. ${error}`),
         );
 
         const constructorParams = getDataValueFromReturnValueWit(witValue);
@@ -119,7 +120,10 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
           () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(SimpleAgentName.value, constructorParams);
+        const result = agentInitiator.initiate(
+          SimpleAgentName.value,
+          constructorParams,
+        );
 
         expect(result.tag).toEqual('ok');
 
