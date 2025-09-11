@@ -42,14 +42,18 @@ export default function CreateWorker() {
   const navigate = useNavigate();
   const { componentId, appId } = useParams();
 
-  const [agentConstructorDetails, setAgentConstructorDetails] = useState<string[]>([]);
+  const [agentConstructorDetails, setAgentConstructorDetails] = useState<
+    string[]
+  >([]);
   useEffect(() => {
     API.componentService.getComponentById(appId!, componentId!).then(res => {
-      const agentSuffix = " agent constructor"
-      console.log(res)
-      const constructors = res.exports?.filter(e => e.endsWith(agentSuffix)).map(e => e.slice(0, - agentSuffix.length))
-      console.log(constructors)
-      setAgentConstructorDetails(constructors)
+      const agentSuffix = " agent constructor";
+      console.log(res);
+      const constructors = res.exports
+        ?.filter(e => e.endsWith(agentSuffix))
+        .map(e => e.slice(0, -agentSuffix.length));
+      console.log(constructors);
+      setAgentConstructorDetails(constructors);
     });
   }, [componentId]);
 
@@ -120,8 +124,9 @@ export default function CreateWorker() {
                       </div>
                     </FormControl>
                     <FormDescription>
-                      The agent to construct. The format needs to be agent constructor name with all constructor params.
-                      Available constructors are:
+                      The agent to construct. The format needs to be agent
+                      constructor name with all constructor params. Available
+                      constructors are:
                       <ul className="list-disc list-inside mt-2 space-y-1 text-gray-600">
                         {agentConstructorDetails.map((acd, i) => (
                           <li key={i}>{acd}</li>
