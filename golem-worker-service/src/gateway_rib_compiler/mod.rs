@@ -14,10 +14,12 @@
 
 use golem_common::model::agent::AgentType;
 use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm_rpc::IntoValue;
 use rib::{
     CompilerOutput, ComponentDependency, ComponentDependencyKey, Expr, GlobalVariableTypeSpec,
     InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig,
 };
+use uuid::Uuid;
 
 // A wrapper over ComponentDependency which is coming from rib-module
 // to attach agent types to it.
@@ -70,7 +72,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             for agent_type in agent_types {
                 custom_instance_spec.push(rib::CustomInstanceSpec {
                     instance_name: agent_type.type_name.clone(),
-                    parameter_types: vec![], // TODO; needed for compiler check, otherwise runtime error
+                    parameter_types: agent_type.constructor.wit_arg_types(),
                     interface_name: Some(InterfaceName {
                         name: agent_type.type_name,
                         version: None,
@@ -104,6 +106,14 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
                 "request",
                 Path::from_elems(vec!["header"]),
                 InferredType::string(),
+            ),
+            // TODO:
+            // What we actually want is request.request_id to be uuid, but this says "all children of request.request_id" are uuid.
+            // At runtime we expect request.request_id.value to be accessed.
+            GlobalVariableTypeSpec::new(
+                "request",
+                Path::from_elems(vec!["request_id"]),
+                (&Uuid::get_type()).into(),
             ),
         ];
 

@@ -23,12 +23,14 @@ use golem_common::SafeDisplay;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 
 /// Thin wrapper around a poem::Request that is used to evaluate all binding types when coming from an http gateway.
 pub struct RichRequest {
     pub underlying: poem::Request,
+    pub request_id: Uuid,
     path_segments: Vec<String>,
     path_param_extractors: Vec<PathParamExtractor>,
     auth_data: Option<Value>,
@@ -39,6 +41,7 @@ impl RichRequest {
     pub fn new(underlying: poem::Request) -> RichRequest {
         RichRequest {
             underlying,
+            request_id: Uuid::new_v4(),
             path_segments: vec![],
             path_param_extractors: vec![],
             auth_data: None,
@@ -222,6 +225,7 @@ pub fn split_resolved_route_entry(
 
     let rich_request = RichRequest {
         underlying: request,
+        request_id: Uuid::new_v4(),
         path_segments: entry.path_segments,
         path_param_extractors: entry.route_entry.path_params,
         auth_data: None,
