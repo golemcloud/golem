@@ -21,7 +21,7 @@ export class WorkerService {
     version: number,
     upgradeType: string,
   ) => {
-    return await this.cliService.callCLI(appId, "worker", [
+    return await this.cliService.callCLI(appId, "agent", [
       "update",
       `${componentName}/${workerName}`,
       upgradeType,
@@ -46,7 +46,7 @@ export class WorkerService {
     if (param.precise) {
       params.push(`--precise`);
     }
-    return (await this.cliService.callCLI(appId, "worker", params)) as Promise<{
+    return (await this.cliService.callCLI(appId, "agent", params)) as Promise<{
       workers: Worker[];
     }>;
   };
@@ -60,7 +60,7 @@ export class WorkerService {
       appId,
       componentId,
     );
-    return await this.cliService.callCLI(appId, "worker", [
+    return await this.cliService.callCLI(appId, "agent", [
       "delete",
       `${component?.componentName}/${workerName}`,
     ]);
@@ -75,7 +75,7 @@ export class WorkerService {
       appId,
       componentID,
     );
-    return await this.cliService.callCLI(appId, "worker", [
+    return await this.cliService.callCLI(appId, "agent", [
       "new",
       `${component?.componentName!}/${name}`,
       // JSON.stringify(params),
@@ -91,7 +91,7 @@ export class WorkerService {
       appId,
       componentId,
     );
-    return await this.cliService.callCLI(appId, "worker", [
+    return await this.cliService.callCLI(appId, "agent", [
       "get",
       `${component?.componentName}/${workerName}`,
     ]);
@@ -107,7 +107,7 @@ export class WorkerService {
       componentId,
     );
     const fullWorkerName = `${component?.componentName}/${workerName}`;
-    return await this.cliService.callCLI(appId, "worker", [
+    return await this.cliService.callCLI(appId, "agent", [
       "interrupt",
       fullWorkerName,
     ]);
@@ -123,7 +123,7 @@ export class WorkerService {
       componentId,
     );
     const fullWorkerName = `${component?.componentName}/${workerName}`;
-    return await this.cliService.callCLI(appId, "worker", [
+    return await this.cliService.callCLI(appId, "agent", [
       "resume",
       fullWorkerName,
     ]);
@@ -164,7 +164,7 @@ export class WorkerService {
       waveArgs = [];
     }
 
-    return (await this.cliService.callCLI(appId, "worker", [
+    return (await this.cliService.callCLI(appId, "agent", [
       "invoke",
       fullWorkerName,
       functionName,
@@ -206,7 +206,7 @@ export class WorkerService {
       waveArgs = [];
     }
 
-    return (await this.cliService.callCLI(appId, "worker", [
+    return (await this.cliService.callCLI(appId, "agent", [
       "invoke",
       ephemeralWorkerName,
       functionName,
@@ -227,7 +227,7 @@ export class WorkerService {
     );
     const fullWorkerName = `${component?.componentName}/${workerName}`;
 
-    const r = await this.cliService.callCLI(appId, "worker", [
+    const r = await this.cliService.callCLI(appId, "agent", [
       "oplog",
       fullWorkerName,
       `--query=${searchQuery}`,

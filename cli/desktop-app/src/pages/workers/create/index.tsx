@@ -20,9 +20,9 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { API } from "@/service";
-import { v4 as uuidv4 } from "uuid";
 import { ArrowLeft } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useState } from "react";
 
 const formSchema = z.object({
   componentID: z.string(),
@@ -41,6 +41,18 @@ const formSchema = z.object({
 export default function CreateWorker() {
   const navigate = useNavigate();
   const { componentId, appId } = useParams();
+
+  const [agentConstructorDetails, setAgentConstructorDetails] = useState<string[]>([]);
+  useEffect(() => {
+    API.componentService.getComponentById(appId!, componentId!).then(res => {
+      const agentSuffix = " agent constructor"
+      console.log(res)
+      const constructors = res.exports?.filter(e => e.endsWith(agentSuffix)).map(e => e.slice(0, - agentSuffix.length))
+      console.log(constructors)
+      setAgentConstructorDetails(constructors)
+    });
+  }, [componentId]);
+
   const form = useForm({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -68,10 +80,6 @@ export default function CreateWorker() {
     control: form.control,
     name: "args",
   });
-
-  function generateUUID() {
-    form.setValue("name", uuidv4());
-  }
 
   function onSubmit(values) {
     const { componentID, ...rest } = values;
@@ -109,17 +117,16 @@ export default function CreateWorker() {
                     <FormControl>
                       <div className="flex gap-2">
                         <Input {...field} />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          onClick={generateUUID}
-                        >
-                          Generate
-                        </Button>
                       </div>
                     </FormControl>
                     <FormDescription>
-                      The name must be unique for this component.
+                      The agent to construct. The format needs to be agent constructor name with all constructor params.
+                      Available constructors are:
+                      <ul className="list-disc list-inside mt-2 space-y-1 text-gray-600">
+                        {agentConstructorDetails.map((acd, i) => (
+                          <li key={i}>{acd}</li>
+                        ))}
+                      </ul>
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
