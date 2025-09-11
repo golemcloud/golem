@@ -33,6 +33,7 @@ import * as fc from 'fast-check';
 import { interfaceArb, unionArb } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import { DataValue } from 'golem:agent/common';
+import * as Value from '../src/internal/mapping/values/Value';
 
 test("ComplexAgent can be successfully initiated and the methods can be invoked'", () => {
   fc.assert(
@@ -53,29 +54,37 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
         const arg1 = typeRegistry.constructorArgs[1].type;
         const arg2 = typeRegistry.constructorArgs[2].type;
 
+        expect(arg0.optional).toEqual(false);
+        expect(arg1.optional).toEqual(true);
+        expect(arg2.optional).toEqual(true);
+
         const interfaceWit = Either.getOrThrowWith(
           WitValue.fromTsValue(interfaceValue, arg0),
           (error) =>
             new Error(`Failed to convert interface to WitValue. ${error}`),
         );
 
-        const stringWit = Either.getOrThrowWith(
+        const optionalStringWit = Either.getOrThrowWith(
           WitValue.fromTsValue(stringValue, arg1),
           (error) =>
             new Error(`Failed to convert interface to WitValue. ${error}`),
         );
 
-        const unionWit = Either.getOrThrowWith(
+        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
+
+        const optionalUnionWit = Either.getOrThrowWith(
           WitValue.fromTsValue(unionValue, arg2),
           (error) => new Error(`Failed to convert union to WitValue. ${error}`),
         );
+
+        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
 
         const dataValue: DataValue = {
           tag: 'tuple',
           val: [
             { tag: 'component-model', val: interfaceWit },
-            { tag: 'component-model', val: stringWit },
-            { tag: 'component-model', val: unionWit },
+            { tag: 'component-model', val: optionalStringWit },
+            { tag: 'component-model', val: optionalUnionWit },
           ],
         };
 

@@ -903,10 +903,23 @@ function handleUnion(
   type: Type.Type,
   possibleTypes: Type.Type[],
 ): Either.Either<Value, string> {
-  const typeWithIndex = findTypeOfAny(tsValue, possibleTypes);
+  let filteredTypes = possibleTypes;
+
+  if (type.optional) {
+    filteredTypes = possibleTypes.filter(
+      (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
+    );
+
+    // If there is only 1 value after being optional
+    if (filteredTypes.length === 1) {
+      return fromTsValue(tsValue, filteredTypes[0]);
+    }
+  }
+
+  const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
   if (!typeWithIndex) {
-    return Either.left(unionTypeMatchError(tsValue, possibleTypes));
+    return Either.left(unionTypeMatchError(tsValue, filteredTypes));
   } else {
     const innerType = typeWithIndex[0];
 
@@ -1204,14 +1217,26 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
+      let filtered = type.unionTypes;
+
+      if (type.optional) {
+        filtered = type.unionTypes.filter(
+          (t) =>
+            t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
+        );
+
+        if (filtered.length === 1) {
+          return toTsValue(value, filtered[0]);
+        }
+      }
+
       if (value.kind === 'variant') {
         const caseValue = value.caseValue;
         if (!caseValue) {
           throw new Error(typeMismatchOut(value, 'union'));
         }
 
-        const unionTypes = type.unionTypes;
-        const matchingType = unionTypes[value.caseIdx];
+        const matchingType = filtered[value.caseIdx];
 
         return toTsValue(caseValue, matchingType);
       } else {
