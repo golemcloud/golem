@@ -56,16 +56,6 @@ describe('Invalid types in agents', () => {
 
     const voidType = getAnalysedTypeInFun1('voidParam');
 
-    const unionWithNullType = getAnalysedTypeInFun1('unionWithNull');
-
-    const objectWithInvalidUnion1 = getAnalysedTypeInFun1(
-      'objectWithUndefinedUnion1',
-    );
-
-    const objectWithInvalidUnion2 = getAnalysedTypeInFun1(
-      'objectWithUndefinedUnion2',
-    );
-
     expect(dateType.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
     );
@@ -124,18 +114,6 @@ describe('Invalid types in agents', () => {
 
     expect(voidType.val).toBe(
       'Unsupported type `void` in fun1 for parameter `voidParam`',
-    );
-
-    expect(unionWithNullType.val).toBe(
-      'Parameter `unionWithNull` in `fun1` has a union type that includes `null`. Consider changing `unionWithNull:` to  `unionWithNull?:` in fun1 and remove undefined',
-    );
-
-    expect(objectWithInvalidUnion1.val).toBe(
-      'Parameter `a` in `ObjectWithInvalidUnion1` has a union type that includes `undefined`. Consider changing `a:` to  `a?:` in ObjectWithInvalidUnion1 and remove undefined',
-    );
-
-    expect(objectWithInvalidUnion2.val).toBe(
-      'Parameter `a` in `ObjectWithInvalidUnion2` has a union type that includes `undefined`. Consider changing `a:` to  `a?:` in ObjectWithInvalidUnion2 and remove undefined',
     );
   });
 

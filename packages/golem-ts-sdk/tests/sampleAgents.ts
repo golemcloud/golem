@@ -18,6 +18,8 @@ import {
   EitherX,
   EitherY,
   EitherZ,
+  ObjectWithUndefinedUnion1,
+  ObjectWithUndefinedUnion2,
   UnionOfLiterals,
   UnionType,
 } from './testTypes';
@@ -89,6 +91,9 @@ class ComplexAgent extends BaseAgent {
     eitherXType: EitherX,
     eitherYType: EitherY,
     eitherZType: EitherZ,
+    unionWithNull: string | number | null,
+    objectWithUndefinedUnion1: ObjectWithUndefinedUnion1,
+    objectWithUndefinedUnion2: ObjectWithUndefinedUnion2,
     optionalStringType?: string,
     optionalUnionType?: UnionType,
   ): Types.PromiseType {

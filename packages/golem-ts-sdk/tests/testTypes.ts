@@ -26,6 +26,14 @@ export type ObjectType = {
   c: boolean;
 };
 
+export type ObjectWithUndefinedUnion1 = {
+  a: string | undefined;
+};
+
+export type ObjectWithUndefinedUnion2 = {
+  a: string | number | undefined;
+};
+
 export type UnionType = number | string | boolean | ObjectType;
 
 export type ListType = Array<string>;

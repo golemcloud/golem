@@ -311,17 +311,17 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
         if (t.kind === "null") {
 
+          // if this is already optional (i.e, parameter with `?`), we can discard null as such
           if (isOptionalParam(scope)) {
-            // If it's already an optional parameter, forget about adding `undefined`
             isOption = true;
             continue;
           }
 
-          const errorMessage =
-            getErrorMessageForInvalidUnion(scope, type.unionTypes, t)
+          const errorMessage: Option.Option<string> =
+            diagoniseInvalidUnion(scope, type.unionTypes, t)
 
-          if (Either.isLeft(errorMessage)) {
-            return errorMessage;
+          if (Option.isSome(errorMessage)) {
+            return Either.left(errorMessage.val);
           }
 
           continue;
@@ -329,17 +329,18 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
         if (t.kind === "void") {
 
+          // if this is already optional (i.e, parameter with `?`), we can discard null as such
           if (isOptionalParam(scope)) {
-            // If it's already an optional parameter, forget about adding `undefined`
             isOption = true;
             continue;
           }
 
-          const errorMessage =
-            getErrorMessageForInvalidUnion(scope, type.unionTypes, t)
+          // If it's not optional, then we need to see
+          const errorMessage: Option.Option<string> =
+            diagoniseInvalidUnion(scope, type.unionTypes, t)
 
-          if (Either.isLeft(errorMessage)) {
-            return errorMessage;
+          if (Option.isSome(errorMessage)) {
+            return Either.left(errorMessage.val);
           }
 
           continue;
@@ -355,11 +356,11 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
             continue;
           }
 
-          const errorMessage =
-            getErrorMessageForInvalidUnion(scope, type.unionTypes, t)
+          const errorMessage: Option.Option<string> =
+            diagoniseInvalidUnion(scope, type.unionTypes, t)
 
-          if (Either.isLeft(errorMessage)) {
-            return errorMessage;
+          if (Option.isSome(errorMessage)) {
+            return Either.left(errorMessage.val);
           }
 
           continue;
@@ -629,7 +630,7 @@ function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undef
 }
 
 
-function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<TypeMappingScope>, unionTypes: TsType[], unionElemType: TsType): Either.Either<never, string> {
+function diagoniseInvalidUnion(optionalParamInParam: Option.Option<TypeMappingScope>, unionTypes: TsType[], unionElemType: TsType): Option.Option<string> {
   const scopeName = getScopeName(optionalParamInParam);
 
   const unionElemTypeKind = unionElemType.kind;
@@ -637,28 +638,25 @@ function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<Type
   const paramNameOpt: Option.Option<string> = Option.isSome(optionalParamInParam)
     ? TypeMappingScope.paramName(optionalParamInParam.val) : Option.none();
 
-  if (Option.isSome(paramNameOpt)) {
-    const paramName = paramNameOpt.val;
 
+  const alternateTypes = unionTypes.filter(
+    (ut) => (ut.kind !== "undefined") && (ut.kind !== "null") && (ut.kind !== "void"),
+  );
 
-    const alternateTypes = unionTypes.filter(
-      (ut) => ut.kind !== "undefined",
-    );
-
-    if (alternateTypes.length >= 1) {
-      return Either.left(
-        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. Consider changing \`${paramName}:\` to  \`${paramName}?:\` in ${scopeName} and remove undefined`,
+  if (alternateTypes.length === 0) {
+    if (Option.isSome(paramNameOpt)) {
+      const paramName = paramNameOpt.val;
+      return Option.some(
+        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that is resolved to ${unionElemTypeKind}`,
       );
     }
 
-    return Either.left(
-      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\``,
+    return Option.some(
+      `Union type is resolved to only \`${unionElemTypeKind}\` and is not supported`,
     );
   }
 
-  return Either.left(
-    `Union type with \`${unionElemTypeKind}\` is not supported. Try removing \`${unionElemTypeKind}\``,
-  )
+  return Option.none()
 }
 
 function isNumberString(name: string): boolean {

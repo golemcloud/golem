@@ -16,11 +16,11 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
 import { ComplexAgentClassName, SimpleAgentClassName } from './testUtils';
-import { AgentType, DataSchema } from 'golem:agent/common';
+import { AgentType, DataSchema, WitType } from 'golem:agent/common';
 import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
-// If the sample agents in the set up changes, this test should fail
+// If the sample agents in the set-up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
   const complexAgent: AgentType = Option.getOrThrowWith(
     AgentTypeRegistry.lookup(ComplexAgentClassName),
@@ -137,6 +137,80 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(optionalUnion).toEqual(expected);
+  });
+
+  it('union with null works', () => {
+    const unionWithNullType = getWitType(
+      complexAgentMethod!.inputSchema,
+      'unionWithNull',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['type-first', 1],
+              ['type-second', 2],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(unionWithNullType).toEqual(expected);
+  });
+
+  it('object with union with undefined works', () => {
+    const objectWithUnionWithNull = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUndefinedUnion1',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-undefined-union1',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'variant-type', val: [['type-first', 2]] } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull).toEqual(expected);
+  });
+
+  it('object with union with undefined works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUndefinedUnion2',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-undefined-union2',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['type-first', 2],
+              ['type-second', 3],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
   it('captures all methods and constructor with correct number of parameters', () => {
