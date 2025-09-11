@@ -85,7 +85,7 @@ fn plug(
         if plugs.len() > 1 {
             return Err(PlugError::GraphError {
                 source: anyhow!(
-                    "multiple plugs found for export {}, remove one of them:\n{}\n",
+                    "multiple plugs found for export {}, only use one of them:\n{}\n",
                     plug_export_name,
                     plugs
                         .iter()
