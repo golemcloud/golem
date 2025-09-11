@@ -632,30 +632,22 @@ function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<Type
   const paramNameOpt: Option.Option<string> = Option.isSome(optionalParamInParam)
     ? TypeMappingScope.paramName(optionalParamInParam.val) : Option.none();
 
-  if (Option.isSome(paramNameOpt) && unionTypes.length === 2) {
+  if (Option.isSome(paramNameOpt)) {
     const paramName = paramNameOpt.val;
 
 
-    const alternate = unionTypes.find(
+    const alternateTypes = unionTypes.filter(
       (ut) => ut.kind !== "undefined",
     );
 
-    if (alternate) {
+    if (alternateTypes.length >= 1) {
       return Either.left(
         `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. \`${unionElemTypeKind}\` type is not supported. Consider changing \`${paramName}:\` to  \`${paramName}?:\` in ${scopeName} and remove undefined`,
       );
     }
 
     return Either.left(
-      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. \`undefined\` is not supported`,
-    );
-  }
-
-  if (Option.isSome(paramNameOpt)) {
-    const paramName = paramNameOpt.val;
-
-    return Either.left(
-      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. Try removing \`${unionElemTypeKind}\` from it`,
+      `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\``,
     );
   }
 
