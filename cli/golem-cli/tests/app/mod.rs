@@ -847,7 +847,7 @@ async fn build_all_templates() {
 #[test]
 async fn test_ts_weather_agent() {
     let mut ctx = TestContext::new();
-    let app_name = "all-templates-app";
+    let app_name = "weather";
 
     ctx.start_server();
 
@@ -874,6 +874,139 @@ async fn test_ts_weather_agent() {
     assert!(outputs.success());
 
     assert!(outputs.stdout_contains("Weather in hello is sunny"));
+}
+
+#[test]
+async fn test_common_dep_plugs_errors() {
+    let mut ctx = TestContext::new();
+    let app_name = "common_dep_plug_errors";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
+        .await;
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success());
+
+    let component_manifest_path = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-weather-agent")
+            .join("golem.yaml"),
+    );
+    let component_source_code = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-weather-agent")
+            .join("src")
+            .join("main.ts"),
+    );
+
+    fs::write_str(
+        &component_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent:
+                template: ts
+
+            dependencies:
+              app:weather-agent:
+              - type: wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_brave-dev.wasm
+              - type: wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_google-dev.wasm
+              - type: wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_serper-dev.wasm
+              - type: wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_tavily-dev.wasm
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains_ordered(
+        [
+            "error: an error occurred when building the composition graph: multiple plugs found for export golem:web-search/types@1.0.0, remove one of them:",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_brave-dev.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_google-dev.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_serper-dev.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_tavily-dev.wasm",
+        ]
+    ));
+
+    fs::write_str(
+        &component_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent:
+                template: ts
+
+            dependencies:
+              app:weather-agent:
+              - type: wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_brave-dev.wasm
+        "# },
+    )
+        .unwrap();
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success());
+
+    fs::write_str(
+        &component_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent:
+                template: ts
+        "# },
+    )
+    .unwrap();
+
+    fs::write_str(
+        &component_source_code,
+        indoc! { r#"
+            import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+            import * as websearch from 'golem:web-search/web-search@1.0.0';
+
+            @agent()
+            class Agent extends BaseAgent {
+              async search(query: string): Promise<string> {
+                let result = websearch.searchOnce({
+                  query: query,
+                });
+
+                console.log(result);
+
+                return "ok";
+              }
+            }
+        "# },
+    )
+    .unwrap();
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    assert!(outputs.success());
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            "agent()",
+            "search",
+            "query",
+        ])
+        .await;
+    assert!(!outputs.success());
+    // If this fails, then adjust format_stack_line to match it
+    assert!(outputs.stderr_contains("Library golem:web-search/web-search@1.0.0 called without being linked with an implementation"))
 }
 
 enum CommandOutput {

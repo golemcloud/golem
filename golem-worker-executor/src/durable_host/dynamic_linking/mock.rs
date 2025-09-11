@@ -117,10 +117,9 @@ pub fn mock_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
             move |_store, _params, _results| {
                 let name = name.clone();
                 Box::new(async move {
-                    error!("Library {name} called without being linked with an implementation");
-                    Err(anyhow!(format!(
-                        "Library {name} called in get-agent-definitions"
-                    )))
+                    let error_message = format!("Library {name} called without being linked with an implementation");
+                    error!(error_message);
+                    Err(anyhow!(error_message))
                 })
             },
         )?;
