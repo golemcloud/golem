@@ -802,19 +802,18 @@ async fn build_all_templates() {
     let templates = outputs
         .stdout
         .iter()
-        .filter_map(|line| {
-            (line.starts_with(template_prefix) && line.contains(':')).then(|| {
-                let template_with_desc = line.as_str().strip_prefix(template_prefix);
-                let_assert!(Some(template_with_desc) = template_with_desc, "{}", line);
-                let separator_index = template_with_desc.find(":");
-                let_assert!(
-                    Some(separator_index) = separator_index,
-                    "{}",
-                    template_with_desc
-                );
+        .filter(|line| line.starts_with(template_prefix) && line.contains(':'))
+        .map(|line| {
+            let template_with_desc = line.as_str().strip_prefix(template_prefix);
+            let_assert!(Some(template_with_desc) = template_with_desc, "{}", line);
+            let separator_index = template_with_desc.find(":");
+            let_assert!(
+                Some(separator_index) = separator_index,
+                "{}",
+                template_with_desc
+            );
 
-                &template_with_desc[..separator_index]
-            })
+            &template_with_desc[..separator_index]
         })
         .collect::<Vec<_>>();
 
