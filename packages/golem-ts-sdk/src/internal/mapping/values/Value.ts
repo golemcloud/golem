@@ -905,15 +905,26 @@ function handleUnion(
 ): Either.Either<Value, string> {
   let filteredTypes = possibleTypes;
 
-  if (type.optional) {
-    filteredTypes = possibleTypes.filter(
-      (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
-    );
+  filteredTypes = possibleTypes.filter(
+    (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
+  );
 
-    // If there is only 1 value after being optional
-    if (filteredTypes.length === 1) {
-      return fromTsValue(tsValue, filteredTypes[0]);
+  // If there is only 1 value after being optional
+  if (filteredTypes.length === 1) {
+    if (tsValue === null || tsValue === undefined) {
+      return Either.right({kind: "option"})
     }
+
+    // If its not null, then wrap it up in option
+    const result = fromTsValue(tsValue, filteredTypes[0]);
+
+
+    return Either.map(result, (value) => {
+      return {
+        kind: 'option',
+        value: value
+      };
+    })
   }
 
   const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);

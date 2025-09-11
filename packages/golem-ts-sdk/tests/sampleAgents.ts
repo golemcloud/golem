@@ -65,8 +65,8 @@ export interface CustomData {
 class ComplexAgent extends BaseAgent {
   constructor(
     readonly testInterfaceType: Types.TestInterfaceType,
-    readonly optionalStringType?: string,
-    readonly optionalUnionType?: UnionType,
+    readonly optionalStringType: string | null,
+    readonly optionalUnionType: UnionType | null,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;

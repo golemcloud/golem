@@ -39,8 +39,8 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
   fc.assert(
     fc.property(
       interfaceArb,
-      fc.string(),
-      unionArb,
+      fc.oneof(fc.string(), fc.constant(null)),
+      fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
         overrideSelfMetadataImpl(ComplexAgentName.value);
 
@@ -55,8 +55,8 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
         const arg2 = typeRegistry.constructorArgs[2].type;
 
         expect(arg0.optional).toEqual(false);
-        expect(arg1.optional).toEqual(true);
-        expect(arg2.optional).toEqual(true);
+        expect(arg1.optional).toEqual(false);
+        expect(arg2.optional).toEqual(false);
 
         const interfaceWit = Either.getOrThrowWith(
           WitValue.fromTsValue(interfaceValue, arg0),
@@ -76,6 +76,7 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
           WitValue.fromTsValue(unionValue, arg2),
           (error) => new Error(`Failed to convert union to WitValue. ${error}`),
         );
+
 
         expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
 
