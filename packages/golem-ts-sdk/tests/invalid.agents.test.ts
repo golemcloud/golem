@@ -114,22 +114,28 @@ describe('Invalid types in agents', () => {
       'Unsupported type `BigInt`, use `bigint` instead',
     );
 
-    expect(nullType.val).toBe('Unsupported type `null`');
+    expect(nullType.val).toBe(
+      'Unsupported type `null` in fun1 for parameter `nullParam`',
+    );
 
-    expect(undefinedType.val).toBe('Unsupported type `undefined`');
+    expect(undefinedType.val).toBe(
+      'Unsupported type `undefined` in fun1 for parameter `undefined`',
+    );
 
-    expect(voidType.val).toBe('Unsupported type `void`');
+    expect(voidType.val).toBe(
+      'Unsupported type `void` in fun1 for parameter `voidParam`',
+    );
 
     expect(unionWithNullType.val).toBe(
-      'Parameter `unionWithNull` in `fun1` has a union type that includes `null`. `null` type is not supported. Consider changing `unionWithNull:` to  `unionWithNull?:` in fun1 and remove undefined',
+      'Parameter `unionWithNull` in `fun1` has a union type that includes `null`. Consider changing `unionWithNull:` to  `unionWithNull?:` in fun1 and remove undefined',
     );
 
     expect(objectWithInvalidUnion1.val).toBe(
-      'Parameter `a` in `ObjectWithInvalidUnion1` has a union type that includes `undefined`. `undefined` type is not supported. Consider changing `a:` to  `a?:` in ObjectWithInvalidUnion1 and remove undefined',
+      'Parameter `a` in `ObjectWithInvalidUnion1` has a union type that includes `undefined`. Consider changing `a:` to  `a?:` in ObjectWithInvalidUnion1 and remove undefined',
     );
 
     expect(objectWithInvalidUnion2.val).toBe(
-      'Parameter `a` in `ObjectWithInvalidUnion2` has a union type that includes `undefined`. `undefined` type is not supported. Consider changing `a:` to  `a?:` in ObjectWithInvalidUnion2 and remove undefined',
+      'Parameter `a` in `ObjectWithInvalidUnion2` has a union type that includes `undefined`. Consider changing `a:` to  `a?:` in ObjectWithInvalidUnion2 and remove undefined',
     );
   });
 

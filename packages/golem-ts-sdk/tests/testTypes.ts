@@ -105,6 +105,7 @@ export interface TestInterfaceType {
     c: boolean;
   };
   unionPropInlined: string | number;
+
   // recordProp: RecordType;
   // enumType: EnumTypeAlias;
   // enumTypeInlined: EnumType,

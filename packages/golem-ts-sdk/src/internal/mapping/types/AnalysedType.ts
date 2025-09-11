@@ -237,6 +237,11 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
 
 export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
 
+  const scopeName = Option.isSome(scope) ? scope.val.name : undefined;
+  const parameterInScope: Option.Option<string> =
+    Option.isSome(scope) ? TypeMappingScope.paramName(scope.val) : Option.none();
+
+
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =
@@ -259,13 +264,13 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       return Either.right(u64())
 
     case "null":
-      return Either.left("Unsupported type `null`");
+      return Either.left("Unsupported type `null` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "undefined":
-      return Either.left("Unsupported type `undefined`");
+      return Either.left("Unsupported type `undefined` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "void":
-      return Either.left("Unsupported type `void`");
+      return Either.left("Unsupported type `void` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "tuple":
       const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
@@ -614,9 +619,9 @@ function isOptionalParam(scope: Option.Option<TypeMappingScope>) {
   return Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val)
 }
 
-function getScopeName(param: Option.Option<TypeMappingScope>): string | undefined {
-  if (Option.isSome(param)) {
-    const scope = param.val;
+function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undefined {
+  if (Option.isSome(optScope)) {
+    const scope = optScope.val;
 
     return scope.name
   }
@@ -642,7 +647,7 @@ function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<Type
 
     if (alternateTypes.length >= 1) {
       return Either.left(
-        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. \`${unionElemTypeKind}\` type is not supported. Consider changing \`${paramName}:\` to  \`${paramName}?:\` in ${scopeName} and remove undefined`,
+        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that includes \`${unionElemTypeKind}\`. Consider changing \`${paramName}:\` to  \`${paramName}?:\` in ${scopeName} and remove undefined`,
       );
     }
 
@@ -652,7 +657,7 @@ function getErrorMessageForInvalidUnion(optionalParamInParam: Option.Option<Type
   }
 
   return Either.left(
-    `Union  type with \`${unionElemTypeKind}\` is not supported. Try removing \`${unionElemTypeKind}\``,
+    `Union type with \`${unionElemTypeKind}\` is not supported. Try removing \`${unionElemTypeKind}\``,
   )
 }
 
