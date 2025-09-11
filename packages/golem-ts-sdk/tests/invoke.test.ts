@@ -30,16 +30,18 @@ import {
 } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
-import { interfaceArb } from './arbitraries';
+import { interfaceArb, unionArb } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
+import { DataValue } from 'golem:agent/common';
 
 test("ComplexAgent can be successfully initiated and the methods can be invoked'", () => {
   fc.assert(
     fc.property(
       interfaceArb,
       fc.string(),
-      (complexAgentConstructorValue, locationValue) => {
-        overrideSelfMetadataImpl();
+      unionArb,
+      (interfaceValue, stringValue, unionValue) => {
+        overrideSelfMetadataImpl(ComplexAgentName.value);
 
         const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
 
@@ -47,15 +49,35 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
           throw new Error('ComplexAgent type metadata not found');
         }
 
-        const constructorInfo = typeRegistry.constructorArgs[0].type;
+        const arg0 = typeRegistry.constructorArgs[0].type;
+        const arg1 = typeRegistry.constructorArgs[1].type;
+        const arg2 = typeRegistry.constructorArgs[2].type;
 
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValue(complexAgentConstructorValue, constructorInfo),
+        const interfaceWit = Either.getOrThrowWith(
+          WitValue.fromTsValue(interfaceValue, arg0),
           (error) =>
-            new Error(
-              `Failed to convert constructor arg to WitValue. ${error}`,
-            ),
+            new Error(`Failed to convert interface to WitValue. ${error}`),
         );
+
+        const stringWit = Either.getOrThrowWith(
+          WitValue.fromTsValue(stringValue, arg1),
+          (error) =>
+            new Error(`Failed to convert interface to WitValue. ${error}`),
+        );
+
+        const unionWit = Either.getOrThrowWith(
+          WitValue.fromTsValue(unionValue, arg2),
+          (error) => new Error(`Failed to convert union to WitValue. ${error}`),
+        );
+
+        const dataValue: DataValue = {
+          tag: 'tuple',
+          val: [
+            { tag: 'component-model', val: interfaceWit },
+            { tag: 'component-model', val: stringWit },
+            { tag: 'component-model', val: unionWit },
+          ],
+        };
 
         const agentInitiator = Option.getOrThrowWith(
           AgentInitiatorRegistry.lookup(ComplexAgentName),
@@ -63,8 +85,8 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
         );
 
         const result = agentInitiator.initiate(
-          SimpleAgentName.value,
-          getDataValueFromReturnValueWit(witValue),
+          ComplexAgentName.value,
+          dataValue,
         );
 
         expect(result.tag).toEqual('ok');
@@ -80,7 +102,7 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
       fc.string(),
       fc.integer(),
       (arbData, locationValue, number) => {
-        overrideSelfMetadataImpl();
+        overrideSelfMetadataImpl(SimpleAgentName.value);
 
         const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
 
@@ -235,7 +257,7 @@ function testInvoke(
     });
 }
 
-function overrideSelfMetadataImpl() {
+function overrideSelfMetadataImpl(agentName: string) {
   vi.spyOn(GolemApiHostModule, 'getSelfMetadata').mockImplementation(() => ({
     workerId: {
       componentId: {
@@ -244,7 +266,7 @@ function overrideSelfMetadataImpl() {
           lowBits: 99n,
         },
       },
-      workerName: 'weather-agent',
+      workerName: agentName,
     },
     args: [],
     env: [],

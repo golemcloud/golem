@@ -24,9 +24,8 @@ export const ComplexAgentClassName = new AgentClassName('ComplexAgent');
 
 export const SimpleAgentClassName = new AgentClassName('SimpleAgent');
 
-export const SimpleAgentName = AgentTypeName.fromAgentClassName(
-  SimpleAgentClassName,
-);
+export const SimpleAgentName =
+  AgentTypeName.fromAgentClassName(SimpleAgentClassName);
 
 export const ComplexAgentName = AgentTypeName.fromAgentClassName(
   ComplexAgentClassName,

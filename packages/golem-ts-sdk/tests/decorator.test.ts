@@ -22,7 +22,6 @@ import * as util from 'node:util';
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
-
   const complexAgent: AgentType = Option.getOrThrowWith(
     AgentTypeRegistry.lookup(ComplexAgentClassName),
     () => new Error('AssistantAgent not found in AgentTypeRegistry'),
@@ -140,7 +139,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(optionalUnion).toEqual(expected);
   });
 
-  it ('captures all methods and constructor with correct number of parameters', () => {
+  it('captures all methods and constructor with correct number of parameters', () => {
     const weatherAgent = Option.getOrThrowWith(
       AgentTypeRegistry.lookup(SimpleAgentClassName),
       () => new Error('WeatherAgent not found in AgentTypeRegistry'),
@@ -150,9 +149,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
     expect(weatherAgent.methods.length).toEqual(6);
     expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);
-
-  })
-
+  });
 });
 
 function getWitType(dataSchema: DataSchema, parameterName: string) {
