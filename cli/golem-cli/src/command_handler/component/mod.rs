@@ -388,11 +388,7 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        if component_views.is_empty() {
-            bail!(NonSuccessfulExit)
-        } else {
-            self.ctx.log_handler().log_view(&component_views);
-        }
+        self.ctx.log_handler().log_view(&component_views);
 
         Ok(())
     }
