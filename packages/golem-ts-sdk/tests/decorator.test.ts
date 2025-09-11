@@ -29,9 +29,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   const complexAgentConstructor = complexAgent.constructor;
 
-  const complexAgentMethod = complexAgent.methods.find(
-    (method) => method.name === 'fun0',
-  );
+  const complexAgentMethod = complexAgent.methods.find((method) => method.name === 'fun0');
 
   it('should handle optional string in constructor', () => {
     const optionalStringInGetWeather = getWitType(
@@ -40,10 +38,7 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     expect(optionalStringInGetWeather).toEqual({
-      nodes: [
-        { type: { tag: 'option-type', val: 1 } },
-        { type: { tag: 'prim-string-type' } },
-      ],
+      nodes: [{ type: { tag: 'option-type', val: 1 } }, { type: { tag: 'prim-string-type' } }],
     });
   });
 
@@ -54,18 +49,12 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     expect(optionalStringInGetWeather).toEqual({
-      nodes: [
-        { type: { tag: 'option-type', val: 1 } },
-        { type: { tag: 'prim-string-type' } },
-      ],
+      nodes: [{ type: { tag: 'option-type', val: 1 } }, { type: { tag: 'prim-string-type' } }],
     });
   });
 
   it('should handle optional union in constructor', () => {
-    const optionalUnion = getWitType(
-      complexAgentConstructor.inputSchema,
-      'optionalUnionType',
-    );
+    const optionalUnion = getWitType(complexAgentConstructor.inputSchema, 'optionalUnionType');
 
     const expected = {
       nodes: [
@@ -101,10 +90,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle optional union in method', () => {
-    const optionalUnion = getWitType(
-      complexAgentMethod!.inputSchema,
-      'optionalUnionType',
-    );
+    const optionalUnion = getWitType(complexAgentMethod!.inputSchema, 'optionalUnionType');
 
     const expected = {
       nodes: [
@@ -156,17 +142,13 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
   const optionalParamInput = dataSchema.val.find((s) => s[0] === parameterName);
 
   if (!optionalParamInput) {
-    throw new Error(
-      `${parameterName} not found in scheme ${util.format(dataSchema)}`,
-    );
+    throw new Error(`${parameterName} not found in scheme ${util.format(dataSchema)}`);
   }
 
   const optionalParamInputElement = optionalParamInput[1];
 
   const witTypeOpt =
-    optionalParamInputElement.tag === 'component-model'
-      ? optionalParamInputElement.val
-      : undefined;
+    optionalParamInputElement.tag === 'component-model' ? optionalParamInputElement.val : undefined;
 
   if (!witTypeOpt) {
     throw new Error(

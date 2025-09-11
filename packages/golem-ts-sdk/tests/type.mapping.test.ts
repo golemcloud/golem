@@ -126,9 +126,7 @@ describe('TypeScript Promise type to AnalysedType', () => {
 describe('TypeScript Object to AnalysedType', () => {
   it('transforms object with different properties successfully to analysed type', () => {
     const interfaceType = getTestObjectType();
-    const analysed = Either.getOrThrow(
-      AnalysedType.fromTsType(interfaceType, Option.none()),
-    );
+    const analysed = Either.getOrThrow(AnalysedType.fromTsType(interfaceType, Option.none()));
 
     expect(analysed).toBeDefined();
     expect(analysed.kind).toBe('record');
@@ -281,9 +279,7 @@ function checkOptionalFields(fields: NameTypePair[]) {
 }
 
 function checkUnionComplexFields(fields: NameTypePair[]) {
-  const unionComplexFields = fields.filter((f) =>
-    f.name.startsWith('unionComplexProp'),
-  )[0];
+  const unionComplexFields = fields.filter((f) => f.name.startsWith('unionComplexProp'))[0];
 
   const expected: NameTypePair = {
     name: 'unionComplexProp',
@@ -856,9 +852,7 @@ function checkListFields(fields: any[]) {
 }
 
 function checkListObjectFields(fields: any[]) {
-  const listObjectFields = fields.filter((f) =>
-    f.name.startsWith('listObjectProp'),
-  );
+  const listObjectFields = fields.filter((f) => f.name.startsWith('listObjectProp'));
   expect(listObjectFields.length).toBeGreaterThan(0);
 
   listObjectFields.forEach((field) => {
@@ -886,9 +880,7 @@ function checkTupleFields(fields: any[]) {
 }
 
 function checkTupleWithObjectFields(fields: any[]) {
-  const tupleObjectFields = fields.filter((f) =>
-    f.name.startsWith('tupleObjectProp'),
-  );
+  const tupleObjectFields = fields.filter((f) => f.name.startsWith('tupleObjectProp'));
   expect(tupleObjectFields.length).toBeGreaterThan(0);
 
   tupleObjectFields.forEach((field) => {
@@ -944,9 +936,7 @@ function checkMapFields(fields: any[]) {
 }
 
 function checkObjectComplexFields(fields: any[]) {
-  const objectFields = fields.filter((f) =>
-    f.name.startsWith('objectComplexProp'),
-  );
+  const objectFields = fields.filter((f) => f.name.startsWith('objectComplexProp'));
   expect(objectFields.length).toBeGreaterThan(0);
 
   const expected = [

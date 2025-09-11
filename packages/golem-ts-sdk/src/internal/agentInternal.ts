@@ -22,9 +22,6 @@ import { AgentId } from '../agentId';
  */
 export interface AgentInternal {
   getId(): AgentId;
-  invoke(
-    method: string,
-    args: DataValue,
-  ): Promise<Result<DataValue, AgentError>>;
+  invoke(method: string, args: DataValue): Promise<Result<DataValue, AgentError>>;
   getAgentType(): AgentType;
 }

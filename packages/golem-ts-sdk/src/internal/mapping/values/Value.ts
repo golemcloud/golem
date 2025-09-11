@@ -135,20 +135,14 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
         return {
           kind: 'result',
           value: {
-            ok:
-              res.val !== undefined
-                ? buildTree(nodes[res.val], nodes)
-                : undefined,
+            ok: res.val !== undefined ? buildTree(nodes[res.val], nodes) : undefined,
           },
         };
       } else {
         return {
           kind: 'result',
           value: {
-            err:
-              res.val !== undefined
-                ? buildTree(nodes[res.val], nodes)
-                : undefined,
+            err: res.val !== undefined ? buildTree(nodes[res.val], nodes) : undefined,
           },
         };
       }
@@ -324,9 +318,7 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
     case 'result': {
       if ('ok' in value.value) {
         const innerIdx =
-          value.value.ok !== undefined
-            ? buildNodes(value.value.ok, nodes)
-            : undefined;
+          value.value.ok !== undefined ? buildNodes(value.value.ok, nodes) : undefined;
         nodes[idx] = {
           tag: 'result-value',
           val: {
@@ -336,9 +328,7 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
         };
       } else {
         const innerIdx =
-          value.value.err !== undefined
-            ? buildNodes(value.value.err, nodes)
-            : undefined;
+          value.value.err !== undefined ? buildNodes(value.value.err, nodes) : undefined;
         nodes[idx] = {
           tag: 'result-value',
           val: {
@@ -443,10 +433,7 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
 
 // Note that we take `type: Type` instead of `type: AnalysedType`(because at this point `AnalysedType` of the `tsValue` is also available)
 // as `Type` holds more information, and can be used to determine the error messages for wrong `tsValue` more accurately.
-export function fromTsValue(
-  tsValue: any,
-  type: Type.Type,
-): Either.Either<Value, string> {
+export function fromTsValue(tsValue: any, type: Type.Type): Either.Either<Value, string> {
   if (type.name === 'String') {
     throw new Error(
       unhandledTypeError(
@@ -635,11 +622,7 @@ export function fromTsValue(
 
     case 'class':
       return Either.left(
-        unhandledTypeError(
-          tsValue,
-          Option.none(),
-          Option.some('Classes are not supported'),
-        ),
+        unhandledTypeError(tsValue, Option.none(), Option.some('Classes are not supported')),
       );
 
     case 'interface':
@@ -691,17 +674,11 @@ export function fromTsValue(
       }
 
     case 'alias':
-      return Either.left(
-        unhandledTypeError(tsValue, Option.none(), Option.none()),
-      );
+      return Either.left(unhandledTypeError(tsValue, Option.none(), Option.none()));
 
     case 'others':
       return Either.left(
-        unhandledTypeError(
-          tsValue,
-          Option.some(type.name ?? 'anonymous'),
-          Option.none(),
-        ),
+        unhandledTypeError(tsValue, Option.some(type.name ?? 'anonymous'), Option.none()),
       );
   }
 }
@@ -746,10 +723,7 @@ function handleBooleanType(tsValue: any): Either.Either<Value, string> {
   }
 }
 
-function handleArrayType(
-  tsValue: any,
-  elementType: Type.Type,
-): Either.Either<Value, string> {
+function handleArrayType(tsValue: any, elementType: Type.Type): Either.Either<Value, string> {
   if (!Array.isArray(tsValue)) {
     return Either.left(
       typeMismatchIn(tsValue, {
@@ -769,10 +743,7 @@ function handleArrayType(
   );
 }
 
-function handleTupleType(
-  tsValue: any,
-  types: Type.Type[],
-): Either.Either<Value, string> {
+function handleTupleType(tsValue: any, types: Type.Type[]): Either.Either<Value, string> {
   if (!Array.isArray(tsValue)) {
     return Either.left(
       typeMismatchIn(tsValue, {
@@ -992,10 +963,7 @@ function matchesType(value: any, type: Type.Type): boolean {
   }
 }
 
-function matchesTuple(
-  value: any,
-  tupleTypes: readonly Type.Type[] | undefined,
-): boolean {
+function matchesTuple(value: any, tupleTypes: readonly Type.Type[] | undefined): boolean {
   if (!Array.isArray(value)) return false;
   if (!tupleTypes) return false;
   if (value.length !== tupleTypes.length) return false;
@@ -1008,11 +976,7 @@ function matchesArray(value: any, elementType: Type.Type): boolean {
   return value.every((item) => matchesType(item, elementType));
 }
 
-function handleObjectMatch(
-  value: any,
-  type: Type.Type,
-  props: Symbol[],
-): boolean {
+function handleObjectMatch(value: any, type: Type.Type, props: Symbol[]): boolean {
   if (typeof value !== 'object' || value === null) return false;
 
   const valueKeys = Object.keys(value);
@@ -1099,9 +1063,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
           }
         case 'Uint8ClampedArray':
           if (value.kind === 'list') {
-            return new Uint8ClampedArray(
-              value.value.map((v) => convertToNumber(v)),
-            );
+            return new Uint8ClampedArray(value.value.map((v) => convertToNumber(v)));
           } else {
             throw new Error(typeMismatchOut(value, 'Uint8ClampedArray'));
           }
@@ -1150,17 +1112,13 @@ export function toTsValue(value: Value, type: Type.Type): any {
           }
         case 'BigInt64Array':
           if (value.kind === 'list') {
-            return new BigInt64Array(
-              value.value.map((v) => convertToBigInt(v)),
-            );
+            return new BigInt64Array(value.value.map((v) => convertToBigInt(v)));
           } else {
             throw new Error(typeMismatchOut(value, 'BigInt64Array'));
           }
         case 'BigUint64Array':
           if (value.kind === 'list') {
-            return new BigUint64Array(
-              value.value.map((v) => convertToBigInt(v)),
-            );
+            return new BigUint64Array(value.value.map((v) => convertToBigInt(v)));
           } else {
             throw new Error(typeMismatchOut(value, 'BigUint64Array'));
           }
@@ -1180,9 +1138,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
     case 'tuple':
       const typeArg = type.elements;
       if (value.kind === 'tuple') {
-        return value.value.map((item: Value, idx: number) =>
-          toTsValue(item, typeArg[idx]),
-        );
+        return value.value.map((item: Value, idx: number) => toTsValue(item, typeArg[idx]));
       } else {
         throw new Error(typeMismatchOut(value, 'tuple'));
       }
@@ -1209,9 +1165,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
         return expectedTypeFields.reduce(
           (acc, field, idx) => {
             const name = field.getName();
-            const expectedFieldType = field.getTypeAtLocation(
-              field.getDeclarations()[0],
-            );
+            const expectedFieldType = field.getTypeAtLocation(field.getDeclarations()[0]);
             acc[name] = toTsValue(fieldValues[idx], expectedFieldType);
             return acc;
           },
@@ -1222,13 +1176,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'class':
-      throw new Error(
-        unhandledTypeError(
-          value,
-          Option.some(name ?? 'anonymous'),
-          Option.none(),
-        ),
-      );
+      throw new Error(unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()));
 
     case 'interface':
       if (value.kind === 'record') {
@@ -1237,9 +1185,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
         return expectedTypeFields.reduce(
           (acc, field, idx) => {
             const name = field.getName();
-            const expectedFieldType = field.getTypeAtLocation(
-              field.getDeclarations()[0],
-            );
+            const expectedFieldType = field.getTypeAtLocation(field.getDeclarations()[0]);
             acc[name] = toTsValue(fieldValues[idx], expectedFieldType);
             return acc;
           },
@@ -1252,9 +1198,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
     case 'promise':
       const innerType = type.element;
       if (!innerType) {
-        throw new Error(
-          `Internal Error: Expected Promise to have one type argument`,
-        );
+        throw new Error(`Internal Error: Expected Promise to have one type argument`);
       }
       return toTsValue(value, innerType);
 
@@ -1262,15 +1206,13 @@ export function toTsValue(value: Value, type: Type.Type): any {
       if (value.kind === 'list') {
         const entries: [any, any][] = value.value.map((item: Value) => {
           if (item.kind !== 'tuple' || item.value.length !== 2) {
-            throw new Error(
-              `Internal Error: Expected tuple of two items, got ${item}`,
-            );
+            throw new Error(`Internal Error: Expected tuple of two items, got ${item}`);
           }
 
-          return [
-            toTsValue(item.value[0], type.key),
-            toTsValue(item.value[1], type.value),
-          ] as [any, any];
+          return [toTsValue(item.value[0], type.key), toTsValue(item.value[1], type.value)] as [
+            any,
+            any,
+          ];
         });
         return new Map(entries);
       } else {
@@ -1279,32 +1221,17 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
     case 'literal':
       const literalValue = type.name;
-      if (
-        value.kind === 'bool' &&
-        (literalValue === 'true' || literalValue === 'false')
-      ) {
+      if (value.kind === 'bool' && (literalValue === 'true' || literalValue === 'false')) {
         return value.value;
       } else {
         throw new Error(typeMismatchOut(value, 'boolean'));
       }
 
     case 'alias':
-      throw new Error(
-        unhandledTypeError(
-          value,
-          Option.some(name ?? 'anonymous'),
-          Option.none(),
-        ),
-      );
+      throw new Error(unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()));
 
     case 'others':
-      throw new Error(
-        unhandledTypeError(
-          value,
-          Option.some(name ?? 'anonymous'),
-          Option.none(),
-        ),
-      );
+      throw new Error(unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()));
   }
 }
 

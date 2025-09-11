@@ -14,10 +14,7 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
-import {
-  getDataValueFromReturnValueWit,
-  getWitValueFromDataValue,
-} from '../src/decorators';
+import { getDataValueFromReturnValueWit, getWitValueFromDataValue } from '../src/decorators';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect, it } from 'vitest';
@@ -36,175 +33,147 @@ import { DataValue } from 'golem:agent/common';
 
 test("ComplexAgent can be successfully initiated and the methods can be invoked'", () => {
   fc.assert(
-    fc.property(
-      interfaceArb,
-      fc.string(),
-      unionArb,
-      (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(ComplexAgentName.value);
+    fc.property(interfaceArb, fc.string(), unionArb, (interfaceValue, stringValue, unionValue) => {
+      overrideSelfMetadataImpl(ComplexAgentName.value);
 
-        const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
+      const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
 
-        if (!typeRegistry) {
-          throw new Error('ComplexAgent type metadata not found');
-        }
+      if (!typeRegistry) {
+        throw new Error('ComplexAgent type metadata not found');
+      }
 
-        const arg0 = typeRegistry.constructorArgs[0].type;
-        const arg1 = typeRegistry.constructorArgs[1].type;
-        const arg2 = typeRegistry.constructorArgs[2].type;
+      const arg0 = typeRegistry.constructorArgs[0].type;
+      const arg1 = typeRegistry.constructorArgs[1].type;
+      const arg2 = typeRegistry.constructorArgs[2].type;
 
-        const interfaceWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(interfaceValue, arg0),
-          (error) =>
-            new Error(`Failed to convert interface to WitValue. ${error}`),
-        );
+      const interfaceWit = Either.getOrThrowWith(
+        WitValue.fromTsValue(interfaceValue, arg0),
+        (error) => new Error(`Failed to convert interface to WitValue. ${error}`),
+      );
 
-        const stringWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(stringValue, arg1),
-          (error) =>
-            new Error(`Failed to convert interface to WitValue. ${error}`),
-        );
+      const stringWit = Either.getOrThrowWith(
+        WitValue.fromTsValue(stringValue, arg1),
+        (error) => new Error(`Failed to convert interface to WitValue. ${error}`),
+      );
 
-        const unionWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(unionValue, arg2),
-          (error) => new Error(`Failed to convert union to WitValue. ${error}`),
-        );
+      const unionWit = Either.getOrThrowWith(
+        WitValue.fromTsValue(unionValue, arg2),
+        (error) => new Error(`Failed to convert union to WitValue. ${error}`),
+      );
 
-        const dataValue: DataValue = {
-          tag: 'tuple',
-          val: [
-            { tag: 'component-model', val: interfaceWit },
-            { tag: 'component-model', val: stringWit },
-            { tag: 'component-model', val: unionWit },
-          ],
-        };
+      const dataValue: DataValue = {
+        tag: 'tuple',
+        val: [
+          { tag: 'component-model', val: interfaceWit },
+          { tag: 'component-model', val: stringWit },
+          { tag: 'component-model', val: unionWit },
+        ],
+      };
 
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(ComplexAgentName),
-          () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
-        );
+      const agentInitiator = Option.getOrThrowWith(
+        AgentInitiatorRegistry.lookup(ComplexAgentName),
+        () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
+      );
 
-        const result = agentInitiator.initiate(
-          ComplexAgentName.value,
-          dataValue,
-        );
+      const result = agentInitiator.initiate(ComplexAgentName.value, dataValue);
 
-        expect(result.tag).toEqual('ok');
-      },
-    ),
+      expect(result.tag).toEqual('ok');
+    }),
   );
 });
 
 test('SimpleAgent can be successfully initiated and the methods can be invoked', () => {
   fc.assert(
-    fc.property(
-      fc.string(),
-      fc.string(),
-      fc.integer(),
-      (arbData, locationValue, number) => {
-        overrideSelfMetadataImpl(SimpleAgentName.value);
+    fc.property(fc.string(), fc.string(), fc.integer(), (arbData, locationValue, number) => {
+      overrideSelfMetadataImpl(SimpleAgentName.value);
 
-        const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
+      const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
 
-        if (!typeRegistry) {
-          throw new Error('SimpleAgent type metadata not found');
-        }
+      if (!typeRegistry) {
+        throw new Error('SimpleAgent type metadata not found');
+      }
 
-        const constructorInfo = typeRegistry.constructorArgs[0].type;
+      const constructorInfo = typeRegistry.constructorArgs[0].type;
 
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValue(arbData, constructorInfo),
-          (error) =>
-            new Error(
-              `Failed to convert constructor arg to WitValue. ${error}`,
-            ),
-        );
+      const witValue = Either.getOrThrowWith(
+        WitValue.fromTsValue(arbData, constructorInfo),
+        (error) => new Error(`Failed to convert constructor arg to WitValue. ${error}`),
+      );
 
-        const constructorParams = getDataValueFromReturnValueWit(witValue);
+      const constructorParams = getDataValueFromReturnValueWit(witValue);
 
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(SimpleAgentName),
-          () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
-        );
+      const agentInitiator = Option.getOrThrowWith(
+        AgentInitiatorRegistry.lookup(SimpleAgentName),
+        () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
+      );
 
-        const result = agentInitiator.initiate(
-          SimpleAgentName.value,
-          constructorParams,
-        );
+      const result = agentInitiator.initiate(SimpleAgentName.value, constructorParams);
 
-        expect(result.tag).toEqual('ok');
+      expect(result.tag).toEqual('ok');
 
-        const resolvedAgent =
-          result.tag === 'ok'
-            ? result.val
-            : (() => {
-                throw new Error('Agent initiation failed');
-              })();
+      const resolvedAgent =
+        result.tag === 'ok'
+          ? result.val
+          : (() => {
+              throw new Error('Agent initiation failed');
+            })();
 
-        testInvoke(
-          typeRegistry,
-          'fun1',
-          'location',
-          locationValue,
-          resolvedAgent,
-          'Weather in ' + locationValue + ' is sunny!',
-        );
+      testInvoke(
+        typeRegistry,
+        'fun1',
+        'location',
+        locationValue,
+        resolvedAgent,
+        'Weather in ' + locationValue + ' is sunny!',
+      );
 
-        testInvoke(
-          typeRegistry,
-          'fun2',
-          'data',
-          {
-            value: number,
-            data: locationValue,
-          },
-          resolvedAgent,
-          `Weather in ${locationValue} is sunny!`,
-        );
+      testInvoke(
+        typeRegistry,
+        'fun2',
+        'data',
+        {
+          value: number,
+          data: locationValue,
+        },
+        resolvedAgent,
+        `Weather in ${locationValue} is sunny!`,
+      );
 
-        testInvoke(
-          typeRegistry,
-          'fun3',
-          'param2',
-          {
-            data: locationValue,
-            value: number,
-          },
-          resolvedAgent,
-          `Weather in ${locationValue} is sunny!`,
-        );
+      testInvoke(
+        typeRegistry,
+        'fun3',
+        'param2',
+        {
+          data: locationValue,
+          value: number,
+        },
+        resolvedAgent,
+        `Weather in ${locationValue} is sunny!`,
+      );
 
-        testInvoke(
-          typeRegistry,
-          'fun4',
-          'location',
-          {
-            data: locationValue,
-            value: number,
-          },
-          resolvedAgent,
-          undefined,
-        );
+      testInvoke(
+        typeRegistry,
+        'fun4',
+        'location',
+        {
+          data: locationValue,
+          value: number,
+        },
+        resolvedAgent,
+        undefined,
+      );
 
-        testInvoke(
-          typeRegistry,
-          'fun5',
-          'location',
-          locationValue,
-          resolvedAgent,
-          `Weather in ${locationValue} is sunny!`,
-        );
+      testInvoke(
+        typeRegistry,
+        'fun5',
+        'location',
+        locationValue,
+        resolvedAgent,
+        `Weather in ${locationValue} is sunny!`,
+      );
 
-        testInvoke(
-          typeRegistry,
-          'fun6',
-          'location',
-          locationValue,
-          resolvedAgent,
-          undefined,
-        );
-      },
-    ),
+      testInvoke(typeRegistry, 'fun6', 'location', locationValue, resolvedAgent, undefined);
+    }),
   );
 });
 
@@ -231,9 +200,7 @@ function testInvoke(
   const parameterType = parametersInfo.get(parameterName);
 
   if (!parameterType) {
-    throw new Error(
-      'Parameter location not found in method getWeather metadata',
-    );
+    throw new Error('Parameter location not found in method getWeather metadata');
   }
 
   const parameterWitValue = Either.getOrThrowWith(
