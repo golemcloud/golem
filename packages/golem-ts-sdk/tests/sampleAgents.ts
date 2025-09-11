@@ -55,7 +55,10 @@ export interface CustomData {
 
 @agent()
 class AssistantAgent extends BaseAgent {
-  constructor(readonly testInterfaceType: Types.TestInterfaceType) {
+  constructor(
+    readonly testInterfaceType: Types.TestInterfaceType,
+    optionalStringType?: string,
+  ) {
     super();
     this.testInterfaceType = testInterfaceType;
   }
@@ -77,7 +80,7 @@ class AssistantAgent extends BaseAgent {
     eitherXType: EitherX,
     eitherYType: EitherY,
     eitherZType: EitherZ,
-    optionalParamType?: string,
+    optionalStringType?: string,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

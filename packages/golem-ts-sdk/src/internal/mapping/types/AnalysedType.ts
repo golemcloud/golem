@@ -235,7 +235,7 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
   return fromTsTypeInternal(tsType, scope);
 }
 
-export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =
@@ -274,6 +274,7 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
       let fieldIdx = 1;
       const possibleTypes: NameOptionTypePair[] = [];
       let boolTracked = false;
+      let isOption = false;
 
       for (const t of type.unionTypes) {
         if (t.kind === "boolean" || t.name === "false" || t.name === "true") {
@@ -304,13 +305,14 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
         if (t.kind === "null") {
 
-          if (isOptionalParam(optionalParamInParam)) {
+          if (isOptionalParam(scope)) {
             // If it's already an optional parameter, forget about adding `undefined`
+            isOption = true;
             continue;
           }
 
           const errorMessage =
-            getErrorMessageForInvalidUnion(optionalParamInParam, type.unionTypes, t)
+            getErrorMessageForInvalidUnion(scope, type.unionTypes, t)
 
           if (Either.isLeft(errorMessage)) {
             return errorMessage;
@@ -321,13 +323,14 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
 
         if (t.kind === "void") {
 
-          if (isOptionalParam(optionalParamInParam)) {
+          if (isOptionalParam(scope)) {
             // If it's already an optional parameter, forget about adding `undefined`
+            isOption = true;
             continue;
           }
 
           const errorMessage =
-            getErrorMessageForInvalidUnion(optionalParamInParam, type.unionTypes, t)
+            getErrorMessageForInvalidUnion(scope, type.unionTypes, t)
 
           if (Either.isLeft(errorMessage)) {
             return errorMessage;
@@ -340,13 +343,14 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
           // If undefined is part of optional parameter, this is already tagged
           // as optional and therefore we can ignore its undefined variant.
 
-          if (isOptionalParam(optionalParamInParam)) {
+          if (isOptionalParam(scope)) {
+            isOption = true
             // If it's already an optional parameter, forget about adding `undefined`
             continue;
           }
 
           const errorMessage =
-            getErrorMessageForInvalidUnion(optionalParamInParam, type.unionTypes, t)
+            getErrorMessageForInvalidUnion(scope, type.unionTypes, t)
 
           if (Either.isLeft(errorMessage)) {
             return errorMessage;
@@ -361,11 +365,18 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
           return result;
         }
 
+
+
         possibleTypes.push({
           name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
           typ: result.val,
         });
       }
+
+      if (possibleTypes.length === 1 && isOption) {
+        return Either.right(option(type.name, possibleTypes[0].typ!));
+      }
+
 
       return Either.right(variant(type.name, possibleTypes));
     }
@@ -598,8 +609,8 @@ export function fromTsTypeInternal(type: TsType, optionalParamInParam: Option.Op
   }
 }
 
-function isOptionalParam(param: Option.Option<TypeMappingScope>) {
-  return Option.isSome(param) && TypeMappingScope.isOptionalParam(param.val)
+function isOptionalParam(scope: Option.Option<TypeMappingScope>) {
+  return Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val)
 }
 
 function getScopeName(param: Option.Option<TypeMappingScope>): string | undefined {

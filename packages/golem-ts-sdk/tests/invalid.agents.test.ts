@@ -24,13 +24,8 @@ import * as Either from '../src/newTypes/either';
 const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
 
-
-
 describe('Invalid types in agents', () => {
-
-
   it('invalid types in method inputs will return error', () => {
-
     const dateType = getAnalysedTypeInFun1('date');
 
     const regExpType = getAnalysedTypeInFun1('regExp');
@@ -39,13 +34,9 @@ describe('Invalid types in agents', () => {
 
     const iterableType = getAnalysedTypeInFun1('iterable');
 
-    const asyncIteratorType = getAnalysedTypeInFun1(
-      'asyncIterator',
-    );
+    const asyncIteratorType = getAnalysedTypeInFun1('asyncIterator');
 
-    const asyncIterableType = getAnalysedTypeInFun1(
-      'asyncIterable',
-    );
+    const asyncIterableType = getAnalysedTypeInFun1('asyncIterable');
 
     const anyType = getAnalysedTypeInFun1('any');
 
@@ -61,15 +52,11 @@ describe('Invalid types in agents', () => {
 
     const nullType = getAnalysedTypeInFun1('nullParam');
 
-    const undefinedType = getAnalysedTypeInFun1(
-      'undefined',
-    );
+    const undefinedType = getAnalysedTypeInFun1('undefined');
 
     const voidType = getAnalysedTypeInFun1('voidParam');
 
-    const unionWithNullType = getAnalysedTypeInFun1(
-      'unionWithNull',
-    );
+    const unionWithNullType = getAnalysedTypeInFun1('unionWithNull');
 
     const objectWithInvalidUnion1 = getAnalysedTypeInFun1(
       'objectWithUndefinedUnion1',
@@ -218,12 +205,12 @@ describe('Invalid types in agents', () => {
   });
 });
 
-
-function getAnalysedTypeInFun1(parameterName: string): Either.Either<AnalysedType.AnalysedType, string> {
+function getAnalysedTypeInFun1(
+  parameterName: string,
+): Either.Either<AnalysedType.AnalysedType, string> {
   const type = fun1Params?.get(parameterName)!;
-  return AnalysedType.fromTsType(type, Option.some(TypeMappingScope.method(
-    'fun1',
-    parameterName,
-    type.optional
-  )))
+  return AnalysedType.fromTsType(
+    type,
+    Option.some(TypeMappingScope.method('fun1', parameterName, type.optional)),
+  );
 }

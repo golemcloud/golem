@@ -126,7 +126,9 @@ describe('TypeScript Promise type to AnalysedType', () => {
 describe('TypeScript Object to AnalysedType', () => {
   it('transforms object with different properties successfully to analysed type', () => {
     const interfaceType = getTestObjectType();
-    const analysed = Either.getOrThrow(AnalysedType.fromTsType(interfaceType, Option.none()));
+    const analysed = Either.getOrThrow(
+      AnalysedType.fromTsType(interfaceType, Option.none()),
+    );
 
     expect(analysed).toBeDefined();
     expect(analysed.kind).toBe('record');

@@ -724,8 +724,8 @@ function handleTypedArray<
     : Either.left(
         typeMismatchIn(tsValue, {
           kind: 'array',
-          element: { kind: 'number', optional: false},
-          optional: false
+          element: { kind: 'number', optional: false },
+          optional: false,
         }),
       );
 }
@@ -755,7 +755,7 @@ function handleArrayType(
       typeMismatchIn(tsValue, {
         kind: 'array',
         element: elementType,
-        optional: false
+        optional: false,
       }),
     );
   }

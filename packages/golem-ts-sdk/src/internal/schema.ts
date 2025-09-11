@@ -35,11 +35,16 @@ export function getConstructorDataSchema(
 
   const constructorParamTypes = Either.all(
     constructorParamInfos.map((paramInfo) =>
-      WitType.fromTsType(paramInfo.type, Option.some(TypeMappingScope.constructor(
-        agentClassName.value,
-        paramInfo.name,
-        paramInfo.type.optional
-      ))),
+      WitType.fromTsType(
+        paramInfo.type,
+        Option.some(
+          TypeMappingScope.constructor(
+            agentClassName.value,
+            paramInfo.name,
+            paramInfo.type.optional,
+          ),
+        ),
+      ),
     ),
   );
 
@@ -128,11 +133,16 @@ export function buildMethodInputSchema(
   const result = Either.all(
     Array.from(paramTypes).map((parameterInfo) =>
       Either.mapBoth(
-        convertToElementSchema(parameterInfo[1], Option.some(TypeMappingScope.method(
-          methodName,
-          parameterInfo[0],
-          parameterInfo[1].optional
-        ))),
+        convertToElementSchema(
+          parameterInfo[1],
+          Option.some(
+            TypeMappingScope.method(
+              methodName,
+              parameterInfo[0],
+              parameterInfo[1].optional,
+            ),
+          ),
+        ),
         (result) => {
           return [parameterInfo[0], result] as [string, ElementSchema];
         },
@@ -159,17 +169,20 @@ export function buildOutputSchema(
     return Either.right(undefinedSchema.val);
   }
 
-  return Either.map(convertToElementSchema(returnType, Option.none()), (result) => {
-    return {
-      tag: 'tuple',
-      val: [['return-value', result]],
-    };
-  });
+  return Either.map(
+    convertToElementSchema(returnType, Option.none()),
+    (result) => {
+      return {
+        tag: 'tuple',
+        val: [['return-value', result]],
+      };
+    },
+  );
 }
 
 function convertToElementSchema(
   type: Type.Type,
-  scope: Option.Option<TypeMappingScope>
+  scope: Option.Option<TypeMappingScope>,
 ): Either.Either<ElementSchema, string> {
   return Either.map(WitType.fromTsType(type, scope), (witType) => {
     return {
