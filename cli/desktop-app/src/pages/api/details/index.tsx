@@ -49,7 +49,7 @@ const APIDetails = () => {
 
   const routeToQuery = (route: HttpApiDefinitionRoute) => {
     navigate(
-      `/app/${appId}/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
+      `/app/${appId}/apis/${apiName}/version/${version}/routes/?path=${encodeURIComponent(route.path)}&method=${route.method}`,
     );
   };
   return (
