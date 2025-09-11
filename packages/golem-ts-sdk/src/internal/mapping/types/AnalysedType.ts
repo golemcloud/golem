@@ -236,6 +236,7 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
 }
 
 export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
+
   if (type.name === 'UnstructuredText') {
     // Special case for UnstructuredText
     const textDescriptor =

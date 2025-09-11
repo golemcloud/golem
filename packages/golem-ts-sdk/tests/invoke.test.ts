@@ -15,7 +15,7 @@
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
 import {
-  getDataValueFromWitValue,
+  getDataValueFromReturnValueWit,
   getWitValueFromDataValue,
 } from '../src/decorators';
 import * as Option from '../src/newTypes/option';
@@ -23,34 +23,34 @@ import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorR
 import { expect, it } from 'vitest';
 import * as GolemApiHostModule from 'golem:api/host@1.1.7';
 import {
-  AssistantAgentClassName,
-  AssistantAgentName,
-  WeatherAgentClassName,
-  WeatherAgentName,
+  ComplexAgentClassName,
+  ComplexAgentName,
+  SimpleAgentClassName,
+  SimpleAgentName,
 } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
 import { interfaceArb } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 
-test("AssistantAgent can be successfully initiated and the methods can be invoked'", () => {
+test("ComplexAgent can be successfully initiated and the methods can be invoked'", () => {
   fc.assert(
     fc.property(
       interfaceArb,
       fc.string(),
-      (weatherAgentConstructorValue, locationValue) => {
+      (complexAgentConstructorValue, locationValue) => {
         overrideSelfMetadataImpl();
 
-        const typeRegistry = TypeMetadata.get(AssistantAgentClassName.value);
+        const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
 
         if (!typeRegistry) {
-          throw new Error('WeatherAgent type metadata not found');
+          throw new Error('ComplexAgent type metadata not found');
         }
 
         const constructorInfo = typeRegistry.constructorArgs[0].type;
 
         const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValue(weatherAgentConstructorValue, constructorInfo),
+          WitValue.fromTsValue(complexAgentConstructorValue, constructorInfo),
           (error) =>
             new Error(
               `Failed to convert constructor arg to WitValue. ${error}`,
@@ -58,13 +58,13 @@ test("AssistantAgent can be successfully initiated and the methods can be invoke
         );
 
         const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(AssistantAgentName),
-          () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
+          AgentInitiatorRegistry.lookup(ComplexAgentName),
+          () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
         );
 
         const result = agentInitiator.initiate(
-          WeatherAgentName.value,
-          getDataValueFromWitValue(witValue),
+          SimpleAgentName.value,
+          getDataValueFromReturnValueWit(witValue),
         );
 
         expect(result.tag).toEqual('ok');
@@ -73,7 +73,7 @@ test("AssistantAgent can be successfully initiated and the methods can be invoke
   );
 });
 
-test('WeatherAgent can be successfully initiated and the methods can be invoked', () => {
+test('SimpleAgent can be successfully initiated and the methods can be invoked', () => {
   fc.assert(
     fc.property(
       fc.string(),
@@ -82,10 +82,10 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
       (arbData, locationValue, number) => {
         overrideSelfMetadataImpl();
 
-        const typeRegistry = TypeMetadata.get(WeatherAgentClassName.value);
+        const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
 
         if (!typeRegistry) {
-          throw new Error('WeatherAgent type metadata not found');
+          throw new Error('SimpleAgent type metadata not found');
         }
 
         const constructorInfo = typeRegistry.constructorArgs[0].type;
@@ -98,15 +98,15 @@ test('WeatherAgent can be successfully initiated and the methods can be invoked'
             ),
         );
 
-        const constructorParams = getDataValueFromWitValue(witValue);
+        const constructorParams = getDataValueFromReturnValueWit(witValue);
 
         const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(WeatherAgentName),
-          () => new Error('WeatherAgent not found in AgentInitiatorRegistry'),
+          AgentInitiatorRegistry.lookup(SimpleAgentName),
+          () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
         );
 
         const result = agentInitiator.initiate(
-          WeatherAgentName.value,
+          SimpleAgentName.value,
           constructorParams,
         );
 
@@ -220,7 +220,7 @@ function testInvoke(
   );
 
   resolvedAgent
-    .invoke(methodName, getDataValueFromWitValue(parameterWitValue))
+    .invoke(methodName, getDataValueFromReturnValueWit(parameterWitValue))
     .then((invokeResult) => {
       const invokeDataValue =
         invokeResult.tag === 'ok'

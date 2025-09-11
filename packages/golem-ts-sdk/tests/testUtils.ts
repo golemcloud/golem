@@ -20,16 +20,16 @@ import {
 import { AgentClassName } from '../src';
 import { AgentTypeName } from '../src/newTypes/agentTypeName';
 
-export const AssistantAgentClassName = new AgentClassName('AssistantAgent');
+export const ComplexAgentClassName = new AgentClassName('ComplexAgent');
 
-export const WeatherAgentClassName = new AgentClassName('WeatherAgent');
+export const SimpleAgentClassName = new AgentClassName('SimpleAgent');
 
-export const WeatherAgentName = AgentTypeName.fromAgentClassName(
-  WeatherAgentClassName,
+export const SimpleAgentName = AgentTypeName.fromAgentClassName(
+  SimpleAgentClassName,
 );
 
-export const AssistantAgentName = AgentTypeName.fromAgentClassName(
-  AssistantAgentClassName,
+export const ComplexAgentName = AgentTypeName.fromAgentClassName(
+  ComplexAgentClassName,
 );
 
 export function getAll() {

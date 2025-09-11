@@ -14,10 +14,16 @@
 
 import { agent, BaseAgent, UnstructuredText } from '../src';
 import * as Types from './testTypes';
-import { EitherX, EitherY, EitherZ, UnionOfLiterals } from './testTypes';
+import {
+  EitherX,
+  EitherY,
+  EitherZ,
+  UnionOfLiterals,
+  UnionType,
+} from './testTypes';
 
 @agent()
-class WeatherAgent extends BaseAgent {
+class SimpleAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;
@@ -54,16 +60,17 @@ export interface CustomData {
 }
 
 @agent()
-class AssistantAgent extends BaseAgent {
+class ComplexAgent extends BaseAgent {
   constructor(
     readonly testInterfaceType: Types.TestInterfaceType,
     optionalStringType?: string,
+    optionalUnionType?: UnionType,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;
   }
 
-  async getWeather(
+  async fun0(
     complexType: Types.ObjectComplexType,
     unionType: Types.UnionType,
     unionComplexType: Types.UnionComplexType,
@@ -81,6 +88,7 @@ class AssistantAgent extends BaseAgent {
     eitherYType: EitherY,
     eitherZType: EitherZ,
     optionalStringType?: string,
+    optionalUnionType?: UnionType,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

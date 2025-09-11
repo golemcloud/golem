@@ -329,7 +329,7 @@ export function agent() {
 
               return {
                 tag: 'ok',
-                val: getDataValueFromWitValue(returnValue.val),
+                val: getDataValueFromReturnValueWit(returnValue.val),
               };
             },
           };
@@ -417,7 +417,7 @@ export function getWitValueFromDataValue(
 
 // Why is return value a tuple with a single element?
 // why should it have a name?
-export function getDataValueFromWitValue(
+export function getDataValueFromReturnValueWit(
   witValue: WitValue.WitValue,
 ): DataValue {
   return {

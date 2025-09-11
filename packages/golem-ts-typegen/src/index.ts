@@ -46,7 +46,7 @@ export function getTypeFromTsMorph(
         name: "Float64Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
         optional: isOptional,
       };
@@ -56,7 +56,7 @@ export function getTypeFromTsMorph(
         name: "Float32Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
         optional: isOptional,
       };
@@ -66,7 +66,7 @@ export function getTypeFromTsMorph(
         name: "Int8Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
         optional: isOptional,
       };
@@ -76,7 +76,7 @@ export function getTypeFromTsMorph(
         name: "Uint8Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
         optional: isOptional,
       };
@@ -86,7 +86,7 @@ export function getTypeFromTsMorph(
         name: "Int16Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
         optional: isOptional,
       };
@@ -96,9 +96,9 @@ export function getTypeFromTsMorph(
         name: "Uint16Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
-        optional: isOptional
+        optional: isOptional,
       };
     case "Int32Array":
       return {
@@ -106,9 +106,9 @@ export function getTypeFromTsMorph(
         name: "Int32Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
-        optional: isOptional
+        optional: isOptional,
       };
     case "Uint32Array":
       return {
@@ -116,9 +116,9 @@ export function getTypeFromTsMorph(
         name: "Uint32Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
-        optional: isOptional
+        optional: isOptional,
       };
     case "BigInt64Array":
       return {
@@ -126,9 +126,9 @@ export function getTypeFromTsMorph(
         name: "BigInt64Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
-        optional: isOptional
+        optional: isOptional,
       };
     case "BigUint64Array":
       return {
@@ -136,9 +136,9 @@ export function getTypeFromTsMorph(
         name: "BigUint64Array",
         element: {
           kind: "number",
-          optional: false
+          optional: false,
         },
-        optional: isOptional
+        optional: isOptional,
       };
   }
 
@@ -189,7 +189,12 @@ export function getTypeFromTsMorph(
 
   if (type.isLiteral()) {
     const literalValue = type.getLiteralValue()?.toString();
-    return { kind: "literal", name: aliasName, literalValue: literalValue, optional: isOptional };
+    return {
+      kind: "literal",
+      name: aliasName,
+      literalValue: literalValue,
+      optional: isOptional,
+    };
   }
 
   if (type.isTuple()) {
@@ -222,7 +227,9 @@ export function getTypeFromTsMorph(
   }
 
   if (type.isUnion()) {
-    const unionTypes = type.getUnionTypes().map((t) => getTypeFromTsMorph(t, false));
+    const unionTypes = type
+      .getUnionTypes()
+      .map((t) => getTypeFromTsMorph(t, false));
 
     return {
       kind: "union",
@@ -338,7 +345,7 @@ export function getTypeFromTsMorph(
   }
 
   if (type.isNull()) {
-    return { kind: "null", name: aliasName , optional: isOptional };
+    return { kind: "null", name: aliasName, optional: isOptional };
   }
 
   if (type.isBigInt()) {
@@ -357,7 +364,11 @@ export function getTypeFromTsMorph(
     return { kind: "string", name: aliasName, optional: isOptional };
   }
 
-  return { kind: "others", name: aliasName ?? type.getText(), optional: isOptional };
+  return {
+    kind: "others",
+    name: aliasName ?? type.getText(),
+    optional: isOptional,
+  };
 }
 
 export function getRawTypeName(type: TsMorphType): string | undefined {
@@ -518,7 +529,10 @@ export function updateMetadataFromSourceFiles(
           }),
         );
 
-        const returnType = getTypeFromTsMorph(callSignature.getReturnType(), false);
+        const returnType = getTypeFromTsMorph(
+          callSignature.getReturnType(),
+          false,
+        );
         methods.set(publicArrow.getName(), { methodParams, returnType });
       }
 

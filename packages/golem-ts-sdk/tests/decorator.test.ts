@@ -15,58 +15,144 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
-import { AssistantAgentClassName, WeatherAgentClassName } from './testUtils';
-import { AnalysedType } from '../src/internal/mapping/types/AnalysedType';
-import { AgentMethod, AgentType, DataSchema } from 'golem:agent/common';
+import { ComplexAgentClassName, SimpleAgentClassName } from './testUtils';
+import { AgentType, DataSchema } from 'golem:agent/common';
+import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
 // If the sample agents in the set up changes, this test should fail
+describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
 
-test('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
-  const assistantAgent: AgentType = Option.getOrThrowWith(
-    AgentTypeRegistry.lookup(AssistantAgentClassName),
+  const complexAgent: AgentType = Option.getOrThrowWith(
+    AgentTypeRegistry.lookup(ComplexAgentClassName),
     () => new Error('AssistantAgent not found in AgentTypeRegistry'),
   );
 
-  const weatherAgent = Option.getOrThrowWith(
-    AgentTypeRegistry.lookup(WeatherAgentClassName),
-    () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+  const complexAgentConstructor = complexAgent.constructor;
+
+  const complexAgentMethod = complexAgent.methods.find(
+    (method) => method.name === 'fun0',
   );
 
-  const getWeatherAgentMethod = assistantAgent.methods.find(
-    (method) => method.name === 'getWeather',
-  );
+  it('should handle optional string in constructor', () => {
+    const optionalStringInGetWeather = getWitType(
+      complexAgentConstructor.inputSchema,
+      'optionalStringType',
+    );
 
-  const optionalWitInMethod = getWitType(
-    getWeatherAgentMethod!.inputSchema,
-    'optionalStringType',
-  );
-
-  expect(optionalWitInMethod).toEqual({
-    nodes: [
-      { type: { tag: 'option-type', val: 1 } },
-      { type: { tag: 'prim-string-type' } },
-    ],
+    expect(optionalStringInGetWeather).toEqual({
+      nodes: [
+        { type: { tag: 'option-type', val: 1 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    });
   });
 
-  const assistantAgentConstructor = assistantAgent.constructor;
+  it('should handle optional string in method', () => {
+    const optionalStringInGetWeather = getWitType(
+      complexAgentMethod!.inputSchema,
+      'optionalStringType',
+    );
 
-  const optionalWitInConstructor = getWitType(
-    assistantAgentConstructor.inputSchema,
-    'optionalStringType',
-  );
-
-  expect(optionalWitInConstructor).toEqual({
-    nodes: [
-      { type: { tag: 'option-type', val: 1 } },
-      { type: { tag: 'prim-string-type' } },
-    ],
+    expect(optionalStringInGetWeather).toEqual({
+      nodes: [
+        { type: { tag: 'option-type', val: 1 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    });
   });
 
-  expect(assistantAgent.methods.length).toEqual(22);
-  expect(assistantAgent.constructor.inputSchema.val.length).toEqual(2);
-  expect(weatherAgent.methods.length).toEqual(6);
-  expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);
+  it('should handle optional union in constructor', () => {
+    const optionalUnion = getWitType(
+      complexAgentConstructor.inputSchema,
+      'optionalUnionType',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['type-first', 1],
+              ['type-second', 2],
+              ['type-third', 3],
+              ['type-fourth', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-bool-type' } },
+        {
+          name: 'object-type',
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 1],
+              ['b', 2],
+              ['c', 3],
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(optionalUnion).toEqual(expected);
+  });
+
+  it('should handle optional union in method', () => {
+    const optionalUnion = getWitType(
+      complexAgentMethod!.inputSchema,
+      'optionalUnionType',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['type-first', 1],
+              ['type-second', 2],
+              ['type-third', 3],
+              ['type-fourth', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-bool-type' } },
+        {
+          name: 'object-type',
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 1],
+              ['b', 2],
+              ['c', 3],
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(optionalUnion).toEqual(expected);
+  });
+
+  it ('captures all methods and constructor with correct number of parameters', () => {
+    const weatherAgent = Option.getOrThrowWith(
+      AgentTypeRegistry.lookup(SimpleAgentClassName),
+      () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+    );
+
+    expect(complexAgent.methods.length).toEqual(22);
+    expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
+    expect(weatherAgent.methods.length).toEqual(6);
+    expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);
+
+  })
+
 });
 
 function getWitType(dataSchema: DataSchema, parameterName: string) {
@@ -74,7 +160,7 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
 
   if (!optionalParamInput) {
     throw new Error(
-      `${parameterName} not found in scheme ${JSON.stringify(dataSchema)}`,
+      `${parameterName} not found in scheme ${util.format(dataSchema)}`,
     );
   }
 
@@ -87,7 +173,7 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
 
   if (!witTypeOpt) {
     throw new Error(
-      `Test failed - ${parameterName} is not of component-model type in getWeather function in ${AssistantAgentClassName.value}`,
+      `Test failed - ${parameterName} is not of component-model type in getWeather function in ${ComplexAgentClassName.value}`,
     );
   }
 
