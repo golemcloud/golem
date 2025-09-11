@@ -12,18 +12,28 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { ClassMetadata, Type, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import {
+  ClassMetadata,
+  Type,
+  TypeMetadata,
+} from '@golemcloud/golem-ts-types-core';
 import { WasmRpc, WorkerId } from 'golem:rpc/types@0.2.2';
 import * as Either from '../newTypes/either';
 import * as WitValue from './mapping/values/WitValue';
 import * as Option from '../newTypes/option';
-import { getAgentType, makeAgentId, RegisteredAgentType } from 'golem:agent/host';
+import {
+  getAgentType,
+  makeAgentId,
+  RegisteredAgentType,
+} from 'golem:agent/host';
 import { AgentTypeName } from '../newTypes/agentTypeName';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { DataValue, ElementValue } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
 
-export function getRemoteClient<T extends new (...args: any[]) => any>(ctor: T) {
+export function getRemoteClient<T extends new (...args: any[]) => any>(
+  ctor: T,
+) {
   return (...args: any[]) => {
     const instance = new ctor(...args);
 
@@ -157,7 +167,8 @@ function getWorkerId(
     return Either.left(`There are no components implementing ${agentTypeName}`);
   }
 
-  const registeredAgentType: RegisteredAgentType = optionalRegisteredAgentType.val;
+  const registeredAgentType: RegisteredAgentType =
+    optionalRegisteredAgentType.val;
 
   const constructorParamInfo = classMetadata.constructorArgs;
 

@@ -31,7 +31,20 @@ import { AgentClassName } from '../src';
 
 const base = 'AssistantAgent';
 
-const specialChars = ['$', '_', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'];
+const specialChars = [
+  '$',
+  '_',
+  '0',
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  '9',
+];
 
 //Ts class names can have $ and _ and digits
 export const agentClassNameArb: fc.Arbitrary<AgentClassName> = fc
@@ -193,7 +206,9 @@ export const baseArb = fc.record({
 
 const optionalPropArb = fc
   .option(fc.integer())
-  .map((opt) => (opt === undefined || opt === null ? {} : { optionalProp: opt }));
+  .map((opt) =>
+    opt === undefined || opt === null ? {} : { optionalProp: opt },
+  );
 
 export const interfaceArb: fc.Arbitrary<TestInterfaceType> = fc
   .tuple(baseArb, optionalPropArb)

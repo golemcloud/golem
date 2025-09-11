@@ -173,7 +173,9 @@ export namespace Result {
 
   export function fromNullish(value: null): Result.Err<null>;
   export function fromNullish(value: undefined): Result.Err<undefined>;
-  export function fromNullish(value: null | undefined): Result.Err<null | undefined>;
+  export function fromNullish(
+    value: null | undefined,
+  ): Result.Err<null | undefined>;
   export function fromNullish<T extends {}>(value: T): Result.Ok<T>;
   export function fromNullish<T>(value: T | null): Result<T, null>;
   export function fromNullish<T>(value: T | undefined): Result<T, undefined>;
@@ -231,7 +233,8 @@ function unwrapErr<T>(this: Result.Ok<T>): never;
 function unwrapErr<E>(this: Result.Err<E>): E;
 function unwrapErr<T, E>(this: Result<T, E>): E;
 function unwrapErr<T, E>(this: Result<T, E>): E {
-  if (this.isOk()) throw new TypeError(`unwrapErr·called·on·Ok·result:·${this.val}`);
+  if (this.isOk())
+    throw new TypeError(`unwrapErr·called·on·Ok·result:·${this.val}`);
   else return this.val;
 }
 
@@ -275,10 +278,22 @@ function map<T, E, T2>(this: Result<T, E>, f: (value: T) => T2): Result<T2, E> {
   else return Result.ok(f(this.val));
 }
 
-function mapError<T, E, E2>(this: Result.Ok<T>, f: (error: E) => E2): Result.Ok<T>;
-function mapError<E, E2>(this: Result.Err<E>, f: (error: E) => E2): Result.Err<E2>;
-function mapError<T, E, E2>(this: Result<T, E>, f: (error: E) => E2): Result<T, E2>;
-function mapError<T, E, E2>(this: Result<T, E>, f: (error: E) => E2): Result<T, E2> {
+function mapError<T, E, E2>(
+  this: Result.Ok<T>,
+  f: (error: E) => E2,
+): Result.Ok<T>;
+function mapError<E, E2>(
+  this: Result.Err<E>,
+  f: (error: E) => E2,
+): Result.Err<E2>;
+function mapError<T, E, E2>(
+  this: Result<T, E>,
+  f: (error: E) => E2,
+): Result<T, E2>;
+function mapError<T, E, E2>(
+  this: Result<T, E>,
+  f: (error: E) => E2,
+): Result<T, E2> {
   if (this.isOk()) return this;
   else return Result.err(f(this.val));
 }
@@ -319,7 +334,10 @@ function flatMap<T, E, T2, E2>(
   this: Result<T, E>,
   f: (value: T) => Result<T2, E2>,
 ): Result<T2, E | E2>;
-function flatMap<T, E, T2, E2>(this: Result<T, E>, f: (value: T) => Result<T2, E2>) {
+function flatMap<T, E, T2, E2>(
+  this: Result<T, E>,
+  f: (value: T) => Result<T2, E2>,
+) {
   if (this.isErr()) return this;
   else return f(this.val);
 }

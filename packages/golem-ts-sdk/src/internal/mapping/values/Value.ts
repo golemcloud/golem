@@ -135,7 +135,10 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
         return {
           kind: 'result',
           value: {
-            ok: res.val !== undefined ? buildTree(nodes[res.val], nodes) : undefined,
+            ok:
+              res.val !== undefined
+                ? buildTree(nodes[res.val], nodes)
+                : undefined,
           },
         };
       } else {
@@ -143,7 +146,9 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
           kind: 'result',
           value: {
             err:
-              res.val !== undefined ? buildTree(nodes[res.val], nodes) : undefined,
+              res.val !== undefined
+                ? buildTree(nodes[res.val], nodes)
+                : undefined,
           },
         };
       }
@@ -686,7 +691,9 @@ export function fromTsValue(
       }
 
     case 'alias':
-      return Either.left(unhandledTypeError(tsValue, Option.none(), Option.none()));
+      return Either.left(
+        unhandledTypeError(tsValue, Option.none(), Option.none()),
+      );
 
     case 'others':
       return Either.left(
@@ -1001,7 +1008,11 @@ function matchesArray(value: any, elementType: Type.Type): boolean {
   return value.every((item) => matchesType(item, elementType));
 }
 
-function handleObjectMatch(value: any, type: Type.Type, props: Symbol[]): boolean {
+function handleObjectMatch(
+  value: any,
+  type: Type.Type,
+  props: Symbol[],
+): boolean {
   if (typeof value !== 'object' || value === null) return false;
 
   const valueKeys = Object.keys(value);
@@ -1088,7 +1099,9 @@ export function toTsValue(value: Value, type: Type.Type): any {
           }
         case 'Uint8ClampedArray':
           if (value.kind === 'list') {
-            return new Uint8ClampedArray(value.value.map((v) => convertToNumber(v)));
+            return new Uint8ClampedArray(
+              value.value.map((v) => convertToNumber(v)),
+            );
           } else {
             throw new Error(typeMismatchOut(value, 'Uint8ClampedArray'));
           }
@@ -1137,13 +1150,17 @@ export function toTsValue(value: Value, type: Type.Type): any {
           }
         case 'BigInt64Array':
           if (value.kind === 'list') {
-            return new BigInt64Array(value.value.map((v) => convertToBigInt(v)));
+            return new BigInt64Array(
+              value.value.map((v) => convertToBigInt(v)),
+            );
           } else {
             throw new Error(typeMismatchOut(value, 'BigInt64Array'));
           }
         case 'BigUint64Array':
           if (value.kind === 'list') {
-            return new BigUint64Array(value.value.map((v) => convertToBigInt(v)));
+            return new BigUint64Array(
+              value.value.map((v) => convertToBigInt(v)),
+            );
           } else {
             throw new Error(typeMismatchOut(value, 'BigUint64Array'));
           }
@@ -1206,7 +1223,11 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
     case 'class':
       throw new Error(
-        unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()),
+        unhandledTypeError(
+          value,
+          Option.some(name ?? 'anonymous'),
+          Option.none(),
+        ),
       );
 
     case 'interface':
@@ -1269,12 +1290,20 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
     case 'alias':
       throw new Error(
-        unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()),
+        unhandledTypeError(
+          value,
+          Option.some(name ?? 'anonymous'),
+          Option.none(),
+        ),
       );
 
     case 'others':
       throw new Error(
-        unhandledTypeError(value, Option.some(name ?? 'anonymous'), Option.none()),
+        unhandledTypeError(
+          value,
+          Option.some(name ?? 'anonymous'),
+          Option.none(),
+        ),
       );
   }
 }

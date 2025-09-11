@@ -14,7 +14,13 @@
 
 import { agent, BaseAgent, UnstructuredText } from '../src';
 import * as Types from './testTypes';
-import { EitherX, EitherY, EitherZ, UnionOfLiterals, UnionType } from './testTypes';
+import {
+  EitherX,
+  EitherY,
+  EitherZ,
+  UnionOfLiterals,
+  UnionType,
+} from './testTypes';
 
 @agent()
 class SimpleAgent extends BaseAgent {

@@ -34,7 +34,10 @@ export function missingObjectKey(key: string, tsValue: any): string {
 }
 
 // tsValue does not match any of the union types when converting from TS to WIT
-export function unionTypeMatchError(unionTypes: Type.Type[], tsValue: any): string {
+export function unionTypeMatchError(
+  unionTypes: Type.Type[],
+  tsValue: any,
+): string {
   return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${unionTypes.map((t) => t.name).join(', ')}`;
 }
 

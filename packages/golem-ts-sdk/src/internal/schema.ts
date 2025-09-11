@@ -30,7 +30,8 @@ export function getConstructorDataSchema(
   agentClassName: AgentClassName,
   classType: ClassMetadata,
 ): Either.Either<DataSchema, string> {
-  const constructorParamInfos: readonly ConstructorArg[] = classType.constructorArgs;
+  const constructorParamInfos: readonly ConstructorArg[] =
+    classType.constructorArgs;
 
   const constructorParamTypes = Either.all(
     constructorParamInfos.map((paramInfo) =>
@@ -76,7 +77,9 @@ export function getAgentMethodSchema(
   agentClassName: AgentClassName,
 ): Either.Either<AgentMethod[], string> {
   if (!classMetadata) {
-    return Either.left(`No metadata found for agent class ${agentClassName.value}`);
+    return Either.left(
+      `No metadata found for agent class ${agentClassName.value}`,
+    );
   }
 
   const methodMetadata = Array.from(classMetadata.methods.entries());
@@ -91,7 +94,8 @@ export function getAgentMethodSchema(
       const returnType: Type.Type = signature.returnType;
 
       const baseMeta =
-        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ?? {};
+        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
+        {};
 
       const inputSchemaEither = buildMethodInputSchema(methodName, parameters);
 
@@ -165,12 +169,15 @@ export function buildOutputSchema(
     return Either.right(undefinedSchema.val);
   }
 
-  return Either.map(convertToElementSchema(returnType, Option.none()), (result) => {
-    return {
-      tag: 'tuple',
-      val: [['return-value', result]],
-    };
-  });
+  return Either.map(
+    convertToElementSchema(returnType, Option.none()),
+    (result) => {
+      return {
+        tag: 'tuple',
+        val: [['return-value', result]],
+      };
+    },
+  );
 }
 
 function convertToElementSchema(

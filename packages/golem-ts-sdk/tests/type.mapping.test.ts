@@ -856,7 +856,9 @@ function checkListFields(fields: any[]) {
 }
 
 function checkListObjectFields(fields: any[]) {
-  const listObjectFields = fields.filter((f) => f.name.startsWith('listObjectProp'));
+  const listObjectFields = fields.filter((f) =>
+    f.name.startsWith('listObjectProp'),
+  );
   expect(listObjectFields.length).toBeGreaterThan(0);
 
   listObjectFields.forEach((field) => {
@@ -942,7 +944,9 @@ function checkMapFields(fields: any[]) {
 }
 
 function checkObjectComplexFields(fields: any[]) {
-  const objectFields = fields.filter((f) => f.name.startsWith('objectComplexProp'));
+  const objectFields = fields.filter((f) =>
+    f.name.startsWith('objectComplexProp'),
+  );
   expect(objectFields.length).toBeGreaterThan(0);
 
   const expected = [

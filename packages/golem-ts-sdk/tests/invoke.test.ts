@@ -55,12 +55,14 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
 
         const interfaceWit = Either.getOrThrowWith(
           WitValue.fromTsValue(interfaceValue, arg0),
-          (error) => new Error(`Failed to convert interface to WitValue. ${error}`),
+          (error) =>
+            new Error(`Failed to convert interface to WitValue. ${error}`),
         );
 
         const stringWit = Either.getOrThrowWith(
           WitValue.fromTsValue(stringValue, arg1),
-          (error) => new Error(`Failed to convert interface to WitValue. ${error}`),
+          (error) =>
+            new Error(`Failed to convert interface to WitValue. ${error}`),
         );
 
         const unionWit = Either.getOrThrowWith(
@@ -82,7 +84,10 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
           () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(ComplexAgentName.value, dataValue);
+        const result = agentInitiator.initiate(
+          ComplexAgentName.value,
+          dataValue,
+        );
 
         expect(result.tag).toEqual('ok');
       },
@@ -110,7 +115,9 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
         const witValue = Either.getOrThrowWith(
           WitValue.fromTsValue(arbData, constructorInfo),
           (error) =>
-            new Error(`Failed to convert constructor arg to WitValue. ${error}`),
+            new Error(
+              `Failed to convert constructor arg to WitValue. ${error}`,
+            ),
         );
 
         const constructorParams = getDataValueFromReturnValueWit(witValue);
@@ -224,7 +231,9 @@ function testInvoke(
   const parameterType = parametersInfo.get(parameterName);
 
   if (!parameterType) {
-    throw new Error('Parameter location not found in method getWeather metadata');
+    throw new Error(
+      'Parameter location not found in method getWeather metadata',
+    );
   }
 
   const parameterWitValue = Either.getOrThrowWith(

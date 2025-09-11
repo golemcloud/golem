@@ -52,7 +52,10 @@ export function mapOr<T, U>(opt: Option<T>, def: U, f: (t: T) => U): U {
   return opt.tag === 'some' ? f(opt.val) : def;
 }
 
-export function andThen<T, U>(opt: Option<T>, f: (t: T) => Option<U>): Option<U> {
+export function andThen<T, U>(
+  opt: Option<T>,
+  f: (t: T) => Option<U>,
+): Option<U> {
   return opt.tag === 'some' ? f(opt.val) : none();
 }
 
@@ -61,7 +64,9 @@ export function zipWith<A, B, C>(
   ob: Option<B>,
   f: (a: A, b: B) => C,
 ): Option<C> {
-  return oa.tag === 'some' && ob.tag === 'some' ? some(f(oa.val, ob.val)) : none();
+  return oa.tag === 'some' && ob.tag === 'some'
+    ? some(f(oa.val, ob.val))
+    : none();
 }
 
 export function all<T>(opts: Option<T>[]): Option<T[]> {

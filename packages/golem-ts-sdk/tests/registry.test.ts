@@ -84,7 +84,11 @@ describe('AgentType look up', () => {
   it('AgentMethodMetadataRegistry should return method details when looking up by string representation of agentClassName', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
 
-    AgentMethodMetadataRegistry.setDescription(agentClassName, 'foo', 'sample desc');
+    AgentMethodMetadataRegistry.setDescription(
+      agentClassName,
+      'foo',
+      'sample desc',
+    );
 
     AgentMethodMetadataRegistry.setPromptName(
       agentClassName,

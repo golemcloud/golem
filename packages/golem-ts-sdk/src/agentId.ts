@@ -34,9 +34,14 @@ export class AgentId {
 
   // !!!! This is only a placeholder implementation (simplest)
   // as we are yet to decide on how to handle values of complex types
-  static fromAgentTypeAndParams(agentType: AgentTypeName, params: any[]): AgentId {
+  static fromAgentTypeAndParams(
+    agentType: AgentTypeName,
+    params: any[],
+  ): AgentId {
     // Only placeholder implementation
-    const paramsConcatenated: string[] = params.map((param) => param.toString());
+    const paramsConcatenated: string[] = params.map((param) =>
+      param.toString(),
+    );
 
     const param = paramsConcatenated.join(',');
     return new AgentId(

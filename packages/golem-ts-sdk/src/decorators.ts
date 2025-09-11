@@ -22,7 +22,10 @@ import { BaseAgent } from './baseAgent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as WitValue from './internal/mapping/values/WitValue';
 import * as Either from './newTypes/either';
-import { getAgentMethodSchema, getConstructorDataSchema } from './internal/schema';
+import {
+  getAgentMethodSchema,
+  getConstructorDataSchema,
+} from './internal/schema';
 import * as Option from './newTypes/option';
 import { AgentMethodMetadataRegistry } from './internal/registry/agentMethodMetadataRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
@@ -146,7 +149,10 @@ export function agent() {
       },
     );
 
-    const methodSchemaEither = getAgentMethodSchema(classMetadata, agentClassName);
+    const methodSchemaEither = getAgentMethodSchema(
+      classMetadata,
+      agentClassName,
+    );
 
     // Note: Either.getOrThrowWith doesn't seem to work within the decorator context
     if (Either.isLeft(methodSchemaEither)) {
@@ -182,7 +188,9 @@ export function agent() {
         initiate: (agentName: string, constructorParams: DataValue) => {
           const constructorInfo = classMetadata.constructorArgs;
 
-          const constructorParamTypes: Type[] = constructorInfo.map((p) => p.type);
+          const constructorParamTypes: Type[] = constructorInfo.map(
+            (p) => p.type,
+          );
 
           const constructorParamWitValues =
             getWitValueFromDataValue(constructorParams);
@@ -280,10 +288,14 @@ export function agent() {
 
               const result = await fn.apply(instance, convertedArgs);
 
-              const methodDef = agentType.methods.find((m) => m.name === method);
+              const methodDef = agentType.methods.find(
+                (m) => m.name === method,
+              );
 
               if (!methodDef) {
-                const entriesAsStrings = Array.from(AgentTypeRegistry.entries()).map(
+                const entriesAsStrings = Array.from(
+                  AgentTypeRegistry.entries(),
+                ).map(
                   ([key, value]) =>
                     `Key: ${key}, Value: ${JSON.stringify(value, null, 2)}`,
                 );
@@ -352,7 +364,11 @@ export function agent() {
 export function prompt(prompt: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodMetadataRegistry.setPromptName(agentClassName, propertyKey, prompt);
+    AgentMethodMetadataRegistry.setPromptName(
+      agentClassName,
+      propertyKey,
+      prompt,
+    );
   };
 }
 
@@ -383,7 +399,9 @@ export function description(description: string) {
 }
 
 // FIXME: in the next version, handle all dataValues
-export function getWitValueFromDataValue(dataValue: DataValue): WitValue.WitValue[] {
+export function getWitValueFromDataValue(
+  dataValue: DataValue,
+): WitValue.WitValue[] {
   if (dataValue.tag === 'tuple') {
     return dataValue.val.map((elem) => {
       if (elem.tag === 'component-model') {
