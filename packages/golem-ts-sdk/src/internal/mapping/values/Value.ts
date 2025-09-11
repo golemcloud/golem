@@ -447,6 +447,22 @@ export function fromTsValue(
   tsValue: any,
   type: Type.Type,
 ): Either.Either<Value, string> {
+  const result = fromTsValueInternal(tsValue, type);
+
+  if (type.optional) {
+    return Either.map(result, (val) => ({
+      kind: 'option',
+      value: val,
+    }));
+  }
+
+  return fromTsValueInternal(tsValue, type);
+}
+
+function fromTsValueInternal(
+  tsValue: any,
+  type: Type.Type,
+): Either.Either<Value, string> {
   if (type.name === 'String') {
     throw new Error(
       unhandledTypeError(
