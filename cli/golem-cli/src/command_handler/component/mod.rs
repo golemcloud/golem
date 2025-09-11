@@ -344,9 +344,9 @@ impl ComponentCommandHandler {
                 .map_service_error()?;
 
             component_views.extend(
-                results
-                    .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta))),
+                results.into_iter().map(|meta| {
+                    ComponentView::new_wit_style(show_sensitive, Component::from(meta))
+                }),
             );
         } else {
             for component_name in selected_component_names.component_names.iter() {
@@ -362,7 +362,7 @@ impl ComponentCommandHandler {
                     .await
                     .map_service_error()?
                     .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta)))
+                    .map(|meta| ComponentView::new_wit_style(show_sensitive, Component::from(meta)))
                     .collect::<Vec<_>>();
 
                 if results.is_empty() {
@@ -435,7 +435,10 @@ impl ComponentCommandHandler {
                 .await?;
 
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new_wit_style(
+                    self.ctx.show_sensitive(),
+                    component,
+                ));
             }
         }
 
@@ -811,12 +814,9 @@ impl ComponentCommandHandler {
                     Component::from(component)
                 };
 
-                self.ctx
-                    .log_handler()
-                    .log_view(&ComponentUpdateView(ComponentView::new(
-                        self.ctx.show_sensitive(),
-                        component.clone(),
-                    )));
+                self.ctx.log_handler().log_view(&ComponentUpdateView(
+                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
+                ));
                 component
             }
             None => {
@@ -853,12 +853,9 @@ impl ComponentCommandHandler {
                     Component::from(component)
                 };
 
-                self.ctx
-                    .log_handler()
-                    .log_view(&ComponentCreateView(ComponentView::new(
-                        self.ctx.show_sensitive(),
-                        component.clone(),
-                    )));
+                self.ctx.log_handler().log_view(&ComponentCreateView(
+                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
+                ));
 
                 component
             }
