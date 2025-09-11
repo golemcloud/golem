@@ -15,7 +15,7 @@
 use crate::app::build::task_result_marker::{
     GetServerComponentHash, GetServerIfsFileHash, TaskResultMarker,
 };
-use crate::app::context::ApplicationContext;
+use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
@@ -44,6 +44,7 @@ use crate::model::{
     AccountDetails, ComponentName, ComponentNameMatchKind, ComponentVersionSelection,
     ProjectRefAndId, ProjectReference, SelectedComponents, WorkerUpdateMode,
 };
+use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient;
 use golem_client::model::ComponentQuery;
@@ -343,9 +344,9 @@ impl ComponentCommandHandler {
                 .map_service_error()?;
 
             component_views.extend(
-                results
-                    .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta))),
+                results.into_iter().map(|meta| {
+                    ComponentView::new_wit_style(show_sensitive, Component::from(meta))
+                }),
             );
         } else {
             for component_name in selected_component_names.component_names.iter() {
@@ -361,7 +362,7 @@ impl ComponentCommandHandler {
                     .await
                     .map_service_error()?
                     .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta)))
+                    .map(|meta| ComponentView::new_wit_style(show_sensitive, Component::from(meta)))
                     .collect::<Vec<_>>();
 
                 if results.is_empty() {
@@ -430,7 +431,10 @@ impl ComponentCommandHandler {
                 .await?;
 
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new_wit_style(
+                    self.ctx.show_sensitive(),
+                    component,
+                ));
             }
         }
 
@@ -806,12 +810,9 @@ impl ComponentCommandHandler {
                     Component::from(component)
                 };
 
-                self.ctx
-                    .log_handler()
-                    .log_view(&ComponentUpdateView(ComponentView::new(
-                        self.ctx.show_sensitive(),
-                        component.clone(),
-                    )));
+                self.ctx.log_handler().log_view(&ComponentUpdateView(
+                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
+                ));
                 component
             }
             None => {
@@ -848,12 +849,9 @@ impl ComponentCommandHandler {
                     Component::from(component)
                 };
 
-                self.ctx
-                    .log_handler()
-                    .log_view(&ComponentCreateView(ComponentView::new(
-                        self.ctx.show_sensitive(),
-                        component.clone(),
-                    )));
+                self.ctx.log_handler().log_view(&ComponentCreateView(
+                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
+                ));
 
                 component
             }
@@ -1620,7 +1618,9 @@ fn component_deploy_properties(
         .as_deployable_component_type()
         .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
     let files = component_properties.files.clone();
-    let env = (!component_properties.env.is_empty()).then(|| component_properties.env.clone());
+    let env = (!component_properties.env.is_empty())
+        .then(|| resolve_env_vars(component_name, &component_properties.env))
+        .transpose()?;
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
@@ -1685,4 +1685,59 @@ fn app_component_dynamic_linking(
             })),
         }))
     }
+}
+
+fn resolve_env_vars(
+    component_name: &AppComponentName,
+    env: &HashMap<String, String>,
+) -> anyhow::Result<HashMap<String, String>> {
+    let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
+
+    let minijinja_env = {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        env
+    };
+
+    let mut resolved_env = HashMap::with_capacity(env.len());
+    let mut validation = ValidationBuilder::new();
+    validation.with_context(
+        vec![("component", component_name.to_string())],
+        |validation| {
+            for key in env.keys().sorted() {
+                let value = env.get(key).unwrap();
+                match minijinja_env.render_str(value, &proc_env_vars) {
+                    Ok(resolved_value) => {
+                        resolved_env.insert(key.clone(), resolved_value);
+                    }
+                    Err(err) => {
+                        validation.with_context(
+                            vec![
+                                ("key", key.to_string()),
+                                ("template", value.to_string()),
+                                (
+                                    "error",
+                                    err.to_string().log_color_error_highlight().to_string(),
+                                ),
+                            ],
+                            |validation| {
+                                validation.add_error(
+                                    "Failed to substitute environment variable".to_string(),
+                                )
+                            },
+                        );
+                    }
+                };
+            }
+        },
+    );
+
+    to_anyhow(
+        &format!(
+            "Failed to prepare environment variables for component: {}",
+            component_name.as_str().log_color_highlight()
+        ),
+        validation.build(resolved_env),
+        None,
+    )
 }

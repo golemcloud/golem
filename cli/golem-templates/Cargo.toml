@@ -7,7 +7,6 @@ repository = "https://github.com/golemcloud/golem"
 description = "Golem templates"
 license-file = "../../LICENSE"
 
-default-run = "golem-templates-test-cli"
 autotests = false
 
 [dependencies]
@@ -39,14 +38,4 @@ assert2 = { workspace = true }
 
 [lib]
 path = "src/lib.rs"
-harness = false
-
-[[bin]]
-name = "golem-templates-test-cli"
-path = "src/test/main.rs"
-test = false
-
-[[test]]
-name = "integration"
-path = "tests/integration.rs"
 harness = false
