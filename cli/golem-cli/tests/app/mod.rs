@@ -25,7 +25,7 @@ use heck::ToKebabCase;
 use indoc::indoc;
 use itertools::Itertools;
 use nanoid::nanoid;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -55,9 +55,10 @@ mod cmd {
 }
 
 mod flag {
-    pub static FORCE_BUILD: &str = "--force-build";
-    pub static YES: &str = "--yes";
     pub static DEV_MODE: &str = "--dev-mode";
+    pub static FORCE_BUILD: &str = "--force-build";
+    pub static SHOW_SENSITIVE: &str = "--show-sensitive";
+    pub static YES: &str = "--yes";
 }
 
 mod pattern {
@@ -1008,6 +1009,77 @@ async fn test_common_dep_plugs_errors() {
     assert!(outputs.stderr_contains("Library golem:web-search/web-search@1.0.0 called without being linked with an implementation"))
 }
 
+#[test]
+async fn test_component_env_var_substitution() {
+    let mut ctx = TestContext::new();
+    let app_name = "env_var_substitution";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
+        .await;
+    assert!(outputs.success());
+
+    let component_manifest_path = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-weather-agent")
+            .join("golem.yaml"),
+    );
+
+    fs::write_str(
+        &component_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent:
+                template: ts
+                env:
+                  NORMAL: 'REALLY'
+                  VERY_CUSTOM_ENV_VAR_SECRET_1: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}'
+                  VERY_CUSTOM_ENV_VAR_SECRET_2: '{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}'
+                  COMPOSED: '{{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}'
+        "# },
+    )
+    .unwrap();
+
+    ctx.start_server();
+
+    // Building is okay, as that does not resolve env vars
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success());
+
+    // But deploying will do so, so it should fail
+    let outputs = ctx.cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY]).await;
+    assert!(!outputs.success());
+
+    assert!(outputs.stderr_contains_ordered([
+        "key:       COMPOSED",
+        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}-{{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "key:       VERY_CUSTOM_ENV_VAR_SECRET_1",
+        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_1 }}",
+        "key:       VERY_CUSTOM_ENV_VAR_SECRET_2",
+        "template:  {{ VERY_CUSTOM_ENV_VAR_SECRET_3 }}",
+        "Failed to prepare environment variables for component: app:weather-agent",
+    ]));
+
+    // After providing the missing env vars, deploy should work
+    ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_1", "123");
+    ctx.add_env_var("VERY_CUSTOM_ENV_VAR_SECRET_3", "456");
+
+    let outputs = ctx.cli([flag::SHOW_SENSITIVE, cmd::APP, cmd::DEPLOY]).await;
+    assert!(outputs.success());
+
+    assert!(outputs.stdout_contains_ordered([
+        "COMPOSED=123-456",
+        "NORMAL=REALLY",
+        "VERY_CUSTOM_ENV_VAR_SECRET_1=123",
+        "VERY_CUSTOM_ENV_VAR_SECRET_2=456",
+    ]));
+}
+
 enum CommandOutput {
     Stdout(String),
     Stderr(String),
@@ -1167,6 +1239,7 @@ struct TestContext {
     data_dir: TempDir,
     working_dir: PathBuf,
     server_process: Option<Child>,
+    env: HashMap<String, String>,
 }
 
 impl Drop for TestContext {
@@ -1208,11 +1281,25 @@ impl TestContext {
             data_dir: TempDir::new().unwrap(),
             working_dir,
             server_process: None,
+            env: HashMap::new(),
         };
 
         info!(ctx = ?ctx ,"Created test context");
 
         ctx
+    }
+
+    #[allow(dead_code)]
+    fn env(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+
+    fn env_mut(&mut self) -> &mut HashMap<String, String> {
+        &mut self.env
+    }
+
+    fn add_env_var<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
+        self.env_mut().insert(key.into(), value.into());
     }
 
     #[must_use]
@@ -1244,6 +1331,7 @@ impl TestContext {
 
         let mut child = Command::new(&self.golem_cli_path)
             .args(args)
+            .envs(&self.env)
             .current_dir(working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

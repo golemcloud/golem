@@ -3,6 +3,14 @@
 components:
   componentname:
     template: ts
+
+    #  Component environment variables can reference system environment variables with minijinja syntax:
+    #
+    #  env:
+    #    ENV_VAR_1: "{{ ENV_VAR_1 }}"
+    #    RENAMED_VAR_2: "{{ ENV_VAR_2 }}"
+    #    COMPOSED_VAR_3: "{{ ENV_VAR_3 }}-{{ ENV_VAR_4}}"
+    #
     env:
       # LLM providers
       # ------------------------------------------------------------------------------------------------------------

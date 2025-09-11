@@ -59,7 +59,6 @@ clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
-envsubst = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }

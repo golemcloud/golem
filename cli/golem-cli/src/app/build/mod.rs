@@ -24,8 +24,6 @@ use crate::model::app::AppBuildStep;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -65,36 +63,6 @@ fn env_var_flag(name: &str) -> bool {
             flag.starts_with("t") || flag == "1"
         })
         .unwrap_or_default()
-}
-
-/// Similar to std::env::vars() but silently drops invalid env vars instead of panicing.
-/// Additionally, will ignore all env vars containing data incompatible with envsubst.
-fn valid_env_vars() -> HashMap<String, String> {
-    let mut result = HashMap::new();
-
-    fn validate(val: OsString) -> Option<String> {
-        let forbidden = &["$", "{", "}"];
-
-        let str = val.into_string().ok()?;
-        for c in forbidden {
-            if str.contains(c) {
-                return None;
-            }
-        }
-        Some(str)
-    }
-
-    for (k, v) in std::env::vars_os() {
-        if let (Some(k), Some(v)) = (validate(k.clone()), validate(v)) {
-            result.insert(k, v);
-        } else {
-            debug!(
-                "Env var `{}` contains invalid data and will be ignored",
-                k.to_string_lossy()
-            )
-        }
-    }
-    result
 }
 
 fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {

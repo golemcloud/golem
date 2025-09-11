@@ -814,7 +814,7 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-fn to_anyhow<T>(
+pub fn to_anyhow<T>(
     message: &str,
     result: ValidatedResult<T>,
     mark_had_warns: Option<fn(T) -> T>,
