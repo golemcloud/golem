@@ -72,7 +72,7 @@ impl AppCommandHandler {
                     .await
             }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
-            AppSubcommand::UpdateWorkers {
+            AppSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
@@ -80,7 +80,7 @@ impl AppCommandHandler {
                 self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            AppSubcommand::RedeployWorkers { component_name } => {
+            AppSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }

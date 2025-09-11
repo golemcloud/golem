@@ -160,29 +160,22 @@ impl ApiDeploymentCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result: Vec<ApiDeployment> = match id {
-            Some(id) => clients
-                .api_deployment
-                .list_deployments(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    Some(id),
-                )
-                .await
-                .map_service_error()?
-                .into_iter()
-                .map(ApiDeployment::from)
-                .collect::<Vec<_>>(),
-            None => {
-                // TODO: update in cloud to allow listing without id
-                log_error("API definition ID for Cloud is required");
-                bail!(NonSuccessfulExit);
-            }
-        };
+        let result: Vec<ApiDeployment> = clients
+            .api_deployment
+            .list_deployments(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                id,
+            )
+            .await
+            .map_service_error()?
+            .into_iter()
+            .map(ApiDeployment::from)
+            .collect::<Vec<_>>();
 
         self.ctx.log_handler().log_view(&result);
 

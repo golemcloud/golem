@@ -126,7 +126,7 @@ impl ComponentCommandHandler {
                 version,
             } => self.cmd_get(component_name.component_name, version).await,
 
-            ComponentSubcommand::UpdateWorkers {
+            ComponentSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
@@ -134,7 +134,7 @@ impl ComponentCommandHandler {
                 self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            ComponentSubcommand::RedeployWorkers { component_name } => {
+            ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
@@ -387,11 +387,7 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        if component_views.is_empty() {
-            bail!(NonSuccessfulExit)
-        } else {
-            self.ctx.log_handler().log_view(&component_views);
-        }
+        self.ctx.log_handler().log_view(&component_views);
 
         Ok(())
     }
@@ -658,7 +654,7 @@ impl ComponentCommandHandler {
             components
         };
 
-        if let Some(update) = update_or_redeploy.update_workers {
+        if let Some(update) = update_or_redeploy.update_agents {
             self.update_workers_by_components(&components, update, true)
                 .await?;
         } else if update_or_redeploy.redeploy_workers(self.ctx.update_or_redeploy()) {
