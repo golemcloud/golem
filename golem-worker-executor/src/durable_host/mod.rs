@@ -730,9 +730,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        debug!("Applying pending side effects accumulated during replay");
-
         let replay_events = self.state.replay_state.take_new_replay_events().await;
+        if !replay_events.is_empty() {
+            debug!("Applying pending side effects accumulated during replay");
+        }
         for event in replay_events {
             match event {
                 ReplayEvent::UpdateReplayed { new_version } => {
