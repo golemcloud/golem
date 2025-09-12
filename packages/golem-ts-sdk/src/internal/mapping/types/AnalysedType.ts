@@ -239,7 +239,16 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
     }
   }
 
-  return fromTsTypeInternal(tsType, scope);
+  const result =
+    fromTsTypeInternal(tsType, scope);
+
+  if (Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val)) {
+    return Either.map(result, (analysedType) => {
+      return option(undefined, analysedType)
+    })
+  }
+
+  return result
 }
 
 export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
@@ -294,6 +303,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         const filteredTypes = filterUndefinedTypes(
           scope,
           type.name,
+          type,
           type.unionTypes,
         );
 
@@ -307,6 +317,11 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
         if (Either.isLeft(innerTypeEither)) {
           return Either.left(innerTypeEither.val);
+        }
+
+        // Type is already optional and further loop will solve it
+        if ((Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
+          return Either.right(innerTypeEither.val);
         }
 
         return Either.right(option(undefined, innerTypeEither.val))
@@ -363,7 +378,6 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         const node = nodes[0];
 
         const entityName = type.name ?? type.kind;
-
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
           const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
@@ -604,6 +618,7 @@ function includesUndefined(
 function filterUndefinedTypes(
   scope: Option.Option<TypeMappingScope>,
   unionTypeName: string | undefined,
+  type: TsType,
   unionTypes: TsType[],
 ): Either.Either<TsType, string> {
 
@@ -635,7 +650,7 @@ function filterUndefinedTypes(
     return Either.right(alternateTypes[0]);
   }
 
-  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: false  });
+  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional  });
 }
 
 function isNumberString(name: string): boolean {
