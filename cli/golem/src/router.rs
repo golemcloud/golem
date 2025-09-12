@@ -122,6 +122,8 @@ pub fn start_router(
         .at("/v1/login/*", cloud_service_api.clone())
         .at("/v1/projects", cloud_service_api.clone())
         .at("/v1/projects/*", cloud_service_api.clone())
+        .at("/v1/agent-types", component_service_api.clone())
+        .at("/v1/agent-types/*", component_service_api.clone())
         .at("/metrics", metrics)
         .at("/healthcheck", component_service_api)
         .with(CookieJarManager::new())
