@@ -17,7 +17,9 @@ use async_trait::async_trait;
 use aws_config::meta::region::RegionProviderChain;
 use aws_config::BehaviorVersion;
 use aws_sdk_s3::config::Credentials;
+use aws_sdk_s3::types::{Delete, ObjectIdentifier};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::Error;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::stream::BoxStream;
 use futures::TryStreamExt;
@@ -36,7 +38,6 @@ use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::{tempdir, TempDir};
 use test_r::{define_matrix_dimension, test, test_dep};
 use testcontainers::core::ContainerPort;
@@ -144,13 +145,13 @@ impl GetBlobStorage for S3Test {
                     .expect("Failed to start MinIO");
 
                 setup_buckets(host, host_port, &config).await;
-        let storage = s3::S3BlobStorage::new(config).await;
 
+                let storage = s3::S3BlobStorage::new(config).await;
                 return Arc::new(S3BlobStorageWithContainer {
-            storage,
-            _container: container,
+                    storage,
+                    _container: container,
                 });
-    }
+            }
         }
 
         warn!("MinIO assumed to be provided at http://{host}:{host_port}");

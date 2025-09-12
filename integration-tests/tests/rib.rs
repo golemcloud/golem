@@ -370,11 +370,11 @@ async fn test_rib_with_resource_methods(
 }
 
 struct TestRibFunctionInvoke {
-    dependencies: EnvBasedTestDependencies,
+    dependencies: Deps,
 }
 
 impl TestRibFunctionInvoke {
-    fn new(dependencies: EnvBasedTestDependencies) -> Self {
+    fn new(dependencies: Deps) -> Self {
         Self { dependencies }
     }
 }

@@ -294,11 +294,11 @@ async fn test_repl_invoking_resource_methods(
 }
 
 struct TestRibReplDependencyManager {
-    dependencies: EnvBasedTestDependencies,
+    dependencies: Deps,
 }
 
 impl TestRibReplDependencyManager {
-    fn new(dependencies: EnvBasedTestDependencies) -> Self {
+    fn new(dependencies: Deps) -> Self {
         Self { dependencies }
     }
 }
@@ -347,11 +347,11 @@ impl RibDependencyManager for TestRibReplDependencyManager {
 
 // Embedded RibFunctionInvoke implementation
 pub struct TestRibReplWorkerFunctionInvoke {
-    embedded_worker_executor: EnvBasedTestDependencies,
+    embedded_worker_executor: Deps,
 }
 
 impl TestRibReplWorkerFunctionInvoke {
-    pub fn new(embedded_worker_executor: EnvBasedTestDependencies) -> Self {
+    pub fn new(embedded_worker_executor: Deps) -> Self {
         Self {
             embedded_worker_executor,
         }

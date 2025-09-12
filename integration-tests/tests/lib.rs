@@ -19,6 +19,8 @@ use golem_test_framework::config::{
 };
 use std::ops::Deref;
 use test_r::test_dep;
+use uuid::Uuid;
+use golem_common::base_model::ProjectId;
 
 test_r::enable!();
 
@@ -69,6 +71,7 @@ pub async fn create_deps(_tracing: &Tracing) -> Deps {
 
     let deps2 = TestDependenciesDsl {
         deps,
+        default_project_id: ProjectId(Uuid::new_v4()),
         account_id: AccountId {
             value: "".to_string(),
         },

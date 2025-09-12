@@ -31,6 +31,8 @@ use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
+use golem_test_framework::components::redis::docker::DockerRedis;
+use golem_test_framework::components::redis_monitor::docker::DockerRedisMonitor;
 use golem_test_framework::config::TestDependencies;
 use golem_worker_executor::services::golem_config::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig, ComponentCacheConfig,
