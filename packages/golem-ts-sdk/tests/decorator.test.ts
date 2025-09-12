@@ -33,7 +33,7 @@ describe('Agent decorator should register the agent class and its methods into A
     (method) => method.name === 'fun0',
   );
 
-  it('should handle optional string in constructor', () => {
+  it('should handle string with null in constructor', () => {
     const optionalStringInGetWeather = getWitType(
       complexAgentConstructor.inputSchema,
       'optionalStringType',
@@ -41,8 +41,17 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(optionalStringInGetWeather).toEqual({
       nodes: [
-        { type: { tag: 'option-type', val: 1 } },
-        { type: { tag: 'prim-string-type' } },
+        {
+          type: {
+            tag: 'option-type',
+            val: 1,
+          },
+        },
+        {
+          type: {
+            tag: 'prim-string-type',
+          },
+        },
       ],
     });
   });
@@ -55,28 +64,38 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(optionalStringInGetWeather).toEqual({
       nodes: [
-        { type: { tag: 'option-type', val: 1 } },
-        { type: { tag: 'prim-string-type' } },
+        {
+          type: {
+            tag: 'option-type',
+            val: 1,
+          },
+        },
+        {
+          type: {
+            tag: 'prim-string-type',
+          },
+        },
       ],
     });
   });
 
-  it('should handle optional union in constructor', () => {
+  it('should handle union with null in constructor', () => {
     const optionalUnion = getWitType(
       complexAgentConstructor.inputSchema,
       'optionalUnionType',
     );
 
-    const expected = {
+    const expectedWit = {
       nodes: [
+        { type: { tag: 'option-type', val: 1 } },
         {
           type: {
             tag: 'variant-type',
             val: [
-              ['type-first', 1],
-              ['type-second', 2],
-              ['type-third', 3],
-              ['type-fourth', 4],
+              ['type-first', 2],
+              ['type-second', 3],
+              ['type-third', 4],
+              ['type-fourth', 5],
             ],
           },
         },
@@ -88,16 +107,16 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'record-type',
             val: [
-              ['a', 1],
-              ['b', 2],
-              ['c', 3],
+              ['a', 2],
+              ['b', 3],
+              ['c', 4],
             ],
           },
         },
       ],
     };
 
-    expect(optionalUnion).toEqual(expected);
+    expect(optionalUnion).toEqual(expectedWit);
   });
 
   it('should handle optional union in method', () => {
@@ -119,9 +138,21 @@ describe('Agent decorator should register the agent class and its methods into A
             ],
           },
         },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
-        { type: { tag: 'prim-bool-type' } },
+        {
+          type: {
+            tag: 'prim-string-type',
+          },
+        },
+        {
+          type: {
+            tag: 'prim-s32-type',
+          },
+        },
+        {
+          type: {
+            tag: 'prim-bool-type',
+          },
+        },
         {
           name: 'object-type',
           type: {
@@ -147,55 +178,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expected = {
       nodes: [
-        {
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['type-first', 1],
-              ['type-second', 2],
-            ],
-          },
-        },
-        { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
-      ],
-    };
-
-    expect(unionWithNullType).toEqual(expected);
-  });
-
-  it('object with union with undefined works', () => {
-    const objectWithUnionWithNull = getWitType(
-      complexAgentMethod!.inputSchema,
-      'objectWithUndefinedUnion1',
-    );
-
-    const expected = {
-      nodes: [
-        {
-          name: 'object-with-undefined-union1',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
-        { type: { tag: 'variant-type', val: [['type-first', 2]] } },
-        { type: { tag: 'prim-string-type' } },
-      ],
-    };
-
-    expect(objectWithUnionWithNull).toEqual(expected);
-  });
-
-  it('object with union with undefined works', () => {
-    const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod!.inputSchema,
-      'objectWithUndefinedUnion2',
-    );
-
-    const expected = {
-      nodes: [
-        {
-          name: 'object-with-undefined-union2',
-          type: { tag: 'record-type', val: [['a', 1]] },
-        },
+        { type: { tag: 'option-type', val: 1 } },
         {
           type: {
             tag: 'variant-type',
@@ -207,6 +190,78 @@ describe('Agent decorator should register the agent class and its methods into A
         },
         { type: { tag: 'prim-string-type' } },
         { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(unionWithNullType).toEqual(expected);
+  });
+
+  it('object with union with undefined-one works', () => {
+    const objectWithUnionWithNull = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUndefinedUnion1',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-undefined-union2',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['type-first', 3],
+              ['type-second', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull).toEqual(expected);
+  });
+
+  it('object with union with undefined-two works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUndefinedUnion2',
+    );
+
+    console.log(JSON.stringify(objectWithUnionWithNull2));
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-undefined-union2',
+          type: {
+            tag: 'record-type',
+            val: [['a', 1]],
+          },
+        },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['type-first', 2],
+              ['type-second', 3],
+            ],
+          },
+        },
+        {
+          type: {
+            tag: 'prim-string-type',
+          },
+        },
+        {
+          type: {
+            tag: 'prim-s32-type',
+          },
+        },
       ],
     };
 

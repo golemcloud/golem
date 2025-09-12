@@ -135,7 +135,15 @@ describe('typescript value to wit value round-trip conversions', () => {
         f: [],
         g: [],
         h: ['', 0, false],
-        i: ['', 0, { a: '', b: 0, c: false }],
+        i: [
+          '',
+          0,
+          {
+            a: '',
+            b: 0,
+            c: false,
+          },
+        ],
         j: new Map<string, number>(),
         k: { n: 0 },
         // m: Either.left('failed')
@@ -149,7 +157,15 @@ describe('typescript value to wit value round-trip conversions', () => {
       },
       stringProp: '',
       trueProp: true,
-      tupleObjectProp: ['', 0, { a: '', b: 0, c: false }],
+      tupleObjectProp: [
+        '',
+        0,
+        {
+          a: '',
+          b: 0,
+          c: false,
+        },
+      ],
       tupleProp: ['', 0, false],
       unionProp: 1,
       uint8ArrayProp: new Uint8Array([1, 2, 3]),
@@ -192,7 +208,15 @@ describe('typescript value to wit value round-trip conversions', () => {
       },
       stringProp: '',
       trueProp: true,
-      tupleObjectProp: ['', 0, { a: '', b: 0, c: false }],
+      tupleObjectProp: [
+        '',
+        0,
+        {
+          a: '',
+          b: 0,
+          c: false,
+        },
+      ],
       tupleProp: ['', 0, false],
       unionProp: 1,
       optionalProp: 2,
@@ -220,7 +244,15 @@ describe('typescript value to wit value round-trip conversions', () => {
         f: [],
         g: [],
         h: ['', 0, false],
-        i: ['', 0, { a: '', b: 0, c: false }],
+        i: [
+          '',
+          0,
+          {
+            a: '',
+            b: 0,
+            c: false,
+          },
+        ],
         j: new Map<string, number>(),
         k: { n: 0 },
       },
@@ -254,7 +286,15 @@ describe('typescript value to wit value round-trip conversions', () => {
       },
       stringProp: '',
       trueProp: true,
-      tupleObjectProp: ['', 0, { a: '', b: 0, c: false }],
+      tupleObjectProp: [
+        '',
+        0,
+        {
+          a: '',
+          b: 0,
+          c: false,
+        },
+      ],
       tupleProp: ['', 0, false],
       unionProp: {
         a: 'test',
@@ -286,7 +326,15 @@ describe('typescript value to wit value round-trip conversions', () => {
         f: [],
         g: [],
         h: ['', 0, false],
-        i: ['', 0, { a: '', b: 0, c: false }],
+        i: [
+          '',
+          0,
+          {
+            a: '',
+            b: 0,
+            c: false,
+          },
+        ],
         j: new Map<string, number>(),
         k: { n: 0 },
       },

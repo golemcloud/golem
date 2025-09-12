@@ -138,15 +138,21 @@ describe('TypeScript Object to AnalysedType', () => {
     const expected: NameTypePair[] = [
       {
         name: 'a',
-        typ: { kind: 'string' },
+        typ: {
+          kind: 'string',
+        },
       },
       {
         name: 'b',
-        typ: { kind: 's32' },
+        typ: {
+          kind: 's32',
+        },
       },
       {
         name: 'c',
-        typ: { kind: 'bool' },
+        typ: {
+          kind: 'bool',
+        },
       },
     ];
 
@@ -170,15 +176,21 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
         cases: [
           {
             name: 'type-first',
-            typ: { kind: 'string' },
+            typ: {
+              kind: 'string',
+            },
           },
           {
             name: 'type-second',
-            typ: { kind: 's32' },
+            typ: {
+              kind: 's32',
+            },
           },
           {
             name: 'type-third',
-            typ: { kind: 'bool' },
+            typ: {
+              kind: 'bool',
+            },
           },
           {
             name: 'type-fourth',
@@ -257,12 +269,24 @@ test('Union of literals to AnalysedType', () => {
 
 function checkPrimitiveFields(fields: any[]) {
   const expected = {
-    numberProp: { kind: 's32' },
-    stringProp: { kind: 'string' },
-    booleanProp: { kind: 'bool' },
-    bigintProp: { kind: 'u64' },
-    trueProp: { kind: 'bool' },
-    falseProp: { kind: 'bool' },
+    numberProp: {
+      kind: 's32',
+    },
+    stringProp: {
+      kind: 'string',
+    },
+    booleanProp: {
+      kind: 'bool',
+    },
+    bigintProp: {
+      kind: 'u64',
+    },
+    trueProp: {
+      kind: 'bool',
+    },
+    falseProp: {
+      kind: 'bool',
+    },
   };
 
   for (const [name, expectedType] of Object.entries(expected)) {
@@ -293,15 +317,21 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
         cases: [
           {
             name: 'type-first',
-            typ: { kind: 'string' },
+            typ: {
+              kind: 'string',
+            },
           },
           {
             name: 'type-second',
-            typ: { kind: 's32' },
+            typ: {
+              kind: 's32',
+            },
           },
           {
             name: 'type-third',
-            typ: { kind: 'bool' },
+            typ: {
+              kind: 'bool',
+            },
           },
           {
             name: 'type-fourth',
@@ -635,7 +665,17 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             typ: {
               kind: 'tuple',
               value: {
-                items: [{ kind: 'string' }, { kind: 's32' }, { kind: 'bool' }],
+                items: [
+                  {
+                    kind: 'string',
+                  },
+                  {
+                    kind: 's32',
+                  },
+                  {
+                    kind: 'bool',
+                  },
+                ],
                 name: 'tuple-type',
                 owner: undefined,
               },
@@ -647,8 +687,12 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
               kind: 'tuple',
               value: {
                 items: [
-                  { kind: 'string' },
-                  { kind: 's32' },
+                  {
+                    kind: 'string',
+                  },
+                  {
+                    kind: 's32',
+                  },
                   {
                     kind: 'record',
                     value: {
@@ -774,7 +818,9 @@ function checkUnionFields(fields: any[]) {
   const expectedCases: NameTypePair[] = [
     {
       name: 'type-first',
-      typ: { kind: 'string' },
+      typ: {
+        kind: 'string',
+      },
     },
     {
       name: 'type-second',
@@ -832,7 +878,10 @@ function checkObjectFields(fields: any[]) {
       name: 'a',
       typ: { kind: 'string' },
     },
-    { name: 'b', typ: { kind: 's32' } },
+    {
+      name: 'b',
+      typ: { kind: 's32' },
+    },
     {
       name: 'c',
       typ: { kind: 'bool' },
@@ -876,7 +925,9 @@ function checkTupleFields(fields: any[]) {
     expect(field.typ.kind).toBe('tuple');
     if (field.typ.kind == 'tuple') {
       const expected: AnalysedType.AnalysedType[] = [
-        { kind: 'string' },
+        {
+          kind: 'string',
+        },
         { kind: 's32' },
         { kind: 'bool' },
       ];
@@ -895,7 +946,9 @@ function checkTupleWithObjectFields(fields: any[]) {
     expect(field.typ.kind).toBe('tuple');
     if (field.typ.kind == 'tuple') {
       const expected: AnalysedType.AnalysedType[] = [
-        { kind: 'string' },
+        {
+          kind: 'string',
+        },
         { kind: 's32' },
         {
           kind: 'record',
@@ -909,11 +962,15 @@ function checkTupleWithObjectFields(fields: any[]) {
               },
               {
                 name: 'b',
-                typ: { kind: 's32' },
+                typ: {
+                  kind: 's32',
+                },
               },
               {
                 name: 'c',
-                typ: { kind: 'bool' },
+                typ: {
+                  kind: 'bool',
+                },
               },
             ],
             name: 'object-type',
@@ -954,7 +1011,10 @@ function checkObjectComplexFields(fields: any[]) {
       name: 'a',
       typ: { kind: 'string' },
     },
-    { name: 'b', typ: { kind: 's32' } },
+    {
+      name: 'b',
+      typ: { kind: 's32' },
+    },
     {
       name: 'c',
       typ: { kind: 'bool' },
@@ -967,15 +1027,21 @@ function checkObjectComplexFields(fields: any[]) {
           fields: [
             {
               name: 'a',
-              typ: { kind: 'string' },
+              typ: {
+                kind: 'string',
+              },
             },
             {
               name: 'b',
-              typ: { kind: 's32' },
+              typ: {
+                kind: 's32',
+              },
             },
             {
               name: 'c',
-              typ: { kind: 'bool' },
+              typ: {
+                kind: 'bool',
+              },
             },
           ],
           name: 'object-type',
@@ -991,15 +1057,21 @@ function checkObjectComplexFields(fields: any[]) {
           cases: [
             {
               name: 'type-first',
-              typ: { kind: 'string' },
+              typ: {
+                kind: 'string',
+              },
             },
             {
               name: 'type-second',
-              typ: { kind: 's32' },
+              typ: {
+                kind: 's32',
+              },
             },
             {
               name: 'type-third',
-              typ: { kind: 'bool' },
+              typ: {
+                kind: 'bool',
+              },
             },
             {
               name: 'type-fourth',
@@ -1042,7 +1114,9 @@ function checkObjectComplexFields(fields: any[]) {
       typ: {
         kind: 'list',
         value: {
-          inner: { kind: 'string' },
+          inner: {
+            kind: 'string',
+          },
           name: 'list-type',
           owner: undefined,
         },
@@ -1065,11 +1139,15 @@ function checkObjectComplexFields(fields: any[]) {
                 },
                 {
                   name: 'b',
-                  typ: { kind: 's32' },
+                  typ: {
+                    kind: 's32',
+                  },
                 },
                 {
                   name: 'c',
-                  typ: { kind: 'bool' },
+                  typ: {
+                    kind: 'bool',
+                  },
                 },
               ],
               name: 'object-type',
@@ -1086,7 +1164,13 @@ function checkObjectComplexFields(fields: any[]) {
       typ: {
         kind: 'tuple',
         value: {
-          items: [{ kind: 'string' }, { kind: 's32' }, { kind: 'bool' }],
+          items: [
+            {
+              kind: 'string',
+            },
+            { kind: 's32' },
+            { kind: 'bool' },
+          ],
           name: 'tuple-type',
           owner: undefined,
         },
@@ -1098,7 +1182,9 @@ function checkObjectComplexFields(fields: any[]) {
         kind: 'tuple',
         value: {
           items: [
-            { kind: 'string' },
+            {
+              kind: 'string',
+            },
             { kind: 's32' },
             {
               kind: 'record',
@@ -1141,7 +1227,14 @@ function checkObjectComplexFields(fields: any[]) {
           inner: {
             kind: 'tuple',
             value: {
-              items: [{ kind: 'string' }, { kind: 's32' }],
+              items: [
+                {
+                  kind: 'string',
+                },
+                {
+                  kind: 's32',
+                },
+              ],
               name: undefined,
               owner: undefined,
             },
@@ -1159,7 +1252,9 @@ function checkObjectComplexFields(fields: any[]) {
           fields: [
             {
               name: 'n',
-              typ: { kind: 's32' },
+              typ: {
+                kind: 's32',
+              },
             },
           ],
           name: 'simple-interface-type',

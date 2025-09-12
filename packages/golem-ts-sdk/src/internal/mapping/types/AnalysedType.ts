@@ -238,6 +238,7 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
 export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
 
   const scopeName = Option.isSome(scope) ? scope.val.name : undefined;
+
   const parameterInScope: Option.Option<string> =
     Option.isSome(scope) ? TypeMappingScope.paramName(scope.val) : Option.none();
 
@@ -280,7 +281,29 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       let fieldIdx = 1;
       const possibleTypes: NameOptionTypePair[] = [];
       let boolTracked = false;
-      let isOption = false;
+
+      // If the union includes undefined, we need to treat it as option
+      if (includesUndefined(type.unionTypes)) {
+        const filteredTypes = filterUndefinedTypes(
+          scope,
+          type.name,
+          type.unionTypes,
+        );
+
+
+        if (Either.isLeft(filteredTypes)) {
+          return Either.left(filteredTypes.val);
+        }
+
+        const innerTypeEither =
+          fromTsTypeInternal(filteredTypes.val, Option.none());
+
+        if (Either.isLeft(innerTypeEither)) {
+          return Either.left(innerTypeEither.val);
+        }
+
+        return Either.right(option(undefined, innerTypeEither.val))
+      }
 
       for (const t of type.unionTypes) {
         if (t.kind === "boolean" || t.name === "false" || t.name === "true") {
@@ -309,81 +332,17 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           continue;
         }
 
-        if (t.kind === "null") {
-
-          // if this is already optional (i.e, parameter with `?`), we can discard null as such
-          if (isOptionalParam(scope)) {
-            isOption = true;
-            continue;
-          }
-
-          const errorMessage: Option.Option<string> =
-            diagoniseInvalidUnion(scope, type.unionTypes, t)
-
-          if (Option.isSome(errorMessage)) {
-            return Either.left(errorMessage.val);
-          }
-
-          continue;
-        }
-
-        if (t.kind === "void") {
-
-          // if this is already optional (i.e, parameter with `?`), we can discard null as such
-          if (isOptionalParam(scope)) {
-            isOption = true;
-            continue;
-          }
-
-          // If it's not optional, then we need to see
-          const errorMessage: Option.Option<string> =
-            diagoniseInvalidUnion(scope, type.unionTypes, t)
-
-          if (Option.isSome(errorMessage)) {
-            return Either.left(errorMessage.val);
-          }
-
-          continue;
-        }
-
-        if (t.kind === "undefined") {
-          // If undefined is part of optional parameter, this is already tagged
-          // as optional and therefore we can ignore its undefined variant.
-
-          if (isOptionalParam(scope)) {
-            isOption = true
-            // If it's already an optional parameter, forget about adding `undefined`
-            continue;
-          }
-
-          const errorMessage: Option.Option<string> =
-            diagoniseInvalidUnion(scope, type.unionTypes, t)
-
-          if (Option.isSome(errorMessage)) {
-            return Either.left(errorMessage.val);
-          }
-
-          continue;
-        }
-
         const result = fromTsTypeInternal(t, Option.none());
 
         if (Either.isLeft(result)) {
           return result;
         }
 
-
-
         possibleTypes.push({
           name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
           typ: result.val,
         });
       }
-
-      if (possibleTypes.length === 1 && isOption) {
-        return Either.right(option(type.name, possibleTypes[0].typ!));
-      }
-
 
       return Either.right(variant(type.name, possibleTypes));
     }
@@ -629,14 +588,22 @@ function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undef
   return undefined;
 }
 
+function includesUndefined(
+  unionTypes: TsType[]
+): boolean {
+  return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
+}
 
-function diagoniseInvalidUnion(optionalParamInParam: Option.Option<TypeMappingScope>, unionTypes: TsType[], unionElemType: TsType): Option.Option<string> {
-  const scopeName = getScopeName(optionalParamInParam);
+function filterUndefinedTypes(
+  scope: Option.Option<TypeMappingScope>,
+  unionTypeName: string | undefined,
+  unionTypes: TsType[],
+): Either.Either<TsType, string> {
 
-  const unionElemTypeKind = unionElemType.kind;
+  const scopeName = getScopeName(scope);
 
-  const paramNameOpt: Option.Option<string> = Option.isSome(optionalParamInParam)
-    ? TypeMappingScope.paramName(optionalParamInParam.val) : Option.none();
+  const paramNameOpt: Option.Option<string> = Option.isSome(scope)
+    ? TypeMappingScope.paramName(scope.val) : Option.none();
 
 
   const alternateTypes = unionTypes.filter(
@@ -646,17 +613,22 @@ function diagoniseInvalidUnion(optionalParamInParam: Option.Option<TypeMappingSc
   if (alternateTypes.length === 0) {
     if (Option.isSome(paramNameOpt)) {
       const paramName = paramNameOpt.val;
-      return Option.some(
-        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that is resolved to ${unionElemTypeKind}`,
+      return Either.left(
+        `Parameter \`${paramName}\` in \`${scopeName}\` has a union type that cannot be resolved to a valid type`,
       );
     }
 
-    return Option.some(
-      `Union type is resolved to only \`${unionElemTypeKind}\` and is not supported`,
+    return Either.left(
+      `Union type cannot be resolved`,
     );
   }
 
-  return Option.none()
+
+  if (alternateTypes.length === 1) {
+    return Either.right(alternateTypes[0]);
+  }
+
+  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: false  });
 }
 
 function isNumberString(name: string): boolean {

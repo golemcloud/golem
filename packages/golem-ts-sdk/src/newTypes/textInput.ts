@@ -24,8 +24,14 @@ export type TextSource = {
 };
 
 export type UnstructuredText =
-  | { tag: 'url'; val: string }
-  | { tag: 'inline'; val: TextSource };
+  | {
+      tag: 'url';
+      val: string;
+    }
+  | {
+      tag: 'inline';
+      val: TextSource;
+    };
 
 export const TextInput = {
   fromTextReferenceDataValue(dataValue: TextReference): UnstructuredText {
@@ -73,7 +79,9 @@ export const TextInput = {
       tag: 'inline',
       val: {
         data: data,
-        textType: { languageCode },
+        textType: {
+          languageCode,
+        },
       },
     };
   },

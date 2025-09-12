@@ -168,10 +168,12 @@ export function atomically<T>(f: () => T): T {
  * @param fn - The function to execute.
  * @returns The result of the executed function.
  */
-export function executeWithDrop<Resource extends { drop: () => void }, R>(
-  resources: [Resource],
-  fn: () => R,
-): R {
+export function executeWithDrop<
+  Resource extends {
+    drop: () => void;
+  },
+  R,
+>(resources: [Resource], fn: () => R): R {
   try {
     const result = fn();
     dropAll(true, resources);
@@ -187,10 +189,11 @@ export function executeWithDrop<Resource extends { drop: () => void }, R>(
  * @param resources - An array of resources to be dropped.
  * @throws DropError if any errors occur during the dropping process.
  */
-export function dropAll<Resource extends { drop: () => void }>(
-  throwOnError: boolean,
-  resources: [Resource],
-) {
+export function dropAll<
+  Resource extends {
+    drop: () => void;
+  },
+>(throwOnError: boolean, resources: [Resource]) {
   const errors = [];
   for (const resource of resources) {
     try {

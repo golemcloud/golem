@@ -150,14 +150,26 @@ export namespace Result {
    * Create a successful result.
    */
   export function ok<T>(value: T): Result.Ok<T> {
-    return withPrototype({ tag: 'ok', val: value }, prototype);
+    return withPrototype(
+      {
+        tag: 'ok',
+        val: value,
+      },
+      prototype,
+    );
   }
 
   /**
    * Create an error result.
    */
   export function err<E>(error: E): Err<E> {
-    return withPrototype({ tag: 'err', val: error }, prototype);
+    return withPrototype(
+      {
+        tag: 'err',
+        val: error,
+      },
+      prototype,
+    );
   }
 
   /**

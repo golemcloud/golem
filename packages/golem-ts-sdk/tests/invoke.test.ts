@@ -77,15 +77,23 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
           (error) => new Error(`Failed to convert union to WitValue. ${error}`),
         );
 
-
         expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
 
         const dataValue: DataValue = {
           tag: 'tuple',
           val: [
-            { tag: 'component-model', val: interfaceWit },
-            { tag: 'component-model', val: optionalStringWit },
-            { tag: 'component-model', val: optionalUnionWit },
+            {
+              tag: 'component-model',
+              val: interfaceWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalStringWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalUnionWit,
+            },
           ],
         };
 

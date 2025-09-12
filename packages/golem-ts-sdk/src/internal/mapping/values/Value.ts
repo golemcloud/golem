@@ -26,30 +26,87 @@ import {
 import * as Either from '../../../newTypes/either';
 
 export type Value =
-  | { kind: 'bool'; value: boolean }
-  | { kind: 'u8'; value: number }
-  | { kind: 'u16'; value: number }
-  | { kind: 'u32'; value: number }
-  | { kind: 'u64'; value: bigint }
-  | { kind: 's8'; value: number }
-  | { kind: 's16'; value: number }
-  | { kind: 's32'; value: number }
-  | { kind: 's64'; value: bigint }
-  | { kind: 'f32'; value: number }
-  | { kind: 'f64'; value: number }
-  | { kind: 'char'; value: string }
-  | { kind: 'string'; value: string }
-  | { kind: 'list'; value: Value[] }
-  | { kind: 'tuple'; value: Value[] }
-  | { kind: 'record'; value: Value[] }
+  | {
+      kind: 'bool';
+      value: boolean;
+    }
+  | {
+      kind: 'u8';
+      value: number;
+    }
+  | {
+      kind: 'u16';
+      value: number;
+    }
+  | {
+      kind: 'u32';
+      value: number;
+    }
+  | {
+      kind: 'u64';
+      value: bigint;
+    }
+  | {
+      kind: 's8';
+      value: number;
+    }
+  | {
+      kind: 's16';
+      value: number;
+    }
+  | {
+      kind: 's32';
+      value: number;
+    }
+  | {
+      kind: 's64';
+      value: bigint;
+    }
+  | {
+      kind: 'f32';
+      value: number;
+    }
+  | {
+      kind: 'f64';
+      value: number;
+    }
+  | {
+      kind: 'char';
+      value: string;
+    }
+  | {
+      kind: 'string';
+      value: string;
+    }
+  | {
+      kind: 'list';
+      value: Value[];
+    }
+  | {
+      kind: 'tuple';
+      value: Value[];
+    }
+  | {
+      kind: 'record';
+      value: Value[];
+    }
   | {
       kind: 'variant';
       caseIdx: number;
       caseValue?: Value;
     }
-  | { kind: 'enum'; value: number }
-  | { kind: 'flags'; value: boolean[] }
-  | { kind: 'option'; value?: Value }
+  | {
+      kind: 'enum';
+      value: number;
+    }
+  | {
+      kind: 'flags';
+      value: boolean[];
+    }
+  | {
+      kind: 'option';
+      value?: Value;
+    }
   | {
       kind: 'result';
       value: {
@@ -432,7 +489,12 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
     case 'handle':
       nodes[idx] = {
         tag: 'handle',
-        val: [{ value: value.uri }, value.resourceId],
+        val: [
+          {
+            value: value.uri,
+          },
+          value.resourceId,
+        ],
       };
       return idx;
 
@@ -734,13 +796,21 @@ function handleTypedArray<
     | BigInt64Array
     | Float32Array
     | Float64Array,
->(tsValue: unknown, ctor: { new (_: number): A }): Either.Either<A, string> {
+>(
+  tsValue: unknown,
+  ctor: {
+    new (_: number): A;
+  },
+): Either.Either<A, string> {
   return tsValue instanceof ctor
     ? Either.right(tsValue)
     : Either.left(
         typeMismatchIn(tsValue, {
           kind: 'array',
-          element: { kind: 'number', optional: false },
+          element: {
+            kind: 'number',
+            optional: false,
+          },
           optional: false,
         }),
       );
@@ -912,19 +982,20 @@ function handleUnion(
   // If there is only 1 value after being optional
   if (filteredTypes.length === 1) {
     if (tsValue === null || tsValue === undefined) {
-      return Either.right({kind: "option"})
+      return Either.right({
+        kind: 'option',
+      });
     }
 
     // If its not null, then wrap it up in option
     const result = fromTsValue(tsValue, filteredTypes[0]);
 
-
     return Either.map(result, (value) => {
       return {
         kind: 'option',
-        value: value
+        value: value,
       };
-    })
+    });
   }
 
   const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);

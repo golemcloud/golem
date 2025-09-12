@@ -15,7 +15,10 @@
 export type Either<T, E> = { tag: 'right'; val: T } | { tag: 'left'; val: E };
 
 export function right<T, E = never>(val: T): Either<T, E> {
-  return { tag: 'right', val };
+  return {
+    tag: 'right',
+    val,
+  };
 }
 
 export function left<T = never, E = unknown>(val: E): Either<T, E> {
@@ -57,11 +60,21 @@ export function getOrThrowWith<T, E>(
   throw onErr(e.val);
 }
 
-export function isLeft<T, E>(r: Either<T, E>): r is { tag: 'left'; val: E } {
+export function isLeft<T, E>(
+  r: Either<T, E>,
+): r is {
+  tag: 'left';
+  val: E;
+} {
   return r.tag === 'left';
 }
 
-export function isRight<T, E>(r: Either<T, E>): r is { tag: 'right'; val: T } {
+export function isRight<T, E>(
+  r: Either<T, E>,
+): r is {
+  tag: 'right';
+  val: T;
+} {
   return r.tag === 'right';
 }
 
