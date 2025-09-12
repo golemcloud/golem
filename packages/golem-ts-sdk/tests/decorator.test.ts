@@ -211,8 +211,6 @@ describe('Agent decorator should register the agent class and its methods into A
       'objectWithUndefinedUnion2',
     );
 
-    console.log(JSON.stringify(objectWithUnionWithNull2));
-
     const expected = {
       nodes: [
         {

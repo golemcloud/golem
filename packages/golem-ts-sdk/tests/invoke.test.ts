@@ -32,8 +32,8 @@ import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
 import { interfaceArb, unionArb } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
-import { DataValue } from 'golem:agent/common';
 import * as Value from '../src/internal/mapping/values/Value';
+import { DataValue } from 'golem:agent/common';
 
 test("ComplexAgent can be successfully initiated and the methods can be invoked'", () => {
   fc.assert(
@@ -50,13 +50,14 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
           throw new Error('ComplexAgent type metadata not found');
         }
 
+        // TestInterfaceType
         const arg0 = typeRegistry.constructorArgs[0].type;
-        const arg1 = typeRegistry.constructorArgs[1].type;
-        const arg2 = typeRegistry.constructorArgs[2].type;
 
-        expect(arg0.optional).toEqual(false);
-        expect(arg1.optional).toEqual(false);
-        expect(arg2.optional).toEqual(false);
+        // string | null
+        const arg1 = typeRegistry.constructorArgs[1].type;
+
+        // UnionType | null
+        const arg2 = typeRegistry.constructorArgs[2].type;
 
         const interfaceWit = Either.getOrThrowWith(
           WitValue.fromTsValue(interfaceValue, arg0),

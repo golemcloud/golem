@@ -518,13 +518,17 @@ export function fromTsValue(
     }));
   }
 
-  return fromTsValueInternal(tsValue, type);
+  return result;
 }
 
 function fromTsValueInternal(
   tsValue: any,
   type: Type.Type,
 ): Either.Either<Value, string> {
+  if (tsValue === null || tsValue === undefined) {
+    return Either.right({ kind: 'option' });
+  }
+
   if (type.name === 'String') {
     throw new Error(
       unhandledTypeError(
@@ -973,31 +977,46 @@ function handleUnion(
   type: Type.Type,
   possibleTypes: Type.Type[],
 ): Either.Either<Value, string> {
-  let filteredTypes = possibleTypes;
-
-  filteredTypes = possibleTypes.filter(
+  const filteredTypes = possibleTypes.filter(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
-  // If there is only 1 value after being optional
-  if (filteredTypes.length === 1) {
-    if (tsValue === null || tsValue === undefined) {
-      return Either.right({
-        kind: 'option',
-      });
-    }
-
-    // If its not null, then wrap it up in option
-    const result = fromTsValue(tsValue, filteredTypes[0]);
-
-    return Either.map(result, (value) => {
-      return {
-        kind: 'option',
-        value: value,
-      };
+  if (tsValue === null || tsValue === undefined) {
+    return Either.right({
+      kind: 'option',
     });
   }
 
+  // This implies it's an optional value
+  if (filteredTypes.length !== possibleTypes.length) {
+    const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
+
+    if (!typeWithIndex) {
+      return Either.left(unionTypeMatchError(tsValue, filteredTypes));
+    } else {
+      const innerType = typeWithIndex[0];
+
+      return Either.map(fromTsValue(tsValue, innerType), (result) => {
+        if (filteredTypes.length === 1) {
+          return {
+            kind: 'option',
+            value: result,
+          };
+        } else {
+          return {
+            kind: 'option',
+            value: {
+              kind: 'variant',
+              caseIdx: typeWithIndex[1],
+              caseValue: result,
+            },
+          };
+        }
+      });
+    }
+  }
+
+  // It doesn't have null and therefore no need to wrap it in option at all
   const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
   if (!typeWithIndex) {
@@ -1299,14 +1318,12 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
-      let filtered = type.unionTypes;
+      const filtered = type.unionTypes.filter(
+        (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
+      );
 
-      if (type.optional) {
-        filtered = type.unionTypes.filter(
-          (t) =>
-            t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
-        );
-
+      // This implies this optional value
+      if (filtered.length !== type.unionTypes.length) {
         if (filtered.length === 1) {
           return toTsValue(value, filtered[0]);
         }
