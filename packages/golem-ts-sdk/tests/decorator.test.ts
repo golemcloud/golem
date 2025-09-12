@@ -33,9 +33,9 @@ describe('Agent decorator should register the agent class and its methods into A
     (method) => method.name === 'fun0',
   );
 
-  it('should handle string with null in constructor', () => {
+  it('should handle `a: string | undefined` in method params', () => {
     const optionalStringInGetWeather = getWitType(
-      complexAgentConstructor.inputSchema,
+      complexAgentMethod!.inputSchema,
       'optionalStringType',
     );
 
