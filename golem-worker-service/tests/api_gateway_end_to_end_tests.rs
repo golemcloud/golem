@@ -39,6 +39,7 @@ use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
 use serde_json::{Number, Value as JsonValue};
+use std::str::FromStr;
 use std::sync::Arc;
 use test_r::test;
 use url::Url;
@@ -3865,4 +3866,30 @@ async fn get_api_def_with_swagger_ui(path_pattern: &str) -> HttpApiDefinition {
     )
     .await
     .unwrap()
+}
+
+#[test]
+async fn test_api_def_with_request_id() {
+    let response_mapping = r#"
+       request.request_id.value
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo", response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Send + Sync> = internal::get_session_store();
+
+    let api_request = get_gateway_request("/foo", None, &HeaderMap::new(), JsonValue::Null);
+
+    let mut response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let response_body = response.take_body().into_string().await.unwrap();
+
+    assert!(uuid::Uuid::from_str(&response_body).is_ok());
 }

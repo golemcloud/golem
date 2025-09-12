@@ -38,6 +38,7 @@ golem-rib = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
 golem-wasm-ast = { workspace = true, default-features = true }
 golem-wasm-rpc = { workspace = true, default-features = true }
+golem-wasm-rpc-derive = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
