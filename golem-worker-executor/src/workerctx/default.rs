@@ -280,14 +280,23 @@ impl ResourceLimiterAsync for Context {
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
             current, desired, maximum, limit
         );
-        let allow = if desired > limit {
-            false
-        } else {
-            !matches!(maximum, Some(max) if desired > max)
+
+        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
+            // TODO: Continuing here does not really make sense as the worker executor will just hit the plan limits again when retrying.
+            // We should fail the worker permanently here with a descriptive error.
+            return Ok(false);
         };
 
-        record_allocated_memory(desired);
-        Ok(allow)
+        let current_known = self.durable_ctx.total_linear_memory_size();
+        let delta = (desired as u64).saturating_sub(current_known);
+
+        if delta > 0 {
+            // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
+            self.durable_ctx.increase_memory(delta).await?;
+            record_allocated_memory(desired);
+        }
+
+        Ok(true)
     }
 
     async fn table_growing(

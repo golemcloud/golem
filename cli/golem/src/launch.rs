@@ -28,8 +28,8 @@ use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, ProjectServiceConfig,
-    ProjectServiceGrpcConfig,
+    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, OplogConfig,
+    ProjectServiceConfig, ProjectServiceGrpcConfig,
 };
 use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
@@ -161,6 +161,7 @@ fn cloud_service_config(args: &LaunchArgs) -> CloudServiceConfig {
         storage_limit: i32::MAX,
         monthly_gas_limit: i64::MAX,
         monthly_upload_limit: i32::MAX,
+        max_memory_per_worker: i64::MAX,
     };
 
     CloudServiceConfig {
@@ -337,6 +338,11 @@ fn worker_executor_config(
                 ..Default::default()
             },
         ),
+        oplog: OplogConfig {
+            indexed_storage_layers: 0,
+            blob_storage_layers: 0,
+            ..Default::default()
+        },
         ..Default::default()
     };
 

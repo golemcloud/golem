@@ -340,6 +340,7 @@ pub struct PlanData {
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i32,
+    pub max_memory_per_worker: i64,
 }
 
 impl Default for PlanData {
@@ -351,6 +352,7 @@ impl Default for PlanData {
             storage_limit: 500000000,
             monthly_gas_limit: 1000000000000,
             monthly_upload_limit: 1000000000,
+            max_memory_per_worker: 100 * 1024 * 1024, // 1GB
         }
     }
 }
@@ -364,6 +366,7 @@ impl From<golem_api_grpc::proto::golem::account::PlanData> for PlanData {
             storage_limit: value.storage_limit,
             monthly_gas_limit: value.monthly_gas_limit,
             monthly_upload_limit: value.monthly_upload_limit,
+            max_memory_per_worker: value.max_memory_per_worker,
         }
     }
 }
@@ -377,6 +380,7 @@ impl From<PlanData> for golem_api_grpc::proto::golem::account::PlanData {
             storage_limit: value.storage_limit,
             monthly_gas_limit: value.monthly_gas_limit,
             monthly_upload_limit: value.monthly_upload_limit,
+            max_memory_per_worker: value.max_memory_per_worker,
         }
     }
 }
