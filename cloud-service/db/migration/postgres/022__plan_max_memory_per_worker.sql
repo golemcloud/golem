@@ -1,5 +1,5 @@
 ALTER TABLE plans
-ADD COLUMN max_memory_per_worker INTEGER DEFAULT (1024 * 1024 * 1024);
+ADD COLUMN max_memory_per_worker BIGINT DEFAULT (1024 * 1024 * 1024);
 
 -- backfill existing rows
 UPDATE plans
