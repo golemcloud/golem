@@ -127,40 +127,29 @@ describe('Agent decorator should register the agent class and its methods into A
 
     const expected = {
       nodes: [
+        { type: { tag: 'option-type', val: 1 } },
         {
           type: {
             tag: 'variant-type',
             val: [
-              ['type-first', 1],
-              ['type-second', 2],
-              ['type-third', 3],
-              ['type-fourth', 4],
+              ['type-first', 2],
+              ['type-second', 3],
+              ['type-third', 4],
+              ['type-fourth', 5],
             ],
           },
         },
-        {
-          type: {
-            tag: 'prim-string-type',
-          },
-        },
-        {
-          type: {
-            tag: 'prim-s32-type',
-          },
-        },
-        {
-          type: {
-            tag: 'prim-bool-type',
-          },
-        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-bool-type' } },
         {
           name: 'object-type',
           type: {
             tag: 'record-type',
             val: [
-              ['a', 1],
-              ['b', 2],
-              ['c', 3],
+              ['a', 2],
+              ['b', 3],
+              ['c', 4],
             ],
           },
         },
@@ -205,21 +194,11 @@ describe('Agent decorator should register the agent class and its methods into A
     const expected = {
       nodes: [
         {
-          name: 'object-with-undefined-union2',
+          name: 'object-with-undefined-union1',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { type: { tag: 'option-type', val: 2 } },
-        {
-          type: {
-            tag: 'variant-type',
-            val: [
-              ['type-first', 3],
-              ['type-second', 4],
-            ],
-          },
-        },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
       ],
     };
 
@@ -238,30 +217,20 @@ describe('Agent decorator should register the agent class and its methods into A
       nodes: [
         {
           name: 'object-with-undefined-union2',
-          type: {
-            tag: 'record-type',
-            val: [['a', 1]],
-          },
+          type: { tag: 'record-type', val: [['a', 1]] },
         },
+        { type: { tag: 'option-type', val: 2 } },
         {
           type: {
             tag: 'variant-type',
             val: [
-              ['type-first', 2],
-              ['type-second', 3],
+              ['type-first', 3],
+              ['type-second', 4],
             ],
           },
         },
-        {
-          type: {
-            tag: 'prim-string-type',
-          },
-        },
-        {
-          type: {
-            tag: 'prim-s32-type',
-          },
-        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
       ],
     };
 
