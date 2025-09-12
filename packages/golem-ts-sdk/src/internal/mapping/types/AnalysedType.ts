@@ -15,7 +15,7 @@
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import {numberToOrdinalKebab} from "./typeIndexOrdinal";
+import { numberToOrdinalKebab, variantCaseName } from './typeIndexOrdinal';
 import { TypeMappingScope } from './scope';
 
 type TsType = CoreType.Type;
@@ -319,7 +319,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           }
           boolTracked = true;
           possibleTypes.push({
-            name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
+            name: variantCaseName(fieldIdx++),
             typ: bool(),
           });
           continue;
@@ -346,7 +346,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         }
 
         possibleTypes.push({
-          name: `type-${numberToOrdinalKebab(fieldIdx++)}`,
+          name: variantCaseName(fieldIdx++),
           typ: result.val,
         });
       }
