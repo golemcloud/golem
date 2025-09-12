@@ -223,7 +223,7 @@ impl PlanLimitService for PlanLimitServiceDefault {
 
         Ok(ResourceLimits {
             available_fuel,
-            max_memory_per_worker: 100 * 1024 * 1024,
+            max_memory_per_worker: plan.plan_data.max_memory_per_worker,
         })
     }
 
