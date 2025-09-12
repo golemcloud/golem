@@ -1,0 +1,5 @@
+{
+  "description": "An example agent using the golem-ai library to search the web and summarize the results.",
+  "instructions": "This template requires some configuration, check the component's golem.yaml file after creation.\n After the component is deployed, you can interact with it using http like this: 'http get localhost:9006/v1/research topic==\"Are cucumbers healthy?\" accept:text/plain'",
+  "appComponentGroup": "default"
+}
