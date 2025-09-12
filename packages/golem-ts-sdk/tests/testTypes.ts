@@ -38,6 +38,10 @@ export type ObjectWithUnionWithUndefined3 = {
   a?: string | number | undefined;
 };
 
+export type ObjectWithUnionWithUndefined4 = {
+  a?: string | undefined;
+};
+
 export type UnionType = number | string | boolean | ObjectType;
 
 export type ListType = Array<string>;

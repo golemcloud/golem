@@ -21,6 +21,7 @@ import {
   ObjectWithUnionWithUndefined1,
   ObjectWithUnionWithUndefined2,
   ObjectWithUnionWithUndefined3,
+  ObjectWithUnionWithUndefined4,
   UnionOfLiterals,
   UnionType,
 } from './testTypes';
@@ -96,6 +97,7 @@ class ComplexAgent extends BaseAgent {
     objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
     objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
     objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
+    objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
     optionalStringType: string | undefined,
     optionalUnionType: UnionType | undefined,
   ): Types.PromiseType {

@@ -265,6 +265,26 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
+  it('object with \`a?: string | undefined\` works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUnionWithUndefined4',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-union-with-undefined4',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
   it('captures all methods and constructor with correct number of parameters', () => {
     const weatherAgent = Option.getOrThrowWith(
       AgentTypeRegistry.lookup(SimpleAgentClassName),
