@@ -417,11 +417,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
             // was initialized with the correct amount of memory.
-            Ok(true)
+            Ok(())
         } else {
             // In live mode we need to try to get more memory permits and if we can't,
             // we fail the worker, unload it from memory and schedule a retry.
@@ -434,7 +434,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             self.public_state.worker().increase_memory(delta).await?;
             self.state.total_linear_memory_size += delta;
-            Ok(true)
+            Ok(())
         }
     }
 
