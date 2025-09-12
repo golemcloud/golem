@@ -25,6 +25,7 @@ struct Component;
 
 impl Guest for Component {
     fn add(value: u64) {
+        eprintln!("error log message");
         with_state(|state| {
             if value > 10 {
                 panic!("value is too large");
