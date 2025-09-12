@@ -141,7 +141,8 @@ export const ApiRoute = () => {
   );
   const [_apiResponse, setApiResponse] = useState({} as HttpApiDefinition);
   const [queryParams] = useSearchParams();
-  const path = queryParams.get("path");
+  const rawPath = queryParams.get("path");
+  const path = rawPath != null ? decodeURIComponent(rawPath) : null;
   const method = queryParams.get("method");
   const reload = queryParams.get("reload");
 
@@ -240,9 +241,15 @@ export const ApiRoute = () => {
                   Component
                 </h2>
                 <CodeBlock
-                  code={`${
-                    currentRoute?.binding?.componentName
-                  } / v${currentRoute?.binding?.componentVersion}`}
+                  code={(() => {
+                    const componentName = currentRoute?.binding?.componentName;
+                    const componentVersion =
+                      currentRoute.binding?.componentVersion == null
+                        ? "latest"
+                        : `v${currentRoute.binding.componentVersion}`;
+
+                    return `${componentName} / ${componentVersion}`;
+                  })()}
                   label="component name"
                   allowCopy={false}
                 />
@@ -280,7 +287,7 @@ export const ApiRoute = () => {
                   code={currentRoute?.binding?.workerName || "No worker name"}
                   label="worker name RIB script"
                   allowCopy={true}
-                /> 
+                />
                 </div> */}
 
             {/* Response Section */}

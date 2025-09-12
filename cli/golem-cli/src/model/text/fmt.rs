@@ -163,7 +163,9 @@ pub fn format_stack(stack: &str) -> String {
     stack
         .lines()
         .map(|line| {
-            if line.contains("<unknown>!<wasm function") {
+            if line.contains("called without being linked with an implementation") {
+                line.red().bold().to_string()
+            } else if line.contains("<unknown>!<wasm function") {
                 line.bright_black().to_string()
             } else {
                 line.yellow().to_string()

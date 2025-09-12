@@ -116,7 +116,7 @@ export const ApiLayout = () => {
                 return {
                   method: route.method,
                   name: route.path,
-                  url: `/app/${appId}/apis/${apiName}/version/${version}/routes/?path=${route.path}&method=${route.method}`,
+                  url: `/app/${appId}/apis/${apiName}/version/${version}/routes/?path=${encodeURIComponent(route.path)}&method=${route.method}`,
                 };
               })}
               setActiveItem={value => setCurrentMenu(value)}

@@ -154,7 +154,7 @@ impl Context {
             }
 
             if manifest_profile.redeploy_workers == Some(true) {
-                update_or_redeploy.redeploy_workers = true;
+                update_or_redeploy.redeploy_agents = true;
             }
 
             if manifest_profile.redeploy_http_api == Some(true) {

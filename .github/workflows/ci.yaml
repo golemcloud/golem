@@ -160,8 +160,6 @@ jobs:
             description: "API tests"
           - name: cli-integration-tests
             description: "CLI tests"
-          - name: template-integration-tests
-            description: "Template integration tests"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -186,15 +184,15 @@ jobs:
           auto-start: false
 
       - uses: cargo-bins/cargo-binstall@main
-        if: matrix.group.name == 'template-integration-tests' || matrix.group.name == 'cli-integration-tests'
+        if: matrix.group.name == 'cli-integration-tests'
       - name: Install cargo-component
-        if: matrix.group.name == 'template-integration-tests' || matrix.group.name == 'cli-integration-tests'
+        if: matrix.group.name == 'cli-integration-tests'
         run: cargo install cargo-component@0.21.1
       - name: Install wasm-tools
-        if: matrix.group.name == 'template-integration-tests' || matrix.group.name == 'cli-integration-tests'
+        if: matrix.group.name == 'cli-integration-tests'
         run: cargo binstall --force --locked wasm-tools@1.227.1
       - name: Install wit-bindgen
-        if: matrix.group.name == 'template-integration-tests' || matrix.group.name == 'cli-integration-tests'
+        if: matrix.group.name == 'cli-integration-tests'
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
 
       - name: Purge v8 from cache

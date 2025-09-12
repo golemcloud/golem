@@ -157,6 +157,8 @@ impl ComponentUpsertResult {
 pub struct ComponentView {
     #[serde(skip)]
     pub show_sensitive: bool,
+    #[serde(skip)]
+    pub show_exports_for_rib: bool,
 
     pub component_name: ComponentName,
     pub component_id: Uuid,
@@ -174,9 +176,41 @@ pub struct ComponentView {
 }
 
 impl ComponentView {
-    pub fn new(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_rib_style(show_sensitive: bool, value: Component) -> Self {
+        Self::new(show_sensitive, true, value)
+    }
+
+    pub fn new_wit_style(show_sensitive: bool, value: Component) -> Self {
+        Self::new(show_sensitive, false, value)
+    }
+
+    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: Component) -> Self {
+        let exports = {
+            if value.metadata.is_agent() {
+                if show_exports_for_rib {
+                    show_exported_agents(value.metadata.agent_types())
+                } else {
+                    value
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .flat_map(|agent| {
+                            show_exported_functions(
+                                value.metadata.exports(),
+                                true,
+                                agent_interface_name(&value, &agent.type_name).as_deref(),
+                            )
+                        })
+                        .collect()
+                }
+            } else {
+                show_exported_functions(value.metadata.exports(), true, None)
+            }
+        };
+
         ComponentView {
             show_sensitive,
+            show_exports_for_rib,
             component_name: value.component_name,
             component_id: value.versioned_component_id.component_id,
             component_type: value.component_type,
@@ -184,11 +218,7 @@ impl ComponentView {
             component_size: value.component_size,
             created_at: value.created_at,
             project_id: value.project_id,
-            exports: if value.metadata.is_agent() {
-                show_exported_agents(value.metadata.agent_types())
-            } else {
-                show_exported_functions(value.metadata.exports(), true, None)
-            },
+            exports,
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
@@ -384,19 +414,21 @@ fn render_element_schema(schema: &ElementSchema) -> String {
 pub fn show_exported_functions(
     exports: &[AnalysedExport],
     with_parameters: bool,
-    instance_name_filter: Option<&str>,
+    agent_instance_name_filter: Option<&str>,
 ) -> Vec<String> {
+    let is_agent = agent_instance_name_filter.is_some();
     exports
         .iter()
         .flat_map(|exp| match exp {
             AnalysedExport::Instance(AnalysedInstance { name, functions }) => {
-                if let Some(instance_name_filter) = instance_name_filter {
+                if let Some(instance_name_filter) = agent_instance_name_filter {
                     if name != instance_name_filter {
                         return vec![];
                     }
                 }
                 let fs: Vec<String> = functions
                     .iter()
+                    .filter(|f| !is_agent || f.name != "get-definition")
                     .map(|f| render_exported_function(Some(name), f, with_parameters))
                     .collect();
                 fs
