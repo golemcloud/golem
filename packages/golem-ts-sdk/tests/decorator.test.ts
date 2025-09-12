@@ -188,13 +188,13 @@ describe('Agent decorator should register the agent class and its methods into A
   it('object with union with undefined-one works', () => {
     const objectWithUnionWithNull = getWitType(
       complexAgentMethod!.inputSchema,
-      'objectWithUndefinedUnion1',
+      'objectWithUnionWithUndefined1',
     );
 
     const expected = {
       nodes: [
         {
-          name: 'object-with-undefined-union1',
+          name: 'object-with-union-with-undefined1',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { type: { tag: 'option-type', val: 2 } },
@@ -208,13 +208,13 @@ describe('Agent decorator should register the agent class and its methods into A
   it('object with union with undefined-two works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
-      'objectWithUndefinedUnion2',
+      'objectWithUnionWithUndefined2',
     );
 
     const expected = {
       nodes: [
         {
-          name: 'object-with-undefined-union2',
+          name: 'object-with-union-with-undefined2',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { type: { tag: 'option-type', val: 2 } },
@@ -238,15 +238,13 @@ describe('Agent decorator should register the agent class and its methods into A
   it('object with union with undefined-three works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
-      'objectWithUndefinedUnion3',
+      'objectWithUnionWithUndefined3',
     );
-
-    console.log(JSON.stringify(objectWithUnionWithNull2));
 
     const expected = {
       nodes: [
         {
-          name: 'object-with-undefined-union3',
+          name: 'object-with-union-with-undefined3',
           type: { tag: 'record-type', val: [['a', 1]] },
         },
         { type: { tag: 'option-type', val: 2 } },

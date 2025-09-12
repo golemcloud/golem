@@ -26,15 +26,15 @@ export type ObjectType = {
   c: boolean;
 };
 
-export type ObjectWithUndefinedUnion1 = {
+export type ObjectWithUnionWithUndefined1 = {
   a: string | undefined;
 };
 
-export type ObjectWithUndefinedUnion2 = {
+export type ObjectWithUnionWithUndefined2 = {
   a: string | number | undefined;
 };
 
-export type ObjectWithUndefinedUnion3 = {
+export type ObjectWithUnionWithUndefined3 = {
   a?: string | number | undefined;
 };
 
