@@ -19,6 +19,7 @@ use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
 use crate::model::app::DependencyType;
 use crate::wasm_rpc_stubgen::commands;
+use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 
@@ -27,7 +28,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
     let _indent = LogIndent::new();
 
     for component_name in ctx.selected_component_names() {
-        let static_dependencies = ctx
+        let static_wasm_rpc_dependencies = ctx
             .application
             .component_dependencies(component_name)
             .iter()
@@ -39,21 +40,25 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::Wasm)
             .collect::<BTreeSet<_>>();
-        let dynamic_dependencies = ctx
+        let dynamic_wasm_rpc_dependencies = ctx
             .application
             .component_dependencies(component_name)
             .iter()
             .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
             .collect::<BTreeSet<_>>();
 
-        let mut wasms_to_compose_with = Vec::new();
-        for static_dep in &static_dependencies {
-            let path = ctx.resolve_binary_component_source(static_dep).await?;
-            wasms_to_compose_with.push(path);
+        let mut plugs = Vec::new();
+        for static_dep in &static_wasm_rpc_dependencies {
+            plugs.push(Plug {
+                name: static_dep.source.to_string(),
+                wasm: ctx.resolve_binary_component_source(static_dep).await?,
+            });
         }
         for library_dep in &library_dependencies {
-            let path = ctx.resolve_binary_component_source(library_dep).await?;
-            wasms_to_compose_with.push(path);
+            plugs.push(Plug {
+                name: library_dep.source.to_string(),
+                wasm: ctx.resolve_binary_component_source(library_dep).await?,
+            });
         }
 
         let component_wasm = ctx
@@ -65,16 +70,18 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             &ctx.application.task_result_marker_dir(),
             LinkRpcMarkerHash {
                 component_name,
-                dependencies: &static_dependencies,
+                static_wasm_rpc_dependencies: &static_wasm_rpc_dependencies,
+                dynamic_wasm_rpc_dependencies: &dynamic_wasm_rpc_dependencies,
+                library_dependencies: &library_dependencies,
             },
         )?;
 
-        if !dynamic_dependencies.is_empty() {
+        if !dynamic_wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Found",
                 format!(
                     "dynamic WASM RPC dependencies ({}) for {}",
-                    dynamic_dependencies
+                    dynamic_wasm_rpc_dependencies
                         .iter()
                         .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
@@ -83,12 +90,12 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             );
         }
 
-        if !static_dependencies.is_empty() {
+        if !static_wasm_rpc_dependencies.is_empty() {
             log_action(
                 "Found",
                 format!(
                     "static WASM RPC dependencies ({}) for {}",
-                    static_dependencies
+                    static_wasm_rpc_dependencies
                         .iter()
                         .map(|s| s.source.to_string().log_color_highlight())
                         .join(", "),
@@ -114,9 +121,9 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
             || {
-                wasms_to_compose_with
+                plugs
                     .iter()
-                    .map(|s| s.as_path())
+                    .map(|p| p.wasm.as_path())
                     .chain(std::iter::once(component_wasm.as_path()))
             },
             || [&linked_wasm],
@@ -130,7 +137,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
         task_result_marker.result(
             async {
-                if wasms_to_compose_with.is_empty() {
+                if plugs.is_empty() {
                     log_action(
                         "Copying",
                         format!(
@@ -144,7 +151,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                         "Linking",
                         format!(
                             "static dependencies ({}) into {}",
-                            static_dependencies
+                            static_wasm_rpc_dependencies
                                 .iter()
                                 .map(|s| s.source.to_string().log_color_highlight())
                                 .chain(
@@ -162,7 +169,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                         ctx.application
                             .component_wasm(component_name, ctx.build_profile())
                             .as_path(),
-                        &wasms_to_compose_with,
+                        plugs,
                         linked_wasm.as_path(),
                     )
                     .await

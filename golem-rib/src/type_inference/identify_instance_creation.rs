@@ -21,6 +21,7 @@ use crate::{
     CustomError, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
     TypeInternal, TypeOrigin,
 };
+use golem_wasm_ast::analysis::AnalysedType;
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation
@@ -185,26 +186,79 @@ fn get_instance_creation_details(
                     match custom_instance_spec {
                         None => Ok((None, None)),
                         Some(custom_instance_spec) => {
+                            // In a custom instance the worker name is then
+                            // `custom-instance-name(arg1, arg2, ...)`
+                            // Such that arg1, if ends up (after interpretation)
+                            // in a string, then it should be quoted
+                            // while arg2, if not a string, can be kept
+                            // as it is (keeping the wave syntax valid)
                             let new_worker_name_prefix =
                                 format!("{}(", custom_instance_spec.instance_name);
 
                             let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
-                            let mut iter = args.iter().cloned().peekable();
 
-                            while let Some(arg) = iter.next() {
+                            if args.len() != custom_instance_spec.parameter_types.len() {
+                                return Err(format!(
+                                    "expected {} arguments, found {}",
+                                    custom_instance_spec.parameter_types.len(),
+                                    args.len()
+                                ));
+                            }
+
+                            let mut args_iter = args
+                                .iter()
+                                .zip(custom_instance_spec.parameter_types)
+                                .peekable();
+
+                            while let Some((arg, analysed_type)) = args_iter.next() {
                                 match arg {
-                                    Expr::Literal { .. } => {
-                                        exprs.push(Expr::literal("\""));
-                                        exprs.push(arg);
-                                        exprs.push(Expr::literal("\""));
+                                    // chances of being a string after interpretation
+                                    Expr::Literal { .. }
+                                    | Expr::Identifier { .. }
+                                    | Expr::SelectField { .. }
+                                    | Expr::SelectIndex { .. }
+                                    | Expr::Concat { .. }
+                                    | Expr::ListReduce { .. }
+                                    | Expr::ExprBlock { .. }
+                                    | Expr::Cond { .. }
+                                    | Expr::PatternMatch { .. }
+                                    | Expr::Call { .. }
+                                    | Expr::GenerateWorkerName { .. }
+                                    | Expr::InvokeMethodLazy { .. } => {
+                                        quote_string(&analysed_type, &mut exprs, arg)
                                     }
 
-                                    _ => {
-                                        exprs.push(arg);
-                                    }
+                                    // Can't never be a string
+                                    Expr::Let { .. }
+                                    | Expr::Sequence { .. }
+                                    | Expr::Range { .. }
+                                    | Expr::Record { .. }
+                                    | Expr::Tuple { .. }
+                                    | Expr::Number { .. }
+                                    | Expr::Flags { .. }
+                                    | Expr::Boolean { .. }
+                                    | Expr::Not { .. }
+                                    | Expr::GreaterThan { .. }
+                                    | Expr::And { .. }
+                                    | Expr::Or { .. }
+                                    | Expr::GreaterThanOrEqualTo { .. }
+                                    | Expr::LessThanOrEqualTo { .. }
+                                    | Expr::Plus { .. }
+                                    | Expr::Multiply { .. }
+                                    | Expr::Minus { .. }
+                                    | Expr::Divide { .. }
+                                    | Expr::EqualTo { .. }
+                                    | Expr::LessThan { .. }
+                                    | Expr::Option { .. }
+                                    | Expr::Result { .. }
+                                    | Expr::Unwrap { .. }
+                                    | Expr::Throw { .. }
+                                    | Expr::GetTag { .. }
+                                    | Expr::ListComprehension { .. }
+                                    | Expr::Length { .. } => exprs.push(arg.clone()),
                                 }
 
-                                if iter.peek().is_some() {
+                                if args_iter.peek().is_some() {
                                     exprs.push(Expr::literal(","));
                                 }
                             }
@@ -235,6 +289,19 @@ fn get_instance_creation_details(
         }
         CallType::VariantConstructor(_) => Ok((None, None)),
         CallType::EnumConstructor(_) => Ok((None, None)),
+    }
+}
+
+fn quote_string(analysed_type: &AnalysedType, instance_args: &mut Vec<Expr>, arg: &Expr) {
+    match analysed_type {
+        AnalysedType::Str(_) => {
+            instance_args.push(Expr::literal("\""));
+            instance_args.push(arg.clone());
+            instance_args.push(Expr::literal("\""));
+        }
+        _ => {
+            instance_args.push(arg.clone());
+        }
     }
 }
 
