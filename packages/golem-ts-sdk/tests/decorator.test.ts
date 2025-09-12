@@ -185,7 +185,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(unionWithNullType).toEqual(expected);
   });
 
-  it('object with union with undefined-one works', () => {
+  it('object with \`a: string | undefined\` works', () => {
     const objectWithUnionWithNull = getWitType(
       complexAgentMethod!.inputSchema,
       'objectWithUnionWithUndefined1',
@@ -205,7 +205,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull).toEqual(expected);
   });
 
-  it('object with union with undefined-two works', () => {
+  it('object with \`a: string | number | undefined\` works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
       'objectWithUnionWithUndefined2',
@@ -235,7 +235,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
-  it('object with union with undefined-three works', () => {
+  it('object with \`a?: string | number | undefined\` works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
       'objectWithUnionWithUndefined3',
