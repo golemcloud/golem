@@ -783,6 +783,61 @@ impl TextView for PublicOplogEntry {
                     format_id(&format!("{:?}", &params.persistence_level))
                 ));
             }
+            PublicOplogEntry::BeginRemoteTransaction(params) => {
+                logln(format_message_highlight("BEGIN REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}transaction id:          {}",
+                    format_id(&params.transaction_id)
+                ));
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+                logln(format_message_highlight("PRE COMMIT REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+                logln(format_message_highlight("PRE ROLLBACK REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(params) => {
+                logln(format_message_highlight("COMMITTED REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+                logln(format_message_highlight("ROLLED BACK REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
         }
     }
 }
