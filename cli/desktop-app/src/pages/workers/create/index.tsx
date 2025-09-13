@@ -45,14 +45,22 @@ export default function CreateWorker() {
   const [agentConstructorDetails, setAgentConstructorDetails] = useState<
     string[]
   >([]);
+
   useEffect(() => {
     API.componentService.getComponentById(appId!, componentId!).then(res => {
-      const agentSuffix = " agent constructor";
-      console.log(res);
       const constructors = res.exports
-        ?.filter(e => e.endsWith(agentSuffix))
-        .map(e => e.slice(0, -agentSuffix.length));
-      console.log(constructors);
+        ?.map(entry => {
+          const match = entry.match(/([^/]+)\/([^/]+)\.\{([^}]+)\}\(([^)]*)\)/);
+          if (match == null) return null;
+
+          const [_, packageName, agentName, func, args] = match;
+          if (packageName === res.componentName && func === "initialize") {
+            return `${agentName}(${args})`;
+          }
+          return null;
+        })
+        .filter(e => e != null);
+
       setAgentConstructorDetails(constructors);
     });
   }, [componentId]);
