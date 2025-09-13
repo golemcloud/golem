@@ -14,9 +14,7 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
-import {
-  getWitValueFromDataValue,
-} from '../src/decorators';
+import { getWitValueFromDataValue } from '../src/decorators';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect, it } from 'vitest';
@@ -42,85 +40,6 @@ import {
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
 import { DataValue } from 'golem:agent/common';
-
-test("ComplexAgent can be successfully initiated and the methods can be invoked'", () => {
-  fc.assert(
-    fc.property(
-      interfaceArb,
-      fc.oneof(fc.string(), fc.constant(null)),
-      fc.oneof(unionArb, fc.constant(null)),
-      (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(ComplexAgentName.value);
-
-        const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
-
-        if (!typeRegistry) {
-          throw new Error('ComplexAgent type metadata not found');
-        }
-
-        // TestInterfaceType
-        const arg0 = typeRegistry.constructorArgs[0].type;
-
-        // string | null
-        const arg1 = typeRegistry.constructorArgs[1].type;
-
-        // UnionType | null
-        const arg2 = typeRegistry.constructorArgs[2].type;
-
-        const interfaceWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(interfaceValue, arg0),
-          (error) =>
-            new Error(`Failed to convert interface to WitValue. ${error}`),
-        );
-
-        const optionalStringWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(stringValue, arg1),
-          (error) =>
-            new Error(`Failed to convert interface to WitValue. ${error}`),
-        );
-
-        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
-
-        const optionalUnionWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(unionValue, arg2),
-          (error) => new Error(`Failed to convert union to WitValue. ${error}`),
-        );
-
-        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
-
-        const dataValue: DataValue = {
-          tag: 'tuple',
-          val: [
-            {
-              tag: 'component-model',
-              val: interfaceWit,
-            },
-            {
-              tag: 'component-model',
-              val: optionalStringWit,
-            },
-            {
-              tag: 'component-model',
-              val: optionalUnionWit,
-            },
-          ],
-        };
-
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(ComplexAgentName),
-          () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
-        );
-
-        const result = agentInitiator.initiate(
-          ComplexAgentName.value,
-          dataValue,
-        );
-
-        expect(result.tag).toEqual('ok');
-      },
-    ),
-  );
-});
 
 test('SimpleAgent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -250,6 +169,85 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
             param7: unionOrUndefined,
           },
         );
+      },
+    ),
+  );
+});
+
+test('ComplexAgent can be successfully initiated', () => {
+  fc.assert(
+    fc.property(
+      interfaceArb,
+      fc.oneof(fc.string(), fc.constant(null)),
+      fc.oneof(unionArb, fc.constant(null)),
+      (interfaceValue, stringValue, unionValue) => {
+        overrideSelfMetadataImpl(ComplexAgentName.value);
+
+        const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
+
+        if (!typeRegistry) {
+          throw new Error('ComplexAgent type metadata not found');
+        }
+
+        // TestInterfaceType
+        const arg0 = typeRegistry.constructorArgs[0].type;
+
+        // string | null
+        const arg1 = typeRegistry.constructorArgs[1].type;
+
+        // UnionType | null
+        const arg2 = typeRegistry.constructorArgs[2].type;
+
+        const interfaceWit = Either.getOrThrowWith(
+          WitValue.fromTsValue(interfaceValue, arg0),
+          (error) =>
+            new Error(`Failed to convert interface to WitValue. ${error}`),
+        );
+
+        const optionalStringWit = Either.getOrThrowWith(
+          WitValue.fromTsValue(stringValue, arg1),
+          (error) =>
+            new Error(`Failed to convert interface to WitValue. ${error}`),
+        );
+
+        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
+
+        const optionalUnionWit = Either.getOrThrowWith(
+          WitValue.fromTsValue(unionValue, arg2),
+          (error) => new Error(`Failed to convert union to WitValue. ${error}`),
+        );
+
+        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
+
+        const dataValue: DataValue = {
+          tag: 'tuple',
+          val: [
+            {
+              tag: 'component-model',
+              val: interfaceWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalStringWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalUnionWit,
+            },
+          ],
+        };
+
+        const agentInitiator = Option.getOrThrowWith(
+          AgentInitiatorRegistry.lookup(ComplexAgentName),
+          () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
+        );
+
+        const result = agentInitiator.initiate(
+          ComplexAgentName.value,
+          dataValue,
+        );
+
+        expect(result.tag).toEqual('ok');
       },
     ),
   );
