@@ -15,7 +15,6 @@
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
 import {
-  getDataValueFromReturnValueWit,
   getWitValueFromDataValue,
 } from '../src/decorators';
 import * as Option from '../src/newTypes/option';
@@ -123,7 +122,7 @@ test("ComplexAgent can be successfully initiated and the methods can be invoked'
   );
 });
 
-test('SimpleAgent can be successfully initiated and the methods can be invoked', () => {
+test('SimpleAgent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
     fc.property(
       fc.string(),
@@ -154,36 +153,7 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
           throw new Error('SimpleAgent type metadata not found');
         }
 
-        const constructorInfo = typeRegistry.constructorArgs[0].type;
-
-        const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValue(arbString, constructorInfo),
-          (error) =>
-            new Error(
-              `Failed to convert constructor arg to WitValue. ${error}`,
-            ),
-        );
-
-        const constructorParams = getDataValueFromReturnValueWit(witValue);
-
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(SimpleAgentName),
-          () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
-        );
-
-        const result = agentInitiator.initiate(
-          SimpleAgentName.value,
-          constructorParams,
-        );
-
-        expect(result.tag).toEqual('ok');
-
-        const resolvedAgent =
-          result.tag === 'ok'
-            ? result.val
-            : (() => {
-                throw new Error('Agent initiation failed');
-              })();
+        const resolvedAgent = initiateSimpleAgent(arbString, typeRegistry);
 
         testInvoke(
           typeRegistry,
@@ -284,6 +254,45 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
     ),
   );
 });
+
+function initiateSimpleAgent(
+  constructorParamString: string,
+  simpleAgentClassMeta: ClassMetadata,
+) {
+  const constructorInfo = simpleAgentClassMeta.constructorArgs[0].type;
+
+  const witValue = Either.getOrThrowWith(
+    WitValue.fromTsValue(constructorParamString, constructorInfo),
+    (error) =>
+      new Error(`Failed to convert constructor arg to WitValue. ${error}`),
+  );
+
+  const constructorParams: DataValue = {
+    tag: 'tuple',
+    val: [
+      {
+        tag: 'component-model',
+        val: witValue,
+      },
+    ],
+  };
+
+  const agentInitiator = Option.getOrThrowWith(
+    AgentInitiatorRegistry.lookup(SimpleAgentName),
+    () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
+  );
+
+  const result = agentInitiator.initiate(
+    SimpleAgentName.value,
+    constructorParams,
+  );
+
+  if (result.tag !== 'ok') {
+    throw new Error('Agent initiation failed');
+  }
+
+  return result.val;
+}
 
 function testInvoke(
   typeRegistry: ClassMetadata,
