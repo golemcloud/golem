@@ -56,8 +56,8 @@ describe('TypeScript Interface to AnalysedType', () => {
     checkOptionalFields(recordFields);
   });
 
-  it('Union types (aliased) within an interface', () => {
-    ///checkUnionFields(recordFields);
+  it('Union types within an interface', () => {
+    checkUnionFields(recordFields);
     checkUnionComplexFields(recordFields);
   });
 
@@ -314,6 +314,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
     typ: {
       kind: 'variant',
       value: {
+        name: 'union-complex-type',
         cases: [
           {
             name: 'case1',
@@ -340,24 +341,6 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
               value: {
                 fields: [
                   {
-                    name: 'n',
-                    typ: {
-                      kind: 's32',
-                    },
-                  },
-                ],
-                name: 'simple-interface-type',
-                owner: undefined,
-              },
-            },
-          },
-          {
-            name: 'case5',
-            typ: {
-              kind: 'record',
-              value: {
-                fields: [
-                  {
                     name: 'a',
                     typ: {
                       kind: 'string',
@@ -377,6 +360,24 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                   },
                 ],
                 name: 'object-type',
+                owner: undefined,
+              },
+            },
+          },
+          {
+            name: 'case5',
+            typ: {
+              kind: 'record',
+              value: {
+                fields: [
+                  {
+                    name: 'n',
+                    typ: {
+                      kind: 's32',
+                    },
+                  },
+                ],
+                name: 'simple-interface-type',
                 owner: undefined,
               },
             },
@@ -802,7 +803,6 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             },
           },
         ],
-        name: 'union-complex-type',
         owner: undefined,
       },
     },
@@ -812,61 +812,38 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
 }
 
 function checkUnionFields(fields: any[]) {
-  const unionFields = fields.filter((f) => f.name.startsWith('unionProp'));
-  expect(unionFields.length).toBeGreaterThan(0);
+  const unionField = fields.find((f) => f.name === 'unionProp');
 
-  const expectedCases: NameTypePair[] = [
-    {
-      name: 'case1',
-      typ: {
-        kind: 'string',
+  const expected = {
+    name: 'unionProp',
+    typ: {
+      kind: 'variant',
+      value: {
+        name: 'union-type',
+        cases: [
+          { name: 'case1', typ: { kind: 'string' } },
+          { name: 'case2', typ: { kind: 's32' } },
+          { name: 'case3', typ: { kind: 'bool' } },
+          {
+            name: 'case4',
+            typ: {
+              kind: 'record',
+              value: {
+                name: 'object-type',
+                fields: [
+                  { name: 'a', typ: { kind: 'string' } },
+                  { name: 'b', typ: { kind: 's32' } },
+                  { name: 'c', typ: { kind: 'bool' } },
+                ],
+              },
+            },
+          },
+        ],
       },
     },
-    {
-      name: 'case2',
-      typ: { kind: 's32' },
-    },
-    {
-      name: 'case3',
-      typ: { kind: 'bool' },
-    },
-    {
-      name: 'case4',
-      typ: {
-        kind: 'record',
-        value: {
-          fields: [
-            {
-              name: 'a',
-              typ: {
-                kind: 'string',
-              },
-            },
-            {
-              name: 'b',
-              typ: {
-                kind: 's32',
-              },
-            },
-            {
-              name: 'c',
-              typ: {
-                kind: 'bool',
-              },
-            },
-          ],
-          name: undefined,
-          owner: undefined,
-        },
-      },
-    },
-  ];
+  };
 
-  // This implies wit value will be a variant with these cases
-  unionFields.forEach((field) => {
-    expect(field.typ.kind).toBe('variant');
-    expect(field.typ.value.cases).toEqual(expectedCases);
-  });
+  expect(unionField).toEqual(expected);
 }
 
 function checkObjectFields(fields: any[]) {

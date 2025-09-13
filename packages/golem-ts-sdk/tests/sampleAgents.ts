@@ -56,6 +56,27 @@ class SimpleAgent extends BaseAgent {
   fun6 = (location: string) => {
     return;
   };
+
+  fun7 = async (
+    unionWithNull: string | number | null,
+    objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
+    objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
+    objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
+    objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
+    optionalStringType: string | undefined,
+    optionalUnionType: UnionType | undefined,
+  ) => {
+    const concatenatedResult = {
+      union: unionWithNull,
+      obj1: objectWithUnionWithUndefined1.a,
+      obj2: objectWithUnionWithUndefined2.a,
+      obj3: objectWithUnionWithUndefined3.a,
+      obj4: objectWithUnionWithUndefined4.a,
+      optionalStr: optionalStringType ?? null,
+      // optionalUnion: optionalUnionType ?? 'undefined',
+    };
+    return Promise.resolve(concatenatedResult);
+  };
 }
 
 export interface CustomData {

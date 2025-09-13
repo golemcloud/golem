@@ -94,38 +94,39 @@ export function getRecordFieldsFromAnalysedType(
 }
 
 function fetchType(typeNameInTestData: string): Type.Type {
-  const classMetadata = Array.from(getAll()).map(([_, v]) => v);
+  const complexAgentMetadata = TypeMetadata.get('ComplexAgent');
 
-  for (const type of classMetadata) {
-    const constructorArg = type.constructorArgs.find((arg) => {
-      const typeName = Type.getTypeName(arg.type);
+  if (!complexAgentMetadata) {
+    throw new Error('Class metadata for ComplexAgent not found');
+  }
+
+  const constructorArg = complexAgentMetadata.constructorArgs.find((arg) => {
+    const typeName = Type.getTypeName(arg.type);
+    return typeName === typeNameInTestData;
+  });
+
+  if (constructorArg) {
+    return constructorArg.type;
+  }
+
+  const methods = Array.from(complexAgentMetadata.methods.values());
+
+  for (const method of methods) {
+    if (
+      method.returnType &&
+      Type.getTypeName(method.returnType) === typeNameInTestData
+    ) {
+      return method.returnType;
+    }
+
+    const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
+      const typeName = Type.getTypeName(t);
       return typeName === typeNameInTestData;
     });
 
-    if (constructorArg) {
-      return constructorArg.type;
-    }
-
-    const methods = Array.from(type.methods.values());
-
-    for (const method of methods) {
-      if (
-        method.returnType &&
-        Type.getTypeName(method.returnType) === typeNameInTestData
-      ) {
-        return method.returnType;
-      }
-
-      const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
-        const typeName = Type.getTypeName(t);
-        return typeName === typeNameInTestData;
-      });
-
-      if (param) {
-        return param[1];
-      }
+    if (param) {
+      return param[1];
     }
   }
-
   throw new Error(`Type ${typeNameInTestData} not found in metadata`);
 }

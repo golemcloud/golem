@@ -24,6 +24,8 @@ import * as Either from '../src/newTypes/either';
 const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
 
+// We almost let agent run and get the errors from it (yet), because - it doesn't accumulate all errors
+// and it doesn't return a value for us to inspect but rather the import fails.
 describe('Invalid types in agents', () => {
   it('invalid types in method inputs will return error', () => {
     const dateType = getAnalysedTypeInFun1('date');

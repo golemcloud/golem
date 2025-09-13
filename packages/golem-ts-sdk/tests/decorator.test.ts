@@ -293,7 +293,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(complexAgent.methods.length).toEqual(22);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
-    expect(weatherAgent.methods.length).toEqual(6);
+    expect(weatherAgent.methods.length).toEqual(7);
     expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 });

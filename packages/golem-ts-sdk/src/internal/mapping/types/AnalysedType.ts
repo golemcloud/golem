@@ -15,7 +15,7 @@
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { numberToOrdinalKebab, variantCaseName } from './typeIndexOrdinal';
+import { variantCaseName } from './typeIndexOrdinal';
 import { TypeMappingScope } from './scope';
 
 type TsType = CoreType.Type;
