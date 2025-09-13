@@ -148,8 +148,8 @@ class MyAgent {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
 
-  // private functions are not tracked by type-gen. This can be made configurable though
+  // type-gen does not track private functions. This can be made configurable though
   private async getWeather2(object: Object): PromiseType {
-    return Promise.resolve(`Weather in ${location} is sunny!`);
+    return Promise.resolve(`Weather in is sunny!`);
   }
 }

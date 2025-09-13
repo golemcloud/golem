@@ -1178,6 +1178,21 @@ export function toTsValue(value: Value, type: Type.Type): any {
   if (value.kind === 'option') {
     const caseValue = value.value;
     if (!caseValue) {
+      // Select between undefined and null
+
+      if (type.kind === 'null') return null;
+      if (type.kind === 'undefined' || type.kind === 'void') return undefined;
+      if (type.kind === 'union') {
+        const unionKinds = type.unionTypes.map((t) => t.kind);
+        if (unionKinds.includes('null')) {
+          return null;
+        }
+
+        if (unionKinds.includes('undefined')) {
+          return undefined;
+        }
+      }
+
       return undefined;
     }
 
@@ -1205,6 +1220,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
     case 'bigint':
       return convertToBigInt(value);
 
+    // This shouldn't happen as null would be always value.kind === optional
     case 'null':
       if (value.kind === 'tuple' && value.value.length === 0) {
         return null;
@@ -1212,6 +1228,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
         throw new Error(typeMismatchOut(value, 'null'));
       }
 
+    // This shouldn't happen as optional would be always value.kind === optional
     case 'undefined':
       if (value.kind === 'tuple' && value.value.length === 0) {
         return undefined;

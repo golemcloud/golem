@@ -46,7 +46,7 @@ class InvalidAgent extends BaseAgent {
     unionWithUndefined: string | number | undefined,
     unionWithVoid: string | number | void,
   ): Types.PromiseType {
-    return Promise.resolve(`Weather in ${location} is sunny!`);
+    return Promise.resolve(`Weather is sunny!`);
   }
 
   async fun2(input: string): Promise<Date> {

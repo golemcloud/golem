@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import fc from 'fast-check';
+import fc, { Arbitrary } from 'fast-check';
 
 import {
   ListComplexType,
@@ -20,6 +20,10 @@ import {
   MapType,
   ObjectComplexType,
   ObjectType,
+  ObjectWithUnionWithUndefined1,
+  ObjectWithUnionWithUndefined2,
+  ObjectWithUnionWithUndefined3,
+  ObjectWithUnionWithUndefined4,
   TestInterfaceType,
   TupleComplexType,
   TupleType,
@@ -28,6 +32,38 @@ import {
 } from './testTypes';
 
 import { AgentClassName } from '../src';
+
+export const stringOrNull = fc.oneof(fc.string(), fc.constant(null));
+
+export const stringOrNumberOrNull = fc.oneof(
+  fc.string(),
+  fc.integer(),
+  fc.constant(null),
+);
+
+export const stringOrUndefined = fc.oneof(fc.string(), fc.constant(undefined));
+
+export const stringOrNumberOrUndefined = fc.oneof(
+  fc.string(),
+  fc.integer(),
+  fc.constant(undefined),
+);
+
+export const objectWithUnionWithUndefined1Arb: Arbitrary<ObjectWithUnionWithUndefined1> =
+  fc.record({
+    a: stringOrUndefined,
+  });
+
+export const objectWithUnionWithUndefined2Arb: Arbitrary<ObjectWithUnionWithUndefined2> =
+  fc.record({
+    a: stringOrNumberOrUndefined,
+  });
+
+export const objectWithUnionWithUndefined3Arb: Arbitrary<ObjectWithUnionWithUndefined3> =
+  fc.oneof(fc.record({}), fc.record({ a: stringOrNumberOrUndefined }));
+
+export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUndefined4> =
+  fc.oneof(fc.record({}), fc.record({ a: stringOrUndefined }));
 
 const base = 'AssistantAgent';
 

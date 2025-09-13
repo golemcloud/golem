@@ -30,7 +30,16 @@ import {
 } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
-import { interfaceArb, unionArb } from './arbitraries';
+import {
+  interfaceArb,
+  objectWithUnionWithUndefined1Arb,
+  objectWithUnionWithUndefined2Arb,
+  objectWithUnionWithUndefined3Arb,
+  objectWithUnionWithUndefined4Arb,
+  stringOrNumberOrNull,
+  stringOrUndefined,
+  unionArb,
+} from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
 import { DataValue } from 'golem:agent/common';
@@ -118,9 +127,25 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
   fc.assert(
     fc.property(
       fc.string(),
-      fc.string(),
       fc.integer(),
-      (arbData, locationValue, number) => {
+      stringOrNumberOrNull,
+      objectWithUnionWithUndefined1Arb,
+      objectWithUnionWithUndefined2Arb,
+      objectWithUnionWithUndefined3Arb,
+      objectWithUnionWithUndefined4Arb,
+      stringOrUndefined,
+      fc.oneof(unionArb, fc.constant(undefined)),
+      (
+        arbString,
+        number,
+        stringOrNumberOrNull,
+        objectWithUnionWithUndefined1,
+        objectWithUnionWithUndefined2,
+        objectWithUnionWithUndefined3,
+        objectWithUnionWithUndefined4,
+        stringOrUndefined,
+        unionOrUndefined,
+      ) => {
         overrideSelfMetadataImpl(SimpleAgentName.value);
 
         const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
@@ -132,7 +157,7 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
         const constructorInfo = typeRegistry.constructorArgs[0].type;
 
         const witValue = Either.getOrThrowWith(
-          WitValue.fromTsValue(arbData, constructorInfo),
+          WitValue.fromTsValue(arbString, constructorInfo),
           (error) =>
             new Error(
               `Failed to convert constructor arg to WitValue. ${error}`,
@@ -163,44 +188,55 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
         testInvoke(
           typeRegistry,
           'fun1',
-          'location',
-          locationValue,
+          [['param', arbString]],
           resolvedAgent,
-          'Weather in ' + locationValue + ' is sunny!',
+          'Weather in ' + arbString + ' is sunny!',
         );
 
         testInvoke(
           typeRegistry,
           'fun2',
-          'data',
-          {
-            value: number,
-            data: locationValue,
-          },
+          [
+            [
+              'param',
+              {
+                value: number,
+                data: arbString,
+              },
+            ],
+          ],
           resolvedAgent,
-          `Weather in ${locationValue} is sunny!`,
+          `Weather in ${arbString} is sunny!`,
         );
 
         testInvoke(
           typeRegistry,
           'fun3',
-          'param2',
-          {
-            data: locationValue,
-            value: number,
-          },
+          [
+            [
+              'param',
+              {
+                data: arbString,
+                value: number,
+              },
+            ],
+          ],
           resolvedAgent,
-          `Weather in ${locationValue} is sunny!`,
+          `Weather in ${arbString} is sunny!`,
         );
 
         testInvoke(
           typeRegistry,
           'fun4',
-          'location',
-          {
-            data: locationValue,
-            value: number,
-          },
+          [
+            [
+              'param',
+              {
+                data: arbString,
+                value: number,
+              },
+            ],
+          ],
           resolvedAgent,
           undefined,
         );
@@ -208,19 +244,41 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
         testInvoke(
           typeRegistry,
           'fun5',
-          'location',
-          locationValue,
+          [['param', arbString]],
           resolvedAgent,
-          `Weather in ${locationValue} is sunny!`,
+          `Weather in ${arbString} is sunny!`,
         );
 
         testInvoke(
           typeRegistry,
           'fun6',
-          'location',
-          locationValue,
+          [['param', arbString]],
           resolvedAgent,
           undefined,
+        );
+
+        testInvoke(
+          typeRegistry,
+          'fun7',
+          [
+            ['param1', stringOrNumberOrNull],
+            ['param2', objectWithUnionWithUndefined1],
+            ['param3', objectWithUnionWithUndefined2],
+            ['param4', objectWithUnionWithUndefined3],
+            ['param5', objectWithUnionWithUndefined4],
+            ['param6', stringOrUndefined],
+            ['param7', unionOrUndefined],
+          ],
+          resolvedAgent,
+          {
+            param1: stringOrNumberOrNull,
+            param2: objectWithUnionWithUndefined1.a,
+            param3: objectWithUnionWithUndefined2.a,
+            param4: objectWithUnionWithUndefined3.a,
+            param5: objectWithUnionWithUndefined4.a,
+            param6: stringOrUndefined,
+            param7: unionOrUndefined,
+          },
         );
       },
     ),
@@ -230,8 +288,7 @@ test('SimpleAgent can be successfully initiated and the methods can be invoked',
 function testInvoke(
   typeRegistry: ClassMetadata,
   methodName: string,
-  parameterName: string,
-  arbInput: any,
+  parameterName: [string, any][],
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
 ) {
@@ -247,33 +304,44 @@ function testInvoke(
     throw new Error(`Method ${methodName} not found in metadata`);
   }
 
-  const parameterType = parametersInfo.get(parameterName);
+  const witValues = parameterName.map(([paramName, value]) => {
+    const paramType = parametersInfo.get(paramName);
 
-  if (!parameterType) {
-    throw new Error(
-      'Parameter location not found in method getWeather metadata',
+    if (!paramType) {
+      throw new Error(
+        `Parameter type for ${paramName} not found in method ${methodName} metadata`,
+      );
+    }
+
+    return Either.getOrThrowWith(
+      WitValue.fromTsValue(value, paramType),
+      (error) =>
+        new Error(
+          `Failed to convert parameter ${paramName} to WitValue. ${error}`,
+        ),
     );
-  }
+  });
 
-  const parameterWitValue = Either.getOrThrowWith(
-    WitValue.fromTsValue(arbInput, parameterType),
-    (error) => new Error('Test error ' + error),
-  );
+  const dataValues: DataValue = {
+    tag: 'tuple',
+    val: witValues.map((witValue) => ({
+      tag: 'component-model',
+      val: witValue,
+    })),
+  };
 
-  resolvedAgent
-    .invoke(methodName, getDataValueFromReturnValueWit(parameterWitValue))
-    .then((invokeResult) => {
-      const invokeDataValue =
-        invokeResult.tag === 'ok'
-          ? invokeResult.val
-          : (() => {
-              throw new Error('Failed to convert method arg to WitValue. ');
-            })();
-      const witValue = getWitValueFromDataValue(invokeDataValue)[0];
-      const result = WitValue.toTsValue(witValue, returnTypeInfo);
+  resolvedAgent.invoke(methodName, dataValues).then((invokeResult) => {
+    const invokeDataValue =
+      invokeResult.tag === 'ok'
+        ? invokeResult.val
+        : (() => {
+            throw new Error('Failed to convert method arg to WitValue. ');
+          })();
+    const witValue = getWitValueFromDataValue(invokeDataValue)[0];
+    const result = WitValue.toTsValue(witValue, returnTypeInfo);
 
-      expect(result).toEqual(expectedOutput);
-    });
+    expect(result).toEqual(expectedOutput);
+  });
 }
 
 function overrideSelfMetadataImpl(agentName: string) {

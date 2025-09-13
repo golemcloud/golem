@@ -33,47 +33,47 @@ class SimpleAgent extends BaseAgent {
     this.input = input;
   }
 
-  async fun1(location: string): Types.PromiseType {
-    return Promise.resolve(`Weather in ${location} is sunny!`);
+  async fun1(param: string): Types.PromiseType {
+    return Promise.resolve(`Weather in ${param} is sunny!`);
   }
 
-  async fun2(data: { value: number; data: string }): Types.PromiseType {
-    return Promise.resolve(`Weather in ${data.data} is sunny!`);
+  async fun2(param: { value: number; data: string }): Types.PromiseType {
+    return Promise.resolve(`Weather in ${param.data} is sunny!`);
   }
 
-  async fun3(param2: CustomData): Types.PromiseType {
-    return Promise.resolve(`Weather in ${param2.data} is sunny!`);
+  async fun3(param: CustomData): Types.PromiseType {
+    return Promise.resolve(`Weather in ${param.data} is sunny!`);
   }
 
-  async fun4(location: CustomData) {
+  async fun4(param: CustomData) {
     return;
   }
 
-  fun5 = (location: string) => {
-    return Promise.resolve(`Weather in ${location} is sunny!`);
+  fun5 = (param: string) => {
+    return Promise.resolve(`Weather in ${param} is sunny!`);
   };
 
-  fun6 = (location: string) => {
+  fun6 = (param: string) => {
     return;
   };
 
   fun7 = async (
-    unionWithNull: string | number | null,
-    objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
-    objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
-    objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
-    objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
-    optionalStringType: string | undefined,
-    optionalUnionType: UnionType | undefined,
+    param1: string | number | null,
+    param2: ObjectWithUnionWithUndefined1,
+    param3: ObjectWithUnionWithUndefined2,
+    param4: ObjectWithUnionWithUndefined3,
+    param5: ObjectWithUnionWithUndefined4,
+    param6: string | undefined,
+    param7: UnionType | undefined,
   ) => {
     const concatenatedResult = {
-      union: unionWithNull,
-      obj1: objectWithUnionWithUndefined1.a,
-      obj2: objectWithUnionWithUndefined2.a,
-      obj3: objectWithUnionWithUndefined3.a,
-      obj4: objectWithUnionWithUndefined4.a,
-      optionalStr: optionalStringType ?? null,
-      // optionalUnion: optionalUnionType ?? 'undefined',
+      param1: param1,
+      param2: param2.a,
+      param3: param3.a,
+      param4: param4.a,
+      param5: param5.a,
+      param6: param6,
+      param7: param7,
     };
     return Promise.resolve(concatenatedResult);
   };
