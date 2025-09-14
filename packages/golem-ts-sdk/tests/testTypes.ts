@@ -16,7 +16,17 @@ interface SimpleInterfaceType {
   n: number;
 }
 
-export type UnionWithLiterals = 'a' | 'b' | 'c' | true | false;
+export type TaggedUnion =
+  | { tag: 'a'; val: string }
+  | { tag: 'b'; val: number }
+  | { tag: 'c'; val: boolean }
+  | { tag: 'c'; val: UnionType }
+  | { tag: 'd'; val: ObjectType }
+  | { tag: 'e'; val: ListType }
+  | { tag: 'f'; val: TupleType }
+  | { tag: 'g'; val: SimpleInterfaceType };
+
+export type UnionWithLiterals = 'a' | 'b' | 'c' | boolean;
 
 export type PromiseType = Promise<string>;
 

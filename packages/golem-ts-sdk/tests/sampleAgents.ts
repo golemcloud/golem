@@ -24,6 +24,7 @@ import {
   ObjectWithUnionWithUndefined4,
   UnionWithLiterals,
   UnionType,
+  TaggedUnion,
 } from './testTypes';
 
 @agent()
@@ -80,6 +81,10 @@ class SimpleAgent extends BaseAgent {
   };
 
   async fun8(a: UnionWithLiterals): Promise<UnionWithLiterals> {
+    return a;
+  }
+
+  async fun9(a: TaggedUnion): Promise<TaggedUnion> {
     return a;
   }
 }
