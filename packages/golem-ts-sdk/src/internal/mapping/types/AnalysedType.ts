@@ -297,6 +297,42 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       let fieldIdx = 1;
       const possibleTypes: NameOptionTypePair[] = [];
 
+      const taggedUnions =
+        getTaggedUnions(type.unionTypes);
+
+      if (Option.isSome(taggedUnions)) {
+        for (const [name, type] of taggedUnions.val) {
+
+          if (!isKebabCase(name)) {
+            return Either.left(`Tagged union case names must be in kebab-case. Found: ${name}`);
+          }
+
+          if (Option.isSome(type) && type.val.kind === "literal") {
+            return Either.left("Tagged unions cannot have literal types in the value section")
+          }
+
+          if (Option.isNone(type)) {
+            possibleTypes.push({
+              name: name
+            })
+          } else {
+            const result =
+              fromTsTypeInternal(type.val, Option.none());
+
+            if (Either.isLeft(result)) {
+              return result;
+            }
+
+            possibleTypes.push({
+              name: name,
+              typ: result.val,
+            });
+          }
+        }
+
+        return Either.right(variant(type.name, possibleTypes));
+      }
+
       // If the union includes undefined, we need to treat it as option
       if (includesUndefined(type.unionTypes)) {
         const filteredTypes = filterUndefinedTypes(
@@ -621,6 +657,53 @@ function includesUndefined(
   return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
 }
 
+function getTaggedUnions(
+  unionTypes: TsType[]
+): Option.Option<[string, Option.Option<TsType>][]> {
+
+  const taggedTypes: [string, Option.Option<TsType>][] = [];
+
+  for (const ut of unionTypes) {
+    if (ut.kind === "object") {
+
+      if (ut.properties.length > 2) {
+        return Option.none();
+      }
+
+      const tag = ut.properties.find((type) => type.getName() === "tag");
+
+      if (!tag) {
+        return Option.none();
+      }
+
+      const tagType =
+        tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
+
+      if (tagType.kind !== "literal" || !tagType.literalValue) {
+        return Option.none();
+      }
+
+      const tagValue = tagType.literalValue;
+
+      const name = trimQuotes(tagValue);
+
+
+      const nextSymbol = ut.properties.find((type) => type.getName() !== "tag");
+
+      if (!nextSymbol){
+        taggedTypes.push([name, Option.none()]);
+      } else {
+        const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
+        taggedTypes.push([name, Option.some(propType)]);
+      }
+    } else {
+      return Option.none()
+    }
+  }
+
+  return Option.some(taggedTypes)
+}
+
 function filterUndefinedTypes(
   scope: Option.Option<TypeMappingScope>,
   unionTypeName: string | undefined,
@@ -670,9 +753,13 @@ function trimQuotes(s: string): string {
   return s;
 }
 
-function convertTypeNameToKebab(methodName: string | undefined): string | undefined{
-  return methodName  ? methodName
+function convertTypeNameToKebab(typeName: string | undefined): string | undefined{
+  return typeName  ? typeName
     .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')
     .toLowerCase() : undefined;
+}
+
+function isKebabCase(str: string): boolean {
+  return /^[a-z]+(-[a-z]+)*$/.test(str);
 }
