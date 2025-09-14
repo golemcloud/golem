@@ -328,14 +328,6 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
       // If union has both true and false (because ts-morph consider boolean to be a union of literal true and literal false)
 
-      console.log(type.unionTypes.map(typee => {
-        if (typee.kind ===  'literal') {
-          return typee.literalValue
-        } else {
-          return "non-boolean"
-        }
-      }));
-
       const hasFalseLiteral = type.unionTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
 
       const hasTrueLiteral = type.unionTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
