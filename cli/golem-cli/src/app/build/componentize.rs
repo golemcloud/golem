@@ -16,7 +16,7 @@ use crate::app::build::command::execute_build_command;
 use crate::app::context::ApplicationContext;
 use crate::log::{log_action, log_warn_action, LogColorize, LogIndent};
 use crate::model::app::{AppComponentName, DependencyType};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
     log_action("Building", "components");
@@ -45,9 +45,8 @@ pub async fn componentize(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
         );
         let _indent = LogIndent::new();
 
-        let env_vars = HashMap::new();
         for build_step in component_properties.build.clone() {
-            execute_build_command(ctx, &component_name, &build_step, env_vars.clone()).await?;
+            execute_build_command(ctx, &component_name, &build_step).await?;
         }
     }
 

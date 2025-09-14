@@ -1152,9 +1152,9 @@ impl Expr {
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
-        self.infer_function_call_types(component_dependency)?;
+        self.infer_function_call_types(component_dependency, custom_instance_spec)?;
         type_inference::type_inference_fix_point(
-            |x| Self::inference_scan(x, component_dependency),
+            |x| Self::inference_scan(x, component_dependency, custom_instance_spec),
             self,
         )?;
         self.check_types(component_dependency)?;
@@ -1206,13 +1206,14 @@ impl Expr {
     pub fn inference_scan(
         &mut self,
         component_dependencies: &ComponentDependencies,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
         self.pull_types_up(component_dependencies)?;
         self.infer_global_inputs();
-        self.infer_function_call_types(component_dependencies)?;
+        self.infer_function_call_types(component_dependencies, custom_instance_spec)?;
         Ok(())
     }
 
@@ -1257,8 +1258,13 @@ impl Expr {
     pub fn infer_function_call_types(
         &mut self,
         component_dependency: &ComponentDependencies,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
-        type_inference::infer_function_call_types(self, component_dependency)?;
+        type_inference::infer_function_call_types(
+            self,
+            component_dependency,
+            custom_instance_spec,
+        )?;
         Ok(())
     }
 

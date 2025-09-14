@@ -3386,15 +3386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "envsubst"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf2f29f6ee674d1229e5715dfc7e24f14395a20d66949e36032de68b31542643"
-dependencies = [
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4135,7 +4126,6 @@ dependencies = [
  "cli-table",
  "colored",
  "dirs 4.0.0",
- "envsubst",
  "flate2",
  "fs_extra",
  "futures-util",
@@ -4159,6 +4149,7 @@ dependencies = [
  "log",
  "minijinja",
  "moonbit-component-generator",
+ "nanoid",
  "native-tls",
  "nondestructive",
  "phf",
@@ -12567,9 +12558,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.0.10"
+version = "0.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "21379389f86d161be04d03240915d7746ddfb04f56c39c629626387dd057b6e6"
+checksum = "3ae9dbf8ce8a6e85067ac9a4823d54073b8a7ccadf5ef9776b99332240a50c33"
 dependencies = [
  "anyhow",
  "camino",

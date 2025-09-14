@@ -988,8 +988,10 @@ impl ComponentProperties {
         source: &Path,
         raw: app_raw::ComponentProperties,
     ) -> Option<Self> {
-        let files = InitialComponentFile::from_raw_vec(validation, source, raw.files)?;
-        let plugins = PluginInstallation::from_raw_vec(validation, source, raw.plugins)?;
+        let files =
+            InitialComponentFile::from_raw_vec(validation, source, raw.files.unwrap_or_default())?;
+        let plugins =
+            PluginInstallation::from_raw_vec(validation, source, raw.plugins.unwrap_or_default())?;
 
         Some(Self {
             source_wit: raw.source_wit.unwrap_or_default(),
@@ -1002,7 +1004,7 @@ impl ComponentProperties {
             component_type: raw.component_type,
             files,
             plugins,
-            env: Self::validate_and_normalize_env(validation, raw.env),
+            env: Self::validate_and_normalize_env(validation, raw.env.unwrap_or_default()),
         })
     }
 
@@ -1056,8 +1058,9 @@ impl ComponentProperties {
             self.component_type = overrides.component_type;
         }
 
-        if !overrides.files.is_empty() {
-            match InitialComponentFile::from_raw_vec(validation, source, overrides.files) {
+        let files = overrides.files.unwrap_or_default();
+        if !files.is_empty() {
+            match InitialComponentFile::from_raw_vec(validation, source, files) {
                 Some(files) => {
                     self.files.extend(files);
                 }
@@ -1067,8 +1070,9 @@ impl ComponentProperties {
             }
         }
 
-        if !overrides.plugins.is_empty() {
-            match PluginInstallation::from_raw_vec(validation, source, overrides.plugins) {
+        let plugins = overrides.plugins.unwrap_or_default();
+        if !plugins.is_empty() {
+            match PluginInstallation::from_raw_vec(validation, source, plugins) {
                 Some(plugins) => {
                     self.plugins.extend(plugins);
                 }
@@ -1078,9 +1082,10 @@ impl ComponentProperties {
             }
         }
 
-        if !overrides.env.is_empty() {
+        let env = overrides.env.unwrap_or_default();
+        if !env.is_empty() {
             self.env
-                .extend(Self::validate_and_normalize_env(validation, overrides.env));
+                .extend(Self::validate_and_normalize_env(validation, env));
         }
 
         Ok((!any_errors).then_some(self))

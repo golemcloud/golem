@@ -23,7 +23,6 @@ use crate::model::app_raw::{
 use crate::model::ProjectId;
 use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -220,7 +219,9 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
 
 pub struct LinkRpcMarkerHash<'a> {
     pub component_name: &'a AppComponentName,
-    pub dependencies: &'a BTreeSet<&'a DependentComponent>,
+    pub static_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
+    pub dynamic_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
+    pub library_dependencies: &'a BTreeSet<&'a DependentComponent>,
 }
 
 impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
@@ -233,14 +234,32 @@ impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(format!(
-            "{}#{}",
-            self.component_name,
-            self.dependencies
+        #[derive(Serialize)]
+        struct SerializedMarker<'a> {
+            component_name: &'a str,
+            static_wasm_rpc_deps: Vec<String>,
+            dynamic_wasm_rpc_deps: Vec<String>,
+            library_deps: Vec<String>,
+        }
+
+        Ok(HashFromString(serde_json::to_string(&SerializedMarker {
+            component_name: self.component_name.as_str(),
+            static_wasm_rpc_deps: self
+                .static_wasm_rpc_dependencies
                 .iter()
-                .map(|s| format!("{}#{}", s.source, s.dep_type.as_str()))
-                .join(",")
-        )))
+                .map(|dep| dep.source.to_string())
+                .collect(),
+            dynamic_wasm_rpc_deps: self
+                .dynamic_wasm_rpc_dependencies
+                .iter()
+                .map(|dep| dep.source.to_string())
+                .collect(),
+            library_deps: self
+                .library_dependencies
+                .iter()
+                .map(|dep| dep.source.to_string())
+                .collect(),
+        })?))
     }
 }
 
