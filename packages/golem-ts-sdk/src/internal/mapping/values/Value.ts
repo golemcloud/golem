@@ -24,6 +24,7 @@ import {
   unionTypeMatchError,
 } from './errors';
 import * as Either from '../../../newTypes/either';
+import { getTaggedUnions } from '../types/AnalysedType';
 
 export type Value =
   | {
@@ -982,14 +983,59 @@ function handleUnion(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
-  if (tsValue === null || tsValue === undefined) {
-    return Either.right({
-      kind: 'option',
-    });
+  const taggedTypes: Option.Option<[string, Option.Option<Type.Type>][]> =
+    getTaggedUnions(possibleTypes);
+
+  if (Option.isSome(taggedTypes)) {
+    for (const [name, type] of taggedTypes.val) {
+      switch (type.tag) {
+        case 'none':
+          if (tsValue === name) {
+            return Either.right({
+              kind: 'variant',
+              caseIdx: taggedTypes.val.findIndex((index) => index[0] === name),
+            });
+          }
+          continue;
+
+        case 'some':
+          if (typeof tsValue === 'object' && tsValue !== null) {
+            const keys = Object.keys(tsValue);
+            const nonTagKey = keys.find((k) => k !== 'tag');
+
+            if (keys.length === 2 && tsValue['tag'] === name) {
+              if (!nonTagKey) {
+                return Either.right({
+                  kind: 'variant',
+                  caseIdx: taggedTypes.val.findIndex(
+                    (index) => index[0] === name,
+                  ),
+                });
+              }
+
+              const innerValue = fromTsValue(tsValue[nonTagKey], type.val);
+
+              return Either.map(innerValue, (result) => ({
+                kind: 'variant',
+                caseIdx: taggedTypes.val.findIndex(
+                  (index) => index[0] === name,
+                ),
+                caseValue: result,
+              }));
+            }
+          }
+      }
+    }
   }
 
-  // This implies it's an optional value
+  // Handle optional types
   if (filteredTypes.length !== possibleTypes.length) {
+    if (tsValue === null || tsValue === undefined) {
+      return Either.right({
+        kind: 'option',
+      });
+    }
+
     const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
     if (!typeWithIndex) {
@@ -1017,7 +1063,7 @@ function handleUnion(
     }
   }
 
-  // It doesn't have null and therefore no need to wrap it in option at all
+  // Handle others
   const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
   if (!typeWithIndex) {

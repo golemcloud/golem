@@ -657,7 +657,7 @@ function includesUndefined(
   return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
 }
 
-function getTaggedUnions(
+export function getTaggedUnions(
   unionTypes: TsType[]
 ): Option.Option<[string, Option.Option<TsType>][]> {
 
