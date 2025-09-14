@@ -79,6 +79,65 @@ describe('Agent decorator should register the agent class and its methods into A
     });
   });
 
+  it('should handle tagged unions in method', () => {
+    const wit = getWitType(complexAgentMethod!.inputSchema, 'taggedUnionType');
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'tagged-union',
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['a', 1],
+              ['b', 2],
+              ['c', 3],
+              ['c', 4],
+              ['d', 5],
+              ['e', 6],
+              ['f', 7],
+              ['g', 8],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-bool-type' } },
+        {
+          name: 'union-type',
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 1],
+              ['case2', 2],
+              ['case3', 5],
+              ['case4', 3],
+            ],
+          },
+        },
+        {
+          name: 'object-type',
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 1],
+              ['b', 2],
+              ['c', 3],
+            ],
+          },
+        },
+        { name: 'list-type', type: { tag: 'list-type', val: 1 } },
+        { name: 'tuple-type', type: { tag: 'tuple-type', val: [1, 2, 3] } },
+        {
+          name: 'simple-interface-type',
+          type: { tag: 'record-type', val: [['n', 2]] },
+        },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
   it('should handle union with null in constructor', () => {
     const wit = getWitType(
       complexAgentConstructor.inputSchema,
