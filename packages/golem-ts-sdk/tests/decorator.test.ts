@@ -80,7 +80,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle union with null in constructor', () => {
-    const optionalUnion = getWitType(
+    const wit = getWitType(
       complexAgentConstructor.inputSchema,
       'optionalUnionType',
     );
@@ -101,7 +101,6 @@ describe('Agent decorator should register the agent class and its methods into A
         },
         { type: { tag: 'prim-string-type' } },
         { type: { tag: 'prim-s32-type' } },
-        { type: { tag: 'prim-bool-type' } },
         {
           name: 'object-type',
           type: {
@@ -109,23 +108,24 @@ describe('Agent decorator should register the agent class and its methods into A
             val: [
               ['a', 2],
               ['b', 3],
-              ['c', 4],
+              ['c', 5],
             ],
           },
         },
+        { type: { tag: 'prim-bool-type' } },
       ],
     };
 
-    expect(optionalUnion).toEqual(expectedWit);
+    expect(wit).toEqual(expectedWit);
   });
 
   it('should handle optional union in method', () => {
-    const optionalUnion = getWitType(
+    const wit = getWitType(
       complexAgentMethod!.inputSchema,
       'optionalUnionType',
     );
 
-    const expected = {
+    const expectedWit = {
       nodes: [
         { type: { tag: 'option-type', val: 1 } },
         {
@@ -141,7 +141,6 @@ describe('Agent decorator should register the agent class and its methods into A
         },
         { type: { tag: 'prim-string-type' } },
         { type: { tag: 'prim-s32-type' } },
-        { type: { tag: 'prim-bool-type' } },
         {
           name: 'object-type',
           type: {
@@ -149,14 +148,15 @@ describe('Agent decorator should register the agent class and its methods into A
             val: [
               ['a', 2],
               ['b', 3],
-              ['c', 4],
+              ['c', 5],
             ],
           },
         },
+        { type: { tag: 'prim-bool-type' } },
       ],
     };
 
-    expect(optionalUnion).toEqual(expected);
+    expect(wit).toEqual(expectedWit);
   });
 
   it('union with null works', () => {
@@ -286,15 +286,15 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('captures all methods and constructor with correct number of parameters', () => {
-    const weatherAgent = Option.getOrThrowWith(
+    const simpleAgent = Option.getOrThrowWith(
       AgentTypeRegistry.lookup(SimpleAgentClassName),
       () => new Error('WeatherAgent not found in AgentTypeRegistry'),
     );
 
     expect(complexAgent.methods.length).toEqual(22);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
-    expect(weatherAgent.methods.length).toEqual(7);
-    expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);
+    expect(simpleAgent.methods.length).toEqual(8);
+    expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 });
 

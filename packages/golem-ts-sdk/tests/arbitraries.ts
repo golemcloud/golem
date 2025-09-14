@@ -28,6 +28,7 @@ import {
   TupleComplexType,
   TupleType,
   UnionComplexType,
+  UnionWithLiterals,
   UnionType,
 } from './testTypes';
 
@@ -64,6 +65,9 @@ export const objectWithUnionWithUndefined3Arb: Arbitrary<ObjectWithUnionWithUnde
 
 export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUndefined4> =
   fc.oneof(fc.record({}), fc.record({ a: stringOrUndefined }));
+
+export const unionOfLiteralArb: Arbitrary<UnionWithLiterals> =
+  fc.constantFrom<UnionWithLiterals>('a', 'b', 'c', true, false);
 
 const base = 'AssistantAgent';
 

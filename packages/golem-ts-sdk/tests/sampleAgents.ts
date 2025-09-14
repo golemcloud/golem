@@ -22,7 +22,7 @@ import {
   ObjectWithUnionWithUndefined2,
   ObjectWithUnionWithUndefined3,
   ObjectWithUnionWithUndefined4,
-  UnionOfLiterals,
+  UnionWithLiterals,
   UnionType,
 } from './testTypes';
 
@@ -75,8 +75,14 @@ class SimpleAgent extends BaseAgent {
       param6: param6,
       param7: param7,
     };
+
+
     return Promise.resolve(concatenatedResult);
   };
+
+  async fun8(a: UnionWithLiterals): Promise<UnionWithLiterals> {
+    return a;
+  }
 }
 
 export interface CustomData {
@@ -109,7 +115,7 @@ class ComplexAgent extends BaseAgent {
     tupleType: Types.TupleType,
     listComplexType: Types.ListComplexType,
     objectType: Types.ObjectType,
-    UnionOfLiterals: UnionOfLiterals,
+    unionWithLiterals: UnionWithLiterals,
     textType: UnstructuredText,
     eitherXType: EitherX,
     eitherYType: EitherY,
@@ -169,7 +175,7 @@ class ComplexAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun14(text: string): Promise<Types.UnionOfLiterals> {
+  async fun14(text: string): Promise<Types.UnionWithLiterals> {
     throw new Error('Unimplemented');
   }
 

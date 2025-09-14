@@ -183,16 +183,17 @@ export function getTypeFromTsMorph(
     return { kind: "void", name: "void", optional: isOptional };
   }
 
-  if (type.isBoolean() || rawName === "true" || rawName === "false") {
+  if (type.isBoolean()) {
     return { kind: "boolean", optional: isOptional };
   }
 
   if (type.isLiteral()) {
-    const literalValue = type.getLiteralValue()?.toString();
+    const literalValue = type.getLiteralValue() ?? type.getText()
+
     return {
       kind: "literal",
       name: aliasName,
-      literalValue: literalValue,
+      literalValue: literalValue.toString(),
       optional: isOptional,
     };
   }

@@ -83,8 +83,8 @@ export function getPromiseType(): Type.Type {
   return fetchType('PromiseType');
 }
 
-export function getUnionOfLiterals(): Type.Type {
-  return fetchType('UnionOfLiterals');
+export function getUnionWithLiterals(): Type.Type {
+  return fetchType('UnionWithLiterals');
 }
 
 export function getRecordFieldsFromAnalysedType(

@@ -296,7 +296,6 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
     case "union": {
       let fieldIdx = 1;
       const possibleTypes: NameOptionTypePair[] = [];
-      let boolTracked = false;
 
       // If the union includes undefined, we need to treat it as option
       if (includesUndefined(type.unionTypes)) {
@@ -327,19 +326,33 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         return Either.right(option(undefined, innerTypeEither.val))
       }
 
-      for (const t of type.unionTypes) {
-        if (t.kind === "boolean" || t.name === "false" || t.name === "true") {
-          if (boolTracked) {
-            continue;
-          }
-          boolTracked = true;
-          possibleTypes.push({
-            name: variantCaseName(fieldIdx++),
-            typ: bool(),
-          });
-          continue;
-        }
+      // If union has both true and false (because ts-morph consider boolean to be a union of literal true and literal false)
 
+      console.log(type.unionTypes.map(typee => {
+        if (typee.kind ===  'literal') {
+          return typee.literalValue
+        } else {
+          return "non-boolean"
+        }
+      }));
+
+      const hasFalseLiteral = type.unionTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
+
+      const hasTrueLiteral = type.unionTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
+
+      let hasBoolean = hasFalseLiteral && hasTrueLiteral;
+
+      let unionTypesLiteralBoolFiltered =
+        type.unionTypes.filter(field => !(field.kind === 'literal' && (field.literalValue === 'false' || field.literalValue === 'true')));
+
+      const optional =
+        unionTypesLiteralBoolFiltered.find((field) => field.kind  === 'literal')?.optional;
+
+      unionTypesLiteralBoolFiltered.push({kind: "boolean", optional: optional ?? false})
+
+      const newUnionTypes = hasBoolean ? unionTypesLiteralBoolFiltered : type.unionTypes;
+
+      for (const t of newUnionTypes) {
         if (t.kind === "literal") {
           const name = t.literalValue;
           if (!name) {
@@ -348,6 +361,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           if (isNumberString(name)) {
             return Either.left("Literals of number type are not supported");
           }
+
           possibleTypes.push({
             name: trimQuotes(name),
           });
@@ -513,7 +527,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       const literalName = type.literalValue;
 
       if (!literalName) {
-        return Either.left(`Unable to determine the literal value. ${JSON.stringify(type)}`);
+        return Either.left(`Internal error: failed to retrieve the literal value from ${JSON.stringify(type)}`);
       }
 
       if (literalName === 'true' || literalName === 'false') {

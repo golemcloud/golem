@@ -745,31 +745,32 @@ function fromTsValueInternal(
       return handleKeyValuePairs(tsValue, type, type.key, type.value);
 
     case 'literal':
-      if (type.name === 'true' || type.name === 'false') {
-        return handleBooleanType(tsValue);
-      } else {
-        if (tsValue === type.name) {
-          if (typeof tsValue === 'string') {
-            return Either.right({
-              kind: 'string',
-              value: tsValue,
-            });
-          } else if (typeof tsValue === 'number') {
-            return Either.right({
-              kind: 's32',
-              value: tsValue,
-            });
-          } else if (typeof tsValue === 'bigint') {
-            return Either.right({
-              kind: 'u64',
-              value: tsValue,
-            });
-          } else {
-            return Either.left(typeMismatchIn(tsValue, type));
-          }
+      if (tsValue.toString() === type.literalValue?.toString()) {
+        if (typeof tsValue === 'boolean') {
+          return Either.right({
+            kind: 'bool',
+            value: tsValue,
+          });
+        } else if (typeof tsValue === 'string') {
+          return Either.right({
+            kind: 'string',
+            value: tsValue,
+          });
+        } else if (typeof tsValue === 'number') {
+          return Either.right({
+            kind: 's32',
+            value: tsValue,
+          });
+        } else if (typeof tsValue === 'bigint') {
+          return Either.right({
+            kind: 'u64',
+            value: tsValue,
+          });
         } else {
           return Either.left(typeMismatchIn(tsValue, type));
         }
+      } else {
+        return Either.left(typeMismatchIn(tsValue, type));
       }
 
     case 'alias':
@@ -992,7 +993,7 @@ function handleUnion(
     const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
     if (!typeWithIndex) {
-      return Either.left(unionTypeMatchError(tsValue, filteredTypes));
+      return Either.left(unionTypeMatchError(filteredTypes, tsValue));
     } else {
       const innerType = typeWithIndex[0];
 
@@ -1020,7 +1021,7 @@ function handleUnion(
   const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
   if (!typeWithIndex) {
-    return Either.left(unionTypeMatchError(tsValue, filteredTypes));
+    return Either.left(unionTypeMatchError(filteredTypes, tsValue));
   } else {
     const innerType = typeWithIndex[0];
 
@@ -1107,12 +1108,14 @@ function matchesType(value: any, type: Type.Type): boolean {
       );
 
     case 'literal':
-      const name = type.name;
-      if (name === 'true' || name === 'false') {
-        return typeof value === 'boolean';
-      } else {
-        return value === type.name;
-      }
+      const expectedLiteralValue = type.literalValue;
+
+      return (
+        (typeof value === 'string' ||
+          typeof value === 'boolean' ||
+          typeof value === 'number') &&
+        value.toString() === expectedLiteralValue?.toString()
+      );
 
     case 'alias':
       return false;
@@ -1184,6 +1187,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
       if (type.kind === 'undefined' || type.kind === 'void') return undefined;
       if (type.kind === 'union') {
         const unionKinds = type.unionTypes.map((t) => t.kind);
+
         if (unionKinds.includes('null')) {
           return null;
         }
@@ -1435,10 +1439,11 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'literal':
-      const literalValue = type.name;
+      const literalValue = type.literalValue;
       if (
-        value.kind === 'bool' &&
-        (literalValue === 'true' || literalValue === 'false')
+        value.kind === 'bool' ||
+        value.kind === 'string' ||
+        value.kind === 's32'
       ) {
         return value.value;
       } else {
@@ -1480,7 +1485,7 @@ function convertToNumber(value: Value): any {
   ) {
     return value.value;
   } else {
-    throw new Error(`Unable to convert the ${JSON.stringify(value)} to number`);
+    throw new Error();
   }
 }
 
