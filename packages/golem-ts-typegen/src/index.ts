@@ -188,7 +188,7 @@ export function getTypeFromTsMorph(
   }
 
   if (type.isLiteral()) {
-    const literalValue = type.getLiteralValue() ?? type.getText()
+    const literalValue = type.getLiteralValue() ?? type.getText();
 
     return {
       kind: "literal",

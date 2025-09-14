@@ -221,7 +221,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
             typ: {
               kind: 'bool',
             },
-          }
+          },
         ],
         name: 'union-type',
         owner: undefined,
@@ -838,7 +838,6 @@ function checkUnionFields(fields: any[]) {
             },
           },
           { name: 'case4', typ: { kind: 'bool' } },
-
         ],
       },
     },

@@ -76,7 +76,6 @@ class SimpleAgent extends BaseAgent {
       param7: param7,
     };
 
-
     return Promise.resolve(concatenatedResult);
   };
 
