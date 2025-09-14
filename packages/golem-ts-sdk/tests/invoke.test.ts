@@ -35,6 +35,7 @@ import {
   objectWithUnionWithUndefined4Arb,
   stringOrNumberOrNull,
   stringOrUndefined,
+  taggedUnionArb,
   unionArb,
   unionOfLiteralArb,
 } from './arbitraries';
@@ -55,6 +56,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
       stringOrUndefined,
       fc.oneof(unionArb, fc.constant(undefined)),
       unionOfLiteralArb,
+      taggedUnionArb,
       (
         arbString,
         number,
@@ -65,7 +67,8 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         objectWithUnionWithUndefined4,
         stringOrUndefined,
         unionOrUndefined,
-        unionOfLiterals,
+        unionWithLiterals,
+        taggedUnion,
       ) => {
         overrideSelfMetadataImpl(SimpleAgentName.value);
 
@@ -176,9 +179,17 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         testInvoke(
           typeRegistry,
           'fun8',
-          [['a', unionOfLiterals]],
+          [['a', unionWithLiterals]],
           resolvedAgent,
-          unionOfLiterals,
+          unionWithLiterals,
+        );
+
+        testInvoke(
+          typeRegistry,
+          'fun9',
+          [['param', taggedUnion]],
+          resolvedAgent,
+          taggedUnion,
         );
       },
     ),
