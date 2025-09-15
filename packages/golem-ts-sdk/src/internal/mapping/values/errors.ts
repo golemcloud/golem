@@ -16,6 +16,7 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
+import { getTaggedUnions } from '../types/AnalysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
@@ -38,7 +39,7 @@ export function unionTypeMatchError(
   unionTypes: Type.Type[],
   tsValue: any,
 ): string {
-  return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${unionTypes
+  const defaultTypes = unionTypes
     .map((t) => {
       return (
         t.name ??
@@ -46,7 +47,12 @@ export function unionTypeMatchError(
         '<anonymous>'
       );
     })
-    .join(', ')}`;
+
+  const taggedUnions = getTaggedUnions(unionTypes);
+
+  const types = Option.isSome(taggedUnions) ? taggedUnions.val.map(([name, _]) => name) : defaultTypes;
+
+  return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${types.join(', ')}`;
 }
 
 // unhandled type of tsValue when converting from TS to WIT

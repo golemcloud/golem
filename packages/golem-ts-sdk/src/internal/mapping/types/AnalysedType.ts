@@ -657,6 +657,13 @@ function includesUndefined(
   return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
 }
 
+//  { tag: 'a', val: string }
+//  is { tagLiteral: 'a', valueType: Option.some(['val', string]) }
+export type TaggedTypeMetadata = {
+  tagLiteral: string
+  valueType: Option.Option<[string, TsType]>,
+}
+
 export function getTaggedUnions(
   unionTypes: TsType[]
 ): Option.Option<[string, Option.Option<TsType>][]> {
@@ -670,7 +677,8 @@ export function getTaggedUnions(
         return Option.none();
       }
 
-      const tag = ut.properties.find((type) => type.getName() === "tag");
+      const tag =
+        ut.properties.find((type) => type.getName() === "tag");
 
       if (!tag) {
         return Option.none();
@@ -688,7 +696,8 @@ export function getTaggedUnions(
       const name = trimQuotes(tagValue);
 
 
-      const nextSymbol = ut.properties.find((type) => type.getName() !== "tag");
+      const nextSymbol =
+        ut.properties.find((type) => type.getName() !== "tag");
 
       if (!nextSymbol){
         taggedTypes.push([name, Option.none()]);

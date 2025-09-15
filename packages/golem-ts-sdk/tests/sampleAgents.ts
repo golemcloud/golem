@@ -85,7 +85,6 @@ class SimpleAgent extends BaseAgent {
   }
 
   async fun9(param: TaggedUnion): Promise<TaggedUnion> {
-    console.log(param);
     return param;
   }
 }

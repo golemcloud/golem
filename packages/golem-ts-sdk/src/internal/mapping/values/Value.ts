@@ -1015,6 +1015,8 @@ function handleUnion(
 
               const innerValue = fromTsValue(tsValue[nonTagKey], type.val);
 
+              console.log(JSON.stringify(innerValue));
+
               return Either.map(innerValue, (result) => ({
                 kind: 'variant',
                 caseIdx: taggedTypes.val.findIndex(
@@ -1023,9 +1025,15 @@ function handleUnion(
                 caseValue: result,
               }));
             }
+          } else {
+            console.log("Damn i can't understand this " + tsValue);
           }
       }
     }
+
+    console.log("orrrr is it coming here??");
+
+    return Either.left(unionTypeMatchError(filteredTypes, tsValue));
   }
 
   // Handle optional types
@@ -1126,6 +1134,39 @@ function matchesType(value: any, type: Type.Type): boolean {
       return matchesTuple(value, type.elements);
 
     case 'union':
+      const taggedUnions = getTaggedUnions(type.unionTypes);
+
+      if (Option.isSome(taggedUnions)) {
+        for (const [name, innerType] of taggedUnions.val) {
+          switch (innerType.tag) {
+            case 'none':
+              if (value === name) {
+                return true;
+              }
+              continue;
+
+            case 'some':
+              if (typeof value === 'object' && value !== null) {
+                const keys = Object.keys(value);
+                const nonTagKey = keys.find((k) => k !== 'tag');
+
+                if (keys.length === 2 && value['tag'] === name) {
+                  if (!nonTagKey) {
+                    return true;
+                  }
+
+                  if (innerType.val) {
+                    return matchesType(value[nonTagKey], innerType.val);
+                  } else {
+                    return false;
+                  }
+                }
+              }
+          }
+        }
+        return false;
+      }
+
       return type.unionTypes.some((t) => matchesType(value, t));
 
     case 'object':
@@ -1247,6 +1288,38 @@ export function toTsValue(value: Value, type: Type.Type): any {
     }
 
     return toTsValue(caseValue, type);
+  }
+
+  if (value.kind === 'variant' && type.kind === 'union') {
+    const taggedUnion: Option.Option<[string, Option.Option<Type.Type>][]> =
+      getTaggedUnions(type.unionTypes);
+
+    if (Option.isSome(taggedUnion)) {
+      const [tagName, innerType] = taggedUnion.val[value.caseIdx];
+
+      if (innerType.tag === 'some') {
+        if (!value.caseValue) {
+          throw new Error(
+            `Expected value for the tag '${tagName}' of the union type '${name}'`,
+          );
+        }
+
+        const vall = "val";
+
+        return {
+          tag: tagName,
+          [vall]: toTsValue(value.caseValue, innerType.val),
+        };
+      }
+
+      if (innerType.tag === 'none') {
+        return {
+          tag: tagName
+        }
+      }
+
+      return tagName;
+    }
   }
 
   switch (type.kind) {
@@ -1385,14 +1458,17 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
-      const filtered = type.unionTypes.filter(
+      const taggedUnions: Option.Option<[string, Option.Option<Type.Type>][]> =
+        getTaggedUnions(type.unionTypes);
+
+      const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
         (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
       );
 
       // This implies this optional value
-      if (filtered.length !== type.unionTypes.length) {
-        if (filtered.length === 1) {
-          return toTsValue(value, filtered[0]);
+      if (filteredUnionTypes.length !== type.unionTypes.length) {
+        if (filteredUnionTypes.length === 1) {
+          return toTsValue(value, filteredUnionTypes[0]);
         }
       }
 
@@ -1402,9 +1478,13 @@ export function toTsValue(value: Value, type: Type.Type): any {
           throw new Error(typeMismatchOut(value, 'union'));
         }
 
-        const matchingType = filtered[value.caseIdx];
+        const matchingTypeTransformed =
+          Option.isSome(taggedUnions) ? Option.getOrThrowWith(taggedUnions.val[value.caseIdx][1], () => new Error("hello")) : filteredUnionTypes[value.caseIdx];
 
-        return toTsValue(caseValue, matchingType);
+        const result = toTsValue(caseValue, matchingTypeTransformed);
+
+
+        return result;
       } else {
         throw new Error(typeMismatchOut(value, 'union'));
       }
