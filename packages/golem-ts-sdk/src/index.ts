@@ -54,10 +54,7 @@ function getResolvedAgentOrThrow(
   );
 }
 
-async function initialize(
-  agentType: string,
-  input: DataValue,
-): Promise<void> {
+async function initialize(agentType: string, input: DataValue): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
@@ -73,7 +70,7 @@ async function initialize(
     );
 
     throw createCustomError(
-        `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`,
+      `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`,
     );
   }
 
