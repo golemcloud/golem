@@ -297,6 +297,13 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       let fieldIdx = 1;
       const possibleTypes: NameOptionTypePair[] = [];
 
+      const unionOfOnlyLiterals =
+        getUnionOfLiterals(type.unionTypes);
+
+      if (Option.isSome(unionOfOnlyLiterals)) {
+        return Either.right(enum_(type.name, unionOfOnlyLiterals.val.literals));
+      }
+
       const taggedUnions =
         getTaggedUnions(type.unionTypes);
 
@@ -662,6 +669,36 @@ function includesUndefined(
 export type TaggedTypeMetadata = {
   tagLiteralName: string
   valueType: Option.Option<[string, TsType]>,
+}
+
+export type LiteralUnions = {
+  literals: string[]
+}
+
+export function getUnionOfLiterals(
+  unionTypes: TsType[]
+): Option.Option<LiteralUnions> {
+
+  const literals: string[] = [];
+
+  for (const ut of unionTypes) {
+    if (ut.kind === "literal" && ut.literalValue) {
+      const literalValue = ut.literalValue;
+      if (isNumberString(literalValue)) {
+        return Option.none();
+      }
+
+      if (literalValue === 'true' || literalValue === 'false') {
+        return Option.none();
+      }
+
+      literals.push(trimQuotes(literalValue));
+    } else {
+      return Option.none();
+    }
+  }
+
+  return Option.some({ literals });
 }
 
 export function getTaggedUnions(
