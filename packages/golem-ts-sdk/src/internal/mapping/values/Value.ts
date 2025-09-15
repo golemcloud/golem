@@ -24,7 +24,11 @@ import {
   unionTypeMatchError,
 } from './errors';
 import * as Either from '../../../newTypes/either';
-import { getTaggedUnions, TaggedTypeMetadata } from '../types/AnalysedType';
+import {
+  getTaggedUnions,
+  getUnionOfLiterals,
+  TaggedTypeMetadata,
+} from '../types/AnalysedType';
 
 export type Value =
   | {
@@ -983,6 +987,24 @@ function handleUnion(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
+  const unionOfLiterals = getUnionOfLiterals(filteredTypes);
+
+  if (Option.isSome(unionOfLiterals)) {
+    if (
+      typeof tsValue === 'string' &&
+      unionOfLiterals.val.literals.includes(tsValue.toString())
+    ) {
+      const value: Value = {
+        kind: 'enum',
+        value: unionOfLiterals.val.literals.indexOf(tsValue.toString()),
+      };
+
+      return Either.right(value);
+    } else {
+      return Either.left(unionTypeMatchError(filteredTypes, tsValue));
+    }
+  }
+
   const taggedTypes: Option.Option<TaggedTypeMetadata[]> =
     getTaggedUnions(possibleTypes);
 
@@ -1299,6 +1321,16 @@ export function toTsValue(value: Value, type: Type.Type): any {
     }
 
     return toTsValue(caseValue, type);
+  }
+
+  if (value.kind === 'enum' && type.kind === 'union') {
+    const unionOfLiterals = getUnionOfLiterals(type.unionTypes);
+
+    if (Option.isSome(unionOfLiterals)) {
+      return unionOfLiterals.val.literals[value.value];
+    } else {
+      throw new Error(typeMismatchOut(value, 'enum'));
+    }
   }
 
   if (value.kind === 'variant' && type.kind === 'union') {

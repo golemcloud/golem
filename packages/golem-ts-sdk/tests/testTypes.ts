@@ -26,6 +26,8 @@ export type TaggedUnion =
   | { tag: 'f'; val: TupleType }
   | { tag: 'g'; val: SimpleInterfaceType };
 
+export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
+
 export type UnionWithLiterals = 'a' | 'b' | 'c' | boolean;
 
 export type PromiseType = Promise<string>;

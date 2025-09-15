@@ -25,6 +25,7 @@ import {
   UnionWithLiterals,
   UnionType,
   TaggedUnion,
+  UnionWithOnlyLiterals,
 } from './testTypes';
 
 @agent()
@@ -85,6 +86,10 @@ class SimpleAgent extends BaseAgent {
   }
 
   async fun9(param: TaggedUnion): Promise<TaggedUnion> {
+    return param;
+  }
+
+  async fun10(param: UnionWithOnlyLiterals): Promise<UnionWithOnlyLiterals> {
     return param;
   }
 }
