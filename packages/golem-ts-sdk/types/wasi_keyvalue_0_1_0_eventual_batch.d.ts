@@ -27,16 +27,18 @@ declare module 'wasi:keyvalue/eventual-batch@0.1.0' {
    * Note that the key-value pairs are guaranteed to be returned in the same order
    * MAY show an out-of-date value if there are concurrent writes to the bucket.
    * If any other error occurs, it returns an `Err(error)`.
+   * @throws Error
    */
-  export function getMany(bucket: Bucket, keys: Key[]): Result<IncomingValue | undefined[], Error>;
+  export function getMany(bucket: Bucket, keys: Key[]): IncomingValue | undefined[];
   /**
    * Get all the keys in the bucket. It returns a list of keys.
    * Note that the keys are not guaranteed to be returned in any particular order.
    * If the bucket is empty, it returns an empty list.
    * MAY show an out-of-date list of keys if there are concurrent writes to the bucket.
    * If any error occurs, it returns an `Err(error)`.
+   * @throws Error
    */
-  export function keys(bucket: Bucket): Result<Key[], Error>;
+  export function keys(bucket: Bucket): Key[];
   /**
    * Set the values associated with the keys in the bucket. If the key already
    * exists in the bucket, it overwrites the value.
@@ -48,8 +50,9 @@ declare module 'wasi:keyvalue/eventual-batch@0.1.0' {
    * does not guarantee atomicity, implying that some key-value pairs could be
    * set while others might fail.
    * Other concurrent operations may also be able to see the partial results.
+   * @throws Error
    */
-  export function setMany(bucket: Bucket, keyValues: [Key, OutgoingValue][]): Result<void, Error>;
+  export function setMany(bucket: Bucket, keyValues: [Key, OutgoingValue][]): void;
   /**
    * Delete the key-value pairs associated with the keys in the bucket.
    * Note that the key-value pairs are not guaranteed to be deleted in the order
@@ -60,8 +63,9 @@ declare module 'wasi:keyvalue/eventual-batch@0.1.0' {
    * does not guarantee atomicity, implying that some key-value pairs could be
    * deleted while others might fail.
    * Other concurrent operations may also be able to see the partial results.
+   * @throws Error
    */
-  export function deleteMany(bucket: Bucket, keys: Key[]): Result<void, Error>;
+  export function deleteMany(bucket: Bucket, keys: Key[]): void;
   export type Bucket = wasiKeyvalue010Types.Bucket;
   export type Error = wasiKeyvalue010Types.Error;
   export type Key = wasiKeyvalue010Types.Key;

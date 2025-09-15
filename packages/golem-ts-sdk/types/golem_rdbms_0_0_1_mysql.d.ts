@@ -5,18 +5,48 @@ declare module 'golem:rdbms/mysql@0.0.1' {
     getNext(): DbRow[] | undefined;
   }
   export class DbConnection {
-    static open(address: string): Result<DbConnection, Error>;
-    query(statement: string, params: DbValue[]): Result<DbResult, Error>;
-    queryStream(statement: string, params: DbValue[]): Result<DbResultStream, Error>;
-    execute(statement: string, params: DbValue[]): Result<bigint, Error>;
-    beginTransaction(): Result<DbTransaction, Error>;
+    /**
+     * @throws Error
+     */
+    static open(address: string): DbConnection;
+    /**
+     * @throws Error
+     */
+    query(statement: string, params: DbValue[]): DbResult;
+    /**
+     * @throws Error
+     */
+    queryStream(statement: string, params: DbValue[]): DbResultStream;
+    /**
+     * @throws Error
+     */
+    execute(statement: string, params: DbValue[]): bigint;
+    /**
+     * @throws Error
+     */
+    beginTransaction(): DbTransaction;
   }
   export class DbTransaction {
-    query(statement: string, params: DbValue[]): Result<DbResult, Error>;
-    queryStream(statement: string, params: DbValue[]): Result<DbResultStream, Error>;
-    execute(statement: string, params: DbValue[]): Result<bigint, Error>;
-    commit(): Result<void, Error>;
-    rollback(): Result<void, Error>;
+    /**
+     * @throws Error
+     */
+    query(statement: string, params: DbValue[]): DbResult;
+    /**
+     * @throws Error
+     */
+    queryStream(statement: string, params: DbValue[]): DbResultStream;
+    /**
+     * @throws Error
+     */
+    execute(statement: string, params: DbValue[]): bigint;
+    /**
+     * @throws Error
+     */
+    commit(): void;
+    /**
+     * @throws Error
+     */
+    rollback(): void;
   }
   export type Date = golemRdbms001Types.Date;
   export type Time = golemRdbms001Types.Time;

@@ -8,38 +8,44 @@ declare module 'wasi:keyvalue/types@0.1.0' {
     /**
      * Opens a bucket with the given name.
      * If any error occurs, including if the bucket does not exist, it returns an `Err(error)`.
+     * @throws Error
      */
-    static openBucket(name: string): Result<Bucket, Error>;
+    static openBucket(name: string): Bucket;
   }
   export class OutgoingValue {
     static newOutgoingValue(): OutgoingValue;
     /**
      * Writes the value to the output-stream asynchronously.
      * If any other error occurs, it returns an `Err(error)`.
+     * @throws Error
      */
-    outgoingValueWriteBodyAsync(): Result<OutgoingValueBodyAsync, Error>;
+    outgoingValueWriteBodyAsync(): OutgoingValueBodyAsync;
     /**
      * Writes the value to the output-stream synchronously.
      * If any other error occurs, it returns an `Err(error)`.
+     * @throws Error
      */
-    outgoingValueWriteBodySync(value: OutgoingValueBodySync): Result<void, Error>;
+    outgoingValueWriteBodySync(value: OutgoingValueBodySync): void;
   }
   export class IncomingValue {
     /**
      * Consumes the value synchronously and returns the value as a list of bytes.
      * If any other error occurs, it returns an `Err(error)`.
+     * @throws Error
      */
-    incomingValueConsumeSync(): Result<IncomingValueSyncBody, Error>;
+    incomingValueConsumeSync(): IncomingValueSyncBody;
     /**
      * Consumes the value asynchronously and returns the value as an `input-stream`.
      * If any other error occurs, it returns an `Err(error)`.
+     * @throws Error
      */
-    incomingValueConsumeAsync(): Result<IncomingValueAsyncBody, Error>;
+    incomingValueConsumeAsync(): IncomingValueAsyncBody;
     /**
      * The size of the value in bytes.
      * If the size is unknown or unavailable, this function returns an `Err(error)`.
+     * @throws Error
      */
-    incomingValueSize(): Result<bigint, Error>;
+    incomingValueSize(): bigint;
   }
   export type InputStream = wasiIo023Streams.InputStream;
   export type OutputStream = wasiIo023Streams.OutputStream;

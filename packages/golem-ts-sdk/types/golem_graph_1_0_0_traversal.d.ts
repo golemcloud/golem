@@ -7,24 +7,29 @@ declare module 'golem:graph/traversal@1.0.0' {
   import * as golemGraph100Types from 'golem:graph/types@1.0.0';
   /**
    * Find shortest path between two vertices
+   * @throws GraphError
    */
-  export function findShortestPath(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined): Result<Path | undefined, GraphError>;
+  export function findShortestPath(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined): Path | undefined;
   /**
    * Find all paths between two vertices (up to limit)
+   * @throws GraphError
    */
-  export function findAllPaths(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined, limit: number | undefined): Result<Path[], GraphError>;
+  export function findAllPaths(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined, limit: number | undefined): Path[];
   /**
    * Get k-hop neighborhood around a vertex
+   * @throws GraphError
    */
-  export function getNeighborhood(transaction: Transaction, center: ElementId, options: NeighborhoodOptions): Result<Subgraph, GraphError>;
+  export function getNeighborhood(transaction: Transaction, center: ElementId, options: NeighborhoodOptions): Subgraph;
   /**
    * Check if path exists between vertices
+   * @throws GraphError
    */
-  export function pathExists(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined): Result<boolean, GraphError>;
+  export function pathExists(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined): boolean;
   /**
    * Get vertices at specific distance from source
+   * @throws GraphError
    */
-  export function getVerticesAtDistance(transaction: Transaction, source: ElementId, distance: number, direction: Direction, edgeTypes: string[] | undefined): Result<Vertex[], GraphError>;
+  export function getVerticesAtDistance(transaction: Transaction, source: ElementId, distance: number, direction: Direction, edgeTypes: string[] | undefined): Vertex[];
   export type Vertex = golemGraph100Types.Vertex;
   export type Edge = golemGraph100Types.Edge;
   export type Path = golemGraph100Types.Path;

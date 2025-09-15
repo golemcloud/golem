@@ -5,28 +5,56 @@ declare module 'golem:search/core@1.0.0' {
   import * as golemSearch100Types from 'golem:search/types@1.0.0';
   /**
    * Index lifecycle
+   * @throws SearchError
    */
-  export function createIndex(name: IndexName, schema: Schema | undefined): Result<void, SearchError>;
-  export function deleteIndex(name: IndexName): Result<void, SearchError>;
-  export function listIndexes(): Result<IndexName[], SearchError>;
+  export function createIndex(name: IndexName, schema: Schema | undefined): void;
+  /**
+   * @throws SearchError
+   */
+  export function deleteIndex(name: IndexName): void;
+  /**
+   * @throws SearchError
+   */
+  export function listIndexes(): IndexName[];
   /**
    * Document operations
+   * @throws SearchError
    */
-  export function upsert(index: IndexName, doc: Doc): Result<void, SearchError>;
-  export function upsertMany(index: IndexName, docs: Doc[]): Result<void, SearchError>;
-  export function delete_(index: IndexName, id: DocumentId): Result<void, SearchError>;
-  export function deleteMany(index: IndexName, ids: DocumentId[]): Result<void, SearchError>;
-  export function get(index: IndexName, id: DocumentId): Result<Doc | undefined, SearchError>;
+  export function upsert(index: IndexName, doc: Doc): void;
+  /**
+   * @throws SearchError
+   */
+  export function upsertMany(index: IndexName, docs: Doc[]): void;
+  /**
+   * @throws SearchError
+   */
+  export function delete_(index: IndexName, id: DocumentId): void;
+  /**
+   * @throws SearchError
+   */
+  export function deleteMany(index: IndexName, ids: DocumentId[]): void;
+  /**
+   * @throws SearchError
+   */
+  export function get(index: IndexName, id: DocumentId): Doc | undefined;
   /**
    * Query
+   * @throws SearchError
    */
-  export function search(index: IndexName, query: SearchQuery): Result<SearchResults, SearchError>;
-  export function streamSearch(index: IndexName, query: SearchQuery): Result<SearchStream, SearchError>;
+  export function search(index: IndexName, query: SearchQuery): SearchResults;
+  /**
+   * @throws SearchError
+   */
+  export function streamSearch(index: IndexName, query: SearchQuery): SearchStream;
   /**
    * Schema inspection
+   * @throws SearchError
    */
-  export function getSchema(index: IndexName): Result<Schema, SearchError>;
-  export function updateSchema(index: IndexName, schema: Schema): Result<void, SearchError>;
+  export function getSchema(index: IndexName): Schema;
+  /**
+   * @throws SearchError
+   */
+  export function updateSchema(index: IndexName, schema: Schema): void;
   export class SearchStream {
     getNext(): SearchHit[] | undefined;
     blockingGetNext(): SearchHit[];

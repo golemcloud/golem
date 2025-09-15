@@ -24,28 +24,32 @@ declare module 'wasi:keyvalue/eventual@0.1.0' {
    * bucket, it returns `Ok(value)`. If the key does not exist in the
    * bucket, it returns `Ok(none)`.
    * If any other error occurs, it returns an `Err(error)`.
+   * @throws Error
    */
-  export function get(bucket: Bucket, key: Key): Result<IncomingValue | undefined, Error>;
+  export function get(bucket: Bucket, key: Key): IncomingValue | undefined;
   /**
    * Set the value associated with the key in the bucket. If the key already
    * exists in the bucket, it overwrites the value.
    * If the key does not exist in the bucket, it creates a new key-value pair.
    * If any other error occurs, it returns an `Err(error)`.
+   * @throws Error
    */
-  export function set(bucket: Bucket, key: Key, outgoingValue: OutgoingValue): Result<void, Error>;
+  export function set(bucket: Bucket, key: Key, outgoingValue: OutgoingValue): void;
   /**
    * Delete the key-value pair associated with the key in the bucket.
    * If the key does not exist in the bucket, it does nothing.
    * If any other error occurs, it returns an `Err(error)`.
+   * @throws Error
    */
-  export function delete_(bucket: Bucket, key: Key): Result<void, Error>;
+  export function delete_(bucket: Bucket, key: Key): void;
   /**
    * Check if the key exists in the bucket.
    * If the key exists in the bucket, it returns `Ok(true)`. If the key does
    * not exist in the bucket, it returns `Ok(false)`.
    * If any other error occurs, it returns an `Err(error)`.
+   * @throws Error
    */
-  export function exists(bucket: Bucket, key: Key): Result<boolean, Error>;
+  export function exists(bucket: Bucket, key: Key): boolean;
   export type Bucket = wasiKeyvalue010Types.Bucket;
   export type Error = wasiKeyvalue010Types.Error;
   export type IncomingValue = wasiKeyvalue010Types.IncomingValue;

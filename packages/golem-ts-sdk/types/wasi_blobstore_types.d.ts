@@ -5,11 +5,17 @@ declare module 'wasi:blobstore/types' {
   import * as wasiIo023Streams from 'wasi:io/streams@0.2.3';
   export class OutgoingValue {
     static newOutgoingValue(): OutgoingValue;
-    outgoingValueWriteBody(): Result<OutputStream, Error>;
+    outgoingValueWriteBody(): OutputStream;
   }
   export class IncomingValue {
-    incomingValueConsumeSync(): Result<IncomingValueSyncBody, Error>;
-    incomingValueConsumeAsync(): Result<IncomingValueAsyncBody, Error>;
+    /**
+     * @throws Error
+     */
+    incomingValueConsumeSync(): IncomingValueSyncBody;
+    /**
+     * @throws Error
+     */
+    incomingValueConsumeAsync(): IncomingValueAsyncBody;
     size(): bigint;
   }
   export type InputStream = wasiIo023Streams.InputStream;

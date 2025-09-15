@@ -7,8 +7,9 @@ declare module 'golem:graph/query@1.0.0' {
   import * as golemGraph100Types from 'golem:graph/types@1.0.0';
   /**
    * Execute a database-specific query string
+   * @throws GraphError
    */
-  export function executeQuery(transaction: Transaction, query: string, parameters: QueryParameters | undefined, options: QueryOptions | undefined): Result<QueryExecutionResult, GraphError>;
+  export function executeQuery(transaction: Transaction, query: string, parameters: QueryParameters | undefined, options: QueryOptions | undefined): QueryExecutionResult;
   export type Vertex = golemGraph100Types.Vertex;
   export type Edge = golemGraph100Types.Edge;
   export type Path = golemGraph100Types.Path;

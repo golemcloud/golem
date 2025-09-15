@@ -1,7 +1,13 @@
 declare module 'golem:video-generation/lip-sync@1.0.0' {
   import * as golemVideoGeneration100Types from 'golem:video-generation/types@1.0.0';
-  export function generateLipSync(video: LipSyncVideo, audio: AudioSource): Result<string, VideoError>;
-  export function listVoices(language: string | undefined): Result<VoiceInfo[], VideoError>;
+  /**
+   * @throws VideoError
+   */
+  export function generateLipSync(video: LipSyncVideo, audio: AudioSource): string;
+  /**
+   * @throws VideoError
+   */
+  export function listVoices(language: string | undefined): VoiceInfo[];
   export type BaseVideo = golemVideoGeneration100Types.BaseVideo;
   export type AudioSource = golemVideoGeneration100Types.AudioSource;
   export type VideoError = golemVideoGeneration100Types.VideoError;

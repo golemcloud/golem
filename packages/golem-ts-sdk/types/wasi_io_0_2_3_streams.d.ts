@@ -30,24 +30,28 @@ declare module 'wasi:io/streams@0.2.3' {
      * is not possible to allocate in wasm32, or not desirable to allocate as
      * as a return value by the callee. The callee may return a list of bytes
      * less than `len` in size while more bytes are available for reading.
+     * @throws StreamError
      */
-    read(len: bigint): Result<Uint8Array, StreamError>;
+    read(len: bigint): Uint8Array;
     /**
      * Read bytes from a stream, after blocking until at least one byte can
      * be read. Except for blocking, behavior is identical to `read`.
+     * @throws StreamError
      */
-    blockingRead(len: bigint): Result<Uint8Array, StreamError>;
+    blockingRead(len: bigint): Uint8Array;
     /**
      * Skip bytes from a stream. Returns number of bytes skipped.
      * Behaves identical to `read`, except instead of returning a list
      * of bytes, returns the number of bytes consumed from the stream.
+     * @throws StreamError
      */
-    skip(len: bigint): Result<bigint, StreamError>;
+    skip(len: bigint): bigint;
     /**
      * Skip bytes from a stream, after blocking until at least one byte
      * can be skipped. Except for blocking behavior, identical to `skip`.
+     * @throws StreamError
      */
-    blockingSkip(len: bigint): Result<bigint, StreamError>;
+    blockingSkip(len: bigint): bigint;
     /**
      * Create a `pollable` which will resolve once either the specified stream
      * has bytes available to read or the other end of the stream has been
@@ -67,8 +71,9 @@ declare module 'wasi:io/streams@0.2.3' {
      * When this function returns 0 bytes, the `subscribe` pollable will
      * become ready when this function will report at least 1 byte, or an
      * error.
+     * @throws StreamError
      */
-    checkWrite(): Result<bigint, StreamError>;
+    checkWrite(): bigint;
     /**
      * Perform a write. This function never blocks.
      * When the destination of a `write` is binary data, the bytes from
@@ -80,8 +85,9 @@ declare module 'wasi:io/streams@0.2.3' {
      * length of less than or equal to n. Otherwise, this function will trap.
      * returns Err(closed) without writing if the stream has closed since
      * the last call to check-write provided a permit.
+     * @throws StreamError
      */
-    write(contents: Uint8Array): Result<void, StreamError>;
+    write(contents: Uint8Array): void;
     /**
      * Perform a write of up to 4096 bytes, and then flush the stream. Block
      * until all of these operations are complete, or an error occurs.
@@ -105,8 +111,9 @@ declare module 'wasi:io/streams@0.2.3' {
      * // Check for any errors that arose during `flush`
      * let _ = this.check-write();         // eliding error handling
      * ```
+     * @throws StreamError
      */
-    blockingWriteAndFlush(contents: Uint8Array): Result<void, StreamError>;
+    blockingWriteAndFlush(contents: Uint8Array): void;
     /**
      * Request to flush buffered output. This function never blocks.
      * This tells the output-stream that the caller intends any buffered
@@ -116,13 +123,15 @@ declare module 'wasi:io/streams@0.2.3' {
      * writes (`check-write` will return `ok(0)`) until the flush has
      * completed. The `subscribe` pollable will become ready when the
      * flush has completed and the stream can accept more writes.
+     * @throws StreamError
      */
-    flush(): Result<void, StreamError>;
+    flush(): void;
     /**
      * Request to flush buffered output, and block until flush completes
      * and stream is ready for writing again.
+     * @throws StreamError
      */
-    blockingFlush(): Result<void, StreamError>;
+    blockingFlush(): void;
     /**
      * Create a `pollable` which will resolve once the output-stream
      * is ready for more writing, or an error has occurred. When this
@@ -140,8 +149,9 @@ declare module 'wasi:io/streams@0.2.3' {
      * preconditions (must use check-write first), but instead of
      * passing a list of bytes, you simply pass the number of zero-bytes
      * that should be written.
+     * @throws StreamError
      */
-    writeZeroes(len: bigint): Result<void, StreamError>;
+    writeZeroes(len: bigint): void;
     /**
      * Perform a write of up to 4096 zeroes, and then flush the stream.
      * Block until all of these operations are complete, or an error
@@ -165,8 +175,9 @@ declare module 'wasi:io/streams@0.2.3' {
      * // Check for any errors that arose during `flush`
      * let _ = this.check-write();         // eliding error handling
      * ```
+     * @throws StreamError
      */
-    blockingWriteZeroesAndFlush(len: bigint): Result<void, StreamError>;
+    blockingWriteZeroesAndFlush(len: bigint): void;
     /**
      * Read from one stream and write to another.
      * The behavior of splice is equivalent to:
@@ -178,15 +189,17 @@ declare module 'wasi:io/streams@0.2.3' {
      * `write` ends the splice and reports that error.
      * This function returns the number of bytes transferred; it may be less
      * than `len`.
+     * @throws StreamError
      */
-    splice(src: InputStream, len: bigint): Result<bigint, StreamError>;
+    splice(src: InputStream, len: bigint): bigint;
     /**
      * Read from one stream and write to another, with blocking.
      * This is similar to `splice`, except that it blocks until the
      * `output-stream` is ready for writing, and the `input-stream`
      * is ready for reading, before performing the `splice`.
+     * @throws StreamError
      */
-    blockingSplice(src: InputStream, len: bigint): Result<bigint, StreamError>;
+    blockingSplice(src: InputStream, len: bigint): bigint;
   }
   export type Error = wasiIo023Error.Error;
   export type Pollable = wasiIo023Poll.Pollable;

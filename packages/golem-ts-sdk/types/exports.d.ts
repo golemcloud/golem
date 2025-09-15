@@ -4,12 +4,14 @@ declare module 'agent-guest' {
     /**
      * Initializes the agent of a given type with the given constructor parameters.
      * If called a second time, it fails.
+     * @throws AgentError
      */
-    export function initialize(agentType: string, input: DataValue): Promise<Result<void, AgentError>>;
+    export function initialize(agentType: string, input: DataValue): Promise<void>;
     /**
      * Invokes an agent. If create was not called before, it fails
+     * @throws AgentError
      */
-    export function invoke(methodName: string, input: DataValue): Promise<Result<DataValue, AgentError>>;
+    export function invoke(methodName: string, input: DataValue): Promise<DataValue>;
     /**
      * Gets the agent type. If create was not called before, it fails
      */

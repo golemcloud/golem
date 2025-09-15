@@ -3,8 +3,9 @@ declare module 'golem:rpc/types@0.2.2' {
   import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
    * Parses a UUID from a string
+   * @throws string
    */
-  export function parseUuid(uuid: string): Result<Uuid, string>;
+  export function parseUuid(uuid: string): Uuid;
   /**
    * Converts a UUID to a string
    */
@@ -13,8 +14,14 @@ declare module 'golem:rpc/types@0.2.2' {
   export function extractType(vnt: ValueAndType): WitType;
   export class WasmRpc {
     constructor(workerId: WorkerId);
-    invokeAndAwait(functionName: string, functionParams: WitValue[]): Result<WitValue, RpcError>;
-    invoke(functionName: string, functionParams: WitValue[]): Result<void, RpcError>;
+    /**
+     * @throws RpcError
+     */
+    invokeAndAwait(functionName: string, functionParams: WitValue[]): WitValue;
+    /**
+     * @throws RpcError
+     */
+    invoke(functionName: string, functionParams: WitValue[]): void;
     asyncInvokeAndAwait(functionName: string, functionParams: WitValue[]): FutureInvokeResult;
     /**
      * Schedule invocation for later

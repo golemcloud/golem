@@ -2,17 +2,20 @@ declare module 'golem:web-search/web-search@1.0.0' {
   import * as golemWebSearch100Types from 'golem:web-search/types@1.0.0';
   /**
    * Start a search session, returning a search context
+   * @throws SearchError
    */
-  export function startSearch(params: SearchParams): Result<SearchSession, SearchError>;
+  export function startSearch(params: SearchParams): SearchSession;
   /**
    * One-shot search that returns results immediately (limited result count)
+   * @throws SearchError
    */
-  export function searchOnce(params: SearchParams): Result<[SearchResult[], SearchMetadata | undefined], SearchError>;
+  export function searchOnce(params: SearchParams): [SearchResult[], SearchMetadata | undefined];
   export class SearchSession {
     /**
      * Get the next page of results
+     * @throws SearchError
      */
-    nextPage(): Result<SearchResult[], SearchError>;
+    nextPage(): SearchResult[];
     /**
      * Retrieve session metadata (after any query)
      */

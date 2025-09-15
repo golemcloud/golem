@@ -1,7 +1,13 @@
 declare module 'golem:stt/transcription@1.0.0' {
   import * as golemStt100Types from 'golem:stt/types@1.0.0';
-  export function transcribe(request: TranscriptionRequest): Result<TranscriptionResult, SttError>;
-  export function transcribeMany(requests: TranscriptionRequest[]): Result<MultiTranscriptionResult, SttError>;
+  /**
+   * @throws SttError
+   */
+  export function transcribe(request: TranscriptionRequest): TranscriptionResult;
+  /**
+   * @throws SttError
+   */
+  export function transcribeMany(requests: TranscriptionRequest[]): MultiTranscriptionResult;
   export type AudioConfig = golemStt100Types.AudioConfig;
   export type TranscriptionResult = golemStt100Types.TranscriptionResult;
   export type SttError = golemStt100Types.SttError;

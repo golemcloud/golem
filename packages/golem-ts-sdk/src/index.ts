@@ -14,7 +14,6 @@
 
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { createCustomError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
@@ -58,15 +57,12 @@ function getResolvedAgentOrThrow(
 async function initialize(
   agentType: string,
   input: DataValue,
-): Promise<Result<void, AgentError>> {
+): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
   if (Option.isSome(resolvedAgent)) {
-    return {
-      tag: 'err',
-      val: createCustomError(`Agent is already initialized in this container`),
-    };
+    throw createCustomError(`Agent is already initialized in this container`);
   }
 
   const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
@@ -76,43 +72,34 @@ async function initialize(
       (entry) => entry[0].value,
     );
 
-    return {
-      tag: 'err',
-      val: createCustomError(
+    throw createCustomError(
         `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`,
-      ),
-    };
+    );
   }
 
   const initiateResult = initiator.val.initiate(agentType, input);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
-
-    return {
-      tag: 'ok',
-      val: undefined,
-    };
+  } else {
+    throw initiateResult.val;
   }
-
-  return {
-    tag: 'err',
-    val: initiateResult.val,
-  };
 }
 
 async function invoke(
   methodName: string,
   input: DataValue,
-): Promise<Result<DataValue, AgentError>> {
+): Promise<DataValue> {
   if (Option.isNone(resolvedAgent)) {
-    return {
-      tag: 'err',
-      val: UninitializedAgentError,
-    };
+    throw UninitializedAgentError;
   }
 
-  return resolvedAgent.val.invoke(methodName, input);
+  const result = await resolvedAgent.val.invoke(methodName, input);
+  if (result.tag === 'ok') {
+    return result.val;
+  } else {
+    throw result.val;
+  }
 }
 
 async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {

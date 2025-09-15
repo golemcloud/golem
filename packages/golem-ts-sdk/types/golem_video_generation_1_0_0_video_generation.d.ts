@@ -1,8 +1,17 @@
 declare module 'golem:video-generation/video-generation@1.0.0' {
   import * as golemVideoGeneration100Types from 'golem:video-generation/types@1.0.0';
-  export function generate(input: MediaInput, config: GenerationConfig): Result<string, VideoError>;
-  export function poll(jobId: string): Result<VideoResult, VideoError>;
-  export function cancel(jobId: string): Result<string, VideoError>;
+  /**
+   * @throws VideoError
+   */
+  export function generate(input: MediaInput, config: GenerationConfig): string;
+  /**
+   * @throws VideoError
+   */
+  export function poll(jobId: string): VideoResult;
+  /**
+   * @throws VideoError
+   */
+  export function cancel(jobId: string): string;
   export type MediaInput = golemVideoGeneration100Types.MediaInput;
   export type GenerationConfig = golemVideoGeneration100Types.GenerationConfig;
   export type VideoResult = golemVideoGeneration100Types.VideoResult;

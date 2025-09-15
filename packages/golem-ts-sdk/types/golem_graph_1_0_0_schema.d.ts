@@ -7,65 +7,80 @@ declare module 'golem:graph/schema@1.0.0' {
   import * as golemGraph100Types from 'golem:graph/types@1.0.0';
   /**
    * Get schema manager for the graph
+   * @throws GraphError
    */
-  export function getSchemaManager(config: ConnectionConfig | undefined): Result<SchemaManager, GraphError>;
+  export function getSchemaManager(config: ConnectionConfig | undefined): SchemaManager;
   export class SchemaManager {
     /**
      * Define or update vertex label schema
+     * @throws GraphError
      */
-    defineVertexLabel(schema: VertexLabelSchema): Result<void, GraphError>;
+    defineVertexLabel(schema: VertexLabelSchema): void;
     /**
      * Define or update edge label schema
+     * @throws GraphError
      */
-    defineEdgeLabel(schema: EdgeLabelSchema): Result<void, GraphError>;
+    defineEdgeLabel(schema: EdgeLabelSchema): void;
     /**
      * Get vertex label schema
+     * @throws GraphError
      */
-    getVertexLabelSchema(label: string): Result<VertexLabelSchema | undefined, GraphError>;
+    getVertexLabelSchema(label: string): VertexLabelSchema | undefined;
     /**
      * Get edge label schema
+     * @throws GraphError
      */
-    getEdgeLabelSchema(label: string): Result<EdgeLabelSchema | undefined, GraphError>;
+    getEdgeLabelSchema(label: string): EdgeLabelSchema | undefined;
     /**
      * List all vertex labels
+     * @throws GraphError
      */
-    listVertexLabels(): Result<string[], GraphError>;
+    listVertexLabels(): string[];
     /**
      * List all edge labels
+     * @throws GraphError
      */
-    listEdgeLabels(): Result<string[], GraphError>;
+    listEdgeLabels(): string[];
     /**
      * Create index
+     * @throws GraphError
      */
-    createIndex(index: IndexDefinition): Result<void, GraphError>;
+    createIndex(index: IndexDefinition): void;
     /**
      * Drop index
+     * @throws GraphError
      */
-    dropIndex(name: string): Result<void, GraphError>;
+    dropIndex(name: string): void;
     /**
      * List indexes
+     * @throws GraphError
      */
-    listIndexes(): Result<IndexDefinition[], GraphError>;
+    listIndexes(): IndexDefinition[];
     /**
      * Get index by name
+     * @throws GraphError
      */
-    getIndex(name: string): Result<IndexDefinition | undefined, GraphError>;
+    getIndex(name: string): IndexDefinition | undefined;
     /**
      * Define edge type for structural databases (ArangoDB-style)
+     * @throws GraphError
      */
-    defineEdgeType(definition: EdgeTypeDefinition): Result<void, GraphError>;
+    defineEdgeType(definition: EdgeTypeDefinition): void;
     /**
      * List edge type definitions
+     * @throws GraphError
      */
-    listEdgeTypes(): Result<EdgeTypeDefinition[], GraphError>;
+    listEdgeTypes(): EdgeTypeDefinition[];
     /**
      * Create container/collection for organizing data
+     * @throws GraphError
      */
-    createContainer(name: string, containerType: ContainerType): Result<void, GraphError>;
+    createContainer(name: string, containerType: ContainerType): void;
     /**
      * List containers/collections
+     * @throws GraphError
      */
-    listContainers(): Result<ContainerInfo[], GraphError>;
+    listContainers(): ContainerInfo[];
   }
   export type PropertyValue = golemGraph100Types.PropertyValue;
   export type GraphError = golemGraph100Errors.GraphError;
