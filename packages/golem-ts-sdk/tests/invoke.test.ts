@@ -342,27 +342,16 @@ function testInvoke(
       );
     }
 
-    const witValue = Either.getOrThrowWith(
+    return Either.getOrThrowWith(
       WitValue.fromTsValue(value, paramType),
       (error) =>
         new Error(
           `Failed to convert parameter ${paramName} to WitValue. ${error}`,
         ),
     );
-
-    // console.log("===================================")
-    //
-    // console.log(JSON.stringify(Value.fromWitValue(witValue)));
-    //
-    // console.log(JSON.stringify(Value.toTsValue(Value.fromWitValue(witValue), paramType)));
-    //
-    // console.log("===================================")
-
-    return witValue
   });
 
-
-//  expect(1).toEqual(1);
+  //  expect(1).toEqual(1);
 
   const dataValues: DataValue = {
     tag: 'tuple',
@@ -377,7 +366,9 @@ function testInvoke(
       invokeResult.tag === 'ok'
         ? invokeResult.val
         : (() => {
-            throw new Error(`Failed to convert method arg to WitValue. ${JSON.stringify(invokeResult.val)}`);
+            throw new Error(
+              `Failed to convert method arg to WitValue. ${JSON.stringify(invokeResult.val)}`,
+            );
           })();
     const witValue = getWitValueFromDataValue(invokeDataValue)[0];
     const result = WitValue.toTsValue(witValue, returnTypeInfo);

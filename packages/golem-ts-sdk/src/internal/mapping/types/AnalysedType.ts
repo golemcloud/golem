@@ -301,30 +301,30 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         getTaggedUnions(type.unionTypes);
 
       if (Option.isSome(taggedUnions)) {
-        for (const [name, type] of taggedUnions.val) {
+        for (const taggedTypeMetadata of taggedUnions.val) {
 
-          if (!isKebabCase(name)) {
-            return Either.left(`Tagged union case names must be in kebab-case. Found: ${name}`);
+          if (!isKebabCase(taggedTypeMetadata.tagLiteralName)) {
+            return Either.left(`Tagged union case names must be in kebab-case. Found: ${taggedTypeMetadata.tagLiteralName}`);
           }
 
-          if (Option.isSome(type) && type.val.kind === "literal") {
+          if (Option.isSome(taggedTypeMetadata.valueType) && taggedTypeMetadata.valueType.val[1].kind === "literal") {
             return Either.left("Tagged unions cannot have literal types in the value section")
           }
 
-          if (Option.isNone(type)) {
+          if (Option.isNone(taggedTypeMetadata.valueType)) {
             possibleTypes.push({
-              name: name
+              name: taggedTypeMetadata.tagLiteralName
             })
           } else {
             const result =
-              fromTsTypeInternal(type.val, Option.none());
+              fromTsTypeInternal(taggedTypeMetadata.valueType.val[1], Option.none());
 
             if (Either.isLeft(result)) {
               return result;
             }
 
             possibleTypes.push({
-              name: name,
+              name: taggedTypeMetadata.tagLiteralName,
               typ: result.val,
             });
           }
@@ -660,15 +660,15 @@ function includesUndefined(
 //  { tag: 'a', val: string }
 //  is { tagLiteral: 'a', valueType: Option.some(['val', string]) }
 export type TaggedTypeMetadata = {
-  tagLiteral: string
+  tagLiteralName: string
   valueType: Option.Option<[string, TsType]>,
 }
 
 export function getTaggedUnions(
   unionTypes: TsType[]
-): Option.Option<[string, Option.Option<TsType>][]> {
+): Option.Option<TaggedTypeMetadata[]> {
 
-  const taggedTypes: [string, Option.Option<TsType>][] = [];
+  const taggedTypes: TaggedTypeMetadata[] = [];
 
   for (const ut of unionTypes) {
     if (ut.kind === "object") {
@@ -700,10 +700,16 @@ export function getTaggedUnions(
         ut.properties.find((type) => type.getName() !== "tag");
 
       if (!nextSymbol){
-        taggedTypes.push([name, Option.none()]);
+        taggedTypes.push({
+          tagLiteralName: name,
+          valueType: Option.none()
+        });
       } else {
         const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
-        taggedTypes.push([name, Option.some(propType)]);
+        taggedTypes.push({
+          tagLiteralName: name,
+          valueType: Option.some([nextSymbol.getName(), propType])
+        });
       }
     } else {
       return Option.none()

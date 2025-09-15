@@ -24,7 +24,7 @@ import {
   unionTypeMatchError,
 } from './errors';
 import * as Either from '../../../newTypes/either';
-import { getTaggedUnions } from '../types/AnalysedType';
+import { getTaggedUnions, TaggedTypeMetadata } from '../types/AnalysedType';
 
 export type Value =
   | {
@@ -983,17 +983,24 @@ function handleUnion(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
-  const taggedTypes: Option.Option<[string, Option.Option<Type.Type>][]> =
+  const taggedTypes: Option.Option<TaggedTypeMetadata[]> =
     getTaggedUnions(possibleTypes);
 
   if (Option.isSome(taggedTypes)) {
-    for (const [name, type] of taggedTypes.val) {
-      switch (type.tag) {
+    for (const taggedTypeMetadata of taggedTypes.val) {
+      switch (taggedTypeMetadata.valueType.tag) {
         case 'none':
-          if (tsValue === name) {
+          if (
+            (typeof tsValue === 'string' ||
+              typeof tsValue === 'number' ||
+              typeof tsValue === 'bigint') &&
+            tsValue === taggedTypeMetadata.tagLiteralName
+          ) {
             return Either.right({
               kind: 'variant',
-              caseIdx: taggedTypes.val.findIndex((index) => index[0] === name),
+              caseIdx: taggedTypes.val.findIndex(
+                (m) => m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
+              ),
             });
           }
           continue;
@@ -1003,35 +1010,36 @@ function handleUnion(
             const keys = Object.keys(tsValue);
             const nonTagKey = keys.find((k) => k !== 'tag');
 
-            if (keys.length === 2 && tsValue['tag'] === name) {
+            if (
+              keys.length === 2 &&
+              tsValue['tag'] === taggedTypeMetadata.tagLiteralName
+            ) {
               if (!nonTagKey) {
                 return Either.right({
                   kind: 'variant',
                   caseIdx: taggedTypes.val.findIndex(
-                    (index) => index[0] === name,
+                    (m) =>
+                      m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
                   ),
                 });
               }
 
-              const innerValue = fromTsValue(tsValue[nonTagKey], type.val);
-
-              console.log(JSON.stringify(innerValue));
+              const innerValue = fromTsValue(
+                tsValue[nonTagKey],
+                taggedTypeMetadata.valueType.val[1],
+              );
 
               return Either.map(innerValue, (result) => ({
                 kind: 'variant',
                 caseIdx: taggedTypes.val.findIndex(
-                  (index) => index[0] === name,
+                  (m) => m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
                 ),
                 caseValue: result,
               }));
             }
-          } else {
-            console.log("Damn i can't understand this " + tsValue);
           }
       }
     }
-
-    console.log("orrrr is it coming here??");
 
     return Either.left(unionTypeMatchError(filteredTypes, tsValue));
   }
@@ -1137,7 +1145,10 @@ function matchesType(value: any, type: Type.Type): boolean {
       const taggedUnions = getTaggedUnions(type.unionTypes);
 
       if (Option.isSome(taggedUnions)) {
-        for (const [name, innerType] of taggedUnions.val) {
+        for (const taggedTypeMetadata of taggedUnions.val) {
+          const name = taggedTypeMetadata.tagLiteralName;
+          const innerType = taggedTypeMetadata.valueType;
+
           switch (innerType.tag) {
             case 'none':
               if (value === name) {
@@ -1156,7 +1167,7 @@ function matchesType(value: any, type: Type.Type): boolean {
                   }
 
                   if (innerType.val) {
-                    return matchesType(value[nonTagKey], innerType.val);
+                    return matchesType(value[nonTagKey], innerType.val[1]);
                   } else {
                     return false;
                   }
@@ -1291,11 +1302,13 @@ export function toTsValue(value: Value, type: Type.Type): any {
   }
 
   if (value.kind === 'variant' && type.kind === 'union') {
-    const taggedUnion: Option.Option<[string, Option.Option<Type.Type>][]> =
-      getTaggedUnions(type.unionTypes);
+    const taggedUnion = getTaggedUnions(type.unionTypes);
 
     if (Option.isSome(taggedUnion)) {
-      const [tagName, innerType] = taggedUnion.val[value.caseIdx];
+      const taggedTypeMetadata = taggedUnion.val[value.caseIdx];
+
+      const tagName = taggedTypeMetadata.tagLiteralName;
+      const innerType = taggedTypeMetadata.valueType;
 
       if (innerType.tag === 'some') {
         if (!value.caseValue) {
@@ -1304,18 +1317,16 @@ export function toTsValue(value: Value, type: Type.Type): any {
           );
         }
 
-        const vall = "val";
-
         return {
           tag: tagName,
-          [vall]: toTsValue(value.caseValue, innerType.val),
+          [innerType.val[0]]: toTsValue(value.caseValue, innerType.val[1]),
         };
       }
 
       if (innerType.tag === 'none') {
         return {
-          tag: tagName
-        }
+          tag: tagName,
+        };
       }
 
       return tagName;
@@ -1458,8 +1469,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
-      const taggedUnions: Option.Option<[string, Option.Option<Type.Type>][]> =
-        getTaggedUnions(type.unionTypes);
+      const taggedUnions = getTaggedUnions(type.unionTypes);
 
       const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
         (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
@@ -1478,13 +1488,24 @@ export function toTsValue(value: Value, type: Type.Type): any {
           throw new Error(typeMismatchOut(value, 'union'));
         }
 
-        const matchingTypeTransformed =
-          Option.isSome(taggedUnions) ? Option.getOrThrowWith(taggedUnions.val[value.caseIdx][1], () => new Error("hello")) : filteredUnionTypes[value.caseIdx];
+        if (Option.isSome(taggedUnions)) {
+          const taggedTypeMetadata = taggedUnions.val[value.caseIdx];
 
-        const result = toTsValue(caseValue, matchingTypeTransformed);
+          const tagName = taggedTypeMetadata.tagLiteralName;
+          const innerType = taggedTypeMetadata.valueType;
 
+          if (Option.isNone(innerType)) {
+            // then we expect the value to be a string only
+            return tagName;
+          } else {
+            const innerTypeVal = innerType.val;
+            return toTsValue(caseValue, innerTypeVal[1]);
+          }
+        }
 
-        return result;
+        const matchingType = filteredUnionTypes[value.caseIdx];
+
+        return toTsValue(caseValue, matchingType);
       } else {
         throw new Error(typeMismatchOut(value, 'union'));
       }

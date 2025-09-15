@@ -39,18 +39,19 @@ export function unionTypeMatchError(
   unionTypes: Type.Type[],
   tsValue: any,
 ): string {
-  const defaultTypes = unionTypes
-    .map((t) => {
-      return (
-        t.name ??
-        (t.kind === 'literal' ? t.literalValue : t.kind) ??
-        '<anonymous>'
-      );
-    })
+  const defaultTypes = unionTypes.map((t) => {
+    return (
+      t.name ??
+      (t.kind === 'literal' ? t.literalValue : t.kind) ??
+      '<anonymous>'
+    );
+  });
 
   const taggedUnions = getTaggedUnions(unionTypes);
 
-  const types = Option.isSome(taggedUnions) ? taggedUnions.val.map(([name, _]) => name) : defaultTypes;
+  const types = Option.isSome(taggedUnions)
+    ? taggedUnions.val.map((metadata) => metadata.tagLiteralName)
+    : defaultTypes;
 
   return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${types.join(', ')}`;
 }

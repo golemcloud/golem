@@ -47,7 +47,6 @@ export function getOrThrowWith<T>(opt: Option<T>, onNone: () => Error): T {
   throw onNone();
 }
 
-
 export function map<T, U>(opt: Option<T>, f: (t: T) => U): Option<U> {
   return opt.tag === 'some' ? some(f(opt.val)) : none();
 }
