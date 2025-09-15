@@ -215,7 +215,7 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
  export const tuple =  (name: string | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple', value: { name: convertTypeNameToKebab(name), owner: undefined, items } });
  export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record', value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
  export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
- export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: name, cases } });
+ export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
  export const variant = (name: string | undefined, cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
 
  export const resultOk =  (name: string | undefined, ok: AnalysedType): AnalysedType =>

@@ -137,6 +137,7 @@ class ComplexAgent extends BaseAgent {
     optionalStringType: string | undefined,
     optionalUnionType: UnionType | undefined,
     taggedUnionType: TaggedUnion,
+    unionWithOnlyLiterals: UnionWithOnlyLiterals,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
