@@ -1012,19 +1012,25 @@ function handleUnion(
     for (const taggedTypeMetadata of taggedTypes.val) {
       switch (taggedTypeMetadata.valueType.tag) {
         case 'none':
-          if (
-            (typeof tsValue === 'string' ||
-              typeof tsValue === 'number' ||
-              typeof tsValue === 'bigint') &&
-            tsValue === taggedTypeMetadata.tagLiteralName
-          ) {
-            return Either.right({
-              kind: 'variant',
-              caseIdx: taggedTypes.val.findIndex(
-                (m) => m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
-              ),
-            });
+          if (typeof tsValue === 'object' && tsValue !== null) {
+            const keys = Object.keys(tsValue);
+
+            if (!keys.includes('tag')) {
+              return Either.left(missingObjectKey('tag', tsValue));
+            }
+
+            if (tsValue['tag'] === taggedTypeMetadata.tagLiteralName) {
+              const value: Value = {
+                kind: 'variant',
+                caseIdx: taggedTypes.val.findIndex(
+                  (m) => m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
+                ),
+              };
+
+              return Either.right(value);
+            }
           }
+
           continue;
 
         case 'some':
@@ -1355,13 +1361,9 @@ export function toTsValue(value: Value, type: Type.Type): any {
         };
       }
 
-      if (innerType.tag === 'none') {
-        return {
-          tag: tagName,
-        };
-      }
-
-      return tagName;
+      return {
+        tag: tagName,
+      };
     }
   }
 

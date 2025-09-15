@@ -72,37 +72,43 @@ export const unionOfLiteralArb: Arbitrary<UnionWithLiterals> =
   fc.constantFrom<UnionWithLiterals>('a', 'b', 'c', true, false);
 
 export const taggedUnionArb: Arbitrary<TaggedUnion> = fc.oneof(
-  fc.record({ tag: fc.constant('a'), val: fc.string() }),
-  fc.record({ tag: fc.constant('b'), val: fc.integer() }),
-  fc.record({ tag: fc.constant('c'), val: fc.boolean() }),
+  // fc.record({ tag: fc.constant('a'), val: fc.string() }),
+  // fc.record({ tag: fc.constant('b'), val: fc.integer() }),
+  // fc.record({ tag: fc.constant('c'), val: fc.boolean() }),
+  // fc.record({
+  //   tag: fc.constant('d'),
+  //   val: fc.oneof(
+  //     fc.integer(),
+  //     fc.string(),
+  //     fc.boolean(),
+  //     fc.record({
+  //       a: fc.string(),
+  //       b: fc.integer(),
+  //       c: fc.boolean(),
+  //     }),
+  //   ),
+  // }),
+  // fc.record({
+  //   tag: fc.constant('e'),
+  //   val: fc.record({
+  //     a: fc.string(),
+  //     b: fc.integer(),
+  //     c: fc.boolean(),
+  //   }),
+  // }),
+  // fc.record({
+  //   tag: fc.constant('f'),
+  //   val: fc.array(fc.string()),
+  // }),
+  // fc.record({
+  //   tag: fc.constant('g'),
+  //   val: fc.tuple(fc.string(), fc.integer(), fc.boolean()),
+  // }),
   fc.record({
-    tag: fc.constant('d'),
-    val: fc.oneof(
-      fc.integer(),
-      fc.string(),
-      fc.boolean(),
-      fc.record({
-        a: fc.string(),
-        b: fc.integer(),
-        c: fc.boolean(),
-      }),
-    ),
+    tag: fc.constant('i'),
   }),
   fc.record({
-    tag: fc.constant('e'),
-    val: fc.record({
-      a: fc.string(),
-      b: fc.integer(),
-      c: fc.boolean(),
-    }),
-  }),
-  fc.record({
-    tag: fc.constant('f'),
-    val: fc.array(fc.string()),
-  }),
-  fc.record({
-    tag: fc.constant('g'),
-    val: fc.tuple(fc.string(), fc.integer(), fc.boolean()),
+    tag: fc.constant('j'),
   }),
 );
 

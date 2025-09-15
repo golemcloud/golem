@@ -24,7 +24,9 @@ export type TaggedUnion =
   | { tag: 'e'; val: ObjectType }
   | { tag: 'f'; val: ListType }
   | { tag: 'g'; val: TupleType }
-  | { tag: 'h'; val: SimpleInterfaceType };
+  | { tag: 'h'; val: SimpleInterfaceType }
+  | { tag: 'i' }
+  | { tag: 'j' };
 
 export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 

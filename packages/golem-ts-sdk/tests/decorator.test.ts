@@ -97,6 +97,8 @@ describe('Agent decorator should register the agent class and its methods into A
               ['f', 6],
               ['g', 7],
               ['h', 8],
+              ['i', undefined],
+              ['j', undefined],
             ],
           },
         },
