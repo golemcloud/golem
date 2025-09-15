@@ -31,6 +31,7 @@ import {
   UnionWithLiterals,
   UnionType,
   TaggedUnion,
+  UnionWithOnlyLiterals,
 } from './testTypes';
 
 import { AgentClassName } from '../src';
@@ -104,6 +105,9 @@ export const taggedUnionArb: Arbitrary<TaggedUnion> = fc.oneof(
     val: fc.tuple(fc.string(), fc.integer(), fc.boolean()),
   }),
 );
+
+export const unionWithOnlyLiteralsArb: Arbitrary<UnionWithOnlyLiterals> =
+  fc.constantFrom<UnionWithOnlyLiterals>('foo', 'bar', 'baz');
 
 const base = 'AssistantAgent';
 

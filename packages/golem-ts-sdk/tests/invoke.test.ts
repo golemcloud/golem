@@ -38,6 +38,7 @@ import {
   taggedUnionArb,
   unionArb,
   unionOfLiteralArb,
+  unionWithOnlyLiteralsArb,
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
@@ -57,6 +58,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
       fc.oneof(unionArb, fc.constant(undefined)),
       unionOfLiteralArb,
       taggedUnionArb,
+      unionWithOnlyLiteralsArb,
       (
         arbString,
         number,
@@ -69,6 +71,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         unionOrUndefined,
         unionWithLiterals,
         taggedUnion,
+        unionWithOnlyLiterals,
       ) => {
         overrideSelfMetadataImpl(SimpleAgentName.value);
 
@@ -190,6 +193,14 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
           [['param', taggedUnion]],
           resolvedAgent,
           taggedUnion,
+        );
+
+        testInvoke(
+          typeRegistry,
+          'fun10',
+          [['param', unionWithOnlyLiterals]],
+          resolvedAgent,
+          unionWithOnlyLiterals,
         );
       },
     ),
