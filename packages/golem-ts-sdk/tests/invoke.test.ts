@@ -351,8 +351,6 @@ function testInvoke(
     );
   });
 
-  //  expect(1).toEqual(1);
-
   const dataValues: DataValue = {
     tag: 'tuple',
     val: witValues.map((witValue) => ({

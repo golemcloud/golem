@@ -20,11 +20,11 @@ export type TaggedUnion =
   | { tag: 'a'; val: string }
   | { tag: 'b'; val: number }
   | { tag: 'c'; val: boolean }
-  | { tag: 'c'; val: UnionType }
-  | { tag: 'd'; val: ObjectType }
-  | { tag: 'e'; val: ListType }
-  | { tag: 'f'; val: TupleType }
-  | { tag: 'g'; val: SimpleInterfaceType };
+  | { tag: 'd'; val: UnionType }
+  | { tag: 'e'; val: ObjectType }
+  | { tag: 'f'; val: ListType }
+  | { tag: 'g'; val: TupleType }
+  | { tag: 'h'; val: SimpleInterfaceType };
 
 export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 
