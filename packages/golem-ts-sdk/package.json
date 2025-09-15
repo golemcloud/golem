@@ -39,9 +39,9 @@
     "clean-test-data": "rm -rf .metadata",
     "generate-sample-agents-types": "node ../golem-ts-typegen/dist/bin/golem-typegen ./tsconfig.json --files tests/**/*.ts --include-class-decorators agent",
     "prebuild": "npm run clean-test-data && pnpm run generate-dts && pnpm run generate-sample-agents-types",
-    "build": "npm run prebuild && tsc --noEmit && rollup -c",
+    "build": "pnpm run prebuild && tsc --noEmit && rollup -c",
     "clean": "rm -rf .metadata dist node_modules package-lock.json && printf '\\nRun `npm install` before building again.\\n\\n'",
-    "test": "pnpm run clean-test-data && pnpm run build && pnpm run generate-sample-agents-types && tsc --noEmit && vitest run",
+    "test": "npm run build && tsc --noEmit && vitest run",
     "dev": "rollup -c -w"
   },
   "keywords": [],

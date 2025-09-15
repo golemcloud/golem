@@ -18,22 +18,28 @@ import { numberToOrdinalKebab } from '../src/internal/mapping/types/typeIndexOrd
 
 test('numberToOrdinalKebab produces valid kebab-case ordinals', () => {
   fc.assert(
-    fc.property(fc.integer({ min: 1, max: 999 }), (n) => {
-      const result = numberToOrdinalKebab(n);
+    fc.property(
+      fc.integer({
+        min: 1,
+        max: 999,
+      }),
+      (n) => {
+        const result = numberToOrdinalKebab(n);
 
-      expect(result).toMatch(/^[a-z-]+$/);
+        expect(result).toMatch(/^[a-z-]+$/);
 
-      expect(result.includes(' ')).toBe(false);
+        expect(result.includes(' ')).toBe(false);
 
-      expect(
-        result.endsWith('th') ||
-          result.endsWith('st') ||
-          result.endsWith('nd') ||
-          result.endsWith('rd'),
-      ).toBe(true);
+        expect(
+          result.endsWith('th') ||
+            result.endsWith('st') ||
+            result.endsWith('nd') ||
+            result.endsWith('rd'),
+        ).toBe(true);
 
-      expect(numberToOrdinalKebab(n)).toBe(result);
-    }),
+        expect(numberToOrdinalKebab(n)).toBe(result);
+      },
+    ),
   );
 });
 

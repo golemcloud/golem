@@ -19,7 +19,13 @@ type AgentMethodNameString = string;
 
 const agentMethodMetadataRegistry = new Map<
   AgentClassNameString,
-  Map<AgentMethodNameString, { prompt?: string; description?: string }>
+  Map<
+    AgentMethodNameString,
+    {
+      prompt?: string;
+      description?: string;
+    }
+  >
 >();
 
 export const AgentMethodMetadataRegistry = {

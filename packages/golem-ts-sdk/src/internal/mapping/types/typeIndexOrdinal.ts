@@ -12,6 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
+export function variantCaseName(n: number): string {
+  return `case${n}`
+}
 export function numberToOrdinalKebab(n: number): string {
     const units: Record<number, string> = {
         0: "",

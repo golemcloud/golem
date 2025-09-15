@@ -16,16 +16,17 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
+import { getTaggedUnions, getUnionOfLiterals } from '../types/AnalysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
   const nameOrKind = expectedType.name ?? expectedType.kind;
-  return `Type mismatch. Expected ${nameOrKind}, but got ${safeDisplay(tsValue)} which is of type ${typeof tsValue}`;
+  return `Type mismatch. Expected \`${nameOrKind}\`, but got \`${safeDisplay(tsValue)}\` which is of type \`${typeof tsValue}\``;
 }
 
 // Unable to convert the value to the expected type in the output direction
 export function typeMismatchOut(value: Value, expectedType: string) {
-  return "Unable to convert '" + safeDisplay(value) + "' to " + expectedType;
+  return `Unable to convert \`${safeDisplay(value)}\` to \`${expectedType}\``;
 }
 
 // Missing keys in tsValue when converting from TS to WIT
@@ -38,7 +39,25 @@ export function unionTypeMatchError(
   unionTypes: Type.Type[],
   tsValue: any,
 ): string {
-  return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${unionTypes.map((t) => t.name).join(', ')}`;
+  const defaultTypes = unionTypes.map((t) => {
+    return (
+      t.name ??
+      (t.kind === 'literal' ? t.literalValue : t.kind) ??
+      '<anonymous>'
+    );
+  });
+
+  const unionOfLiterals = getUnionOfLiterals(unionTypes);
+
+  const taggedUnions = getTaggedUnions(unionTypes);
+
+  const types = Option.isSome(taggedUnions)
+    ? taggedUnions.val.map((metadata) => metadata.tagLiteralName)
+    : Option.isSome(unionOfLiterals)
+      ? unionOfLiterals.val.literals
+      : defaultTypes;
+
+  return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${types.join(', ')}`;
 }
 
 // unhandled type of tsValue when converting from TS to WIT
@@ -54,8 +73,6 @@ export function unhandledTypeError(
   return error + (Option.isSome(message) ? `${message.val}` : '');
 }
 
-// A best effort to display any value.
-// We return the original value only as a last resort in error messages.
 export function safeDisplay(tsValue: any): string {
   return util.format(tsValue);
 }

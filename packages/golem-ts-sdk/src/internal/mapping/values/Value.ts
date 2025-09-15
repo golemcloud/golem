@@ -24,30 +24,106 @@ import {
   unionTypeMatchError,
 } from './errors';
 import * as Either from '../../../newTypes/either';
+import {
+  getTaggedUnions,
+  getUnionOfLiterals,
+  TaggedTypeMetadata,
+} from '../types/AnalysedType';
 
 export type Value =
-  | { kind: 'bool'; value: boolean }
-  | { kind: 'u8'; value: number }
-  | { kind: 'u16'; value: number }
-  | { kind: 'u32'; value: number }
-  | { kind: 'u64'; value: bigint }
-  | { kind: 's8'; value: number }
-  | { kind: 's16'; value: number }
-  | { kind: 's32'; value: number }
-  | { kind: 's64'; value: bigint }
-  | { kind: 'f32'; value: number }
-  | { kind: 'f64'; value: number }
-  | { kind: 'char'; value: string }
-  | { kind: 'string'; value: string }
-  | { kind: 'list'; value: Value[] }
-  | { kind: 'tuple'; value: Value[] }
-  | { kind: 'record'; value: Value[] }
-  | { kind: 'variant'; caseIdx: number; caseValue?: Value }
-  | { kind: 'enum'; value: number }
-  | { kind: 'flags'; value: boolean[] }
-  | { kind: 'option'; value?: Value }
-  | { kind: 'result'; value: { ok?: Value; err?: Value } }
-  | { kind: 'handle'; uri: string; resourceId: bigint };
+  | {
+      kind: 'bool';
+      value: boolean;
+    }
+  | {
+      kind: 'u8';
+      value: number;
+    }
+  | {
+      kind: 'u16';
+      value: number;
+    }
+  | {
+      kind: 'u32';
+      value: number;
+    }
+  | {
+      kind: 'u64';
+      value: bigint;
+    }
+  | {
+      kind: 's8';
+      value: number;
+    }
+  | {
+      kind: 's16';
+      value: number;
+    }
+  | {
+      kind: 's32';
+      value: number;
+    }
+  | {
+      kind: 's64';
+      value: bigint;
+    }
+  | {
+      kind: 'f32';
+      value: number;
+    }
+  | {
+      kind: 'f64';
+      value: number;
+    }
+  | {
+      kind: 'char';
+      value: string;
+    }
+  | {
+      kind: 'string';
+      value: string;
+    }
+  | {
+      kind: 'list';
+      value: Value[];
+    }
+  | {
+      kind: 'tuple';
+      value: Value[];
+    }
+  | {
+      kind: 'record';
+      value: Value[];
+    }
+  | {
+      kind: 'variant';
+      caseIdx: number;
+      caseValue?: Value;
+    }
+  | {
+      kind: 'enum';
+      value: number;
+    }
+  | {
+      kind: 'flags';
+      value: boolean[];
+    }
+  | {
+      kind: 'option';
+      value?: Value;
+    }
+  | {
+      kind: 'result';
+      value: {
+        ok?: Value;
+        err?: Value;
+      };
+    }
+  | {
+      kind: 'handle';
+      uri: string;
+      resourceId: bigint;
+    };
 
 export function fromWitValue(wit: WitValue): Value {
   if (!wit.nodes.length) throw new Error('Empty nodes in WitValue');
@@ -80,10 +156,16 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
     }
 
     case 'enum-value':
-      return { kind: 'enum', value: node.val };
+      return {
+        kind: 'enum',
+        value: node.val,
+      };
 
     case 'flags-value':
-      return { kind: 'flags', value: node.val };
+      return {
+        kind: 'flags',
+        value: node.val,
+      };
 
     case 'tuple-value':
       return {
@@ -99,7 +181,10 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
 
     case 'option-value':
       if (node.val === undefined) {
-        return { kind: 'option', value: undefined };
+        return {
+          kind: 'option',
+          value: undefined,
+        };
       }
       return {
         kind: 'option',
@@ -132,31 +217,70 @@ function buildTree(node: WitNode, nodes: WitNode[]): Value {
     }
 
     case 'prim-u8':
-      return { kind: 'u8', value: node.val };
+      return {
+        kind: 'u8',
+        value: node.val,
+      };
     case 'prim-u16':
-      return { kind: 'u16', value: node.val };
+      return {
+        kind: 'u16',
+        value: node.val,
+      };
     case 'prim-u32':
-      return { kind: 'u32', value: node.val };
+      return {
+        kind: 'u32',
+        value: node.val,
+      };
     case 'prim-u64':
-      return { kind: 'u64', value: node.val };
+      return {
+        kind: 'u64',
+        value: node.val,
+      };
     case 'prim-s8':
-      return { kind: 's8', value: node.val };
+      return {
+        kind: 's8',
+        value: node.val,
+      };
     case 'prim-s16':
-      return { kind: 's16', value: node.val };
+      return {
+        kind: 's16',
+        value: node.val,
+      };
     case 'prim-s32':
-      return { kind: 's32', value: node.val };
+      return {
+        kind: 's32',
+        value: node.val,
+      };
     case 'prim-s64':
-      return { kind: 's64', value: node.val };
+      return {
+        kind: 's64',
+        value: node.val,
+      };
     case 'prim-float32':
-      return { kind: 'f32', value: node.val };
+      return {
+        kind: 'f32',
+        value: node.val,
+      };
     case 'prim-float64':
-      return { kind: 'f64', value: node.val };
+      return {
+        kind: 'f64',
+        value: node.val,
+      };
     case 'prim-char':
-      return { kind: 'char', value: node.val };
+      return {
+        kind: 'char',
+        value: node.val,
+      };
     case 'prim-bool':
-      return { kind: 'bool', value: node.val };
+      return {
+        kind: 'bool',
+        value: node.val,
+      };
     case 'prim-string':
-      return { kind: 'string', value: node.val };
+      return {
+        kind: 'string',
+        value: node.val,
+      };
 
     case 'handle': {
       const [uri, resourceId] = node.val;
@@ -180,51 +304,81 @@ export function toWitValue(value: Value): WitValue {
 
 function buildNodes(value: Value, nodes: WitNode[]): number {
   const idx = nodes.length;
-  nodes.push({ tag: 'placeholder', val: undefined } as any);
+  nodes.push({
+    tag: 'placeholder',
+    val: undefined,
+  } as any);
 
   switch (value.kind) {
     case 'record': {
       const recordIndices = value.value.map((v) => buildNodes(v, nodes));
-      nodes[idx] = { tag: 'record-value', val: recordIndices };
+      nodes[idx] = {
+        tag: 'record-value',
+        val: recordIndices,
+      };
       return idx;
     }
 
     case 'variant': {
       if (value.caseValue !== undefined) {
         const innerIdx = buildNodes(value.caseValue, nodes);
-        nodes[idx] = { tag: 'variant-value', val: [value.caseIdx, innerIdx] };
+        nodes[idx] = {
+          tag: 'variant-value',
+          val: [value.caseIdx, innerIdx],
+        };
       } else {
-        nodes[idx] = { tag: 'variant-value', val: [value.caseIdx, undefined] };
+        nodes[idx] = {
+          tag: 'variant-value',
+          val: [value.caseIdx, undefined],
+        };
       }
       return idx;
     }
 
     case 'enum':
-      nodes[idx] = { tag: 'enum-value', val: value.value };
+      nodes[idx] = {
+        tag: 'enum-value',
+        val: value.value,
+      };
       return idx;
 
     case 'flags':
-      nodes[idx] = { tag: 'flags-value', val: value.value };
+      nodes[idx] = {
+        tag: 'flags-value',
+        val: value.value,
+      };
       return idx;
 
     case 'tuple': {
       const tupleIndices = value.value.map((v) => buildNodes(v, nodes));
-      nodes[idx] = { tag: 'tuple-value', val: tupleIndices };
+      nodes[idx] = {
+        tag: 'tuple-value',
+        val: tupleIndices,
+      };
       return idx;
     }
 
     case 'list': {
       const listIndices = value.value.map((v) => buildNodes(v, nodes));
-      nodes[idx] = { tag: 'list-value', val: listIndices };
+      nodes[idx] = {
+        tag: 'list-value',
+        val: listIndices,
+      };
       return idx;
     }
 
     case 'option': {
       if (value.value !== undefined) {
         const innerIdx = buildNodes(value.value, nodes);
-        nodes[idx] = { tag: 'option-value', val: innerIdx };
+        nodes[idx] = {
+          tag: 'option-value',
+          val: innerIdx,
+        };
       } else {
-        nodes[idx] = { tag: 'option-value', val: undefined };
+        nodes[idx] = {
+          tag: 'option-value',
+          val: undefined,
+        };
       }
       return idx;
     }
@@ -235,7 +389,13 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
           value.value.ok !== undefined
             ? buildNodes(value.value.ok, nodes)
             : undefined;
-        nodes[idx] = { tag: 'result-value', val: { tag: 'ok', val: innerIdx } };
+        nodes[idx] = {
+          tag: 'result-value',
+          val: {
+            tag: 'ok',
+            val: innerIdx,
+          },
+        };
       } else {
         const innerIdx =
           value.value.err !== undefined
@@ -243,56 +403,103 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
             : undefined;
         nodes[idx] = {
           tag: 'result-value',
-          val: { tag: 'err', val: innerIdx },
+          val: {
+            tag: 'err',
+            val: innerIdx,
+          },
         };
       }
       return idx;
     }
 
     case 'u8':
-      nodes[idx] = { tag: 'prim-u8', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-u8',
+        val: value.value,
+      };
       return idx;
     case 'u16':
-      nodes[idx] = { tag: 'prim-u16', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-u16',
+        val: value.value,
+      };
       return idx;
     case 'u32':
-      nodes[idx] = { tag: 'prim-u32', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-u32',
+        val: value.value,
+      };
       return idx;
     case 'u64':
-      nodes[idx] = { tag: 'prim-u64', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-u64',
+        val: value.value,
+      };
       return idx;
     case 's8':
-      nodes[idx] = { tag: 'prim-s8', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-s8',
+        val: value.value,
+      };
       return idx;
     case 's16':
-      nodes[idx] = { tag: 'prim-s16', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-s16',
+        val: value.value,
+      };
       return idx;
     case 's32':
-      nodes[idx] = { tag: 'prim-s32', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-s32',
+        val: value.value,
+      };
       return idx;
     case 's64':
-      nodes[idx] = { tag: 'prim-s64', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-s64',
+        val: value.value,
+      };
       return idx;
     case 'f32':
-      nodes[idx] = { tag: 'prim-float32', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-float32',
+        val: value.value,
+      };
       return idx;
     case 'f64':
-      nodes[idx] = { tag: 'prim-float64', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-float64',
+        val: value.value,
+      };
       return idx;
     case 'char':
-      nodes[idx] = { tag: 'prim-char', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-char',
+        val: value.value,
+      };
       return idx;
     case 'bool':
-      nodes[idx] = { tag: 'prim-bool', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-bool',
+        val: value.value,
+      };
       return idx;
     case 'string':
-      nodes[idx] = { tag: 'prim-string', val: value.value };
+      nodes[idx] = {
+        tag: 'prim-string',
+        val: value.value,
+      };
       return idx;
 
     case 'handle':
       nodes[idx] = {
         tag: 'handle',
-        val: [{ value: value.uri }, value.resourceId],
+        val: [
+          {
+            value: value.uri,
+          },
+          value.resourceId,
+        ],
       };
       return idx;
 
@@ -307,6 +514,26 @@ export function fromTsValue(
   tsValue: any,
   type: Type.Type,
 ): Either.Either<Value, string> {
+  const result = fromTsValueInternal(tsValue, type);
+
+  if (type.optional) {
+    return Either.map(result, (val) => ({
+      kind: 'option',
+      value: val,
+    }));
+  }
+
+  return result;
+}
+
+function fromTsValueInternal(
+  tsValue: any,
+  type: Type.Type,
+): Either.Either<Value, string> {
+  if (tsValue === null || tsValue === undefined) {
+    return Either.right({ kind: 'option' });
+  }
+
   if (type.name === 'String') {
     throw new Error(
       unhandledTypeError(
@@ -323,33 +550,51 @@ export function fromTsValue(
 
     case 'number':
       if (typeof tsValue === 'number') {
-        return Either.right({ kind: 's32', value: tsValue });
+        return Either.right({
+          kind: 's32',
+          value: tsValue,
+        });
       } else {
         return Either.left(typeMismatchIn(tsValue, type));
       }
 
     case 'string':
       if (typeof tsValue === 'string') {
-        return Either.right({ kind: 'string', value: tsValue });
+        return Either.right({
+          kind: 'string',
+          value: tsValue,
+        });
       } else {
         return Either.left(typeMismatchIn(tsValue, type));
       }
 
     case 'bigint':
       if (typeof tsValue === 'bigint' || typeof tsValue === 'number') {
-        return Either.right({ kind: 'u64', value: tsValue as any });
+        return Either.right({
+          kind: 'u64',
+          value: tsValue as any,
+        });
       } else {
         return Either.left(typeMismatchIn(tsValue, type));
       }
 
     case 'null':
-      return Either.right({ kind: 'tuple', value: [] });
+      return Either.right({
+        kind: 'tuple',
+        value: [],
+      });
 
     case 'undefined':
-      return Either.right({ kind: 'tuple', value: [] });
+      return Either.right({
+        kind: 'tuple',
+        value: [],
+      });
 
     case 'void':
-      return Either.right({ kind: 'tuple', value: [] });
+      return Either.right({
+        kind: 'tuple',
+        value: [],
+      });
 
     case 'array':
       switch (type.name) {
@@ -505,22 +750,32 @@ export function fromTsValue(
       return handleKeyValuePairs(tsValue, type, type.key, type.value);
 
     case 'literal':
-      if (type.name === 'true' || type.name === 'false') {
-        return handleBooleanType(tsValue);
-      } else {
-        if (tsValue === type.name) {
-          if (typeof tsValue === 'string') {
-            return Either.right({ kind: 'string', value: tsValue });
-          } else if (typeof tsValue === 'number') {
-            return Either.right({ kind: 's32', value: tsValue });
-          } else if (typeof tsValue === 'bigint') {
-            return Either.right({ kind: 'u64', value: tsValue });
-          } else {
-            return Either.left(typeMismatchIn(tsValue, type));
-          }
+      if (tsValue.toString() === type.literalValue?.toString()) {
+        if (typeof tsValue === 'boolean') {
+          return Either.right({
+            kind: 'bool',
+            value: tsValue,
+          });
+        } else if (typeof tsValue === 'string') {
+          return Either.right({
+            kind: 'string',
+            value: tsValue,
+          });
+        } else if (typeof tsValue === 'number') {
+          return Either.right({
+            kind: 's32',
+            value: tsValue,
+          });
+        } else if (typeof tsValue === 'bigint') {
+          return Either.right({
+            kind: 'u64',
+            value: tsValue,
+          });
         } else {
           return Either.left(typeMismatchIn(tsValue, type));
         }
+      } else {
+        return Either.left(typeMismatchIn(tsValue, type));
       }
 
     case 'alias':
@@ -551,19 +806,39 @@ function handleTypedArray<
     | BigInt64Array
     | Float32Array
     | Float64Array,
->(tsValue: unknown, ctor: { new (_: number): A }): Either.Either<A, string> {
+>(
+  tsValue: unknown,
+  ctor: {
+    new (_: number): A;
+  },
+): Either.Either<A, string> {
   return tsValue instanceof ctor
     ? Either.right(tsValue)
     : Either.left(
-        typeMismatchIn(tsValue, { kind: 'array', element: { kind: 'number' } }),
+        typeMismatchIn(tsValue, {
+          kind: 'array',
+          element: {
+            kind: 'number',
+            optional: false,
+          },
+          optional: false,
+        }),
       );
 }
 
 function handleBooleanType(tsValue: any): Either.Either<Value, string> {
   if (typeof tsValue === 'boolean') {
-    return Either.right({ kind: 'bool', value: tsValue });
+    return Either.right({
+      kind: 'bool',
+      value: tsValue,
+    });
   } else {
-    return Either.left(typeMismatchIn(tsValue, { kind: 'boolean' }));
+    return Either.left(
+      typeMismatchIn(tsValue, {
+        kind: 'boolean',
+        optional: false,
+      }),
+    );
   }
 }
 
@@ -573,13 +848,20 @@ function handleArrayType(
 ): Either.Either<Value, string> {
   if (!Array.isArray(tsValue)) {
     return Either.left(
-      typeMismatchIn(tsValue, { kind: 'array', element: elementType }),
+      typeMismatchIn(tsValue, {
+        kind: 'array',
+        element: elementType,
+        optional: false,
+      }),
     );
   }
 
   return Either.map(
     Either.all(tsValue.map((item) => fromTsValue(item, elementType))),
-    (values) => ({ kind: 'list', value: values }),
+    (values) => ({
+      kind: 'list',
+      value: values,
+    }),
   );
 }
 
@@ -589,13 +871,20 @@ function handleTupleType(
 ): Either.Either<Value, string> {
   if (!Array.isArray(tsValue)) {
     return Either.left(
-      typeMismatchIn(tsValue, { kind: 'tuple', elements: types }),
+      typeMismatchIn(tsValue, {
+        kind: 'tuple',
+        elements: types,
+        optional: false,
+      }),
     );
   }
 
   return Either.map(
     Either.all(tsValue.map((item, idx) => fromTsValue(item, types[idx]))),
-    (values) => ({ kind: 'tuple', value: values }),
+    (values) => ({
+      kind: 'tuple',
+      value: values,
+    }),
   );
 }
 
@@ -614,12 +903,19 @@ function handleKeyValuePairs(
       Either.zipWith(
         fromTsValue(key, keyType),
         fromTsValue(value, valueType),
-        (k, v) => ({ kind: 'tuple', value: [k, v] }) as Value,
+        (k, v) =>
+          ({
+            kind: 'tuple',
+            value: [k, v],
+          }) as Value,
       ),
     ),
   );
 
-  return Either.map(values, (value) => ({ kind: 'list', value }));
+  return Either.map(values, (value) => ({
+    kind: 'list',
+    value,
+  }));
 }
 
 function handleObject(
@@ -642,13 +938,24 @@ function handleObject(
     if (!Object.prototype.hasOwnProperty.call(tsValue, key)) {
       if (Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) {
         if (node.hasQuestionToken()) {
-          values.push({ kind: 'option' });
+          values.push({
+            kind: 'option',
+          });
         } else if (propType.kind === 'string' && tsValue === '') {
-          values.push({ kind: 'string', value: '' });
+          values.push({
+            kind: 'string',
+            value: '',
+          });
         } else if (propType.kind === 'number' && tsValue === 0) {
-          values.push({ kind: 's32', value: 0 });
+          values.push({
+            kind: 's32',
+            value: 0,
+          });
         } else if (propType.kind === 'boolean' && tsValue === false) {
-          values.push({ kind: 'bool', value: false });
+          values.push({
+            kind: 'bool',
+            value: false,
+          });
         } else {
           return Either.left(missingObjectKey(key, tsValue));
         }
@@ -665,7 +972,10 @@ function handleObject(
     values.push(fieldVal.val);
   }
 
-  return Either.right({ kind: 'record', value: values });
+  return Either.right({
+    kind: 'record',
+    value: values,
+  });
 }
 
 function handleUnion(
@@ -673,10 +983,135 @@ function handleUnion(
   type: Type.Type,
   possibleTypes: Type.Type[],
 ): Either.Either<Value, string> {
-  const typeWithIndex = findTypeOfAny(tsValue, possibleTypes);
+  const filteredTypes = possibleTypes.filter(
+    (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
+  );
+
+  const unionOfLiterals = getUnionOfLiterals(filteredTypes);
+
+  if (Option.isSome(unionOfLiterals)) {
+    if (
+      typeof tsValue === 'string' &&
+      unionOfLiterals.val.literals.includes(tsValue.toString())
+    ) {
+      const value: Value = {
+        kind: 'enum',
+        value: unionOfLiterals.val.literals.indexOf(tsValue.toString()),
+      };
+
+      return Either.right(value);
+    } else {
+      return Either.left(unionTypeMatchError(filteredTypes, tsValue));
+    }
+  }
+
+  const taggedTypes: Option.Option<TaggedTypeMetadata[]> =
+    getTaggedUnions(possibleTypes);
+
+  if (Option.isSome(taggedTypes)) {
+    for (const taggedTypeMetadata of taggedTypes.val) {
+      switch (taggedTypeMetadata.valueType.tag) {
+        case 'none':
+          if (typeof tsValue === 'object' && tsValue !== null) {
+            const keys = Object.keys(tsValue);
+
+            if (!keys.includes('tag')) {
+              return Either.left(missingObjectKey('tag', tsValue));
+            }
+
+            if (tsValue['tag'] === taggedTypeMetadata.tagLiteralName) {
+              const value: Value = {
+                kind: 'variant',
+                caseIdx: taggedTypes.val.findIndex(
+                  (m) => m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
+                ),
+              };
+
+              return Either.right(value);
+            }
+          }
+
+          continue;
+
+        case 'some':
+          if (typeof tsValue === 'object' && tsValue !== null) {
+            const keys = Object.keys(tsValue);
+            const nonTagKey = keys.find((k) => k !== 'tag');
+
+            if (
+              keys.length === 2 &&
+              tsValue['tag'] === taggedTypeMetadata.tagLiteralName
+            ) {
+              if (!nonTagKey) {
+                return Either.right({
+                  kind: 'variant',
+                  caseIdx: taggedTypes.val.findIndex(
+                    (m) =>
+                      m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
+                  ),
+                });
+              }
+
+              const innerValue = fromTsValue(
+                tsValue[nonTagKey],
+                taggedTypeMetadata.valueType.val[1],
+              );
+
+              return Either.map(innerValue, (result) => ({
+                kind: 'variant',
+                caseIdx: taggedTypes.val.findIndex(
+                  (m) => m.tagLiteralName === taggedTypeMetadata.tagLiteralName,
+                ),
+                caseValue: result,
+              }));
+            }
+          }
+      }
+    }
+
+    return Either.left(unionTypeMatchError(filteredTypes, tsValue));
+  }
+
+  // Handle optional types
+  if (filteredTypes.length !== possibleTypes.length) {
+    if (tsValue === null || tsValue === undefined) {
+      return Either.right({
+        kind: 'option',
+      });
+    }
+
+    const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
+
+    if (!typeWithIndex) {
+      return Either.left(unionTypeMatchError(filteredTypes, tsValue));
+    } else {
+      const innerType = typeWithIndex[0];
+
+      return Either.map(fromTsValue(tsValue, innerType), (result) => {
+        if (filteredTypes.length === 1) {
+          return {
+            kind: 'option',
+            value: result,
+          };
+        } else {
+          return {
+            kind: 'option',
+            value: {
+              kind: 'variant',
+              caseIdx: typeWithIndex[1],
+              caseValue: result,
+            },
+          };
+        }
+      });
+    }
+  }
+
+  // Handle others
+  const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
   if (!typeWithIndex) {
-    return Either.left(unionTypeMatchError(tsValue, possibleTypes));
+    return Either.left(unionTypeMatchError(filteredTypes, tsValue));
   } else {
     const innerType = typeWithIndex[0];
 
@@ -735,6 +1170,42 @@ function matchesType(value: any, type: Type.Type): boolean {
       return matchesTuple(value, type.elements);
 
     case 'union':
+      const taggedUnions = getTaggedUnions(type.unionTypes);
+
+      if (Option.isSome(taggedUnions)) {
+        for (const taggedTypeMetadata of taggedUnions.val) {
+          const name = taggedTypeMetadata.tagLiteralName;
+          const innerType = taggedTypeMetadata.valueType;
+
+          switch (innerType.tag) {
+            case 'none':
+              if (value === name) {
+                return true;
+              }
+              continue;
+
+            case 'some':
+              if (typeof value === 'object' && value !== null) {
+                const keys = Object.keys(value);
+                const nonTagKey = keys.find((k) => k !== 'tag');
+
+                if (keys.length === 2 && value['tag'] === name) {
+                  if (!nonTagKey) {
+                    return true;
+                  }
+
+                  if (innerType.val) {
+                    return matchesType(value[nonTagKey], innerType.val[1]);
+                  } else {
+                    return false;
+                  }
+                }
+              }
+          }
+        }
+        return false;
+      }
+
       return type.unionTypes.some((t) => matchesType(value, t));
 
     case 'object':
@@ -763,12 +1234,14 @@ function matchesType(value: any, type: Type.Type): boolean {
       );
 
     case 'literal':
-      const name = type.name;
-      if (name === 'true' || name === 'false') {
-        return typeof value === 'boolean';
-      } else {
-        return value === type.name;
-      }
+      const expectedLiteralValue = type.literalValue;
+
+      return (
+        (typeof value === 'string' ||
+          typeof value === 'boolean' ||
+          typeof value === 'number') &&
+        value.toString() === expectedLiteralValue?.toString()
+      );
 
     case 'alias':
       return false;
@@ -834,10 +1307,64 @@ export function toTsValue(value: Value, type: Type.Type): any {
   if (value.kind === 'option') {
     const caseValue = value.value;
     if (!caseValue) {
+      // Select between undefined and null
+
+      if (type.kind === 'null') return null;
+      if (type.kind === 'undefined' || type.kind === 'void') return undefined;
+      if (type.kind === 'union') {
+        const unionKinds = type.unionTypes.map((t) => t.kind);
+
+        if (unionKinds.includes('null')) {
+          return null;
+        }
+
+        if (unionKinds.includes('undefined')) {
+          return undefined;
+        }
+      }
+
       return undefined;
     }
 
     return toTsValue(caseValue, type);
+  }
+
+  if (value.kind === 'enum' && type.kind === 'union') {
+    const unionOfLiterals = getUnionOfLiterals(type.unionTypes);
+
+    if (Option.isSome(unionOfLiterals)) {
+      return unionOfLiterals.val.literals[value.value];
+    } else {
+      throw new Error(typeMismatchOut(value, 'enum'));
+    }
+  }
+
+  if (value.kind === 'variant' && type.kind === 'union') {
+    const taggedUnion = getTaggedUnions(type.unionTypes);
+
+    if (Option.isSome(taggedUnion)) {
+      const taggedTypeMetadata = taggedUnion.val[value.caseIdx];
+
+      const tagName = taggedTypeMetadata.tagLiteralName;
+      const innerType = taggedTypeMetadata.valueType;
+
+      if (innerType.tag === 'some') {
+        if (!value.caseValue) {
+          throw new Error(
+            `Expected value for the tag '${tagName}' of the union type '${name}'`,
+          );
+        }
+
+        return {
+          tag: tagName,
+          [innerType.val[0]]: toTsValue(value.caseValue, innerType.val[1]),
+        };
+      }
+
+      return {
+        tag: tagName,
+      };
+    }
   }
 
   switch (type.kind) {
@@ -861,6 +1388,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
     case 'bigint':
       return convertToBigInt(value);
 
+    // This shouldn't happen as null would be always value.kind === optional
     case 'null':
       if (value.kind === 'tuple' && value.value.length === 0) {
         return null;
@@ -868,6 +1396,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
         throw new Error(typeMismatchOut(value, 'null'));
       }
 
+    // This shouldn't happen as optional would be always value.kind === optional
     case 'undefined':
       if (value.kind === 'tuple' && value.value.length === 0) {
         return undefined;
@@ -974,14 +1503,41 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
+      const taggedUnions = getTaggedUnions(type.unionTypes);
+
+      const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
+        (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
+      );
+
+      // This implies this optional value
+      if (filteredUnionTypes.length !== type.unionTypes.length) {
+        if (filteredUnionTypes.length === 1) {
+          return toTsValue(value, filteredUnionTypes[0]);
+        }
+      }
+
       if (value.kind === 'variant') {
         const caseValue = value.caseValue;
         if (!caseValue) {
           throw new Error(typeMismatchOut(value, 'union'));
         }
 
-        const unionTypes = type.unionTypes;
-        const matchingType = unionTypes[value.caseIdx];
+        if (Option.isSome(taggedUnions)) {
+          const taggedTypeMetadata = taggedUnions.val[value.caseIdx];
+
+          const tagName = taggedTypeMetadata.tagLiteralName;
+          const innerType = taggedTypeMetadata.valueType;
+
+          if (Option.isNone(innerType)) {
+            // then we expect the value to be a string only
+            return tagName;
+          } else {
+            const innerTypeVal = innerType.val;
+            return toTsValue(caseValue, innerTypeVal[1]);
+          }
+        }
+
+        const matchingType = filteredUnionTypes[value.caseIdx];
 
         return toTsValue(caseValue, matchingType);
       } else {
@@ -1064,10 +1620,11 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'literal':
-      const literalValue = type.name;
+      const literalValue = type.literalValue;
       if (
-        value.kind === 'bool' &&
-        (literalValue === 'true' || literalValue === 'false')
+        value.kind === 'bool' ||
+        value.kind === 'string' ||
+        value.kind === 's32'
       ) {
         return value.value;
       } else {
@@ -1109,7 +1666,7 @@ function convertToNumber(value: Value): any {
   ) {
     return value.value;
   } else {
-    throw new Error(`Unable to convert the ${JSON.stringify(value)} to number`);
+    throw new Error();
   }
 }
 

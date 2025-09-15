@@ -233,9 +233,7 @@ function unwrapResult(witValue: WitValue.WitValue): Value.Value {
       ? innerResult.value.ok
       : (() => {
           throw new Error(
-            `Remote invocation failed: ${JSON.stringify(
-              innerResult.value.err,
-            )}`,
+            `Remote invocation failed: ${JSON.stringify(innerResult.value.err)}`,
           );
         })()
     : innerResult;

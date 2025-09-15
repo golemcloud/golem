@@ -15,24 +15,389 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
-import { AssistantAgentClassName, WeatherAgentClassName } from './testUtils';
+import { ComplexAgentClassName, SimpleAgentClassName } from './testUtils';
+import { AgentType, DataSchema, WitType } from 'golem:agent/common';
+import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
-// If the sample agents in the set up changes, this test should fail
-
-test('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
-  const assistantAgent = Option.getOrThrowWith(
-    AgentTypeRegistry.lookup(AssistantAgentClassName),
+// If the sample agents in the set-up changes, this test should fail
+describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
+  const complexAgent: AgentType = Option.getOrThrowWith(
+    AgentTypeRegistry.lookup(ComplexAgentClassName),
     () => new Error('AssistantAgent not found in AgentTypeRegistry'),
   );
 
-  const weatherAgent = Option.getOrThrowWith(
-    AgentTypeRegistry.lookup(WeatherAgentClassName),
-    () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+  const complexAgentConstructor = complexAgent.constructor;
+
+  const complexAgentMethod = complexAgent.methods.find(
+    (method) => method.name === 'fun0',
   );
 
-  expect(assistantAgent.methods.length).toEqual(22);
-  expect(assistantAgent.constructor.inputSchema.val.length).toEqual(1);
-  expect(weatherAgent.methods.length).toEqual(6);
-  expect(weatherAgent.constructor.inputSchema.val.length).toEqual(1);
+  it('should handle `a: string | undefined` in method params', () => {
+    const optionalStringInGetWeather = getWitType(
+      complexAgentMethod!.inputSchema,
+      'optionalStringType',
+    );
+
+    expect(optionalStringInGetWeather).toEqual({
+      nodes: [
+        {
+          type: {
+            tag: 'option-type',
+            val: 1,
+          },
+        },
+        {
+          type: {
+            tag: 'prim-string-type',
+          },
+        },
+      ],
+    });
+  });
+
+  it('should handle optional string in method', () => {
+    const optionalStringInGetWeather = getWitType(
+      complexAgentMethod!.inputSchema,
+      'optionalStringType',
+    );
+
+    expect(optionalStringInGetWeather).toEqual({
+      nodes: [
+        {
+          type: {
+            tag: 'option-type',
+            val: 1,
+          },
+        },
+        {
+          type: {
+            tag: 'prim-string-type',
+          },
+        },
+      ],
+    });
+  });
+
+  it('should handle tagged unions in method', () => {
+    const wit = getWitType(complexAgentMethod!.inputSchema, 'taggedUnionType');
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'tagged-union',
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['a', 1],
+              ['b', 2],
+              ['c', 3],
+              ['d', 4],
+              ['e', 5],
+              ['f', 6],
+              ['g', 7],
+              ['h', 8],
+              ['i', undefined],
+              ['j', undefined],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-bool-type' } },
+        {
+          name: 'union-type',
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 1],
+              ['case2', 2],
+              ['case3', 5],
+              ['case4', 3],
+            ],
+          },
+        },
+        {
+          name: 'object-type',
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 1],
+              ['b', 2],
+              ['c', 3],
+            ],
+          },
+        },
+        { name: 'list-type', type: { tag: 'list-type', val: 1 } },
+        { name: 'tuple-type', type: { tag: 'tuple-type', val: [1, 2, 3] } },
+        {
+          name: 'simple-interface-type',
+          type: { tag: 'record-type', val: [['n', 2]] },
+        },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle union with only literals in method', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'unionWithOnlyLiterals',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'union-with-only-literals',
+          type: { tag: 'enum-type', val: ['foo', 'bar', 'baz'] },
+        },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle union with null in constructor', () => {
+    const wit = getWitType(
+      complexAgentConstructor.inputSchema,
+      'optionalUnionType',
+    );
+
+    const expectedWit = {
+      nodes: [
+        { type: { tag: 'option-type', val: 1 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 2],
+              ['case2', 3],
+              ['case3', 4],
+              ['case4', 5],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        {
+          name: 'object-type',
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 2],
+              ['b', 3],
+              ['c', 5],
+            ],
+          },
+        },
+        { type: { tag: 'prim-bool-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle optional union in method', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'optionalUnionType',
+    );
+
+    const expectedWit = {
+      nodes: [
+        { type: { tag: 'option-type', val: 1 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 2],
+              ['case2', 3],
+              ['case3', 4],
+              ['case4', 5],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+        {
+          name: 'object-type',
+          type: {
+            tag: 'record-type',
+            val: [
+              ['a', 2],
+              ['b', 3],
+              ['c', 5],
+            ],
+          },
+        },
+        { type: { tag: 'prim-bool-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('union with null works', () => {
+    const unionWithNullType = getWitType(
+      complexAgentMethod!.inputSchema,
+      'unionWithNull',
+    );
+
+    const expected = {
+      nodes: [
+        { type: { tag: 'option-type', val: 1 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 2],
+              ['case2', 3],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(unionWithNullType).toEqual(expected);
+  });
+
+  it('object with \`a: string | undefined\` works', () => {
+    const objectWithUnionWithNull = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUnionWithUndefined1',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-union-with-undefined1',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull).toEqual(expected);
+  });
+
+  it('object with \`a: string | number | undefined\` works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUnionWithUndefined2',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-union-with-undefined2',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 3],
+              ['case2', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('object with \`a?: string | number | undefined\` works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUnionWithUndefined3',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-union-with-undefined3',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 3],
+              ['case2', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-s32-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('object with \`a?: string | undefined\` works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      complexAgentMethod!.inputSchema,
+      'objectWithUnionWithUndefined4',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-union-with-undefined4',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('captures all methods and constructor with correct number of parameters', () => {
+    const simpleAgent = Option.getOrThrowWith(
+      AgentTypeRegistry.lookup(SimpleAgentClassName),
+      () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+    );
+
+    expect(complexAgent.methods.length).toEqual(22);
+    expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
+    expect(simpleAgent.methods.length).toEqual(10);
+    expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
+  });
 });
+
+function getWitType(dataSchema: DataSchema, parameterName: string) {
+  const optionalParamInput = dataSchema.val.find((s) => s[0] === parameterName);
+
+  if (!optionalParamInput) {
+    throw new Error(
+      `${parameterName} not found in scheme ${util.format(dataSchema)}`,
+    );
+  }
+
+  const optionalParamInputElement = optionalParamInput[1];
+
+  const witTypeOpt =
+    optionalParamInputElement.tag === 'component-model'
+      ? optionalParamInputElement.val
+      : undefined;
+
+  if (!witTypeOpt) {
+    throw new Error(
+      `Test failed - ${parameterName} is not of component-model type in getWeather function in ${ComplexAgentClassName.value}`,
+    );
+  }
+
+  return witTypeOpt;
+}

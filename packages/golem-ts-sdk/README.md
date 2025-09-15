@@ -21,7 +21,7 @@ class AssistantAgent extends BaseAgent {
         const customData = { data: "Sample data", value: 42 };
 
         const remoteWeatherClient = WeatherAgent.get("Jon");
-        const remoteWeather = await remoteWeatherClient.getWeather(name, customData);
+        const remoteWeather = await remoteWeatherClient.fun1(name, customData);
 
         return (
             `${this.getId().value} reporting on the weather in ${name}: ` +

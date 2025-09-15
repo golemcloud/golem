@@ -149,7 +149,10 @@ class FallibleTransaction<Err> {
 export type TransactionResult<Out, Err> = Result<Out, TransactionFailure<Err>>;
 
 export type TransactionFailure<Err> =
-  | { type: 'FailedAndRolledBackCompletely'; error: Err }
+  | {
+      type: 'FailedAndRolledBackCompletely';
+      error: Err;
+    }
   | {
       type: 'FailedAndRolledBackPartially';
       error: Err;

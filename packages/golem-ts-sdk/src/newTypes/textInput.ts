@@ -24,13 +24,22 @@ export type TextSource = {
 };
 
 export type UnstructuredText =
-  | { tag: 'url'; val: string }
-  | { tag: 'inline'; val: TextSource };
+  | {
+      tag: 'url';
+      val: string;
+    }
+  | {
+      tag: 'inline';
+      val: TextSource;
+    };
 
 export const TextInput = {
   fromTextReferenceDataValue(dataValue: TextReference): UnstructuredText {
     if (dataValue.tag === 'url') {
-      return { tag: 'url', val: dataValue.val };
+      return {
+        tag: 'url',
+        val: dataValue.val,
+      };
     }
 
     return {
@@ -51,7 +60,10 @@ export const TextInput = {
    *
    */
   fromUrl(urlValue: string): UnstructuredText {
-    return { tag: 'url', val: urlValue };
+    return {
+      tag: 'url',
+      val: urlValue,
+    };
   },
 
   /**
@@ -63,6 +75,14 @@ export const TextInput = {
    */
   fromInline(data: string, languageCode?: string): UnstructuredText {
     languageCode = languageCode ? languageCode : 'en';
-    return { tag: 'inline', val: { data: data, textType: { languageCode } } };
+    return {
+      tag: 'inline',
+      val: {
+        data: data,
+        textType: {
+          languageCode,
+        },
+      },
+    };
   },
 };

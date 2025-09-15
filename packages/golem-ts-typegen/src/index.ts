@@ -31,7 +31,10 @@ import {
 import * as fs from "node:fs";
 import path from "path";
 
-export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
+export function getTypeFromTsMorph(
+  tsMorphType: TsMorphType,
+  isOptional: boolean,
+): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
   const aliasName = getAliasTypeName(type);
@@ -43,7 +46,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Float64Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Float32Array":
       return {
@@ -51,7 +56,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Float32Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Int8Array":
       return {
@@ -59,7 +66,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Int8Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Uint8Array":
       return {
@@ -67,7 +76,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Uint8Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Int16Array":
       return {
@@ -75,7 +86,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Int16Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Uint16Array":
       return {
@@ -83,7 +96,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Uint16Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Int32Array":
       return {
@@ -91,7 +106,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Int32Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "Uint32Array":
       return {
@@ -99,7 +116,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "Uint32Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "BigInt64Array":
       return {
@@ -107,7 +126,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "BigInt64Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
     case "BigUint64Array":
       return {
@@ -115,7 +136,9 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
         name: "BigUint64Array",
         element: {
           kind: "number",
+          optional: false,
         },
+        optional: isOptional,
       };
   }
 
@@ -127,54 +150,64 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
     return {
       kind: "others",
       name: name,
+      optional: isOptional,
     };
   }
 
   if (rawName === "Promise" && type.getTypeArguments().length === 1) {
     const inner = type.getTypeArguments()[0];
-    const promiseType = getTypeFromTsMorph(inner);
+    const promiseType = getTypeFromTsMorph(inner, false);
 
     return {
       kind: "promise",
       name: aliasName,
       element: promiseType,
+      optional: isOptional,
     };
   }
 
   if (rawName === "Map" && type.getTypeArguments().length === 2) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getTypeFromTsMorph(keyT);
-    const value = getTypeFromTsMorph(valT);
+    const key = getTypeFromTsMorph(keyT, false);
+    const value = getTypeFromTsMorph(valT, false);
     return {
       kind: "map",
       name: aliasName,
       key: key,
       value: value,
+      optional: isOptional,
     };
   }
 
   if (type.isVoid()) {
-    return { kind: "void", name: "void" };
+    return { kind: "void", name: "void", optional: isOptional };
   }
 
-  if (type.isBoolean() || rawName === "true" || rawName === "false") {
-    return { kind: "boolean" };
+  if (type.isBoolean()) {
+    return { kind: "boolean", optional: isOptional };
   }
 
   if (type.isLiteral()) {
-    const literalValue = type.getLiteralValue()?.toString();
-    return { kind: "literal", name: aliasName, literalValue: literalValue };
+    const literalValue = type.getLiteralValue() ?? type.getText();
+
+    return {
+      kind: "literal",
+      name: aliasName,
+      literalValue: literalValue.toString(),
+      optional: isOptional,
+    };
   }
 
   if (type.isTuple()) {
     const tupleElems = type
       .getTupleElements()
-      .map((el) => getTypeFromTsMorph(el));
+      .map((el) => getTypeFromTsMorph(el, false));
 
     return {
       kind: "tuple",
       name: aliasName,
       elements: tupleElems,
+      optional: isOptional,
     };
   }
 
@@ -184,22 +217,26 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       throw new Error("Array type without element type");
     }
 
-    const element = getTypeFromTsMorph(elementType);
+    const element = getTypeFromTsMorph(elementType, false);
 
     return {
       kind: "array",
       name: aliasName,
       element,
+      optional: isOptional,
     };
   }
 
   if (type.isUnion()) {
-    const unionTypes = type.getUnionTypes().map((t) => getTypeFromTsMorph(t));
+    const unionTypes = type
+      .getUnionTypes()
+      .map((t) => getTypeFromTsMorph(t, false));
 
     return {
       kind: "union",
       name: aliasName,
       unionTypes,
+      optional: isOptional,
     };
   }
 
@@ -208,7 +245,7 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getTypeFromTsMorph(type);
+      const tsType = getTypeFromTsMorph(type, false);
       const propName = prop.getName();
 
       if (
@@ -234,6 +271,7 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       kind: "class",
       name: aliasName ?? rawName,
       properties: result,
+      optional: isOptional,
     };
   }
 
@@ -242,7 +280,7 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getTypeFromTsMorph(type);
+      const tsType = getTypeFromTsMorph(type, false);
       const propName = prop.getName();
 
       if (
@@ -268,6 +306,7 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       kind: "interface",
       name: aliasName ?? rawName,
       properties: result,
+      optional: isOptional,
     };
   }
 
@@ -276,7 +315,7 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getTypeFromTsMorph(type);
+      const tsType = getTypeFromTsMorph(type, false);
       const propName = prop.getName();
 
       if (
@@ -302,30 +341,35 @@ export function getTypeFromTsMorph(tsMorphType: TsMorphType): Type.Type {
       kind: "object",
       name: aliasName,
       properties: result,
+      optional: isOptional,
     };
   }
 
   if (type.isNull()) {
-    return { kind: "null", name: aliasName };
+    return { kind: "null", name: aliasName, optional: isOptional };
   }
 
   if (type.isBigInt()) {
-    return { kind: "bigint", name: aliasName };
+    return { kind: "bigint", name: aliasName, optional: isOptional };
   }
 
   if (type.isUndefined()) {
-    return { kind: "undefined", name: aliasName };
+    return { kind: "undefined", name: aliasName, optional: isOptional };
   }
 
   if (type.isNumber()) {
-    return { kind: "number", name: aliasName };
+    return { kind: "number", name: aliasName, optional: isOptional };
   }
 
   if (type.isString()) {
-    return { kind: "string", name: aliasName };
+    return { kind: "string", name: aliasName, optional: isOptional };
   }
 
-  return { kind: "others", name: aliasName ?? type.getText() };
+  return {
+    kind: "others",
+    name: aliasName ?? type.getText(),
+    optional: isOptional,
+  };
 }
 
 export function getRawTypeName(type: TsMorphType): string | undefined {
@@ -427,7 +471,7 @@ export function updateMetadataFromSourceFiles(
           ? []
           : publicConstructors[0].getParameters().map((p) => ({
               name: p.getName(),
-              type: getTypeFromTsMorph(p.getType()),
+              type: getTypeFromTsMorph(p.getType(), p.isOptional()),
             }));
 
       const methods = new Map();
@@ -439,11 +483,14 @@ export function updateMetadataFromSourceFiles(
       for (const method of publicMethods) {
         const methodParams = new Map(
           method.getParameters().map((p) => {
-            return [p.getName(), getTypeFromTsMorph(p.getType())];
+            return [
+              p.getName(),
+              getTypeFromTsMorph(p.getType(), p.isOptional()),
+            ];
           }),
         );
 
-        const returnType = getTypeFromTsMorph(method.getReturnType());
+        const returnType = getTypeFromTsMorph(method.getReturnType(), false);
         methods.set(method.getName(), { methodParams, returnType });
       }
 
@@ -476,11 +523,17 @@ export function updateMetadataFromSourceFiles(
               );
             }
             const paramType = p.getTypeAtLocation(decl);
-            return [p.getName(), getTypeFromTsMorph(paramType)];
+            const isOptional = TsMorphNode.isParameterDeclaration(decl)
+              ? decl.isOptional()
+              : false;
+            return [p.getName(), getTypeFromTsMorph(paramType, isOptional)];
           }),
         );
 
-        const returnType = getTypeFromTsMorph(callSignature.getReturnType());
+        const returnType = getTypeFromTsMorph(
+          callSignature.getReturnType(),
+          false,
+        );
         methods.set(publicArrow.getName(), { methodParams, returnType });
       }
 

@@ -14,38 +14,84 @@
 
 import { agent, BaseAgent, UnstructuredText } from '../src';
 import * as Types from './testTypes';
-import { EitherX, EitherY, EitherZ, UnionOfLiterals } from './testTypes';
+import {
+  EitherX,
+  EitherY,
+  EitherZ,
+  ObjectWithUnionWithUndefined1,
+  ObjectWithUnionWithUndefined2,
+  ObjectWithUnionWithUndefined3,
+  ObjectWithUnionWithUndefined4,
+  UnionWithLiterals,
+  UnionType,
+  TaggedUnion,
+  UnionWithOnlyLiterals,
+} from './testTypes';
 
 @agent()
-class WeatherAgent extends BaseAgent {
+class SimpleAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;
   }
 
-  async fun1(location: string): Types.PromiseType {
-    return Promise.resolve(`Weather in ${location} is sunny!`);
+  async fun1(param: string): Types.PromiseType {
+    return Promise.resolve(`Weather in ${param} is sunny!`);
   }
 
-  async fun2(data: { value: number; data: string }): Types.PromiseType {
-    return Promise.resolve(`Weather in ${data.data} is sunny!`);
+  async fun2(param: { value: number; data: string }): Types.PromiseType {
+    return Promise.resolve(`Weather in ${param.data} is sunny!`);
   }
 
-  async fun3(param2: CustomData): Types.PromiseType {
-    return Promise.resolve(`Weather in ${param2.data} is sunny!`);
+  async fun3(param: CustomData): Types.PromiseType {
+    return Promise.resolve(`Weather in ${param.data} is sunny!`);
   }
 
-  async fun4(location: CustomData) {
+  async fun4(param: CustomData) {
     return;
   }
 
-  fun5 = (location: string) => {
-    return Promise.resolve(`Weather in ${location} is sunny!`);
+  fun5 = (param: string) => {
+    return Promise.resolve(`Weather in ${param} is sunny!`);
   };
 
-  fun6 = (location: string) => {
+  fun6 = (param: string) => {
     return;
   };
+
+  fun7 = async (
+    param1: string | number | null,
+    param2: ObjectWithUnionWithUndefined1,
+    param3: ObjectWithUnionWithUndefined2,
+    param4: ObjectWithUnionWithUndefined3,
+    param5: ObjectWithUnionWithUndefined4,
+    param6: string | undefined,
+    param7: UnionType | undefined,
+  ) => {
+    const concatenatedResult = {
+      param1: param1,
+      param2: param2.a,
+      param3: param3.a,
+      param4: param4.a,
+      param5: param5.a,
+      param6: param6,
+      param7: param7,
+    };
+
+    return Promise.resolve(concatenatedResult);
+  };
+
+  async fun8(a: UnionWithLiterals): Promise<UnionWithLiterals> {
+    return a;
+  }
+
+  async fun9(param: TaggedUnion): Promise<TaggedUnion> {
+    return param;
+  }
+
+  async fun10(param: UnionWithOnlyLiterals): Promise<UnionWithOnlyLiterals> {
+    return param;
+  }
 }
 
 export interface CustomData {
@@ -54,13 +100,19 @@ export interface CustomData {
 }
 
 @agent()
-class AssistantAgent extends BaseAgent {
-  constructor(readonly testInterfaceType: Types.TestInterfaceType) {
+class ComplexAgent extends BaseAgent {
+  constructor(
+    readonly testInterfaceType: Types.TestInterfaceType,
+    readonly optionalStringType: string | null,
+    readonly optionalUnionType: UnionType | null,
+  ) {
     super();
     this.testInterfaceType = testInterfaceType;
+    this.optionalStringType = optionalStringType;
+    this.optionalUnionType = optionalUnionType;
   }
 
-  async getWeather(
+  async fun0(
     complexType: Types.ObjectComplexType,
     unionType: Types.UnionType,
     unionComplexType: Types.UnionComplexType,
@@ -72,14 +124,20 @@ class AssistantAgent extends BaseAgent {
     tupleType: Types.TupleType,
     listComplexType: Types.ListComplexType,
     objectType: Types.ObjectType,
-    UnionOfLiterals: UnionOfLiterals,
-    voidType: void,
-    nullType: null,
-    undefinedType: undefined,
+    unionWithLiterals: UnionWithLiterals,
     textType: UnstructuredText,
     eitherXType: EitherX,
     eitherYType: EitherY,
     eitherZType: EitherZ,
+    unionWithNull: string | number | null,
+    objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
+    objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
+    objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
+    objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
+    optionalStringType: string | undefined,
+    optionalUnionType: UnionType | undefined,
+    taggedUnionType: TaggedUnion,
+    unionWithOnlyLiterals: UnionWithOnlyLiterals,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
@@ -128,7 +186,7 @@ class AssistantAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun14(text: string): Promise<Types.UnionOfLiterals> {
+  async fun14(text: string): Promise<Types.UnionWithLiterals> {
     throw new Error('Unimplemented');
   }
 
@@ -153,11 +211,17 @@ class AssistantAgent extends BaseAgent {
   }
 
   async fun2(text: string): Promise<EitherY> {
-    return { tag: 'ok', val: 'hello' };
+    return {
+      tag: 'ok',
+      val: 'hello',
+    };
   }
 
   async fun19(text: string): Promise<EitherZ> {
-    return { tag: 'ok', val: 'hello' };
+    return {
+      tag: 'ok',
+      val: 'hello',
+    };
   }
 
   async fun20(text: string) {

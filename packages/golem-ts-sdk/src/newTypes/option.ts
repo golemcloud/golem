@@ -27,7 +27,10 @@ export function fromNullable<T>(val: T | null | undefined): Option<T> {
   return val === null || val === undefined ? none() : some(val);
 }
 
-export function isSome<T>(opt: Option<T>): opt is { tag: 'some'; val: T } {
+export function isSome<T>(opt: Option<T>): opt is {
+  tag: 'some';
+  val: T;
+} {
   return opt.tag === 'some';
 }
 

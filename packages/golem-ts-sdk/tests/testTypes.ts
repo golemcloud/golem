@@ -16,11 +16,45 @@ interface SimpleInterfaceType {
   n: number;
 }
 
-export type UnionOfLiterals = 'a' | 'b' | 'c' | true | false | null;
+export type TaggedUnion =
+  | { tag: 'a'; val: string }
+  | { tag: 'b'; val: number }
+  | { tag: 'c'; val: boolean }
+  | { tag: 'd'; val: UnionType }
+  | { tag: 'e'; val: ObjectType }
+  | { tag: 'f'; val: ListType }
+  | { tag: 'g'; val: TupleType }
+  | { tag: 'h'; val: SimpleInterfaceType }
+  | { tag: 'i' }
+  | { tag: 'j' };
+
+export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
+
+export type UnionWithLiterals = 'a' | 'b' | 'c' | boolean;
 
 export type PromiseType = Promise<string>;
 
-export type ObjectType = { a: string; b: number; c: boolean };
+export type ObjectType = {
+  a: string;
+  b: number;
+  c: boolean;
+};
+
+export type ObjectWithUnionWithUndefined1 = {
+  a: string | undefined;
+};
+
+export type ObjectWithUnionWithUndefined2 = {
+  a: string | number | undefined;
+};
+
+export type ObjectWithUnionWithUndefined3 = {
+  a?: string | number | undefined;
+};
+
+export type ObjectWithUnionWithUndefined4 = {
+  a?: string | undefined;
+};
 
 export type UnionType = number | string | boolean | ObjectType;
 
@@ -72,7 +106,6 @@ export interface TestInterfaceType {
   stringProp: string;
   booleanProp: boolean;
   bigintProp: bigint;
-  nullProp: null;
   trueProp: true;
   falseProp: false;
   optionalProp?: number;
@@ -102,6 +135,7 @@ export interface TestInterfaceType {
     c: boolean;
   };
   unionPropInlined: string | number;
+
   // recordProp: RecordType;
   // enumType: EnumTypeAlias;
   // enumTypeInlined: EnumType,

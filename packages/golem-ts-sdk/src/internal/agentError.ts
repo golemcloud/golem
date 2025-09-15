@@ -28,7 +28,9 @@ export function createCustomError(error: string): AgentError {
           {
             name: undefined,
             owner: undefined,
-            type: { tag: 'prim-string-type' },
+            type: {
+              tag: 'prim-string-type',
+            },
           },
         ],
       },
