@@ -44,7 +44,7 @@ use crate::workerctx::{
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use anyhow::Error;
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
 use golem_common::model::agent::AgentId;
@@ -57,7 +57,9 @@ use golem_common::model::{
     OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
@@ -282,9 +284,7 @@ impl ResourceLimiterAsync for Context {
         );
 
         if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
-            // TODO: Continuing here does not really make sense as the worker executor will just hit the plan limits again when retrying.
-            // We should fail the worker permanently here with a descriptive error.
-            return Ok(false);
+            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededMemoryLimit))?;
         };
 
         let current_known = self.durable_ctx.total_linear_memory_size();

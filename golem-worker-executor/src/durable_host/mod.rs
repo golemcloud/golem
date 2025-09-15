@@ -452,6 +452,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
             TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
             TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::ExceededMemoryLimit) => RetryDecision::None,
             TrapType::Error(WorkerError::Unknown(_)) => {
                 let retryable = previous_tries < (retry_config.max_attempts as u64);
                 if retryable {
