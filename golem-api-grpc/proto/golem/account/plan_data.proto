@@ -9,4 +9,5 @@ message PlanData {
   int32 storage_limit = 4;
   int64 monthly_gas_limit = 5;
   int32 monthly_upload_limit = 6;
+  int64 max_memory_per_worker = 7;
 }

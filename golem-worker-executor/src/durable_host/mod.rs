@@ -417,11 +417,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
             // was initialized with the correct amount of memory.
-            Ok(true)
+            Ok(())
         } else {
             // In live mode we need to try to get more memory permits and if we can't,
             // we fail the worker, unload it from memory and schedule a retry.
@@ -434,7 +434,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             self.public_state.worker().increase_memory(delta).await?;
             self.state.total_linear_memory_size += delta;
-            Ok(true)
+            Ok(())
         }
     }
 
@@ -452,6 +452,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
             TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
             TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::ExceededMemoryLimit) => RetryDecision::None,
             TrapType::Error(WorkerError::Unknown(_)) => {
                 let retryable = previous_tries < (retry_config.max_attempts as u64);
                 if retryable {
@@ -730,9 +731,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        debug!("Applying pending side effects accumulated during replay");
-
         let replay_events = self.state.replay_state.take_new_replay_events().await;
+        if !replay_events.is_empty() {
+            debug!("Applying pending side effects accumulated during replay");
+        }
         for event in replay_events {
             match event {
                 ReplayEvent::UpdateReplayed { new_version } => {
