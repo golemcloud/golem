@@ -68,7 +68,7 @@ pub trait WorkerEventService: Send + Sync {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct WorkerEventEntry {
     event: InternalWorkerEvent,
     is_live: bool,
@@ -143,11 +143,15 @@ impl WorkerEventService for WorkerEventServiceDefault {
     fn get_last_invocation_errors(&self) -> String {
         let ring_cons = self.ring_cons.lock().unwrap();
         let history: Vec<_> = ring_cons.iter().cloned().collect();
+
         let mut stderr_chunks = Vec::new();
-        for event in history.iter().rev() {
+        let mut current_stderr_chunks_batch = Vec::new();
+        let mut first_seen_invocation = None;
+
+        for event in history.iter().rev().filter(|e| e.is_live) {
             match &event.event {
                 InternalWorkerEvent::StdErr { bytes, .. } => {
-                    stderr_chunks.push(bytes.clone());
+                    current_stderr_chunks_batch.push(bytes.clone());
                 }
                 InternalWorkerEvent::Log {
                     level,
@@ -164,9 +168,33 @@ impl WorkerEventService for WorkerEventServiceDefault {
                         context,
                         message
                     );
-                    stderr_chunks.push(line.as_bytes().to_vec());
+                    current_stderr_chunks_batch.push(line.as_bytes().to_vec());
                 }
-                InternalWorkerEvent::InvocationStart { .. } => break,
+                // We need to keep going back till the beginning of the invocation, including possible retries (which won't be live)
+                InternalWorkerEvent::InvocationStart {
+                    function,
+                    idempotency_key,
+                    ..
+                } => {
+                    match &first_seen_invocation {
+                        None => {
+                            first_seen_invocation = Some((function, idempotency_key));
+                            stderr_chunks.extend(std::mem::take(&mut current_stderr_chunks_batch));
+                        }
+                        Some((expected_function, expected_idempotency_key))
+                            if function == *expected_function
+                                && idempotency_key == *expected_idempotency_key =>
+                        {
+                            // The previous function we saw was a retry of this one. Keep collection logs.
+                            // Note that deduplication of logs will ensure that there is only one live entry for all log messages between all retries of the invocation.
+                            stderr_chunks.extend(std::mem::take(&mut current_stderr_chunks_batch));
+                        }
+                        Some(_) => {
+                            // beginning of a different function, the last chunk of logs is unrelated
+                            break;
+                        }
+                    }
+                }
                 _ => {}
             }
         }
