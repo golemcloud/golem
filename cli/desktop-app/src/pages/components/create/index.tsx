@@ -38,7 +38,7 @@ const LANGUAGE_TEMPLATES = [
 
 // Group templates by language
 const GROUPED_TEMPLATES = {
-  TypeScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("ts")),
+  TypeScript: LANGUAGE_TEMPLATES
 };
 
 // Form schema using zod for validation
