@@ -72,7 +72,7 @@ async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tra
     check!(
         env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
-                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("GOLEM_AGENT_ID".to_string()),
                 Value::String("dynamic-worker-creation-1".to_string())
             ]),
             Value::Tuple(vec![

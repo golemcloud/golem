@@ -1046,7 +1046,7 @@ async fn environment_service(
                     Value::String("test-value".to_string())
                 ]),
                 Value::Tuple(vec![
-                    Value::String("GOLEM_WORKER_NAME".to_string()),
+                    Value::String("GOLEM_AGENT_ID".to_string()),
                     Value::String("environment-service-1".to_string())
                 ]),
                 Value::Tuple(vec![
@@ -2481,6 +2481,155 @@ async fn filesystem_rename_replay_restores_file_times(
 
 #[test]
 #[tracing::instrument]
+async fn remove_dir_all(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    // [2025-09-16T10:55:39.482Z] [STDOUT  ] Removing temporary module root: "/tmp/py/modules/0"
+    // [2025-09-16T10:55:39.482Z] [STDOUT  ] 📁 mytest
+    // [2025-09-16T10:55:39.483Z] [STDOUT  ]   📄 __init__.py
+    // [2025-09-16T10:55:39.483Z] [STDOUT  ]   📁 __pycache__
+    // [2025-09-16T10:55:39.484Z] [STDOUT  ]     📄 __init__.rustpython-01.pyc
+    // [2025-09-16T10:55:39.484Z] [STDOUT  ]     📄 mymodule.rustpython-01.pyc
+    // [2025-09-16T10:55:39.484Z] [STDOUT  ]   📄 mymodule.py
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("file-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "file-service-11")
+        .await;
+
+    executor.log_output(&worker_id).await;
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{create-directory}",
+    //         vec!["/tmp".into_value_and_type()],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{create-directory}",
+    //         vec!["/tmp/py".into_value_and_type()],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{create-directory}",
+    //         vec!["/tmp/py/modules".into_value_and_type()],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{create-directory}",
+    //         vec!["/tmp/py/modules/0".into_value_and_type()],
+    //     )
+    //     .await
+    //     .unwrap();
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{create-directory}",
+    //         vec!["/tmp/py/modules/0/mytest".into_value_and_type()],
+    //     )
+    //     .await
+    //     .unwrap();
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{create-directory}",
+    //         vec!["/tmp/py/modules/0/mytest/__pycache__".into_value_and_type()],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{write-file}",
+    //         vec![
+    //             "/tmp/py/modules/0/mytest/__init__.py".into_value_and_type(),
+    //             "# hello world".into_value_and_type(),
+    //         ],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{write-file}",
+    //         vec![
+    //             "/tmp/py/modules/0/mytest/__pycache__/__init__.rustpython-01.pyc".into_value_and_type(),
+    //             "# hello world".into_value_and_type(),
+    //         ],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{write-file}",
+    //         vec![
+    //             "/tmp/py/modules/0/mytest/__pycache__/mymodule.rustpython-01.pyc".into_value_and_type(),
+    //             "# hello world".into_value_and_type(),
+    //         ],
+    //     )
+    //     .await
+    //     .unwrap();
+    //
+    // let _ = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{write-file}",
+    //         vec![
+    //             "/tmp/py/modules/0/mytest/mymodule.py".into_value_and_type(),
+    //             "# hello world".into_value_and_type(),
+    //         ],
+    //     )
+    //     .await
+    //     .unwrap();
+    // let result = executor
+    //     .invoke_and_await(
+    //         &worker_id,
+    //         "golem:it/api.{remove-dir-all}",
+    //         vec![
+    //             "/tmp/py/modules/0".into_value_and_type(),
+    //         ],
+    //     )
+    //     .await
+    //     .unwrap();
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{reproducer}", vec![])
+        .await
+        .unwrap();
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
+    println!("{:?}", result);
+
+    // check!(result[0] == Value::Result(Ok(None)));
+    // check!(result[0] == Value::Result(Ok(None)));
+}
+
+#[test]
+#[tracing::instrument]
 async fn filesystem_remove_file_replay_restores_file_times(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2513,10 +2662,26 @@ async fn filesystem_remove_file_replay_restores_file_times(
         )
         .await
         .unwrap();
+    let info1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{get-info}",
+            vec!["/test/testfile.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
+            vec!["/test/testfile.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let info2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{get-info}",
             vec!["/test/testfile.txt".into_value_and_type()],
         )
         .await
@@ -2544,6 +2709,9 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
+
+    println!("{:?}", info1);
+    println!("{:?}", info2);
 
     check!(times1 == times2);
 }

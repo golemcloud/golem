@@ -34,6 +34,10 @@ interface api {
   rename-file: func(source: string, destination: string) -> result<_, string>;
 
   hash: func(path: string) -> result<metadata-hash-value, string>;
+
+  remove-dir-all: func(path: string) -> result<_, string>;
+
+  reproducer: func();
 }
 
 world file-service {

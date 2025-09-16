@@ -557,7 +557,7 @@ async fn fork_worker_ensures_zero_divergence_until_cut_off(
     // The worker name is foo
     let expected = Value::Result(Ok(Some(Box::new(Value::List(vec![
         Value::Tuple(vec![
-            Value::String("GOLEM_WORKER_NAME".to_string()),
+            Value::String("GOLEM_AGENT_ID".to_string()),
             Value::String(source_worker_name),
         ]),
         Value::Tuple(vec![
