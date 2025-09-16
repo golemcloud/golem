@@ -30,15 +30,7 @@ import {
 import { FolderOpen, Info, ArrowLeft, Sparkles } from "lucide-react";
 
 const LANGUAGE_OPTIONS = [
-  { value: "c", label: "C" },
-  { value: "go", label: "Go" },
-  { value: "js", label: "JavaScript" },
-  { value: "python", label: "Python" },
-  { value: "rust", label: "Rust" },
-  { value: "ts", label: "TypeScript" },
-  { value: "zig", label: "Zig" },
-  { value: "scala", label: "Scala.js" },
-  { value: "moonbit", label: "MoonBit" },
+  { value: "ts", label: "TypeScript" }
 ];
 
 export const CreateApplication = () => {
