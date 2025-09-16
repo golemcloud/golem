@@ -828,8 +828,8 @@ impl Display for TemplateOption {
 
 #[derive(Debug, Clone, Copy, EnumIter)]
 enum AddComponentOrCreateApp {
-    AddComponent,
     CreateApp,
+    AddComponent,
 }
 
 impl Display for AddComponentOrCreateApp {
