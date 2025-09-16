@@ -5217,60 +5217,6 @@ pub mod exports {
                         }
                     }
                 }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_remove_dir_all_cabi<T: Guest>(
-                    arg0: *mut u8,
-                    arg1: usize,
-                ) -> *mut u8 {
-                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
-                    let len0 = arg1;
-                    let bytes0 = _rt::Vec::from_raw_parts(arg0.cast(), len0, len0);
-                    let result1 = T::remove_dir_all(_rt::string_lift(bytes0));
-                    let ptr2 = (&raw mut _RET_AREA.0).cast::<u8>();
-                    match result1 {
-                        Ok(_) => {
-                            *ptr2.add(0).cast::<u8>() = (0i32) as u8;
-                        }
-                        Err(e) => {
-                            *ptr2.add(0).cast::<u8>() = (1i32) as u8;
-                            let vec3 = (e.into_bytes()).into_boxed_slice();
-                            let ptr3 = vec3.as_ptr().cast::<u8>();
-                            let len3 = vec3.len();
-                            ::core::mem::forget(vec3);
-                            *ptr2
-                                .add(2 * ::core::mem::size_of::<*const u8>())
-                                .cast::<usize>() = len3;
-                            *ptr2
-                                .add(::core::mem::size_of::<*const u8>())
-                                .cast::<*mut u8>() = ptr3.cast_mut();
-                        }
-                    };
-                    ptr2
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn __post_return_remove_dir_all<T: Guest>(arg0: *mut u8) {
-                    let l0 = i32::from(*arg0.add(0).cast::<u8>());
-                    match l0 {
-                        0 => {}
-                        _ => {
-                            let l1 = *arg0
-                                .add(::core::mem::size_of::<*const u8>())
-                                .cast::<*mut u8>();
-                            let l2 = *arg0
-                                .add(2 * ::core::mem::size_of::<*const u8>())
-                                .cast::<usize>();
-                            _rt::cabi_dealloc(l1, l2, 1);
-                        }
-                    }
-                }
-                #[doc(hidden)]
-                #[allow(non_snake_case)]
-                pub unsafe fn _export_reproducer_cabi<T: Guest>() {
-                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
-                    T::reproducer();
-                }
                 pub trait Guest {
                     fn read_file(path: _rt::String) -> Result<_rt::String, _rt::String>;
                     fn write_file(
@@ -5300,8 +5246,6 @@ pub mod exports {
                         destination: _rt::String,
                     ) -> Result<(), _rt::String>;
                     fn hash(path: _rt::String) -> Result<MetadataHashValue, _rt::String>;
-                    fn remove_dir_all(path: _rt::String) -> Result<(), _rt::String>;
-                    fn reproducer() -> ();
                 }
                 #[doc(hidden)]
                 macro_rules! __export_golem_it_api_cabi {
@@ -5403,17 +5347,7 @@ pub mod exports {
                         unsafe { $($path_to_types)*:: _export_hash_cabi::<$ty > (arg0,
                         arg1) } } #[unsafe (export_name = "cabi_post_golem:it/api#hash")]
                         unsafe extern "C" fn _post_return_hash(arg0 : * mut u8,) { unsafe
-                        { $($path_to_types)*:: __post_return_hash::<$ty > (arg0) } }
-                        #[unsafe (export_name = "golem:it/api#remove-dir-all")] unsafe
-                        extern "C" fn export_remove_dir_all(arg0 : * mut u8, arg1 :
-                        usize,) -> * mut u8 { unsafe { $($path_to_types)*::
-                        _export_remove_dir_all_cabi::<$ty > (arg0, arg1) } } #[unsafe
-                        (export_name = "cabi_post_golem:it/api#remove-dir-all")] unsafe
-                        extern "C" fn _post_return_remove_dir_all(arg0 : * mut u8,) {
-                        unsafe { $($path_to_types)*:: __post_return_remove_dir_all::<$ty
-                        > (arg0) } } #[unsafe (export_name = "golem:it/api#reproducer")]
-                        unsafe extern "C" fn export_reproducer() { unsafe {
-                        $($path_to_types)*:: _export_reproducer_cabi::<$ty > () } } };
+                        { $($path_to_types)*:: __post_return_hash::<$ty > (arg0) } } };
                     };
                 }
                 #[doc(hidden)]
@@ -5663,8 +5597,8 @@ pub(crate) use __export_file_service_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5186] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xbf'\x01A\x02\x01A\x16\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 5147] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x98'\x01A\x02\x01A\x16\
 \x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01@\0\0\
 \x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/wall-\
 clock@0.2.3\x05\0\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\
@@ -5753,7 +5687,7 @@ k\x1c\x01@\x01\x03err\xd2\0\0\xd3\0\x04\0\x15filesystem-error-code\x01T\x03\0\x1
 wasi:filesystem/types@0.2.3\x05\x0a\x02\x03\0\x04\x0adescriptor\x01B\x07\x02\x03\
 \x02\x01\x0b\x04\0\x0adescriptor\x03\0\0\x01i\x01\x01o\x02\x02s\x01p\x03\x01@\0\0\
 \x04\x04\0\x0fget-directories\x01\x05\x03\0\x1ewasi:filesystem/preopens@0.2.3\x05\
-\x0c\x02\x03\0\x04\x13metadata-hash-value\x01B\x20\x02\x03\x02\x01\x09\x04\0\x08\
+\x0c\x02\x03\0\x04\x13metadata-hash-value\x01B\x1d\x02\x03\x02\x01\x09\x04\0\x08\
 datetime\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x13metadata-hash-value\x03\0\x02\x01r\
 \x02\x0dlast-modified\x01\x0dlast-accessed\x01\x04\0\x09file-info\x03\0\x04\x01j\
 \x01s\x01s\x01@\x01\x04paths\0\x06\x04\0\x09read-file\x01\x07\x01j\0\x01s\x01@\x02\
@@ -5763,11 +5697,10 @@ s\x01@\x01\x04paths\0\x0b\x04\0\x0dget-file-info\x01\x0c\x04\0\x08get-info\x01\x
 \x04\0\x10create-directory\x01\x0a\x01@\x02\x06sources\x0bdestinations\0\x08\x04\
 \0\x0bcreate-link\x01\x0d\x04\0\x0fcreate-sym-link\x01\x0d\x04\0\x10remove-direc\
 tory\x01\x0a\x04\0\x0bremove-file\x01\x0a\x04\0\x0brename-file\x01\x0d\x01j\x01\x03\
-\x01s\x01@\x01\x04paths\0\x0e\x04\0\x04hash\x01\x0f\x04\0\x0eremove-dir-all\x01\x0a\
-\x01@\0\x01\0\x04\0\x0areproducer\x01\x10\x04\0\x0cgolem:it/api\x05\x0e\x04\0\x15\
-golem:it/file-service\x04\0\x0b\x12\x01\0\x0cfile-service\x03\0\0\0G\x09producer\
-s\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.4\
-1.0";
+\x01s\x01@\x01\x04paths\0\x0e\x04\0\x04hash\x01\x0f\x04\0\x0cgolem:it/api\x05\x0e\
+\x04\0\x15golem:it/file-service\x04\0\x0b\x12\x01\0\x0cfile-service\x03\0\0\0G\x09\
+producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rus\
+t\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

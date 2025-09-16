@@ -505,6 +505,7 @@ async fn context_inheritance(
             ),
             ("GOLEM_COMPONENT_VERSION".to_string(), "0".to_string()),
             ("GOLEM_AGENT_ID".to_string(), "counters_test4".to_string()),
+            ("GOLEM_WORKER_NAME".to_string(), "counters_test4".to_string()),
             ("TEST_CONFIG".to_string(), "123".to_string())
         ]
     );
