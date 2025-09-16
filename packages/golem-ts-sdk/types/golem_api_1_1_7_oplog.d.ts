@@ -43,6 +43,10 @@ declare module 'golem:api/oplog@1.1.7' {
   {
     tag: 'write-remote-batched'
     val: OplogIndex | undefined
+  } |
+  {
+    tag: 'write-remote-transaction'
+    val: OplogIndex | undefined
   };
   export type PluginInstallationDescription = {
     installationId: Uuid;
@@ -226,6 +230,14 @@ declare module 'golem:api/oplog@1.1.7' {
     timestamp: Datetime;
     persistenceLevel: PersistenceLevel;
   };
+  export type BeginRemoteTransactionParameters = {
+    timestamp: Datetime;
+    transactionId: string;
+  };
+  export type RemoteTransactionParameters = {
+    timestamp: Datetime;
+    beginIndex: OplogIndex;
+  };
   export type OplogEntry = {
     tag: 'create'
     val: CreateParameters
@@ -353,5 +365,25 @@ declare module 'golem:api/oplog@1.1.7' {
   {
     tag: 'change-persistence-level'
     val: ChangePersistenceLevelParameters
+  } |
+  {
+    tag: 'begin-remote-transaction'
+    val: BeginRemoteTransactionParameters
+  } |
+  {
+    tag: 'pre-commit-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  {
+    tag: 'pre-rollback-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  {
+    tag: 'committed-remote-transaction'
+    val: RemoteTransactionParameters
+  } |
+  {
+    tag: 'rolled-back-remote-transaction'
+    val: RemoteTransactionParameters
   };
 }
