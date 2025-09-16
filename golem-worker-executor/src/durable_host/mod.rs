@@ -418,11 +418,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
             // was initialized with the correct amount of memory.
-            Ok(true)
+            Ok(())
         } else {
             // In live mode we need to try to get more memory permits and if we can't,
             // we fail the worker, unload it from memory and schedule a retry.
@@ -435,7 +435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             self.public_state.worker().increase_memory(delta).await?;
             self.state.total_linear_memory_size += delta;
-            Ok(true)
+            Ok(())
         }
     }
 
@@ -453,6 +453,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
             TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
             TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::ExceededMemoryLimit) => RetryDecision::None,
             TrapType::Error(WorkerError::Unknown(_)) => {
                 let retryable = previous_tries < (retry_config.max_attempts as u64);
                 if retryable {
@@ -731,9 +732,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        debug!("Applying pending side effects accumulated during replay");
-
         let replay_events = self.state.replay_state.take_new_replay_events().await;
+        if !replay_events.is_empty() {
+            debug!("Applying pending side effects accumulated during replay");
+        }
         for event in replay_events {
             match event {
                 ReplayEvent::UpdateReplayed { new_version } => {
@@ -2255,18 +2257,28 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
-/// number of entries, and at most until the first invocation start entry.
+/// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
+
+    // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
+    // have at most one pending batch we discard.
+    let mut collected_count = 0;
     let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
+    let mut current_stderr_entries_batch = Vec::new();
+    let mut first_seen_invocation = None;
+
     loop {
         // TODO: this could be read in batches to speed up the process
         let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+
+        // Because of retries we might have multiple invocation start entries.
+        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
         match oplog_entry.first_key_value() {
             Some((
                 _,
@@ -2276,12 +2288,37 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     ..
                 },
             )) => {
-                stderr_entries.push(message.clone());
-                if stderr_entries.len() >= max_count {
-                    break;
+                if collected_count < max_count {
+                    current_stderr_entries_batch.push(message.clone());
+                    collected_count += 1;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            Some((
+                _,
+                OplogEntry::ExportedFunctionInvoked {
+                    function_name,
+                    idempotency_key,
+                    ..
+                },
+            )) => match &first_seen_invocation {
+                None => {
+                    first_seen_invocation = Some((function_name.clone(), idempotency_key.clone()));
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some((expected_function, expected_idempotency_key))
+                    if function_name == expected_function
+                        && idempotency_key == expected_idempotency_key =>
+                {
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some(_) => break,
+            },
             _ => {}
         }
         if idx > OplogIndex::INITIAL {

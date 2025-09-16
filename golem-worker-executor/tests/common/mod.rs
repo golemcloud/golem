@@ -786,7 +786,8 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
             debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
-            Ok(self.durable_ctx.increase_memory(delta).await?)
+            self.durable_ctx.increase_memory(delta).await?;
+            Ok(true)
         } else {
             Ok(true)
         }

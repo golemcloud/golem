@@ -24,7 +24,7 @@ use golem_common::model::{
     AccountId, ComponentType, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
-    InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_wasm_rpc::ValueAndType;
 use nonempty_collections::NEVec;
@@ -237,8 +237,13 @@ impl TrapType {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
                     Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
-                    _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
-                        Some(_) => TrapType::Error(WorkerError::OutOfMemory),
+                    _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
+                        Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => {
+                            TrapType::Error(WorkerError::OutOfMemory)
+                        }
+                        Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => {
+                            TrapType::Error(WorkerError::ExceededMemoryLimit)
+                        }
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
                                 TrapType::Error(WorkerError::InvalidRequest(details.clone()))

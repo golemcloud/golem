@@ -994,6 +994,8 @@ pub enum WorkerError {
     InvalidRequest(String),
     StackOverflow,
     OutOfMemory,
+    // The worker tried to grow its memory beyond the limits of the plan
+    ExceededMemoryLimit,
 }
 
 impl WorkerError {
@@ -1003,6 +1005,7 @@ impl WorkerError {
             Self::InvalidRequest(message) => message,
             Self::StackOverflow => "Stack overflow",
             Self::OutOfMemory => "Out of memory",
+            Self::ExceededMemoryLimit => "Exceeded plan memory limit",
         }
     }
 
@@ -1060,6 +1063,7 @@ mod protobuf {
                 Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
                 Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
                 Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+                Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
             }
         }
     }
@@ -1076,6 +1080,9 @@ mod protobuf {
                 }
                 WorkerError::Unknown(details) => {
                     Error::UnknownError(grpc_worker::UnknownError { details })
+                }
+                WorkerError::ExceededMemoryLimit => {
+                    Error::ExceededMemoryLimit(grpc_worker::ExceededMemoryLimit {})
                 }
             };
             Self { error: Some(error) }
