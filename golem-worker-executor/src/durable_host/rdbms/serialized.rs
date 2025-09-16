@@ -14,6 +14,7 @@
 
 use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
 use bincode::Encode;
+use golem_common::model::TransactionId;
 use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 
@@ -22,6 +23,7 @@ pub struct RdbmsRequest<T: RdbmsType + 'static> {
     pub pool_key: RdbmsPoolKey,
     pub statement: String,
     pub params: Vec<T::DbValue>,
+    pub transaction_id: Option<TransactionId>,
 }
 
 impl<T: RdbmsType + 'static> bincode::Decode<()> for RdbmsRequest<T>
@@ -35,9 +37,11 @@ where
             pool_key: bincode::Decode::decode(decoder)?,
             statement: bincode::Decode::decode(decoder)?,
             params: bincode::Decode::decode(decoder)?,
+            transaction_id: bincode::Decode::decode(decoder)?,
         })
     }
 }
+
 impl<'de, T: RdbmsType + 'static> bincode::BorrowDecode<'de, ()> for RdbmsRequest<T>
 where
     T: bincode::de::BorrowDecode<'de, ()>,
@@ -49,16 +53,23 @@ where
             pool_key: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
             statement: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
             params: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
+            transaction_id: bincode::BorrowDecode::<'_, ()>::borrow_decode(decoder)?,
         })
     }
 }
 
 impl<T: RdbmsType> RdbmsRequest<T> {
-    pub fn new(pool_key: RdbmsPoolKey, statement: String, params: Vec<T::DbValue>) -> Self {
+    pub fn new(
+        pool_key: RdbmsPoolKey,
+        statement: String,
+        params: Vec<T::DbValue>,
+        transaction_id: Option<TransactionId>,
+    ) -> Self {
         Self {
             pool_key,
             statement,
             params,
+            transaction_id,
         }
     }
 
@@ -67,6 +78,10 @@ impl<T: RdbmsType> RdbmsRequest<T> {
             analysed_type::field("pool-key", RdbmsPoolKey::get_type()),
             analysed_type::field("statement", analysed_type::str()),
             analysed_type::field("params", params_type),
+            analysed_type::field(
+                "transaction-id",
+                analysed_type::option(TransactionId::get_type()),
+            ),
         ])
     }
 }
@@ -83,6 +98,7 @@ where
             self.pool_key.into_value(),
             self.statement.into_value(),
             v.value,
+            self.transaction_id.into_value(),
         ]);
         ValueAndType::new(v, t)
     }
