@@ -5,21 +5,23 @@ import {
     description,
 } from '@golemcloud/golem-ts-sdk';
 
+type CustomData = {
+    data: string;
+    value: number;
+}
 
 @agent()
 class AssistantAgent extends BaseAgent {
     @prompt("Ask your question")
     @description("This method allows the agent to answer your question")
-    async ask(_query: string): Promise<string> {
+    async ask(name: string): Promise<string> {
+        const customData = { data: "Sample data", value: 42 };
+
         const remoteWeatherClient = WeatherAgent.get("Jon");
-
-        const location: Location = { place: { city: 'sydney' }, country: 'australia' };
-
-        const remoteWeather =
-            await remoteWeatherClient.getWeather(location);
+        const remoteWeather = await remoteWeatherClient.getWeather(name, customData);
 
         return (
-            `Agent ${this.getId().value} reporting on the weather: ` +
+            `${this.getId().value}) reporting on the weather in ${name}: ` +
             remoteWeather
         );
     }
@@ -36,22 +38,9 @@ class WeatherAgent extends BaseAgent {
 
     @prompt("Get weather")
     @description("Weather forecast weather for you")
-    async getWeather(location: Location): Promise<string> {
+    async getWeather(name: string, param2: CustomData): Promise<string> {
         return Promise.resolve(
-            `Weather in location ${JSON.stringify(location.place)} is sunny.`
+            `Weather in ${name} is sunny.`
         );
     }
 }
-
-type CityName = {
-    city: string;
-}
-
-type PostalCode = {
-    postalCode: number;
-}
-
-type Location = {
-    place: PostalCode | CityName
-    country: string;
-};
