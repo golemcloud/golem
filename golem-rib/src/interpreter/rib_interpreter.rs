@@ -4741,6 +4741,7 @@ mod tests {
                 let number = "usa";
                 let boolean = true;
                 let optional-str = some("optional");
+                let optional-number = some(2);
                 let list-of-str = ["a", "b", "c"];
                 let tuple = (text, 1, boolean, optional-str);
                 let record = {city: text, country: number};
@@ -4748,7 +4749,7 @@ mod tests {
                 let result-ok = ok(text);
                 let result-err = err(1);
                 let variant = foo("bar");
-                let weather-agent = weather-agent("text", 1, true, optional-str, list-of-str, tuple, record, result, result-ok, result-err, variant);
+                let weather-agent = weather-agent("text", 1, true, optional-str, optional-number, none, none, list-of-str, tuple, record, result, result-ok, result-err, variant);
                 let first-result = weather-agent.get-weather("bar");
                 let assistant-agent = assistant-agent("my assistant");
                 let second-result = assistant-agent.ask("foo", "bar");
@@ -4760,6 +4761,9 @@ mod tests {
             s32(),
             bool(),
             option(str()),
+            option(u64()),
+            option(str()),
+            option(u64()),
             list(str()),
             tuple(vec![str(), s32(), bool(), option(str())]),
             record(vec![field("city", str()), field("country", str())]),
@@ -4813,7 +4817,7 @@ mod tests {
             Value::Record(vec![
                 // worker-name
                 Value::String(
-                    "weather-agent(\"text\",1,true,some(\"optional\"),[\"a\", \"b\", \"c\"],(\"nyc\", 1, true, some(\"optional\")),{city: \"nyc\", country: \"usa\"},ok(\"nyc\"),ok(\"nyc\"),err(1),foo(\"bar\"))".to_string(),
+                    "weather-agent(\"text\",1,true,some(\"optional\"),some(2),none,none,[\"a\", \"b\", \"c\"],(\"nyc\", 1, true, some(\"optional\")),{city: \"nyc\", country: \"usa\"},ok(\"nyc\"),ok(\"nyc\"),err(1),foo(\"bar\"))".to_string(),
                 ),
                 // function-name
                 Value::String("my:agent/weather-agent.{get-weather}".to_string()),
