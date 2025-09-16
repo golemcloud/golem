@@ -93,16 +93,4 @@ impl GolemCommandExecutor {
         .map_err(|e| format!("Async task failed: {}", e))?
     }
     
-    /// Creates a new Golem application
-    pub async fn create_application(
-        &self, 
-        folder_path: &str,
-        app_name: &str,
-        language: &str,
-    ) -> Result<String, String> {
-
-        let result = self.execute_golem_cli(folder_path, "app", &["new", app_name, language]).await?;
-        
-        Ok(format!("Successfully created application: {}\n{}", app_name, result))
-    }
 }

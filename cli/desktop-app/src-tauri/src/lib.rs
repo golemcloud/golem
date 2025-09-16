@@ -29,7 +29,6 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(app_state) // Register app state
         .invoke_handler(tauri::generate_handler![
-            commands::golem_commands::create_golem_app,
             commands::golem_commands::call_golem_command,
             commands::backend_commands::set_golem_cli_path,
             commands::backend_commands::get_golem_cli_path

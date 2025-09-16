@@ -113,11 +113,14 @@ export const CreateApplication = () => {
     setIsCreating(true);
     try {
       // Call the Rust function to create the application
-      const result = await invoke("create_golem_app", {
+      const result = await invoke("call_golem_command", {
+        command: "app",
+        subcommands: ["new", formData.appName, formData.language],
         folderPath: formData.folderPath,
-        appName: formData.appName,
-        language: formData.language,
       });
+
+      // Format the success message similar to the old create_golem_app
+      const successMessage = `Successfully created application: ${formData.appName}\n${result}`;
 
       // Create app object to save to store
       const appPath = `${formData.folderPath}/${formData.appName}`;
@@ -133,7 +136,7 @@ export const CreateApplication = () => {
 
       toast({
         title: "Application created successfully",
-        description: String(result),
+        description: successMessage,
       });
 
       // Navigate to home page after successful creation
