@@ -337,6 +337,9 @@ impl BlobOplogArchive {
         path
     }
 
+    // Fetch a range of entries from the storage. At most one chunk of data will be returned,
+    // but it will always begin with the end of the range. So a given prefix of the of the oplog might be missing,
+    // but the suffix will always be correct if it is returned. Returns None if there is no chunk containing any matching data.
     async fn fetch_and_cache_range(
         &self,
         beginning_of_range: OplogIndex,
@@ -346,43 +349,50 @@ impl BlobOplogArchive {
         // Find the first chunk whose last index is >= end_of_range
         let last_idx = entries.keys().find(|k| **k >= end_of_range);
 
-        if let Some(last_idx) = last_idx {
-            let chunk: CompressedOplogChunk = self
-                .blob_storage
-                .with("blob_oplog", "read")
-                .get(
-                    BlobStorageNamespace::CompressedOplog {
-                        project_id: self.owned_worker_id.project_id(),
-                        component_id: self.owned_worker_id.component_id(),
-                        level: self.level,
-                    },
-                    &self.oplog_index_to_path(*last_idx),
-                )
-                .await?
-                .ok_or_else(|| format!("compressed chunk for {last_idx} not found"))?;
+        let last_idx = if let Some(last_idx) = last_idx {
+            last_idx
+        } else {
+            return Ok(None);
+        };
 
-            let entries = chunk.decompress()?;
-            let mut cache = self.cache.write().await;
+        let chunk: CompressedOplogChunk = self
+            .blob_storage
+            .with("blob_oplog", "read")
+            .get(
+                BlobStorageNamespace::CompressedOplog {
+                    project_id: self.owned_worker_id.project_id(),
+                    component_id: self.owned_worker_id.component_id(),
+                    level: self.level,
+                },
+                &self.oplog_index_to_path(*last_idx),
+            )
+            .await?
+            .ok_or_else(|| format!("compressed chunk for {last_idx} not found"))?;
 
-            let mut current_idx = Into::<u64>::into(*last_idx) - chunk.count + 1;
-            let mut collected = Vec::new();
+        let entries = chunk.decompress()?;
+        let mut cache = self.cache.write().await;
 
-            for entry in entries {
-                let oplog_index = OplogIndex::from_u64(current_idx);
+        let mut current_idx = Into::<u64>::into(*last_idx) - chunk.count + 1;
+        let mut collected = Vec::new();
 
-                cache.insert(oplog_index, entry.clone());
+        for entry in entries {
+            let oplog_index = OplogIndex::from_u64(current_idx);
 
-                if oplog_index >= beginning_of_range && oplog_index <= end_of_range {
-                    collected.push((oplog_index, entry));
-                }
+            cache.insert(oplog_index, entry.clone());
 
-                current_idx += 1;
+            if oplog_index >= beginning_of_range && oplog_index <= end_of_range {
+                collected.push((oplog_index, entry));
             }
 
-            Ok(Some(collected))
-        } else {
-            Ok(None)
+            current_idx += 1;
         }
+
+        if collected.is_empty() {
+            // The closest chunk did not include any of the data were looking for
+            return Ok(None);
+        }
+
+        Ok(Some(collected))
     }
 }
 

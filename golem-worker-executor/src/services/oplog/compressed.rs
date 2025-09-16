@@ -33,7 +33,7 @@ pub struct CompressedOplogArchiveService {
 }
 
 impl CompressedOplogArchiveService {
-    const MAX_CHUNCK_SIZE: usize = 4096;
+    const MAX_CHUNK_SIZE: usize = 4096;
     const CACHE_SIZE: usize = 4096;
     const ZSTD_LEVEL: i32 = 0;
 
@@ -174,13 +174,13 @@ impl CompressedOplogArchive {
 
     // Fetch a range of entries from the storage. At most one chunk of data will be returned,
     // but it will always begin with the end of the range. So a given prefix of the of the oplog might be missing,
-    // but the suffix will always be correct if it is returned.
+    // but the suffix will always be correct if it is returned. Returns None if there is no chunk containing any matching data.
     async fn fetch_and_cache_range(
         &self,
         beginning_of_range: OplogIndex,
         end_of_range: OplogIndex,
     ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, String> {
-        if let Some((last_idx_in_chunk, chunk)) = self
+        let (last_idx_in_chunk, chunk) = if let Some((last_idx_in_chunk, chunk)) = self
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
@@ -190,28 +190,35 @@ impl CompressedOplogArchive {
             )
             .await?
         {
-            let entries = chunk.decompress()?;
-            let mut cache = self.cache.write().await;
+            (last_idx_in_chunk, chunk)
+        } else {
+            return Ok(None);
+        };
 
-            let mut current_idx = last_idx_in_chunk - chunk.count + 1;
-            let mut collected = Vec::new();
+        let entries = chunk.decompress()?;
+        let mut cache = self.cache.write().await;
 
-            for entry in entries {
-                let oplog_index = OplogIndex::from_u64(current_idx);
+        let mut current_idx = last_idx_in_chunk - chunk.count + 1;
+        let mut collected = Vec::new();
 
-                cache.insert(oplog_index, entry.clone());
+        for entry in entries {
+            let oplog_index = OplogIndex::from_u64(current_idx);
 
-                if oplog_index >= beginning_of_range && oplog_index <= end_of_range {
-                    collected.push((oplog_index, entry));
-                }
+            cache.insert(oplog_index, entry.clone());
 
-                current_idx += 1;
+            if oplog_index >= beginning_of_range && oplog_index <= end_of_range {
+                collected.push((oplog_index, entry));
             }
 
-            Ok(Some(collected))
-        } else {
-            Ok(None)
+            current_idx += 1;
         }
+
+        if collected.is_empty() {
+            // The closest chunk did not include any of the data were looking for
+            return Ok(None);
+        }
+
+        Ok(Some(collected))
     }
 }
 
@@ -229,7 +236,6 @@ impl OplogArchive for CompressedOplogArchive {
 
         let mut result = BTreeMap::new();
         let mut last_idx = idx.range_end(n);
-        tracing::warn!("Fetching compressed oplog for range: {idx} - {last_idx}");
 
         while last_idx >= idx {
             {
@@ -282,7 +288,7 @@ impl OplogArchive for CompressedOplogArchive {
             cache.insert(*idx, entry.clone());
         }
 
-        for sub_chunk in chunk.chunks(CompressedOplogArchiveService::MAX_CHUNCK_SIZE) {
+        for sub_chunk in chunk.chunks(CompressedOplogArchiveService::MAX_CHUNK_SIZE) {
             let last_id = sub_chunk.last().unwrap().0;
 
             let entries: Vec<OplogEntry> =
