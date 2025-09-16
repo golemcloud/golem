@@ -24,8 +24,12 @@ use wasmtime::component::{
 };
 use wasmtime::{AsContextMut, Engine, Store};
 use wasmtime_wasi::p2::{WasiCtx, WasiView};
-use wasmtime_wasi::{IoCtx, IoView};
 use wit_parser::{PackageId, Resolve, WorldItem};
+
+#[cfg(feature = "forked-wasmtime")]
+use wasmtime_wasi::{IoCtx, IoView};
+#[cfg(not(feature = "forked-wasmtime"))]
+use wasmtime_wasi::p2::IoView;
 
 const INTERFACE_NAME: &str = "golem:agent/guest";
 const FUNCTION_NAME: &str = "discover-agent-types";
@@ -46,11 +50,22 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
 
-    let (wasi, io) = WasiCtx::builder().inherit_stdout().inherit_stderr().build();
-    let host = Host {
-        table: Arc::new(Mutex::new(ResourceTable::new())),
-        wasi: Arc::new(Mutex::new(wasi)),
-        io: Arc::new(Mutex::new(io)),
+    #[cfg(feature = "forked-wasmtime")]
+    let host = {
+        let (wasi, io) = WasiCtx::builder().inherit_stdout().inherit_stderr().build();
+        Host {
+            table: Arc::new(Mutex::new(ResourceTable::new())),
+            wasi: Arc::new(Mutex::new(wasi)),
+            io: Arc::new(Mutex::new(io)),
+        }
+    };
+    #[cfg(not(feature = "forked-wasmtime"))]
+    let host = {
+        let wasi = WasiCtx::builder().inherit_stdout().inherit_stderr().build();
+        Host {
+            table: Arc::new(Mutex::new(ResourceTable::new())),
+            wasi: Arc::new(Mutex::new(wasi)),
+        }
     };
 
     let component = Component::from_file(&engine, wasm_path)?;
@@ -157,9 +172,11 @@ fn find_discover_function(
 struct Host {
     pub table: Arc<Mutex<ResourceTable>>,
     pub wasi: Arc<Mutex<WasiCtx>>,
+    #[cfg(feature = "forked-wasmtime")]
     pub io: Arc<Mutex<IoCtx>>,
 }
 
+#[cfg(feature = "forked-wasmtime")]
 impl IoView for Host {
     fn table(&mut self) -> &mut ResourceTable {
         Arc::get_mut(&mut self.table)
@@ -173,6 +190,16 @@ impl IoView for Host {
             .expect("IoCtx is shared and cannot be borrowed mutably")
             .get_mut()
             .expect("IoCtx mutex must never fail")
+    }
+}
+
+#[cfg(not(feature = "forked-wasmtime"))]
+impl IoView for Host {
+    fn table(&mut self) -> &mut ResourceTable {
+        Arc::get_mut(&mut self.table)
+            .expect("ResourceTable is shared and cannot be borrowed mutably")
+            .get_mut()
+            .expect("ResourceTable mutex must never fail")
     }
 }
 

@@ -26,6 +26,8 @@ default = [
 ]
 
 agent-extraction = ["dep:wasmtime-wasi", "dep:wit-parser"]
+forked-wasmtime = []
+
 base-model = []
 config = ["model", "dep:figment"]
 model = [
