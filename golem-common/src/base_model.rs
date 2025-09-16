@@ -236,6 +236,11 @@ impl OplogIndex {
         OplogIndex(self.0 - 1)
     }
 
+    /// Subtract the given number of entries from the oplog index
+    pub fn subtract(&self, n: u64) -> OplogIndex {
+        OplogIndex(self.0 - n)
+    }
+
     /// Gets the next oplog index
     pub fn next(&self) -> OplogIndex {
         OplogIndex(self.0 + 1)
