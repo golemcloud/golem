@@ -32,54 +32,13 @@ import { toast } from "@/hooks/use-toast.ts";
 
 // Language template options
 const LANGUAGE_TEMPLATES = [
-  // C
-  { value: "c", label: "C: Default component template" },
-  { value: "c/example-http", label: "C: Example - Stateful with WASI HTTP" },
-  // Go
-  { value: "go", label: "Go: Default component template" },
-  { value: "go/wasi-http", label: "Go: WASI HTTP handler" },
-  // JavaScript
-  { value: "js", label: "JavaScript: Default component template" },
-  { value: "js/example-fetch", label: "JavaScript: Example with fetch" },
-  { value: "js/wasi-http", label: "JavaScript: WASI HTTP handler" },
-  // Python
-  { value: "python", label: "Python: Default component template" },
-  { value: "python/wasi-http", label: "Python: WASI HTTP handler" },
-  // Rust
-  { value: "rust/async", label: "Rust: Async with tokio support" },
-  { value: "rust", label: "Rust: Default component template" },
-  {
-    value: "rust/example-shopping-cart",
-    label: "Rust: Example - Stateful shopping cart",
-  },
-  {
-    value: "rust/example-todo-list",
-    label: "Rust: Example - Stateful todo list",
-  },
-  { value: "rust/minimal", label: "Rust: Minimal with no dependencies" },
-  { value: "rust/wasi-http", label: "Rust: WASI HTTP handler" },
   // TypeScript
   { value: "ts", label: "TypeScript: Default component template" },
-  { value: "ts/example-fetch", label: "TypeScript: Example using fetch" },
-  // Zig
-  { value: "zig", label: "Zig: Default component template" },
-  // Scala.js
-  { value: "scala", label: "Scala.js: Default component template" },
-  // MoonBit
-  { value: "moonbit", label: "MoonBit: Default component template" },
 ];
 
 // Group templates by language
 const GROUPED_TEMPLATES = {
-  C: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("c")),
-  Go: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("go")),
-  JavaScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("js")),
-  Python: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("python")),
-  Rust: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("rust")),
   TypeScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("ts")),
-  Zig: LANGUAGE_TEMPLATES.filter(t => t.value === "zig"),
-  "Scala.js": LANGUAGE_TEMPLATES.filter(t => t.value === "scala"),
-  MoonBit: LANGUAGE_TEMPLATES.filter(t => t.value === "moonbit"),
 };
 
 // Form schema using zod for validation
