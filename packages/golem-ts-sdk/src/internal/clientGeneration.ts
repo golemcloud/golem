@@ -203,15 +203,9 @@ function getWorkerId(
 
   const agentId = makeAgentId(agentTypeName.value, constructorDataValue);
 
-  if (agentId.tag === 'err') {
-    return Either.left(
-      `Failed to create agent-id for agent type ${agentTypeName.value}: ${JSON.stringify(agentId.val)}`,
-    );
-  }
-
   return Either.right({
     componentId: registeredAgentType.implementedBy,
-    workerName: agentId.val,
+    workerName: agentId,
   });
 }
 
