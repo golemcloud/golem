@@ -91,7 +91,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
+use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -116,6 +116,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
+use try_match::try_match;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
@@ -2595,6 +2596,196 @@ impl PrivateDurableWorkerState {
         }
     }
 
+    pub async fn begin_transaction_function<Tx, Err>(
+        &mut self,
+        handler: impl RemoteTransactionHandler<Tx, Err>,
+    ) -> Result<(OplogIndex, Tx), Err>
+    where
+        Err: From<WorkerExecutorError>,
+    {
+        if self.is_live() {
+            let (tx_id, tx) = handler.create_new().await?;
+            self.oplog
+                .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            let begin_index = self.oplog.current_oplog_index().await;
+            Ok((begin_index, tx))
+        } else {
+            let (begin_index, begin_entry) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
+
+            let assume_idempotence = self.assume_idempotence;
+
+            let pre_entry = self
+                .replay_state
+                .lookup_oplog_entry_with_condition(
+                    begin_index,
+                    OplogEntry::is_pre_remote_transaction,
+                    |entry, index| {
+                        if !assume_idempotence {
+                            entry.no_concurrent_side_effect(index)
+                        } else {
+                            true
+                        }
+                    },
+                )
+                .await;
+
+            let tx_id = try_match!(
+                begin_entry,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: _,
+                    transaction_id,
+                }
+            )
+            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+
+            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+
+            let mut should_restart = false;
+
+            if let Some((_, pre_entry)) = pre_entry {
+                let end_entry = self
+                    .replay_state
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_end_remote_transaction,
+                        |entry, index| {
+                            if !assume_idempotence {
+                                entry.no_concurrent_side_effect(index)
+                            } else {
+                                true
+                            }
+                        },
+                    )
+                    .await;
+
+                if end_entry.is_none() {
+                    if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was committed, we need to restart
+                        should_restart = !handler.is_committed(&tx_id).await?;
+                    } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was rolled back, we need to restart
+                        should_restart = !handler.is_rolled_back(&tx_id).await?;
+                    }
+                }
+            } else {
+                // if pre entry is not found, we need to restart
+                should_restart = true;
+            }
+
+            if should_restart {
+                // We need to jump to the end of the oplog
+                self.replay_state.switch_to_live().await;
+
+                if !assume_idempotence {
+                    Err(WorkerExecutorError::runtime(
+                        "Non-idempotent remote write operation was not completed, cannot retry",
+                    )
+                    .into())
+                } else {
+                    // But this is not enough, because if the retried batched write operation succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index, // need to keep the BeginAtomicRegion entry
+                        end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.replay_state
+                        .add_skipped_region(deleted_region.clone())
+                        .await;
+                    self.oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
+
+                    let (tx_id, tx) = handler.create_new().await?;
+                    let begin_index = self
+                        .oplog
+                        .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?;
+
+                    Ok((begin_index, tx))
+                }
+            } else {
+                Ok((begin_index, tx))
+            }
+        }
+    }
+
+    pub async fn pre_commit_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::PreCommitRemoteTransaction)?;
+            Ok(())
+        }
+    }
+
+    pub async fn pre_rollback_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.replay_state,
+                OplogEntry::PreRollbackRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
+    pub async fn committed_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::CommittedRemoteTransaction)?;
+            Ok(())
+        }
+    }
+
+    pub async fn rolled_back_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.replay_state,
+                OplogEntry::RolledBackRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
     /// In live mode it returns the last oplog index (index of the entry last added).
     /// In replay mode it returns the current replay index (index of the entry last read).
     pub async fn current_oplog_index(&self) -> OplogIndex {
@@ -3085,7 +3276,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
@@ -3106,4 +3297,21 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[async_trait]
+pub trait RemoteTransactionHandler<Tx, Err>
+where
+    Err: From<WorkerExecutorError>,
+{
+    async fn create_new(&self) -> Result<(TransactionId, Tx), Err>;
+
+    async fn create_replay(
+        &self,
+        transaction_id: &TransactionId,
+    ) -> Result<(TransactionId, Tx), Err>;
+
+    async fn is_committed(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
+
+    async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
 }
