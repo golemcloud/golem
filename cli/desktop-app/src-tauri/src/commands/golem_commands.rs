@@ -3,7 +3,7 @@ use tauri::AppHandle;
 
 /// Create a new Golem application with the given parameters
 #[tauri::command]
-pub fn create_golem_app(
+pub async fn create_golem_app(
     app_handle: AppHandle,
     folder_path: String,
     app_name: String,
@@ -17,12 +17,12 @@ pub fn create_golem_app(
     // Create a new command executor instance with app handle
     let executor = GolemCommandExecutor::with_app_handle(app_handle);
 
-    // Execute the command
-    executor.create_application(&folder_path, &app_name, &language)
+    // Execute the command asynchronously
+    executor.create_application(&folder_path, &app_name, &language).await
 }
 
 #[tauri::command]
-pub fn call_golem_command(
+pub async fn call_golem_command(
     app_handle: AppHandle,
     command: String,
     subcommands: Vec<String>,
@@ -41,6 +41,6 @@ pub fn call_golem_command(
     let mut final_subcommands = subcommand_refs;
     final_subcommands.push("--format=json");
 
-    // Execute the command
-    executor.execute_golem_cli(&folder_path, &command, &final_subcommands)
+    // Execute the command asynchronously
+    executor.execute_golem_cli(&folder_path, &command, &final_subcommands).await
 }

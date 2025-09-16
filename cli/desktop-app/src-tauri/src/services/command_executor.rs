@@ -43,8 +43,8 @@ impl GolemCommandExecutor {
         "golem-cli".to_string()
     }
     
-    /// Executes the golem-cli command with the given arguments
-    pub fn execute_golem_cli(
+    /// Executes the golem-cli command with the given arguments (async, non-blocking)
+    pub async fn execute_golem_cli(
         &self,
         working_dir: &str,
         subcommand: &str,
@@ -58,41 +58,50 @@ impl GolemCommandExecutor {
         // Find the golem-cli executable (use store setting or fallback to PATH)
         let golem_cli_path = self.get_golem_cli_path();
         
-        // Build the command with the working directory and arguments
-        let mut command = Command::new(&golem_cli_path);
-        command.current_dir(working_dir);
-        command.arg(subcommand);
+        // Clone data for the async task
+        let working_dir = working_dir.to_string();
+        let subcommand = subcommand.to_string();
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         
-        for arg in args {
-            command.arg(arg);
-        }
+        println!("Executing: {} {} {:?} in {}", golem_cli_path, subcommand, args, working_dir);
         
-        println!("Executing: {} {:?} in {}", golem_cli_path, command, working_dir);
-        
-        // Execute the command and handle the result
-        match command.output() {
-            Ok(output) => {
-                if output.status.success() {
-                    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-                    Ok(stdout)
-                } else {
-                    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                    Err(format!("Command execution failed: {}", stderr))
-                }
+        // Execute the command in a background thread to avoid blocking the UI
+        tokio::task::spawn_blocking(move || {
+            let mut command = Command::new(&golem_cli_path);
+            command.current_dir(&working_dir);
+            command.arg(&subcommand);
+            
+            for arg in &args {
+                command.arg(arg);
             }
-            Err(e) => Err(format!("Failed to execute command: {}", e)),
-        }
+            
+            // Execute the command and handle the result
+            match command.output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        Ok(stdout)
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        Err(format!("Command execution failed: {}", stderr))
+                    }
+                }
+                Err(e) => Err(format!("Failed to execute command: {}", e)),
+            }
+        })
+        .await
+        .map_err(|e| format!("Async task failed: {}", e))?
     }
     
     /// Creates a new Golem application
-    pub fn create_application(
+    pub async fn create_application(
         &self, 
         folder_path: &str,
         app_name: &str,
         language: &str,
     ) -> Result<String, String> {
 
-        let result = self.execute_golem_cli(folder_path, "app", &["new", app_name, language])?;
+        let result = self.execute_golem_cli(folder_path, "app", &["new", app_name, language]).await?;
         
         Ok(format!("Successfully created application: {}\n{}", app_name, result))
     }
