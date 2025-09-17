@@ -76,6 +76,10 @@ async fn dynamic_worker_creation(deps: &EnvBasedTestDependencies, _tracing: &Tra
                 Value::String("dynamic-worker-creation-1".to_string())
             ]),
             Value::Tuple(vec![
+                Value::String("GOLEM_WORKER_NAME".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_COMPONENT_ID".to_string()),
                 Value::String(format!("{component_id}"))
             ]),
