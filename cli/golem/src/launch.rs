@@ -28,8 +28,8 @@ use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, OplogConfig,
-    ProjectServiceConfig, ProjectServiceGrpcConfig,
+    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, ProjectServiceConfig,
+    ProjectServiceGrpcConfig,
 };
 use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
@@ -338,11 +338,6 @@ fn worker_executor_config(
                 ..Default::default()
             },
         ),
-        oplog: OplogConfig {
-            indexed_storage_layers: 0,
-            blob_storage_layers: 0,
-            ..Default::default()
-        },
         ..Default::default()
     };
 
