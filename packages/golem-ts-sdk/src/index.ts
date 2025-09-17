@@ -126,10 +126,13 @@ async function save(): Promise<Uint8Array> {
   const view = new DataView(fullSnapshot.buffer);
   view.setUint8(0, 1); // version
   view.setUint32(1, agentTypeBytes.length);
-  view.setUint32(1 + 4, agentParameterBytes.length)
+  view.setUint32(1 + 4, agentParameterBytes.length);
   fullSnapshot.set(agentTypeBytes, 1 + 4 + 4);
   fullSnapshot.set(agentParameterBytes, 1 + 4 + 4 + agentTypeBytes.length);
-  fullSnapshot.set(agentSnapshot, 1 + 4 + 4 + agentTypeBytes.length + agentParameterBytes.length);
+  fullSnapshot.set(
+    agentSnapshot,
+    1 + 4 + 4 + agentTypeBytes.length + agentParameterBytes.length,
+  );
 
   return fullSnapshot;
 }
@@ -149,9 +152,18 @@ async function load(bytes: Uint8Array): Promise<void> {
   const agentTypeLength = view.getUint32(1);
   const agentParameterLength = view.getUint32(1 + 4);
 
-  const agentType = textDecoder.decode(bytes.slice(1 + 4 + 4, 1 + 4 + 4 + agentTypeLength));
-  const agentParametersString = textDecoder.decode(bytes.slice(1 + 4 + 4 + agentTypeLength, 1 + 4 + 4 + agentTypeLength + agentParameterLength));
-  const agentSnapshot = bytes.slice(1 + 4 + 4 + agentTypeLength + agentParameterLength);
+  const agentType = textDecoder.decode(
+    bytes.slice(1 + 4 + 4, 1 + 4 + 4 + agentTypeLength),
+  );
+  const agentParametersString = textDecoder.decode(
+    bytes.slice(
+      1 + 4 + 4 + agentTypeLength,
+      1 + 4 + 4 + agentTypeLength + agentParameterLength,
+    ),
+  );
+  const agentSnapshot = bytes.slice(
+    1 + 4 + 4 + agentTypeLength + agentParameterLength,
+  );
 
   const agentParameters: DataValue = JSON.parse(agentParametersString);
 
