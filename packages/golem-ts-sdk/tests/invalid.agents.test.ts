@@ -58,6 +58,8 @@ describe('Invalid types in agents', () => {
 
     const voidType = getAnalysedTypeInFun1('voidParam');
 
+    const unionWithKeyWord = getAnalysedTypeInFun1('unionWithKeyWord');
+
     expect(dateType.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
     );
@@ -116,6 +118,10 @@ describe('Invalid types in agents', () => {
 
     expect(voidType.val).toBe(
       'Unsupported type `void` in fun1 for parameter `voidParam`',
+    );
+
+    expect(unionWithKeyWord.val).toBe(
+      '`ok` is a reserved keyword. The following keywords cannot be used as literals: ok, err, none, some',
     );
   });
 

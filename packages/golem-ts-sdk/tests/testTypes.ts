@@ -151,20 +151,20 @@ export type EitherX = {
 
 export type EitherY =
   | {
-      tag: 'ok';
+      tag: 'okay';
       val: string;
     }
   | {
-      tag: 'err';
+      tag: 'error';
       val: string;
     };
 
 export type EitherZ =
   | {
-      tag: 'ok';
+      tag: 'okay';
       val: string;
     }
   | {
-      tag: 'err';
+      tag: 'error';
       val?: string;
     };

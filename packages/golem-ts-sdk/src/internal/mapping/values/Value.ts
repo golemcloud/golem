@@ -987,7 +987,10 @@ function handleUnion(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
-  const unionOfLiterals = getUnionOfLiterals(filteredTypes);
+  const unionOfLiterals = Either.getOrThrowWith(
+    getUnionOfLiterals(filteredTypes),
+    (error) => new Error(`Internal Error: ${error}`),
+  );
 
   if (Option.isSome(unionOfLiterals)) {
     if (
@@ -1006,7 +1009,10 @@ function handleUnion(
   }
 
   const taggedTypes: Option.Option<TaggedTypeMetadata[]> =
-    getTaggedUnions(possibleTypes);
+    Either.getOrThrowWith(
+      getTaggedUnions(possibleTypes),
+      (error) => new Error(`Internal Error: ${error}`),
+    );
 
   if (Option.isSome(taggedTypes)) {
     for (const taggedTypeMetadata of taggedTypes.val) {
@@ -1172,8 +1178,12 @@ function matchesType(value: any, type: Type.Type): boolean {
     case 'union':
       const taggedUnions = getTaggedUnions(type.unionTypes);
 
-      if (Option.isSome(taggedUnions)) {
-        for (const taggedTypeMetadata of taggedUnions.val) {
+      if (Either.isLeft(taggedUnions)) {
+        throw new Error(`Internal Error: ${taggedUnions.val} `);
+      }
+
+      if (Option.isSome(taggedUnions.val)) {
+        for (const taggedTypeMetadata of taggedUnions.val.val) {
           const name = taggedTypeMetadata.tagLiteralName;
           const innerType = taggedTypeMetadata.valueType;
 
@@ -1330,7 +1340,10 @@ export function toTsValue(value: Value, type: Type.Type): any {
   }
 
   if (value.kind === 'enum' && type.kind === 'union') {
-    const unionOfLiterals = getUnionOfLiterals(type.unionTypes);
+    const unionOfLiterals = Either.getOrThrowWith(
+      getUnionOfLiterals(type.unionTypes),
+      (error) => new Error(`Internal Error: ${error}`),
+    );
 
     if (Option.isSome(unionOfLiterals)) {
       return unionOfLiterals.val.literals[value.value];
@@ -1340,7 +1353,10 @@ export function toTsValue(value: Value, type: Type.Type): any {
   }
 
   if (value.kind === 'variant' && type.kind === 'union') {
-    const taggedUnion = getTaggedUnions(type.unionTypes);
+    const taggedUnion = Either.getOrThrowWith(
+      getTaggedUnions(type.unionTypes),
+      (error) => new Error(`Internal Error: ${error}`),
+    );
 
     if (Option.isSome(taggedUnion)) {
       const taggedTypeMetadata = taggedUnion.val[value.caseIdx];
@@ -1503,7 +1519,10 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
-      const taggedUnions = getTaggedUnions(type.unionTypes);
+      const taggedUnions = Either.getOrThrowWith(
+        getTaggedUnions(type.unionTypes),
+        (error) => new Error(`Internal Error: ${error}`),
+      );
 
       const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
         (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',

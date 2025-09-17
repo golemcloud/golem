@@ -212,14 +212,14 @@ class ComplexAgent extends BaseAgent {
 
   async fun2(text: string): Promise<EitherY> {
     return {
-      tag: 'ok',
+      tag: 'okay',
       val: 'hello',
     };
   }
 
   async fun19(text: string): Promise<EitherZ> {
     return {
-      tag: 'ok',
+      tag: 'okay',
       val: 'hello',
     };
   }

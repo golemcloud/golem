@@ -20,6 +20,8 @@ import { generateVariantCaseName } from './name';
 
 type TsType = CoreType.Type;
 
+const KeyWords = ["ok", "err", "none", "some"];
+
 export interface NameTypePair {
   name: string;
   typ: AnalysedType;
@@ -301,15 +303,23 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       const unionOfOnlyLiterals =
         getUnionOfLiterals(type.unionTypes);
 
-      if (Option.isSome(unionOfOnlyLiterals)) {
-        return Either.right(enum_(type.name, unionOfOnlyLiterals.val.literals));
+      if (Either.isLeft(unionOfOnlyLiterals)) {
+        return unionOfOnlyLiterals;
+      }
+
+      if (Option.isSome(unionOfOnlyLiterals.val)) {
+        return Either.right(enum_(type.name, unionOfOnlyLiterals.val.val.literals));
       }
 
       const taggedUnions =
         getTaggedUnions(type.unionTypes);
 
-      if (Option.isSome(taggedUnions)) {
-        for (const taggedTypeMetadata of taggedUnions.val) {
+      if (Either.isLeft(taggedUnions)) {
+        return taggedUnions;
+      }
+
+      if (Option.isSome(taggedUnions.val)) {
+        for (const taggedTypeMetadata of taggedUnions.val.val) {
 
           if (!isKebabCase(taggedTypeMetadata.tagLiteralName)) {
             return Either.left(`Tagged union case names must be in kebab-case. Found: ${taggedTypeMetadata.tagLiteralName}`);
@@ -680,7 +690,7 @@ export type LiteralUnions = {
 
 export function getUnionOfLiterals(
   unionTypes: TsType[]
-): Option.Option<LiteralUnions> {
+): Either.Either<Option.Option<LiteralUnions>, string> {
 
   const literals: string[] = [];
 
@@ -688,25 +698,31 @@ export function getUnionOfLiterals(
     if (ut.kind === "literal" && ut.literalValue) {
       const literalValue = ut.literalValue;
       if (isNumberString(literalValue)) {
-        return Option.none();
+        return Either.right(Option.none());
       }
 
       if (literalValue === 'true' || literalValue === 'false') {
-        return Option.none();
+        return Either.right(Option.none());
       }
 
-      literals.push(trimQuotes(literalValue));
+      const literalValueTrimmed = trimQuotes(literalValue);
+      
+      if (KeyWords.includes(literalValueTrimmed)) {
+        return Either.left(`\`${literalValueTrimmed}\` is a reserved keyword. The following keywords cannot be used as literals: ` + KeyWords.join(', '));
+      }
+
+      literals.push(literalValueTrimmed);
     } else {
-      return Option.none();
+      return Either.right(Option.none());
     }
   }
 
-  return Option.some({ literals });
+  return Either.right(Option.some({ literals }));
 }
 
 export function getTaggedUnions(
   unionTypes: TsType[]
-): Option.Option<TaggedTypeMetadata[]> {
+): Either.Either<Option.Option<TaggedTypeMetadata[]>, string> {
 
   const taggedTypes: TaggedTypeMetadata[] = [];
 
@@ -714,49 +730,52 @@ export function getTaggedUnions(
     if (ut.kind === "object") {
 
       if (ut.properties.length > 2) {
-        return Option.none();
+        return Either.right(Option.none());
       }
 
       const tag =
         ut.properties.find((type) => type.getName() === "tag");
 
       if (!tag) {
-        return Option.none();
+        return Either.right(Option.none());
       }
 
       const tagType =
         tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
 
       if (tagType.kind !== "literal" || !tagType.literalValue) {
-        return Option.none();
+        return Either.right(Option.none());
       }
 
       const tagValue = tagType.literalValue;
 
-      const name = trimQuotes(tagValue);
+      const tagValueTrimmed = trimQuotes(tagValue);
 
+      if (KeyWords.includes(tagValueTrimmed)) {
+        return Either.left(`\`${tagValueTrimmed}\` is a reserved keyword. The following keywords cannot be used as tag values: ` + KeyWords.join(', '));
+      }
 
       const nextSymbol =
         ut.properties.find((type) => type.getName() !== "tag");
 
       if (!nextSymbol){
         taggedTypes.push({
-          tagLiteralName: name,
+          tagLiteralName: tagValueTrimmed,
           valueType: Option.none()
         });
       } else {
         const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
         taggedTypes.push({
-          tagLiteralName: name,
+          tagLiteralName: tagValueTrimmed,
           valueType: Option.some([nextSymbol.getName(), propType])
         });
       }
     } else {
-      return Option.none()
+      return Either.right(Option.none())
     }
   }
 
-  return Option.some(taggedTypes)
+  return Either.right(Option.some(taggedTypes))
 }
 
 function filterUndefinedTypes(

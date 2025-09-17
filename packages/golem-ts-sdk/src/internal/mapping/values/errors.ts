@@ -17,6 +17,7 @@ import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
 import { getTaggedUnions, getUnionOfLiterals } from '../types/AnalysedType';
+import * as Either from '../../../newTypes/either';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
@@ -47,9 +48,15 @@ export function unionTypeMatchError(
     );
   });
 
-  const unionOfLiterals = getUnionOfLiterals(unionTypes);
+  const unionOfLiterals = Either.getOrThrowWith(
+    getUnionOfLiterals(unionTypes),
+    (err) => new Error(`Failed to analyse union types: ${err}`),
+  );
 
-  const taggedUnions = getTaggedUnions(unionTypes);
+  const taggedUnions = Either.getOrThrowWith(
+    getTaggedUnions(unionTypes),
+    (err) => new Error(`Failed to analyse union types: ${err}`),
+  );
 
   const types = Option.isSome(taggedUnions)
     ? taggedUnions.val.map((metadata) => metadata.tagLiteralName)
