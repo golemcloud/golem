@@ -293,6 +293,10 @@ async fn dynamic_worker_creation(
     check!(
         env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
                 Value::String("dynamic-worker-creation-1".to_string())
             ]),
@@ -842,6 +846,10 @@ async fn component_env_variables(
                 Value::String("bar".to_string())
             ]),
             Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String("component-env-variables-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
                 Value::String("component-env-variables-1".to_string())
             ]),
@@ -906,7 +914,7 @@ async fn component_env_variables_update(
 
     check!(env.get("FOO") == Some(&"bar".to_string()));
     check!(env.get("BAR") == Some(&"baz".to_string()));
-    check!(env.get("GOLEM_WORKER_NAME") == Some(&"component-env-variables-1".to_string()));
+    check!(env.get("GOLEM_AGENT_ID") == Some(&"component-env-variables-1".to_string()));
 }
 
 #[test]

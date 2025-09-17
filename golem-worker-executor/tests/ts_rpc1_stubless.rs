@@ -298,6 +298,7 @@ async fn context_inheritance(
                 "COUNTERS_COMPONENT_ID".to_string(),
                 counters_component_id.to_string()
             ),
+            ("GOLEM_AGENT_ID".to_string(), "counters_test4".to_string()),
             (
                 "GOLEM_COMPONENT_ID".to_string(),
                 counters_component_id.to_string()

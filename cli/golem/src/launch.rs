@@ -344,11 +344,6 @@ fn worker_executor_config(
                 ..Default::default()
             },
         ),
-        oplog: OplogConfig {
-            indexed_storage_layers: 0,
-            blob_storage_layers: 0,
-            ..Default::default()
-        },
         public_worker_api: WorkerServiceGrpcConfig {
             host: args.router_addr.clone(),
             port: worker_service_run_details.grpc_port,

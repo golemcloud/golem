@@ -1770,6 +1770,7 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
+                &parent.agent_id,
                 component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,

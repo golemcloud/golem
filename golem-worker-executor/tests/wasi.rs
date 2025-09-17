@@ -1046,6 +1046,10 @@ async fn environment_service(
                     Value::String("test-value".to_string())
                 ]),
                 Value::Tuple(vec![
+                    Value::String("GOLEM_AGENT_ID".to_string()),
+                    Value::String("environment-service-1".to_string())
+                ]),
+                Value::Tuple(vec![
                     Value::String("GOLEM_WORKER_NAME".to_string()),
                     Value::String("environment-service-1".to_string())
                 ]),
@@ -2513,10 +2517,26 @@ async fn filesystem_remove_file_replay_restores_file_times(
         )
         .await
         .unwrap();
+    let info1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{get-info}",
+            vec!["/test/testfile.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
+            vec!["/test/testfile.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let info2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{get-info}",
             vec!["/test/testfile.txt".into_value_and_type()],
         )
         .await
@@ -2544,6 +2564,9 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
+
+    println!("{:?}", info1);
+    println!("{:?}", info2);
 
     check!(times1 == times2);
 }
