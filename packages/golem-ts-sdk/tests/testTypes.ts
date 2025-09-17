@@ -171,4 +171,4 @@ export type EitherZ =
 
 export type RecursiveType = {
   more: RecursiveType | undefined;
-}
+};

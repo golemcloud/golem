@@ -38,7 +38,7 @@ export type Type =
   | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
   | { kind: 'alias'; name?: string; aliasSymbol: Symbol; optional: boolean }
   | { kind: 'void'; name?: string; optional: boolean }
-  | { kind: 'others'; name?: string; optional: boolean, recursive: boolean };
+  | { kind: 'others'; name?: string; optional: boolean; recursive: boolean };
 
 export function getName(t: Type): string | undefined {
   if (t.kind === 'others') return t.name;

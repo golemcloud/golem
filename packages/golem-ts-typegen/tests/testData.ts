@@ -117,8 +117,8 @@ export interface TestInterfaceType {
 export type RecordType = Record<string, number>;
 
 type RecursiveType = {
-   more: RecursiveType | undefined;
-}
+  more: RecursiveType | undefined;
+};
 
 class MyAgent {
   constructor(readonly testInterfaceType: TestInterfaceType) {

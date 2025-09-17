@@ -195,7 +195,11 @@ function getTypeFromTsMorphInternal(
   if (rawName === "Map" && type.getTypeArguments().length === 2) {
     const [keyT, valT] = type.getTypeArguments();
     const key = getTypeFromTsMorphInternal(keyT, false, new Set(visitedTypes));
-    const value = getTypeFromTsMorphInternal(valT, false, new Set(visitedTypes));
+    const value = getTypeFromTsMorphInternal(
+      valT,
+      false,
+      new Set(visitedTypes),
+    );
     return {
       kind: "map",
       name: aliasName,

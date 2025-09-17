@@ -207,13 +207,9 @@ describe('Invalid types in agents', () => {
       'Unsupported type `BigInt`, use `bigint` instead',
     );
 
-    expect(fun13Type.val).toBe(
-      'Unsupported type `Object`',
-    );
+    expect(fun13Type.val).toBe('Unsupported type `Object`');
 
-    expect(fun14Type.val).toBe(
-      'Unsupported recursive type `RecursiveType`',
-    );
+    expect(fun14Type.val).toBe('Unsupported recursive type `RecursiveType`');
   });
 });
 
