@@ -110,10 +110,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 1],
-              ['case2', 2],
-              ['case3', 5],
-              ['case4', 3],
+              ['union-type1', 1],
+              ['union-type2', 2],
+              ['union-type3', 5],
+              ['union-type4', 3],
             ],
           },
         },
@@ -171,10 +171,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 2],
-              ['case2', 3],
-              ['case3', 4],
-              ['case4', 5],
+              ['case23', 2],
+              ['case24', 3],
+              ['case25', 4],
+              ['case26', 5],
             ],
           },
         },
@@ -211,10 +211,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 2],
-              ['case2', 3],
-              ['case3', 4],
-              ['case4', 5],
+              ['case33', 2],
+              ['case34', 3],
+              ['case35', 4],
+              ['case36', 5],
             ],
           },
         },
@@ -251,8 +251,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 2],
-              ['case2', 3],
+              ['case27', 2],
+              ['case28', 3],
             ],
           },
         },
@@ -301,8 +301,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 3],
-              ['case2', 4],
+              ['case29', 3],
+              ['case30', 4],
             ],
           },
         },
@@ -331,8 +331,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case1', 3],
-              ['case2', 4],
+              ['case31', 3],
+              ['case32', 4],
             ],
           },
         },

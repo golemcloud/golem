@@ -15,8 +15,8 @@
 import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { variantCaseName } from './typeIndexOrdinal';
 import { TypeMappingScope } from './scope';
+import { generateVariantCaseName } from './name';
 
 type TsType = CoreType.Type;
 
@@ -409,8 +409,10 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           return result;
         }
 
+        const name = type.name;
+
         possibleTypes.push({
-          name: variantCaseName(fieldIdx++),
+          name: generateVariantCaseName(name, fieldIdx++),
           typ: result.val,
         });
       }
@@ -805,13 +807,14 @@ function trimQuotes(s: string): string {
   return s;
 }
 
+
+function isKebabCase(str: string): boolean {
+  return /^[a-z]+(-[a-z]+)*$/.test(str);
+}
+
 function convertTypeNameToKebab(typeName: string | undefined): string | undefined{
   return typeName  ? typeName
     .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')
     .toLowerCase() : undefined;
-}
-
-function isKebabCase(str: string): boolean {
-  return /^[a-z]+(-[a-z]+)*$/.test(str);
 }
