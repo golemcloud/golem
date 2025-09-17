@@ -763,7 +763,7 @@ function fromTsValueInternal(
           });
         } else if (typeof tsValue === 'number') {
           return Either.right({
-            kind: 's32',
+            kind: 'f64',
             value: tsValue,
           });
         } else if (typeof tsValue === 'bigint') {
@@ -948,7 +948,7 @@ function handleObject(
           });
         } else if (propType.kind === 'number' && tsValue === 0) {
           values.push({
-            kind: 's32',
+            kind: 'f64',
             value: 0,
           });
         } else if (propType.kind === 'boolean' && tsValue === false) {
@@ -1624,6 +1624,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
       if (
         value.kind === 'bool' ||
         value.kind === 'string' ||
+        value.kind === 'f64' ||
         value.kind === 's32'
       ) {
         return value.value;
