@@ -48,7 +48,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
   fc.assert(
     fc.property(
       fc.string(),
-      fc.oneof(fc.oneof(fc.integer(), fc.float()), fc.float()),
+      fc.oneof(fc.oneof(fc.integer(), fc.float())),
       stringOrNumberOrNull,
       objectWithUnionWithUndefined1Arb,
       objectWithUnionWithUndefined2Arb,
