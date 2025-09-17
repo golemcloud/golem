@@ -15,6 +15,7 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
@@ -71,6 +72,7 @@ pub struct WorkerConfig {
 impl WorkerConfig {
     pub fn new(
         worker_id: WorkerId,
+        agent_id: &Option<AgentId>,
         target_component_version: u64,
         worker_args: Vec<String>,
         mut worker_env: Vec<(String, String)>,
@@ -84,13 +86,22 @@ impl WorkerConfig {
         let component_id = worker_id.component_id;
         let component_version = target_component_version.to_string();
         worker_env.retain(|(key, _)| {
-            key != "GOLEM_WORKER_NAME"
+            key != "GOLEM_AGENT_ID"
+                && key != "GOLEM_AGENT_TYPE"
+                && key != "GOLEM_WORKER_NAME"
                 && key != "GOLEM_COMPONENT_ID"
                 && key != "GOLEM_COMPONENT_VERSION"
         });
-        worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name));
+        worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
+        worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
         worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
         worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
+        if let Some(agent_id) = agent_id {
+            worker_env.push((
+                String::from("GOLEM_AGENT_TYPE"),
+                agent_id.agent_type.clone(),
+            ));
+        }
         WorkerConfig {
             args: worker_args,
             env: worker_env,
