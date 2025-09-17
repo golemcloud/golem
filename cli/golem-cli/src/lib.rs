@@ -14,7 +14,7 @@
 
 use clap_verbosity_flag::Verbosity;
 use golem_common::tracing::directive;
-use golem_common::tracing::directive::warn;
+use golem_common::tracing::directive::{debug, warn};
 use shadow_rs::shadow;
 use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
@@ -71,6 +71,14 @@ pub fn init_tracing(verbosity: Verbosity, pretty_mode: bool) {
         filter = filter.add_directive(warn("opentelemetry_sdk"));
         filter = filter.add_directive(warn("opentelemetry"));
         filter = filter.add_directive(warn("poem"));
+        filter = filter.add_directive(
+            // Special case: only show sqlx debug logs on TRACE level
+            if level == tracing::Level::TRACE {
+                debug("sqlx")
+            } else {
+                warn("sqlx")
+            },
+        );
 
         if pretty_mode {
             let subscriber = subscriber

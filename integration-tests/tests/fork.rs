@@ -394,6 +394,24 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         )
         .await;
 
+    let original_contents = admin
+        .invoke_and_await(
+            &source_worker_id,
+            "golem:it/api.{get-cart-contents}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    let forked_contents = admin
+        .invoke_and_await(
+            &target_worker_id,
+            "golem:it/api.{get-cart-contents}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
     let result1 = admin
         .search_oplog(&target_worker_id, "G1002 AND NOT pending")
         .await;
@@ -401,8 +419,59 @@ async fn fork_idle_worker(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .search_oplog(&target_worker_id, "G1001 AND NOT pending")
         .await;
 
-    assert_eq!(result1.len(), 6); //  three invocations for G1002 and three log messages
-    assert_eq!(result2.len(), 2); //  one invocation and one log for G1001 which was in the original source oplog
+    assert_eq!(result1.len(), 7); //  three invocations for G1002 and three log messages and the final get-cart-contents invocation
+    assert_eq!(result2.len(), 3); //  one invocation and one log for G1001 which was in the original source oplog and the final get-cart-contents invocation
+
+    assert_eq!(
+        original_contents,
+        vec![Value::List(vec![
+            Record(vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+                ("price", 999999.0f32.into_value_and_type()),
+                ("quantity", 1u32.into_value_and_type()),
+            ])
+            .into_value_and_type()
+            .value,
+            Record(vec![
+                ("product-id", "G1002".into_value_and_type()),
+                ("name", "Mud Golem".into_value_and_type()),
+                ("price", 11.0f32.into_value_and_type()),
+                ("quantity", 10u32.into_value_and_type()),
+            ])
+            .into_value_and_type()
+            .value,
+        ])]
+    );
+    assert_eq!(
+        forked_contents,
+        vec![Value::List(vec![
+            Record(vec![
+                ("product-id", "G1001".into_value_and_type()),
+                ("name", "Golem Cloud Subscription 1y".into_value_and_type()),
+                ("price", 999999.0f32.into_value_and_type()),
+                ("quantity", 1u32.into_value_and_type()),
+            ])
+            .into_value_and_type()
+            .value,
+            Record(vec![
+                ("product-id", "G1002".into_value_and_type()),
+                ("name", "Mud Golem".into_value_and_type()),
+                ("price", 11.0f32.into_value_and_type()),
+                ("quantity", 20u32.into_value_and_type()), // Updated quantity
+            ])
+            .into_value_and_type()
+            .value,
+            Record(vec![
+                ("product-id", "G1002".into_value_and_type()),
+                ("name", "Mud Golem".into_value_and_type()),
+                ("price", 11.0f32.into_value_and_type()),
+                ("quantity", 20u32.into_value_and_type()), // Added quantity
+            ])
+            .into_value_and_type()
+            .value
+        ])]
+    )
 }
 
 #[test]
