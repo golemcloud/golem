@@ -40,7 +40,7 @@ export const stringOrNull = fc.oneof(fc.string(), fc.constant(null));
 
 export const stringOrNumberOrNull = fc.oneof(
   fc.string(),
-  fc.integer(),
+  fc.oneof(fc.integer(), fc.float()),
   fc.constant(null),
 );
 
@@ -48,7 +48,7 @@ export const stringOrUndefined = fc.oneof(fc.string(), fc.constant(undefined));
 
 export const stringOrNumberOrUndefined = fc.oneof(
   fc.string(),
-  fc.integer(),
+  fc.oneof(fc.integer(), fc.float()),
   fc.constant(undefined),
 );
 
@@ -147,12 +147,12 @@ export const agentClassNameArb: fc.Arbitrary<AgentClassName> = fc
   });
 
 export const mapArb: fc.Arbitrary<MapType> = fc
-  .dictionary(fc.string(), fc.integer())
+  .dictionary(fc.string(), fc.oneof(fc.integer(), fc.float()))
   .map((obj) => new Map(Object.entries(obj)));
 
 export const objectArb: fc.Arbitrary<ObjectType> = fc.record({
   a: fc.string(),
-  b: fc.integer(),
+  b: fc.oneof(fc.integer(), fc.float()),
   c: fc.boolean(),
 });
 
@@ -161,56 +161,61 @@ export const listArb: fc.Arbitrary<ListType> = fc.array(fc.string());
 export const listComplexArb: fc.Arbitrary<ListComplexType> = fc.array(
   fc.record({
     a: fc.string(),
-    b: fc.integer(),
+    b: fc.oneof(fc.integer(), fc.float()),
     c: fc.boolean(),
   }),
 );
 
 export const unionArb: fc.Arbitrary<UnionType> = fc.oneof(
-  fc.integer(),
+  fc.oneof(fc.integer(), fc.float()),
   fc.string(),
   fc.boolean(),
   fc.record({
     a: fc.string(),
-    b: fc.integer(),
+    b: fc.oneof(fc.integer(), fc.float()),
     c: fc.boolean(),
   }),
 );
 
 export const tupleArb: fc.Arbitrary<TupleType> = fc.tuple(
   fc.string(),
-  fc.integer(),
+  fc.oneof(fc.integer(), fc.float()),
   fc.boolean(),
 );
 
 export const tupleComplexArb: fc.Arbitrary<TupleComplexType> = fc.tuple(
   fc.string(),
-  fc.integer(),
+  fc.oneof(fc.integer(), fc.float()),
   fc.record({
     a: fc.string(),
-    b: fc.integer(),
+    b: fc.oneof(fc.integer(), fc.float()),
     c: fc.boolean(),
   }),
 );
 
 export const objectComplexArb: fc.Arbitrary<ObjectComplexType> = fc.record({
   a: fc.string(),
-  b: fc.integer(),
+  b: fc.oneof(fc.integer(), fc.float()),
   c: fc.boolean(),
   d: objectArb,
-  e: fc.oneof(fc.integer(), fc.string(), fc.boolean(), objectArb),
+  e: fc.oneof(
+    fc.oneof(fc.integer(), fc.float()),
+    fc.string(),
+    fc.boolean(),
+    objectArb,
+  ),
   f: listArb,
   g: listComplexArb,
   h: tupleArb,
   i: tupleComplexArb,
   j: mapArb,
   k: fc.record({
-    n: fc.integer(),
+    n: fc.oneof(fc.integer(), fc.float()),
   }),
 });
 
 export const unionComplexArb: fc.Arbitrary<UnionComplexType> = fc.oneof(
-  fc.integer(),
+  fc.oneof(fc.integer(), fc.float()),
   fc.string(),
   fc.boolean(),
   objectComplexArb,
@@ -221,7 +226,7 @@ export const unionComplexArb: fc.Arbitrary<UnionComplexType> = fc.oneof(
   tupleComplexArb,
   mapArb,
   fc.record({
-    n: fc.integer(),
+    n: fc.oneof(fc.integer(), fc.float()),
   }),
 );
 
@@ -233,9 +238,9 @@ export const baseArb = fc.record({
   listProp: listArb,
   mapProp: mapArb,
   nestedProp: fc.record({
-    n: fc.integer(),
+    n: fc.oneof(fc.integer(), fc.float()),
   }),
-  numberProp: fc.integer(),
+  numberProp: fc.oneof(fc.integer(), fc.float()),
   objectProp: objectArb,
   objectComplexProp: objectComplexArb,
   stringProp: fc.string(),
@@ -286,14 +291,14 @@ export const baseArb = fc.record({
   }),
   objectPropInlined: fc.record({
     a: fc.string(),
-    b: fc.integer(),
+    b: fc.oneof(fc.integer(), fc.float()),
     c: fc.boolean(),
   }),
-  unionPropInlined: fc.oneof(fc.string(), fc.integer()),
+  unionPropInlined: fc.oneof(fc.string(), fc.oneof(fc.integer(), fc.float())),
 });
 
 const optionalPropArb = fc
-  .option(fc.integer())
+  .option(fc.oneof(fc.integer(), fc.float()))
   .map((opt) =>
     opt === undefined || opt === null ? {} : { optionalProp: opt },
   );
