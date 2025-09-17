@@ -130,22 +130,6 @@ export type EitherBothOptional = {
     err?: string;
 };
 
-export type Either =
-    | {
-    tag: 'ok';
-    val: string;
-}
-    | {
-    tag: 'err';
-    val: string;
-};
+export type Either = { tag: 'ok'; val: string; } | { tag: 'err'; val: string; };
 
-export type EitherOneOptional =
-    | {
-    tag: 'ok';
-    val: string;
-}
-    | {
-    tag: 'err';
-    val?: string;
-};
+export type EitherOneOptional = { tag: 'ok'; val: string; } | { tag: 'err'; val?: string; };
