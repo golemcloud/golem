@@ -32,6 +32,7 @@ pub struct ApplicationConfig {
     pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub golem_rust_override: RustDependencyOverride,
+    pub dev_mode: bool,
 }
 
 impl ApplicationConfig {

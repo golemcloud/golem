@@ -182,6 +182,24 @@ pub fn format_error(error: &str) -> String {
     }
 }
 
+pub fn format_stderr(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(|line| {
+            if line.starts_with("JavaScript exception:")
+                || line.starts_with("JavaScript error:")
+                || line.starts_with("Error:")
+            {
+                line.red().bold().to_string()
+            } else if line.contains("RUST_BACKTRACE=1") {
+                line.bright_black().to_string()
+            } else {
+                line.yellow().to_string()
+            }
+        })
+        .join("\n")
+}
+
 pub fn format_binary_size(size: &u64) -> String {
     humansize::format_size(*size, humansize::BINARY)
 }

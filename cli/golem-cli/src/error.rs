@@ -50,8 +50,7 @@ pub mod service {
 
     use bytes::Bytes;
 
-    use crate::model::text::fmt::format_stack;
-    use colored::Colorize;
+    use crate::model::text::fmt::{format_stack, format_stderr};
     use golem_common::model::{PromiseId, WorkerId};
     use itertools::Itertools;
     use reqwest::StatusCode;
@@ -295,7 +294,7 @@ pub mod service {
                     let message = match error.worker_error {
                         Some(worker_error) => {
                             let error_logs = if !worker_error.stderr.is_empty() {
-                                format!("\n\nStderr:\n{}", worker_error.stderr.yellow())
+                                format!("\n\nStderr:\n{}", format_stderr(&worker_error.stderr))
                             } else {
                                 "".to_string()
                             };
