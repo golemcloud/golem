@@ -146,6 +146,8 @@ describe('Invalid types in agents', () => {
     const fun10ReturnType = invalidAgent?.methods.get('fun10')?.returnType;
     const fun11ReturnType = invalidAgent?.methods.get('fun11')?.returnType;
     const fun12ReturnType = invalidAgent?.methods.get('fun12')?.returnType;
+    const fun13ReturnType = invalidAgent?.methods.get('fun13')?.returnType;
+    const fun14ReturnType = invalidAgent?.methods.get('fun14')?.returnType;
 
     const fun2Type = AnalysedType.fromTsType(fun2ReturnType!, Option.none());
     const fun3Type = AnalysedType.fromTsType(fun3ReturnType!, Option.none());
@@ -158,6 +160,8 @@ describe('Invalid types in agents', () => {
     const fun10Type = AnalysedType.fromTsType(fun10ReturnType!, Option.none());
     const fun11Type = AnalysedType.fromTsType(fun11ReturnType!, Option.none());
     const fun12Type = AnalysedType.fromTsType(fun12ReturnType!, Option.none());
+    const fun13Type = AnalysedType.fromTsType(fun13ReturnType!, Option.none());
+    const fun14Type = AnalysedType.fromTsType(fun14ReturnType!, Option.none());
 
     expect(fun2Type.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
@@ -201,6 +205,14 @@ describe('Invalid types in agents', () => {
 
     expect(fun12Type.val).toBe(
       'Unsupported type `BigInt`, use `bigint` instead',
+    );
+
+    expect(fun13Type.val).toBe(
+      'Unsupported type `Object`',
+    );
+
+    expect(fun14Type.val).toBe(
+      'Unsupported recursive type `RecursiveType`',
     );
   });
 });

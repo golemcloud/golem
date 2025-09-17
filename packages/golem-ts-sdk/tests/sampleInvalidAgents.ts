@@ -14,6 +14,7 @@
 
 import { agent, BaseAgent } from '../src';
 import * as Types from './testTypes';
+import { RecursiveType } from './testTypes';
 
 // This is a set of invalid agents
 // Note that this file is not "imported" anywhere like `sampleAgents.ts`
@@ -93,6 +94,14 @@ class InvalidAgent extends BaseAgent {
   }
 
   async fun12(input: string): Promise<BigInt> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun13(input: string): Promise<Object> {
+    throw new Error('Unimplemented');
+  }
+
+  async fun14(input: string): Promise<RecursiveType> {
     throw new Error('Unimplemented');
   }
 }

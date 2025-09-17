@@ -20,7 +20,12 @@ import { Type } from './type-lite';
 export function buildTypeFromJSON(json: LiteTypeJSON): Type {
   switch (json.kind) {
     case 'others':
-      return { kind: 'others', name: json.name, optional: json.optional };
+      return {
+        kind: 'others',
+        name: json.name,
+        optional: json.optional,
+        recursive: json.recursive,
+      };
 
     case 'boolean':
       return { kind: 'boolean', name: json.name, optional: json.optional };

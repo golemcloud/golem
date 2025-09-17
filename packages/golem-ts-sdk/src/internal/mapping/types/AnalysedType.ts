@@ -626,8 +626,11 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         return Either.left(`Unsupported type \`${customTypeName}\`. Use a plain object or a \`Map\` type instead`);
       }
 
-
-      return Either.left(`Unsupported type \`${customTypeName}\``);
+      if (type.recursive) {
+        return Either.left(`Unsupported recursive type \`${customTypeName}\``);
+      } else {
+        return Either.left(`Unsupported type \`${customTypeName}\``);
+      }
 
     case 'array':
       const name = type.name;

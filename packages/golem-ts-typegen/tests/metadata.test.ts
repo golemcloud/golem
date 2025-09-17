@@ -26,6 +26,8 @@ import {
   getComplexObjectType,
   getInterfaceType,
   getClassType,
+  getLiterallyObjectType,
+  getRecursiveType,
 } from "./util.js";
 
 import { Type } from "@golemcloud/golem-ts-types-core";
@@ -85,5 +87,15 @@ describe("golem-ts-typegen can work correctly read types from .metadata director
   it("track class type", () => {
     const classType = getClassType();
     expect(classType.kind).toEqual("class");
+  });
+
+  it("track Object type", () => {
+    const classType = getLiterallyObjectType();
+    expect(classType.kind).toEqual("others");
+  });
+
+  it("track recursive type", () => {
+    const classType = getRecursiveType();
+    expect(classType.kind).toEqual("object");
   });
 });

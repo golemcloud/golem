@@ -116,6 +116,10 @@ export interface TestInterfaceType {
 
 export type RecordType = Record<string, number>;
 
+type RecursiveType = {
+   more: RecursiveType | undefined;
+}
+
 class MyAgent {
   constructor(readonly testInterfaceType: TestInterfaceType) {
     this.testInterfaceType = testInterfaceType;
@@ -144,6 +148,8 @@ class MyAgent {
     eitherXType: EitherX,
     eitherYType: EitherY,
     eitherZType: EitherZ,
+    literallyObject: Object,
+    recursiveType: RecursiveType,
   ): PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

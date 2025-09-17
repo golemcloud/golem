@@ -168,3 +168,7 @@ export type EitherZ =
       tag: 'error';
       val?: string;
     };
+
+export type RecursiveType = {
+  more: RecursiveType | undefined;
+}

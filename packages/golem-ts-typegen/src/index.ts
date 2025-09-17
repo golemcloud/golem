@@ -35,11 +35,36 @@ export function getTypeFromTsMorph(
   tsMorphType: TsMorphType,
   isOptional: boolean,
 ): Type.Type {
+  return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+}
+
+function getTypeFromTsMorphInternal(
+  tsMorphType: TsMorphType,
+  isOptional: boolean,
+  visitedTypes: Set<TsMorphType>,
+): Type.Type {
   const type = unwrapAlias(tsMorphType);
   const rawName = getRawTypeName(type);
   const aliasName = getAliasTypeName(type);
 
+  if (visitedTypes.has(tsMorphType)) {
+    return {
+      kind: "others",
+      name: rawName ?? aliasName ?? type.getText(),
+      optional: isOptional,
+      recursive: true,
+    };
+  }
+  visitedTypes.add(tsMorphType);
+
   switch (rawName) {
+    case "Object":
+      return {
+        kind: "others",
+        name: rawName,
+        optional: isOptional,
+        recursive: false,
+      };
     case "Float64Array":
       return {
         kind: "array",
@@ -151,12 +176,13 @@ export function getTypeFromTsMorph(
       kind: "others",
       name: name,
       optional: isOptional,
+      recursive: false,
     };
   }
 
   if (rawName === "Promise" && type.getTypeArguments().length === 1) {
     const inner = type.getTypeArguments()[0];
-    const promiseType = getTypeFromTsMorph(inner, false);
+    const promiseType = getTypeFromTsMorphInternal(inner, false, visitedTypes);
 
     return {
       kind: "promise",
@@ -168,8 +194,8 @@ export function getTypeFromTsMorph(
 
   if (rawName === "Map" && type.getTypeArguments().length === 2) {
     const [keyT, valT] = type.getTypeArguments();
-    const key = getTypeFromTsMorph(keyT, false);
-    const value = getTypeFromTsMorph(valT, false);
+    const key = getTypeFromTsMorphInternal(keyT, false, visitedTypes);
+    const value = getTypeFromTsMorphInternal(valT, false, visitedTypes);
     return {
       kind: "map",
       name: aliasName,
@@ -201,7 +227,9 @@ export function getTypeFromTsMorph(
   if (type.isTuple()) {
     const tupleElems = type
       .getTupleElements()
-      .map((el) => getTypeFromTsMorph(el, false));
+      .map((el) =>
+        getTypeFromTsMorphInternal(el, false, new Set(visitedTypes)),
+      );
 
     return {
       kind: "tuple",
@@ -217,7 +245,11 @@ export function getTypeFromTsMorph(
       throw new Error("Array type without element type");
     }
 
-    const element = getTypeFromTsMorph(elementType, false);
+    const element = getTypeFromTsMorphInternal(
+      elementType,
+      false,
+      visitedTypes,
+    );
 
     return {
       kind: "array",
@@ -230,7 +262,7 @@ export function getTypeFromTsMorph(
   if (type.isUnion()) {
     const unionTypes = type
       .getUnionTypes()
-      .map((t) => getTypeFromTsMorph(t, false));
+      .map((t) => getTypeFromTsMorphInternal(t, false, new Set(visitedTypes)));
 
     return {
       kind: "union",
@@ -245,7 +277,11 @@ export function getTypeFromTsMorph(
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getTypeFromTsMorph(type, false);
+      const tsType = getTypeFromTsMorphInternal(
+        type,
+        false,
+        new Set(visitedTypes),
+      );
       const propName = prop.getName();
 
       if (
@@ -280,7 +316,11 @@ export function getTypeFromTsMorph(
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getTypeFromTsMorph(type, false);
+      const tsType = getTypeFromTsMorphInternal(
+        type,
+        false,
+        new Set(visitedTypes),
+      );
       const propName = prop.getName();
 
       if (
@@ -315,7 +355,11 @@ export function getTypeFromTsMorph(
       const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
       const nodes = prop.getDeclarations();
       const node = nodes[0];
-      const tsType = getTypeFromTsMorph(type, false);
+      const tsType = getTypeFromTsMorphInternal(
+        type,
+        false,
+        new Set(visitedTypes),
+      );
       const propName = prop.getName();
 
       if (
@@ -369,6 +413,7 @@ export function getTypeFromTsMorph(
     kind: "others",
     name: aliasName ?? type.getText(),
     optional: isOptional,
+    recursive: false,
   };
 }
 
@@ -490,7 +535,11 @@ export function updateMetadataFromSourceFiles(
           }),
         );
 
-        const returnType = getTypeFromTsMorph(method.getReturnType(), false);
+        const returnType = getTypeFromTsMorphInternal(
+          method.getReturnType(),
+          false,
+          new Set(),
+        );
         methods.set(method.getName(), { methodParams, returnType });
       }
 
