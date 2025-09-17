@@ -753,8 +753,8 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 mod tests {
     use crate::model::agent::test;
     use crate::model::agent::test::{
-        agent_type_with_wit_keywords, reproducer_for_multiple_types_called_element,
-        single_agent_wrapper_types,
+        agent_type_with_wit_keywords, reproducer_for_issue_with_enums,
+        reproducer_for_multiple_types_called_element, single_agent_wrapper_types,
     };
 
     use golem_common::model::agent::{
@@ -1248,6 +1248,46 @@ mod tests {
             "#
             ),
         );
+    }
+
+    #[test]
+    pub fn enum_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_enums();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        // println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! {
+                r#"package test:agent;
+
+                   interface types {
+                     use golem:agent/common.{text-reference, binary-reference};
+
+                     enum union-with-only-literals {
+                       foo,
+                       bar,
+                       baz,
+                     }
+                   }
+
+                   /// FooAgent
+                   interface foo-agent {
+                     use golem:agent/common.{agent-type, binary-reference, text-reference};
+                     use types.{union-with-only-literals};
+
+                     initialize: func(input: string);
+
+                     get-definition: func() -> agent-type;
+
+                     my-fun: func(param: union-with-only-literals) -> union-with-only-literals;
+                   }
+                "#
+            },
+        )
     }
 
     fn assert_wit(actual: &str, expected: &str) {

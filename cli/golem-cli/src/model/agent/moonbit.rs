@@ -1282,7 +1282,7 @@ fn extract_wit_value(
                 .to_upper_camel_case();
             writeln!(
                 result,
-                "{indent}{enum_type_name}::from({from}.enum_value().unwrap().reinterpret_as_int())"
+                "{indent}@types.{enum_type_name}::from({from}.enum_value().unwrap().reinterpret_as_int())"
             )?;
         }
         AnalysedType::Flags(flags) => {
@@ -1409,7 +1409,9 @@ fn extract_wit_value(
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
-    use crate::model::agent::test::reproducer_for_multiple_types_called_element;
+    use crate::model::agent::test::{
+        reproducer_for_issue_with_enums, reproducer_for_multiple_types_called_element,
+    };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
     use tempfile::NamedTempFile;
@@ -1462,6 +1464,16 @@ mod tests {
     fn single_agent_with_test_in_package_name(_trace: &Trace) {
         let component_name: AppComponentName = "test:agent".into();
         let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn enum_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_enums();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

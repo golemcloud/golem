@@ -28,7 +28,8 @@ use crate::model::oplog::{
 use crate::model::plugin::PluginInstallation;
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
+    AccountId, ComponentVersion, Empty, IdempotencyKey, PluginInstallationId, Timestamp,
+    TransactionId, WorkerId,
 };
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
@@ -70,6 +71,14 @@ pub struct WriteRemoteBatchedParameters {
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct WriteRemoteTransactionParameters {
+    pub index: Option<OplogIndex>,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
@@ -95,6 +104,7 @@ pub enum PublicDurableFunctionType {
     /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
     /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
     WriteRemoteBatched(WriteRemoteBatchedParameters),
+    WriteRemoteTransaction(WriteRemoteTransactionParameters),
 }
 
 impl From<DurableFunctionType> for PublicDurableFunctionType {
@@ -108,6 +118,11 @@ impl From<DurableFunctionType> for PublicDurableFunctionType {
                 PublicDurableFunctionType::WriteRemoteBatched(WriteRemoteBatchedParameters {
                     index,
                 })
+            }
+            DurableFunctionType::WriteRemoteTransaction(index) => {
+                PublicDurableFunctionType::WriteRemoteTransaction(
+                    WriteRemoteTransactionParameters { index },
+                )
             }
         }
     }
@@ -593,6 +608,24 @@ pub struct ChangePersistenceLevelParameters {
     pub persistence_level: PersistenceLevel,
 }
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteTransactionParameters {
+    pub timestamp: Timestamp,
+    pub begin_index: OplogIndex,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize, IntoValue)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct BeginRemoteTransactionParameters {
+    pub timestamp: Timestamp,
+    pub transaction_id: TransactionId,
+}
+
 /// A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
 ///
 /// Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
@@ -679,6 +712,16 @@ pub enum PublicOplogEntry {
     SetSpanAttribute(SetSpanAttributeParameters),
     /// Change the current persistence level
     ChangePersistenceLevel(ChangePersistenceLevelParameters),
+    /// Begins a transaction operation
+    BeginRemoteTransaction(BeginRemoteTransactionParameters),
+    /// Pre-Commit of the transaction, indicating that the transaction will be committed
+    PreCommitRemoteTransaction(RemoteTransactionParameters),
+    /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+    PreRollbackRemoteTransaction(RemoteTransactionParameters),
+    /// Committed transaction operation, indicating that the transaction was committed
+    CommittedRemoteTransaction(RemoteTransactionParameters),
+    /// Rolled back transaction operation, indicating that the transaction was rolled back
+    RolledBackRemoteTransaction(RemoteTransactionParameters),
 }
 
 impl PublicOplogEntry {
@@ -972,6 +1015,26 @@ impl PublicOplogEntry {
                 Self::string_match("changepersistencelevel", &[], query_path, query)
                     || Self::string_match("change-persistence-level", &[], query_path, query)
                     || Self::string_match("persistence-level", &[], query_path, query)
+            }
+            PublicOplogEntry::BeginRemoteTransaction(_params) => {
+                Self::string_match("beginremotetransaction", &[], query_path, query)
+                    || Self::string_match("begin-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(_params) => {
+                Self::string_match("precommitremotetransaction", &[], query_path, query)
+                    || Self::string_match("pre-commit-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(_params) => {
+                Self::string_match("prerollbackremotetransaction", &[], query_path, query)
+                    || Self::string_match("pre-rollback-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(_params) => {
+                Self::string_match("committedremotetransaction", &[], query_path, query)
+                    || Self::string_match("committed-remote-transaction", &[], query_path, query)
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(_params) => {
+                Self::string_match("rolledbackremotetransaction", &[], query_path, query)
+                    || Self::string_match("rolled-back-remote-transaction", &[], query_path, query)
             }
         }
     }

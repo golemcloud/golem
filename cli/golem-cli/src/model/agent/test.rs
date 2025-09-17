@@ -368,3 +368,47 @@ pub fn reproducer_for_multiple_types_called_element() -> Vec<AgentType> {
         },
     ]
 }
+
+pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "foo-agent".to_string(),
+        description: "FooAgent".to_string(),
+        constructor: AgentConstructor {
+            name: Some("FooAgent".to_string()),
+            description: "".to_string(),
+            prompt_hint: Some("Enter something...".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "input".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: str(),
+                    }),
+                }],
+            }),
+        },
+        methods: vec![AgentMethod {
+            name: "myFun".to_string(),
+            description: "".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "param".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: r#enum(&["foo", "bar", "baz"])
+                            .named("union-with-only-literals"),
+                    }),
+                }],
+            }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: r#enum(&["foo", "bar", "baz"])
+                            .named("union-with-only-literals"),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+    }]
+}
