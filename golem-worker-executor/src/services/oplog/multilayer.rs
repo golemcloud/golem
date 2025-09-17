@@ -370,7 +370,7 @@ impl OplogService for MultiLayerOplogService {
 
         if !full_match {
             for layer in &self.lower {
-                let partial_result = layer.read(owned_worker_id, idx, remaining as u64).await;
+                let partial_result = layer.read(owned_worker_id, idx, remaining).await;
                 let full_match = match partial_result.first_key_value() {
                     None => false,
                     Some((first_idx, _)) => {
