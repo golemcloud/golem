@@ -348,40 +348,41 @@ impl OplogService for MultiLayerOplogService {
         // TODO: could be optimized by caching what each layer's oldest oplog index is
 
         let mut result = BTreeMap::new();
-        let mut n: i64 = n as i64;
-        if n > 0 {
-            let partial_result = self.primary.read(owned_worker_id, idx, n as u64).await;
-            let full_match = match partial_result.first_key_value() {
-                None => false,
-                Some((first_idx, _)) => {
-                    // It is possible that n is bigger than the available number of entries,
-                    // so we cannot just decrease n by the number of entries read. Instead,
-                    // we want to read from the next layer only up to the first index that was
-                    // read from the primary oplog.s
-                    n = (Into::<u64>::into(*first_idx) as i64) - (Into::<u64>::into(idx) as i64);
-                    *first_idx == idx
-                }
-            };
+        let mut remaining: u64 = min(
+            u64::from(self.get_last_index(owned_worker_id).await.next())
+                .saturating_sub(u64::from(idx)),
+            n,
+        );
+        if remaining == 0 {
+            return result;
+        };
 
-            result.extend(partial_result);
+        let partial_result = self.primary.read(owned_worker_id, idx, remaining).await;
+        let full_match = match partial_result.first_key_value() {
+            None => false,
+            Some((first_idx, _)) => {
+                remaining -= partial_result.len() as u64;
+                *first_idx == idx
+            }
+        };
 
-            if !full_match {
-                for layer in &self.lower {
-                    let partial_result = layer.read(owned_worker_id, idx, n as u64).await;
-                    let full_match = match partial_result.first_key_value() {
-                        None => false,
-                        Some((first_idx, _)) => {
-                            n = (Into::<u64>::into(*first_idx) as i64)
-                                - (Into::<u64>::into(idx) as i64);
-                            *first_idx == idx
-                        }
-                    };
+        result.extend(partial_result);
 
-                    result.extend(partial_result.into_iter());
-
-                    if full_match {
-                        break;
+        if !full_match {
+            for layer in &self.lower {
+                let partial_result = layer.read(owned_worker_id, idx, remaining as u64).await;
+                let full_match = match partial_result.first_key_value() {
+                    None => false,
+                    Some((first_idx, _)) => {
+                        remaining -= partial_result.len() as u64;
+                        *first_idx == idx
                     }
+                };
+
+                result.extend(partial_result.into_iter());
+
+                if full_match {
+                    break;
                 }
             }
         }
