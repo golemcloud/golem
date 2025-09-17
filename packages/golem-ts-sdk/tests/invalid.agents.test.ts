@@ -60,6 +60,10 @@ describe('Invalid types in agents', () => {
 
     const unionWithKeyWord = getAnalysedTypeInFun1('unionWithKeyWord');
 
+    const taggedUnionWithKeyWord = getAnalysedTypeInFun1(
+      'taggedUnionWithKeyWord',
+    );
+
     expect(dateType.val).toBe(
       'Unsupported type `Date`. Use a `string` if possible',
     );
@@ -122,6 +126,10 @@ describe('Invalid types in agents', () => {
 
     expect(unionWithKeyWord.val).toBe(
       '`ok` is a reserved keyword. The following keywords cannot be used as literals: ok, err, none, some',
+    );
+
+    expect(taggedUnionWithKeyWord.val).toBe(
+      '`ok` is a reserved keyword. The following keywords cannot be used as tag values: ok, err, none, some',
     );
   });
 
