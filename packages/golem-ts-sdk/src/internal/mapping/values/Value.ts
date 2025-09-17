@@ -551,7 +551,7 @@ function fromTsValueInternal(
     case 'number':
       if (typeof tsValue === 'number') {
         return Either.right({
-          kind: 's32',
+          kind: 'f64',
           value: tsValue,
         });
       } else {
