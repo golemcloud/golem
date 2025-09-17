@@ -227,6 +227,9 @@ export function agent() {
             getId: () => {
               return uniqueAgentId;
             },
+            getParameters(): DataValue {
+              return constructorParams;
+            },
             getAgentType: () => {
               const agentType = AgentTypeRegistry.lookup(agentClassName);
 
@@ -237,6 +240,12 @@ export function agent() {
               }
 
               return agentType.val;
+            },
+            loadSnapshot(bytes: Uint8Array): Promise<void> {
+              return (instance as BaseAgent).loadSnapshot(bytes);
+            },
+            saveSnapshot(): Promise<Uint8Array> {
+              return (instance as BaseAgent).saveSnapshot();
             },
             invoke: async (method, args) => {
               const fn = instance[method];

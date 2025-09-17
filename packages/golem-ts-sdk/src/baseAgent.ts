@@ -73,6 +73,22 @@ export class BaseAgent {
   }
 
   /**
+   * Loads the agent's state from a previously saved binary snapshot produced by `saveSnapshot()`.
+   * @param bytes The binary snapshot data.
+   * @throws String Can throw a string describing the load error.
+   */
+  loadSnapshot(bytes: Uint8Array): Promise<void> {
+    throw new Error('loadSnapshot is not implemented for this agent type');
+  }
+
+  /**
+   * Saves the agent's current state into a binary snapshot.
+   */
+  saveSnapshot(): Promise<Uint8Array> {
+    throw new Error('saveSnapshot is not implemented for this agent type');
+  }
+
+  /**
    * Gets a remote client instance of this agent type.
    *
    * This remote client will communicate with an agent instance running

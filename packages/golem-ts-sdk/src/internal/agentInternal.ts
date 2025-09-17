@@ -22,9 +22,12 @@ import { AgentId } from '../agentId';
  */
 export interface AgentInternal {
   getId(): AgentId;
+  getParameters(): DataValue;
   invoke(
     method: string,
     args: DataValue,
   ): Promise<Result<DataValue, AgentError>>;
   getAgentType(): AgentType;
+  saveSnapshot(): Promise<Uint8Array>;
+  loadSnapshot(bytes: Uint8Array): Promise<void>;
 }

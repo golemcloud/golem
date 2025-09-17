@@ -107,9 +107,87 @@ async function getDefinition(): Promise<AgentType> {
   return getResolvedAgentOrThrow(resolvedAgent).getDefinition();
 }
 
+async function save(): Promise<Uint8Array> {
+  if (Option.isNone(resolvedAgent)) {
+    throw UninitializedAgentError;
+  }
+  const textEncoder = new TextEncoder();
+
+  const agentType = resolvedAgent.val.getDefinition().typeName;
+  const agentParameters = resolvedAgent.val.getParameters();
+  const agentParametersString = JSON.stringify(agentParameters);
+  const agentParameterBytes = textEncoder.encode(agentParametersString);
+
+  const agentSnapshot = await resolvedAgent.val.saveSnapshot();
+
+  const agentTypeBytes = textEncoder.encode(agentType);
+  const totalLength = 1 + 4 + 4 + agentTypeBytes.length + agentSnapshot.length;
+  const fullSnapshot = new Uint8Array(totalLength);
+  const view = new DataView(fullSnapshot.buffer);
+  view.setUint8(0, 1); // version
+  view.setUint32(1, agentTypeBytes.length);
+  view.setUint32(1 + 4, agentParameterBytes.length)
+  fullSnapshot.set(agentTypeBytes, 1 + 4 + 4);
+  fullSnapshot.set(agentParameterBytes, 1 + 4 + 4 + agentTypeBytes.length);
+  fullSnapshot.set(agentSnapshot, 1 + 4 + 4 + agentTypeBytes.length + agentParameterBytes.length);
+
+  return fullSnapshot;
+}
+
+async function load(bytes: Uint8Array): Promise<void> {
+  if (Option.isSome(resolvedAgent)) {
+    throw `Agent is already initialized in this container`;
+  }
+
+  const textDecoder = new TextDecoder();
+
+  const view = new DataView(bytes.buffer);
+  const version = view.getUint8(0);
+  if (version !== 1) {
+    throw `Unsupported snapshot version ${version}`;
+  }
+  const agentTypeLength = view.getUint32(1);
+  const agentParameterLength = view.getUint32(1 + 4);
+
+  const agentType = textDecoder.decode(bytes.slice(1 + 4 + 4, 1 + 4 + 4 + agentTypeLength));
+  const agentParametersString = textDecoder.decode(bytes.slice(1 + 4 + 4 + agentTypeLength, 1 + 4 + 4 + agentTypeLength + agentParameterLength));
+  const agentSnapshot = bytes.slice(1 + 4 + 4 + agentTypeLength + agentParameterLength);
+
+  const agentParameters: DataValue = JSON.parse(agentParametersString);
+
+  const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
+
+  if (Option.isNone(initiator)) {
+    const entries = Array.from(AgentInitiatorRegistry.entries()).map(
+      (entry) => entry[0].value,
+    );
+
+    throw `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`;
+  }
+
+  const initiateResult = initiator.val.initiate(agentType, agentParameters);
+
+  if (initiateResult.tag === 'ok') {
+    const agent = initiateResult.val;
+    await agent.loadSnapshot(agentSnapshot);
+
+    resolvedAgent = Option.some(agent);
+  } else {
+    throw JSON.stringify(initiateResult.val);
+  }
+}
+
 export const guest: typeof bindings.guest = {
   initialize,
   discoverAgentTypes,
   invoke,
   getDefinition,
+};
+
+export const saveSnapshot: typeof bindings.saveSnapshot = {
+  save,
+};
+
+export const loadSnapshot: typeof bindings.loadSnapshot = {
+  load,
 };
