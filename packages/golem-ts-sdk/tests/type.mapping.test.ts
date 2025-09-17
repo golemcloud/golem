@@ -100,10 +100,10 @@ describe('TypeScript primitives to AnalysedType', () => {
     expect(Either.getRight(result)).toEqual(AnalysedType.str());
   });
 
-  it('Number type is converted to AnalysedType.S32', () => {
+  it('Number type is converted to AnalysedType.F64', () => {
     const numberType = getNumberType();
     const result = AnalysedType.fromTsType(numberType, Option.none());
-    expect(Either.getRight(result)).toEqual(AnalysedType.s32());
+    expect(Either.getRight(result)).toEqual(AnalysedType.f64());
   });
 });
 
@@ -145,7 +145,7 @@ describe('TypeScript Object to AnalysedType', () => {
       {
         name: 'b',
         typ: {
-          kind: 's32',
+          kind: 'f64',
         },
       },
       {
@@ -183,7 +183,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
           {
             name: 'union-type2',
             typ: {
-              kind: 's32',
+              kind: 'f64',
             },
           },
           {
@@ -201,7 +201,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
                   {
                     name: 'b',
                     typ: {
-                      kind: 's32',
+                      kind: 'f64',
                     },
                   },
                   {
@@ -270,7 +270,7 @@ test('Union of literals to AnalysedType', () => {
 function checkPrimitiveFields(fields: any[]) {
   const expected = {
     numberProp: {
-      kind: 's32',
+      kind: 'f64',
     },
     stringProp: {
       kind: 'string',
@@ -325,7 +325,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
           {
             name: 'union-complex-type2',
             typ: {
-              kind: 's32',
+              kind: 'f64',
             },
           },
           {
@@ -343,7 +343,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                   {
                     name: 'b',
                     typ: {
-                      kind: 's32',
+                      kind: 'f64',
                     },
                   },
                   {
@@ -381,7 +381,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     kind: 'string',
                   },
                   {
-                    kind: 's32',
+                    kind: 'f64',
                   },
                   {
                     kind: 'bool',
@@ -401,7 +401,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                   {
                     name: 'n',
                     typ: {
-                      kind: 's32',
+                      kind: 'f64',
                     },
                   },
                 ],
@@ -425,7 +425,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                   {
                     name: 'b',
                     typ: {
-                      kind: 's32',
+                      kind: 'f64',
                     },
                   },
                   {
@@ -449,7 +449,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                           {
                             name: 'b',
                             typ: {
-                              kind: 's32',
+                              kind: 'f64',
                             },
                           },
                           {
@@ -479,7 +479,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                           {
                             name: 'union-type2',
                             typ: {
-                              kind: 's32',
+                              kind: 'f64',
                             },
                           },
                           {
@@ -497,7 +497,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                                   {
                                     name: 'b',
                                     typ: {
-                                      kind: 's32',
+                                      kind: 'f64',
                                     },
                                   },
                                   {
@@ -555,7 +555,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                               {
                                 name: 'b',
                                 typ: {
-                                  kind: 's32',
+                                  kind: 'f64',
                                 },
                               },
                               {
@@ -584,7 +584,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                             kind: 'string',
                           },
                           {
-                            kind: 's32',
+                            kind: 'f64',
                           },
                           {
                             kind: 'bool',
@@ -605,7 +605,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                             kind: 'string',
                           },
                           {
-                            kind: 's32',
+                            kind: 'f64',
                           },
                           {
                             kind: 'record',
@@ -620,7 +620,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                                 {
                                   name: 'b',
                                   typ: {
-                                    kind: 's32',
+                                    kind: 'f64',
                                   },
                                 },
                                 {
@@ -653,7 +653,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                                 kind: 'string',
                               },
                               {
-                                kind: 's32',
+                                kind: 'f64',
                               },
                             ],
                             name: undefined,
@@ -674,7 +674,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                           {
                             name: 'n',
                             typ: {
-                              kind: 's32',
+                              kind: 'f64',
                             },
                           },
                         ],
@@ -699,7 +699,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     kind: 'string',
                   },
                   {
-                    kind: 's32',
+                    kind: 'f64',
                   },
                   {
                     kind: 'record',
@@ -714,7 +714,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                         {
                           name: 'b',
                           typ: {
-                            kind: 's32',
+                            kind: 'f64',
                           },
                         },
                         {
@@ -747,7 +747,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                         kind: 'string',
                       },
                       {
-                        kind: 's32',
+                        kind: 'f64',
                       },
                     ],
                     name: undefined,
@@ -777,7 +777,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                       {
                         name: 'b',
                         typ: {
-                          kind: 's32',
+                          kind: 'f64',
                         },
                       },
                       {
@@ -822,7 +822,7 @@ function checkUnionFields(fields: any[]) {
         name: 'union-type',
         cases: [
           { name: 'union-type1', typ: { kind: 'string' } },
-          { name: 'union-type2', typ: { kind: 's32' } },
+          { name: 'union-type2', typ: { kind: 'f64' } },
           {
             name: 'union-type3',
             typ: {
@@ -831,7 +831,7 @@ function checkUnionFields(fields: any[]) {
                 name: 'object-type',
                 fields: [
                   { name: 'a', typ: { kind: 'string' } },
-                  { name: 'b', typ: { kind: 's32' } },
+                  { name: 'b', typ: { kind: 'f64' } },
                   { name: 'c', typ: { kind: 'bool' } },
                 ],
               },
@@ -857,7 +857,7 @@ function checkObjectFields(fields: any[]) {
     },
     {
       name: 'b',
-      typ: { kind: 's32' },
+      typ: { kind: 'f64' },
     },
     {
       name: 'c',
@@ -905,7 +905,7 @@ function checkTupleFields(fields: any[]) {
         {
           kind: 'string',
         },
-        { kind: 's32' },
+        { kind: 'f64' },
         { kind: 'bool' },
       ];
       expect(field.typ.value.items).toEqual(expected);
@@ -926,7 +926,7 @@ function checkTupleWithObjectFields(fields: any[]) {
         {
           kind: 'string',
         },
-        { kind: 's32' },
+        { kind: 'f64' },
         {
           kind: 'record',
           value: {
@@ -940,7 +940,7 @@ function checkTupleWithObjectFields(fields: any[]) {
               {
                 name: 'b',
                 typ: {
-                  kind: 's32',
+                  kind: 'f64',
                 },
               },
               {
@@ -972,7 +972,7 @@ function checkMapFields(fields: any[]) {
       const inner = field.typ.value.inner;
       expect(inner.value.items.length).toBe(2);
       expect(inner.value.items[0].kind).toBe('string');
-      expect(inner.value.items[1].kind).toBe('s32');
+      expect(inner.value.items[1].kind).toBe('f64');
     }
   });
 }
@@ -990,7 +990,7 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'b',
-      typ: { kind: 's32' },
+      typ: { kind: 'f64' },
     },
     {
       name: 'c',
@@ -1011,7 +1011,7 @@ function checkObjectComplexFields(fields: any[]) {
             {
               name: 'b',
               typ: {
-                kind: 's32',
+                kind: 'f64',
               },
             },
             {
@@ -1041,7 +1041,7 @@ function checkObjectComplexFields(fields: any[]) {
             {
               name: 'union-type2',
               typ: {
-                kind: 's32',
+                kind: 'f64',
               },
             },
             {
@@ -1059,7 +1059,7 @@ function checkObjectComplexFields(fields: any[]) {
                     {
                       name: 'b',
                       typ: {
-                        kind: 's32',
+                        kind: 'f64',
                       },
                     },
                     {
@@ -1117,7 +1117,7 @@ function checkObjectComplexFields(fields: any[]) {
                 {
                   name: 'b',
                   typ: {
-                    kind: 's32',
+                    kind: 'f64',
                   },
                 },
                 {
@@ -1145,7 +1145,7 @@ function checkObjectComplexFields(fields: any[]) {
             {
               kind: 'string',
             },
-            { kind: 's32' },
+            { kind: 'f64' },
             { kind: 'bool' },
           ],
           name: 'tuple-type',
@@ -1162,7 +1162,7 @@ function checkObjectComplexFields(fields: any[]) {
             {
               kind: 'string',
             },
-            { kind: 's32' },
+            { kind: 'f64' },
             {
               kind: 'record',
               value: {
@@ -1176,7 +1176,7 @@ function checkObjectComplexFields(fields: any[]) {
                   {
                     name: 'b',
                     typ: {
-                      kind: 's32',
+                      kind: 'f64',
                     },
                   },
                   {
@@ -1209,7 +1209,7 @@ function checkObjectComplexFields(fields: any[]) {
                   kind: 'string',
                 },
                 {
-                  kind: 's32',
+                  kind: 'f64',
                 },
               ],
               name: undefined,
@@ -1230,7 +1230,7 @@ function checkObjectComplexFields(fields: any[]) {
             {
               name: 'n',
               typ: {
-                kind: 's32',
+                kind: 'f64',
               },
             },
           ],

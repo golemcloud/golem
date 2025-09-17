@@ -271,8 +271,9 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
     case "boolean":
       return Either.right(bool())
 
+    // https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number?utm_source=chatgpt.com#number_encoding
     case "number":
-      return Either.right(s32())
+      return Either.right(f64())
 
     case "string":
       return Either.right(str())

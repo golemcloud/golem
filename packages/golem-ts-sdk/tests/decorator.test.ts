@@ -103,7 +103,7 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-f64-type' } },
         { type: { tag: 'prim-bool-type' } },
         {
           name: 'union-type',
@@ -179,7 +179,7 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-f64-type' } },
         {
           name: 'object-type',
           type: {
@@ -219,7 +219,7 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-f64-type' } },
         {
           name: 'object-type',
           type: {
@@ -257,7 +257,7 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -307,7 +307,7 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-f64-type' } },
       ],
     };
 
@@ -337,7 +337,7 @@ describe('Agent decorator should register the agent class and its methods into A
           },
         },
         { type: { tag: 'prim-string-type' } },
-        { type: { tag: 'prim-s32-type' } },
+        { type: { tag: 'prim-f64-type' } },
       ],
     };
 
