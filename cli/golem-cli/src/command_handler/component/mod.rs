@@ -19,8 +19,7 @@ use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, ForceBuildArg,
-    UpdateOrRedeployArgs,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs, ForceBuildArg,
 };
 use crate::command_handler::component::ifs::IfsFileManager;
 use crate::command_handler::Handlers;
@@ -41,8 +40,8 @@ use crate::model::text::component::{ComponentCreateView, ComponentGetView, Compo
 use crate::model::text::fmt::{log_deploy_diff, log_error, log_text_view, log_warn};
 use crate::model::text::help::ComponentNameHelp;
 use crate::model::{
-    AccountDetails, ComponentName, ComponentNameMatchKind, ComponentVersionSelection,
-    ProjectRefAndId, ProjectReference, SelectedComponents, WorkerUpdateMode,
+    AccountDetails, AgentUpdateMode, ComponentName, ComponentNameMatchKind,
+    ComponentVersionSelection, ProjectRefAndId, ProjectReference, SelectedComponents,
 };
 use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
@@ -97,9 +96,9 @@ impl ComponentCommandHandler {
             ComponentSubcommand::Deploy {
                 component_name,
                 force_build,
-                update_or_redeploy,
+                deploy_args,
             } => {
-                self.cmd_deploy(component_name, force_build, update_or_redeploy)
+                self.cmd_deploy(component_name, force_build, deploy_args)
                     .await
             }
             ComponentSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
@@ -278,7 +277,7 @@ impl ComponentCommandHandler {
         &self,
         component_name: ComponentOptionalComponentNames,
         force_build: ForceBuildArg,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         self.deploy(
             self.ctx
@@ -289,7 +288,7 @@ impl ComponentCommandHandler {
             component_name.component_name,
             Some(force_build),
             &ApplicationComponentSelectMode::CurrentDir,
-            &update_or_redeploy,
+            &deploy_args,
         )
         .await?;
 
@@ -505,12 +504,10 @@ impl ComponentCommandHandler {
     async fn cmd_update_workers(
         &self,
         component_name: Option<ComponentName>,
-        update_mode: WorkerUpdateMode,
+        update_mode: AgentUpdateMode,
         await_update: bool,
     ) -> anyhow::Result<()> {
-        let components = self
-            .components_for_update_or_redeploy(component_name)
-            .await?;
+        let components = self.components_for_deploy_args(component_name).await?;
         self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
@@ -521,9 +518,7 @@ impl ComponentCommandHandler {
         &self,
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
-        let components = self
-            .components_for_update_or_redeploy(component_name)
-            .await?;
+        let components = self.components_for_deploy_args(component_name).await?;
         self.redeploy_workers_by_components(&components).await?;
 
         Ok(())
@@ -599,7 +594,7 @@ impl ComponentCommandHandler {
         component_names: Vec<ComponentName>,
         force_build: Option<ForceBuildArg>,
         default_component_select_mode: &ApplicationComponentSelectMode,
-        update_or_redeploy: &UpdateOrRedeployArgs,
+        deploy_args: &DeployArgs,
     ) -> anyhow::Result<Vec<Component>> {
         self.ctx
             .app_handler()
@@ -658,11 +653,13 @@ impl ComponentCommandHandler {
             components
         };
 
-        if let Some(update) = update_or_redeploy.update_agents {
+        if let Some(update) = deploy_args.update_agents {
             self.update_workers_by_components(&components, update, true)
                 .await?;
-        } else if update_or_redeploy.redeploy_workers(self.ctx.update_or_redeploy()) {
+        } else if deploy_args.redeploy_agents(self.ctx.deploy_args()) {
             self.redeploy_workers_by_components(&components).await?;
+        } else if deploy_args.delete_agents(self.ctx.deploy_args()) {
+            self.delete_workers(&components).await?;
         }
 
         Ok(components)
@@ -872,7 +869,7 @@ impl ComponentCommandHandler {
         Ok(component)
     }
 
-    async fn components_for_update_or_redeploy(
+    async fn components_for_deploy_args(
         &self,
         component_name: Option<ComponentName>,
     ) -> anyhow::Result<Vec<Component>> {
@@ -907,7 +904,7 @@ impl ComponentCommandHandler {
     pub async fn update_workers_by_components(
         &self,
         components: &[Component],
-        update: WorkerUpdateMode,
+        update: AgentUpdateMode,
         await_updates: bool,
     ) -> anyhow::Result<()> {
         if components.is_empty() {
@@ -960,7 +957,42 @@ impl ComponentCommandHandler {
 
         // TODO: json / yaml output?
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
-        // TODO: should we expose "delete-workers" too for development?
+        Ok(())
+    }
+
+    pub async fn delete_workers(&self, components: &[Component]) -> anyhow::Result<()> {
+        if components.is_empty() {
+            return Ok(());
+        }
+
+        log_action("Deleting", "existing workers");
+        let _indent = LogIndent::new();
+
+        // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
+        //       we do so to help a bit with pending invocations or currently running worker creations,
+        //       but this is not a 100% guarantee.
+        let mut found_any = true;
+        let mut first_round = true;
+        while found_any {
+            found_any = false;
+            for component in components {
+                let deleted_count = self
+                    .ctx
+                    .worker_handler()
+                    .delete_component_workers(
+                        &component.component_name,
+                        component.versioned_component_id.component_id,
+                        first_round,
+                    )
+                    .await?;
+                if deleted_count > 0 {
+                    found_any = true;
+                }
+            }
+            first_round = false;
+        }
+
+        // TODO: json / yaml output?
         Ok(())
     }
 
@@ -1123,7 +1155,21 @@ impl ComponentCommandHandler {
         component_match_kind: ComponentNameMatchKind,
         component_name: &ComponentName,
         component_version_selection: Option<ComponentVersionSelection<'_>>,
+        deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<Component> {
+        if deploy_args.is_some() || self.ctx.deploy_args().is_any_set() {
+            self.ctx
+                .component_handler()
+                .deploy(
+                    project,
+                    vec![component_name.clone()],
+                    None,
+                    &ApplicationComponentSelectMode::CurrentDir,
+                    &deploy_args.cloned().unwrap_or_else(|| DeployArgs::none()),
+                )
+                .await?;
+        }
+
         match self
             .component(project, component_name.into(), component_version_selection)
             .await?
@@ -1172,7 +1218,7 @@ impl ComponentCommandHandler {
                             vec![component_name.clone()],
                             None,
                             &ApplicationComponentSelectMode::CurrentDir,
-                            &UpdateOrRedeployArgs::none(),
+                            &deploy_args.cloned().unwrap_or_else(|| DeployArgs::none()),
                         )
                         .await?;
                     self.ctx

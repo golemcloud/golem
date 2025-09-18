@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::api::deployment::ApiDeploymentSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+use crate::command::shared_args::{ProjectOptionalFlagArg, DeployArgs};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -51,8 +51,8 @@ impl ApiDeploymentCommandHandler {
         match command {
             ApiDeploymentSubcommand::Deploy {
                 host_or_site,
-                update_or_redeploy,
-            } => self.cmd_deploy(host_or_site, update_or_redeploy).await,
+                deploy_args,
+            } => self.cmd_deploy(host_or_site, deploy_args).await,
             ApiDeploymentSubcommand::Get { project, site } => self.cmd_get(project, site).await,
             ApiDeploymentSubcommand::List {
                 project,
@@ -67,7 +67,7 @@ impl ApiDeploymentCommandHandler {
     async fn cmd_deploy(
         &self,
         host_or_site: Option<String>,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
@@ -105,7 +105,7 @@ impl ApiDeploymentCommandHandler {
         let latest_api_definition_versions = self
             .deploy_required_api_definitions(
                 project.as_ref(),
-                &update_or_redeploy,
+                &deploy_args,
                 api_deployments.values(),
             )
             .await?;
@@ -404,7 +404,7 @@ impl ApiDeploymentCommandHandler {
     async fn deploy_required_api_definitions<'a, I: Iterator<Item = &'a HttpApiDeployment>>(
         &self,
         project: Option<&ProjectRefAndId>,
-        update_or_redeploy: &UpdateOrRedeployArgs,
+        deploy_args: &DeployArgs,
         api_deployments: I,
     ) -> anyhow::Result<BTreeMap<String, String>> {
         let used_definition_names = api_deployments
@@ -431,7 +431,7 @@ impl ApiDeploymentCommandHandler {
         let latest_components = self
             .ctx
             .api_definition_handler()
-            .deploy_required_components(project, update_or_redeploy, used_definition_names)
+            .deploy_required_components(project, deploy_args, used_definition_names)
             .await?;
 
         log_action("Deploying", "required HTTP API definitions");
@@ -445,7 +445,7 @@ impl ApiDeploymentCommandHandler {
                 .deploy_api_definition(
                     project,
                     HttpApiDeployMode::Matching,
-                    update_or_redeploy,
+                    deploy_args,
                     &latest_components,
                     name,
                     definition,

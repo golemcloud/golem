@@ -97,13 +97,25 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_redeploy_workers(&self, number_of_workers: usize) -> anyhow::Result<bool> {
+    pub fn confirm_redeploy_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!(
-                "Redeploying will {} then recreate {} worker(s), do you want to continue?",
+                "Redeploying will {} then recreate {} agents(s), do you want to continue?",
                 "delete".log_color_warn(),
-                number_of_workers.to_string().log_color_highlight()
+                number_of_agents.to_string().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_deleting_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "{} {} agents(s), do you want to continue?",
+                "Deleting".log_color_warn(),
+                number_of_agents.to_string().log_color_highlight()
             ),
             None,
         )
@@ -136,7 +148,7 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Worker {}/{} will be updated to the latest component version: {}. Do you want to continue?",
+            format!("Agent {}/{} will be updated to the latest component version: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
                     target_version.to_string().log_color_highlight()

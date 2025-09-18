@@ -14,7 +14,7 @@
 
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::api::definition::ApiDefinitionSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+use crate::command::shared_args::{ProjectOptionalFlagArg, DeployArgs};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -57,9 +57,9 @@ impl ApiDefinitionCommandHandler {
         match command {
             ApiDefinitionSubcommand::Deploy {
                 http_api_definition_name,
-                update_or_redeploy,
+                deploy_args,
             } => {
-                self.cmd_deploy(http_api_definition_name, update_or_redeploy)
+                self.cmd_deploy(http_api_definition_name, deploy_args)
                     .await
             }
             ApiDefinitionSubcommand::Get {
@@ -95,7 +95,7 @@ impl ApiDefinitionCommandHandler {
     async fn cmd_deploy(
         &self,
         name: Option<HttpApiDefinitionName>,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
@@ -126,7 +126,7 @@ impl ApiDefinitionCommandHandler {
         let api_def_filter = name.as_ref().into_iter().cloned().collect::<BTreeSet<_>>();
 
         let lastest_used_components = self
-            .deploy_required_components(project.as_ref(), &update_or_redeploy, api_def_filter)
+            .deploy_required_components(project.as_ref(), &deploy_args, api_def_filter)
             .await?;
 
         match &name {
@@ -145,7 +145,7 @@ impl ApiDefinitionCommandHandler {
                 self.deploy_api_definition(
                     project.as_ref(),
                     HttpApiDeployMode::All,
-                    &update_or_redeploy,
+                    &deploy_args,
                     &lastest_used_components,
                     name,
                     &definition,
@@ -158,7 +158,7 @@ impl ApiDefinitionCommandHandler {
                 self.deploy(
                     project.as_ref(),
                     HttpApiDeployMode::All,
-                    &update_or_redeploy,
+                    &deploy_args,
                     &lastest_used_components,
                 )
                 .await?;
@@ -528,7 +528,7 @@ impl ApiDefinitionCommandHandler {
         &self,
         project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
-        update_or_redeploy: &UpdateOrRedeployArgs,
+        deploy_args: &DeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
     ) -> anyhow::Result<BTreeMap<String, String>> {
         let api_definitions = {
@@ -548,7 +548,7 @@ impl ApiDefinitionCommandHandler {
                     .deploy_api_definition(
                         project,
                         deploy_mode,
-                        update_or_redeploy,
+                        deploy_args,
                         latest_component_versions,
                         &api_definition_name,
                         &api_definition,
@@ -568,7 +568,7 @@ impl ApiDefinitionCommandHandler {
         &self,
         project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
-        update_or_redeploy: &UpdateOrRedeployArgs,
+        deploy_args: &DeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
         api_definition_name: &HttpApiDefinitionName,
         api_definition: &WithSource<HttpApiDefinition>,
@@ -654,7 +654,7 @@ impl ApiDefinitionCommandHandler {
                             "The current version of the HTTP API is already deployed as non-draft.",
                         );
 
-                        if update_or_redeploy.redeploy_http_api(self.ctx.update_or_redeploy()) {
+                        if deploy_args.redeploy_http_api(self.ctx.deploy_args()) {
                             self.ctx
                                 .api_deployment_handler()
                                 .undeploy_api_from_all_sites_for_redeploy(
@@ -786,7 +786,7 @@ impl ApiDefinitionCommandHandler {
     pub async fn deploy_required_components(
         &self,
         project: Option<&ProjectRefAndId>,
-        update_or_redeploy: &UpdateOrRedeployArgs,
+        deploy_args: &DeployArgs,
         api_defs_filter: BTreeSet<HttpApiDefinitionName>,
     ) -> anyhow::Result<BTreeMap<String, Component>> {
         let used_component_names = {
@@ -829,7 +829,7 @@ impl ApiDefinitionCommandHandler {
                 used_component_names,
                 None,
                 &ApplicationComponentSelectMode::All,
-                update_or_redeploy,
+                deploy_args,
             )
             .await?
             .into_iter()

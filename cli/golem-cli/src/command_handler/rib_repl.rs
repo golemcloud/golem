@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::shared_args::DeployArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
@@ -53,6 +54,7 @@ impl RibReplHandler {
         &self,
         component_name: Option<ComponentName>,
         component_version: Option<u64>,
+        deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<()> {
         let selected_components = self
             .ctx
@@ -80,6 +82,7 @@ impl RibReplHandler {
                 ComponentNameMatchKind::App,
                 &component_name,
                 component_version.map(|v| v.into()),
+                deploy_args,
             )
             .await?;
 
