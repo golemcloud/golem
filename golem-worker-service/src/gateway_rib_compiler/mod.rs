@@ -70,10 +70,11 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         for (_component_index, agent_types) in agent_types {
             for agent_type in agent_types {
                 let constructor_schema = agent_type.constructor.input_schema;
+                let parameter_types = get_constructor_args(&constructor_schema);
 
                 custom_instance_spec.push(rib::CustomInstanceSpec {
                     instance_name: agent_type.type_name.clone(),
-                    parameter_types: vec![],
+                    parameter_types,
                     interface_name: Some(InterfaceName {
                         name: agent_type.type_name,
                         version: None,
@@ -119,7 +120,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
     }
 }
 
-fn get_constructor_args(input_schema: &DataSchema) {
+fn get_constructor_args(input_schema: &DataSchema) -> Vec<AnalysedType> {
     match input_schema {
         DataSchema::Tuple(element_schemas) => element_schemas
             .elements
@@ -143,7 +144,7 @@ fn get_constructor_args(input_schema: &DataSchema) {
                 variant(vec![name_and_type])
             })
             .collect::<Vec<_>>(),
-    };
+    }
 }
 
 fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
