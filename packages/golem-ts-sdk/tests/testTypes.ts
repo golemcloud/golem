@@ -42,6 +42,23 @@ export type ResultTypeNonExact =
   | { tag: 'ok'; value: number }
   | { tag: 'err'; value: string };
 
+// Result type Kind is similar looking, but it's okValue and errValue instead of val
+export type ResultTypeNonExact2 =
+  | { tag: 'ok'; okValue: number }
+  | { tag: 'err'; errValue: string };
+
+export type ResultTypeNonExact3 =
+  | { tag: 'ok'; okVal?: number }
+  | { tag: 'err'; errVal: string };
+
+export type ResultTypeNonExact4 =
+  | { tag: 'ok'; okVal: number }
+  | { tag: 'err'; errVal?: string };
+
+export type ResultTypeNonExact5 =
+  | { tag: 'ok'; okVal?: number }
+  | { tag: 'err'; errVal?: string };
+
 export type PromiseType = Promise<string>;
 
 export type ObjectType = {

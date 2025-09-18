@@ -28,6 +28,10 @@ import {
   UnionWithOnlyLiterals,
   ResultTypeNonExact,
   ResultTypeExactBoth,
+  ResultTypeNonExact2,
+  ResultTypeNonExact4,
+  ResultTypeNonExact5,
+  ResultTypeNonExact3,
 } from './testTypes';
 
 @agent()
@@ -102,6 +106,22 @@ class SimpleAgent extends BaseAgent {
   async fun12(param: ResultTypeNonExact): Promise<ResultTypeNonExact> {
     return param;
   }
+
+  async fun13(param: ResultTypeNonExact2): Promise<ResultTypeNonExact2> {
+    return param;
+  }
+
+  async fun14(param: ResultTypeNonExact3): Promise<ResultTypeNonExact3> {
+    return param;
+  }
+
+  async fun15(param: ResultTypeNonExact4): Promise<ResultTypeNonExact4> {
+    return param;
+  }
+
+  async fun16(param: ResultTypeNonExact5): Promise<ResultTypeNonExact5> {
+    return param;
+  }
 }
 
 export interface CustomData {
@@ -150,6 +170,10 @@ class ComplexAgent extends BaseAgent {
     unionWithOnlyLiterals: UnionWithOnlyLiterals,
     resultTypeExact: ResultTypeExactBoth,
     resultTypeNonExact: ResultTypeNonExact,
+    resultTypeNonExact2: ResultTypeNonExact2,
+    resultTypeNonExact3: ResultTypeNonExact3,
+    resultTypeNonExact4: ResultTypeNonExact4,
+    resultTypeNonExact5: ResultTypeNonExact5,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

@@ -177,7 +177,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(wit).toEqual(expectedWit);
   });
 
-  it('should handle result type - non exact in method', () => {
+  it('should handle result type with different key names', () => {
     const wit = getWitType(
       complexAgentMethod!.inputSchema,
       'resultTypeNonExact',
@@ -190,6 +190,90 @@ describe('Agent decorator should register the agent class and its methods into A
           type: { tag: 'result-type', val: [1, 2] },
         },
         { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle result type with different key names for ok and err', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'resultTypeNonExact2',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'result-type-non-exact2',
+          type: { tag: 'result-type', val: [1, 2] },
+        },
+        { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle result type with optional ok and non optional err', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'resultTypeNonExact3',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'result-type-non-exact3',
+          type: { tag: 'result-type', val: [1, 3] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle result type with optional err and non optional ok', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'resultTypeNonExact4',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'result-type-non-exact4',
+          type: { tag: 'result-type', val: [1, 2] },
+        },
+        { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'option-type', val: 3 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle result type with optional err and optional ok', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'resultTypeNonExact5',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'result-type-non-exact5',
+          type: { tag: 'result-type', val: [1, 3] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'option-type', val: 4 } },
         { type: { tag: 'prim-string-type' } },
       ],
     };
@@ -411,7 +495,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(complexAgent.methods.length).toEqual(22);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
-    expect(simpleAgent.methods.length).toEqual(12);
+    expect(simpleAgent.methods.length).toEqual(16);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 });

@@ -34,7 +34,8 @@ import {
   objectWithUnionWithUndefined3Arb,
   objectWithUnionWithUndefined4Arb,
   resultTypeExactArb,
-  resultTypeNotExactArb,
+  resultTypeNonExact2Arb,
+  resultTypeNonExactArb,
   stringOrNumberOrNull,
   stringOrUndefined,
   taggedUnionArb,
@@ -64,7 +65,8 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
       taggedUnionArb,
       unionWithOnlyLiteralsArb,
       resultTypeExactArb,
-      resultTypeNotExactArb,
+      resultTypeNonExactArb,
+      resultTypeNonExact2Arb,
       (
         arbString,
         number,
@@ -79,7 +81,8 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         taggedUnion,
         unionWithOnlyLiterals,
         resultTypeExactBoth,
-        resultTypeKind,
+        resultTypeNonExact,
+        resultTypeNonExact2,
       ) => {
         overrideSelfMetadataImpl(SimpleAgentName.value);
 
@@ -222,9 +225,17 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         testInvoke(
           typeRegistry,
           'fun12',
-          [['param', resultTypeKind]],
+          [['param', resultTypeNonExact]],
           resolvedAgent,
-          resultTypeKind,
+          resultTypeNonExact,
+        );
+
+        testInvoke(
+          typeRegistry,
+          'fun13',
+          [['param', resultTypeNonExact2]],
+          resolvedAgent,
+          resultTypeNonExact2,
         );
       },
     ),
