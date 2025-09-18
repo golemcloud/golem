@@ -32,8 +32,6 @@ use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
-use gag::BufferRedirect;
-use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 use tracing::debug;
@@ -118,7 +116,7 @@ async fn execute_agent_wrapper(
         .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
         .await;
 
-    let dev_mode = ctx.config.dev_mode;
+    let _dev_mode = ctx.config.dev_mode;
 
     task_result_marker.result((|| {
         let agent_types = agent_types?;
@@ -142,21 +140,21 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        let redirect = BufferRedirect::stderr().ok();
+        // let redirect = BufferRedirect::stderr().ok();
 
         let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
             wrapper_context,
             wrapper_wasm_path.as_std_path(),
         );
 
-        if result.is_err() || dev_mode {
-            if let Some(mut redirect) = redirect {
-                let mut output = String::new();
-                redirect.read_to_string(&mut output)?;
-                drop(redirect);
-                eprint!("{}", output);
-            }
-        }
+        // if result.is_err() || dev_mode {
+        //     if let Some(mut redirect) = redirect {
+        //         let mut output = String::new();
+        //         redirect.read_to_string(&mut output)?;
+        //         drop(redirect);
+        //         eprint!("{}", output);
+        //     }
+        // }
 
         result
     })())
