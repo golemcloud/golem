@@ -28,8 +28,8 @@ use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, OplogConfig,
-    ProjectServiceConfig, ProjectServiceGrpcConfig, WorkerServiceGrpcConfig,
+    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, ProjectServiceConfig,
+    ProjectServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
