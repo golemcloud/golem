@@ -20,7 +20,8 @@ import {
   SyntaxKind,
   ts,
   Type as TsMorphType,
-  ClassDeclaration, PropertyDeclaration
+  ClassDeclaration,
+  PropertyDeclaration,
 } from "ts-morph";
 import {
   buildJSONFromType,
@@ -574,10 +575,10 @@ export function updateMetadataFromSourceFiles(
         );
 
       for (const publicArrow of publicArrows) {
-
         if (
           classMetadataGenConfig.excludeOverriddenMethods &&
-          (publicArrow.hasOverrideKeyword() || isOverriddenProperty(publicArrow))
+          (publicArrow.hasOverrideKeyword() ||
+            isOverriddenProperty(publicArrow))
         ) {
           continue;
         }
