@@ -38,7 +38,7 @@ export type ResultTypeExactBoth =
   | { tag: 'err'; val: string };
 
 // Result type Kind is similar looking, but it's value instead of val
-export type ResultTypeKind =
+export type ResultTypeNonExact =
   | { tag: 'ok'; value: number }
   | { tag: 'err'; value: string };
 

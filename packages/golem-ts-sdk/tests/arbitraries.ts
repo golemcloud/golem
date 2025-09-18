@@ -33,7 +33,7 @@ import {
   TaggedUnion,
   UnionWithOnlyLiterals,
   ResultTypeExactBoth,
-  ResultTypeKind,
+  ResultTypeNonExact,
 } from './testTypes';
 
 import { AgentClassName } from '../src';
@@ -73,12 +73,12 @@ export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUnde
 export const unionOfLiteralArb: Arbitrary<UnionWithLiterals> =
   fc.constantFrom<UnionWithLiterals>('a', 'b', 'c', true, false);
 
-export const resultTypeBothArb: Arbitrary<ResultTypeExactBoth> = fc.oneof(
+export const resultTypeExactArb: Arbitrary<ResultTypeExactBoth> = fc.oneof(
   fc.record({ tag: fc.constant('ok'), val: fc.integer() }),
   fc.record({ tag: fc.constant('err'), val: fc.string() }),
 );
 
-export const resultTypeKindArb: Arbitrary<ResultTypeKind> = fc.oneof(
+export const resultTypeNotExactArb: Arbitrary<ResultTypeNonExact> = fc.oneof(
   fc.record({ tag: fc.constant('ok'), value: fc.integer() }),
   fc.record({ tag: fc.constant('err'), value: fc.string() }),
 );

@@ -158,12 +158,37 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(wit).toEqual(expectedWit);
   });
 
-  it('should handle result type in method', () => {
-    const wit = getWitType(complexAgentMethod!.inputSchema, 'resultType');
+  it('should handle result type - exact in method', () => {
+    const wit = getWitType(complexAgentMethod!.inputSchema, 'resultTypeExact');
+
+    console.log(JSON.stringify(wit));
 
     const expectedWit = {
       nodes: [
-        { type: { tag: 'result-type', val: [1, 2] } },
+        {
+          name: 'result-type-exact-both',
+          type: { tag: 'result-type', val: [1, 2] },
+        },
+        { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
+  it('should handle result type - non exact in method', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'resultTypeNonExact',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'result-type-non-exact',
+          type: { tag: 'result-type', val: [1, 2] },
+        },
         { type: { tag: 'prim-f64-type' } },
         { type: { tag: 'prim-string-type' } },
       ],
