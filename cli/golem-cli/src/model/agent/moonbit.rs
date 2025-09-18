@@ -73,6 +73,28 @@ pub fn generate_moonbit_wrapper(
         AGENT_GUEST_MBT,
     )?;
 
+    const AGENT_LOAD_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/load_snapshot.mbt");
+    const AGENT_SAVE_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/save_snapshot.mbt");
+
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "loadSnapshot",
+        AGENT_LOAD_SNAPSHOT_MBT,
+    )?;
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "saveSnapshot",
+        AGENT_SAVE_SNAPSHOT_MBT,
+    )?;
+
     if ctx.has_types {
         component.write_interface_stub(
             &PackageName {
@@ -349,6 +371,33 @@ fn setup_dependencies(
     };
 
     depends_on_golem_agent_common(component, "interface/golem/agent/guest")?;
+
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/loadSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("loadSnapshot")
+            .join("loadSnapshot.mi"),
+        "loadSnapshot",
+    )?;
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/saveSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("saveSnapshot")
+            .join("saveSnapshot.mi"),
+        "saveSnapshot",
+    )?;
 
     if has_types {
         depends_on_golem_agent_common(

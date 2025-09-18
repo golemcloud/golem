@@ -124,8 +124,12 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
+        writeln!(result, "  import golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  import golem:api/load-snapshot@1.1.7;")?;
         writeln!(result, "  import wasi:logging/logging;")?;
         writeln!(result, "  export golem:agent/guest;")?;
+        writeln!(result, "  export golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  export golem:api/load-snapshot@1.1.7;")?;
         for interface_name in &interface_names {
             writeln!(result, "  export {interface_name};")?;
         }
@@ -786,9 +790,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
             }
             "#
             ),
@@ -830,9 +838,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -985,9 +997,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
             }
@@ -1077,9 +1093,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
               export agent2;
@@ -1124,9 +1144,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -1193,9 +1217,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
             
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export assistant-agent;
               export weather-agent;
@@ -1240,9 +1268,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
