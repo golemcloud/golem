@@ -82,6 +82,33 @@ pub enum AgentError {
     CustomError(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
 }
 
+impl Display for AgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentError::InvalidInput(msg) => {
+                write!(f, "Invalid input: {msg}")
+            }
+            AgentError::InvalidMethod(msg) => {
+                write!(f, "Invalid method: {msg}")
+            }
+            AgentError::InvalidType(msg) => {
+                write!(f, "Invalid type: {msg}")
+            }
+            AgentError::InvalidAgentId(msg) => {
+                write!(f, "Invalid agent id: {msg}")
+            }
+            AgentError::CustomError(value_and_type) => {
+                write!(
+                    f,
+                    "{}",
+                    print_value_and_type(&value_and_type)
+                        .unwrap_or("Unprintable error".to_string())
+                )
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
