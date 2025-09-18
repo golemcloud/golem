@@ -38,6 +38,7 @@ use http::header::{HOST, LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
+use rib::RibCompilationError;
 use serde_json::{Number, Value as JsonValue};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -152,6 +153,69 @@ async fn test_api_def_with_agent() {
     );
 
     assert!(result.is_ok());
+}
+
+#[test]
+async fn test_api_def_with_agent_invalid_constructor_parameter_type() {
+    let response_mapping = r#"
+       let my-agent = weather-agent(1);
+       let response = my-agent.get-weather("usa");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_agent_component_metadata(),
+        &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+    );
+
+    assert2::assert!(let Err(RouteCompilationErrors::RibError(RibCompilationError::RibTypeError(_))) = result);
+}
+
+#[test]
+async fn test_api_def_with_agent_too_few_constructor_arguments() {
+    let response_mapping = r#"
+       let my-agent = weather-agent();
+       let response = my-agent.get-weather("usa");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_agent_component_metadata(),
+        &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+    );
+
+    assert2::assert!(let Err(RouteCompilationErrors::RibError(RibCompilationError::RibTypeError(_))) = result);
+}
+
+#[test]
+async fn test_api_def_with_agent_too_many_constructor_arguments() {
+    let response_mapping = r#"
+       let my-agent = weather-agent("foo", "bar");
+       let response = my-agent.get-weather("usa");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_agent_component_metadata(),
+        &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+    );
+
+    assert2::assert!(let Err(RouteCompilationErrors::RibError(RibCompilationError::RibTypeError(_))) = result);
 }
 
 #[test]
