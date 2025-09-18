@@ -488,7 +488,7 @@ pub trait ComponentService: Send + Sync {
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
-        let agent_types = extract_agent_types(&local_path).await.map_err(|err| AddComponentError::Other(err))?;
+        let agent_types = extract_agent_types(&local_path).await.map_err(|err| AddComponentError::Other(format!("Failed analyzing component: {err}")))?;
 
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
