@@ -530,6 +530,8 @@ export function updateMetadataFromSourceFiles(
         : classDecl.getMethods();
 
       for (const method of publicMethods) {
+        if (method.hasOverrideKeyword()) continue;
+
         const methodParams = new Map(
           method.getParameters().map((p) => {
             return [
