@@ -14,6 +14,9 @@ export default [
                 project: './tsconfig.json',
                 sourceType: 'module',
             },
+            globals: {
+              'console': 'readonly'
+            }
         },
         plugins: { '@typescript-eslint': pluginTs },
         rules: {
