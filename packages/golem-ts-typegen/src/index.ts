@@ -531,10 +531,8 @@ export function updateMetadataFromSourceFiles(
         : classDecl.getMethods();
 
       for (const method of publicMethods) {
-        if (
-          classMetadataGenConfig.excludeOverriddenMethods &&
-          method.hasOverrideKeyword()
-        ) {
+
+        if (classMetadataGenConfig.excludeOverriddenMethods && (method.hasOverrideKeyword() || !method.getParent())) {
           continue;
         }
 
@@ -571,6 +569,10 @@ export function updateMetadataFromSourceFiles(
         );
 
       for (const publicArrow of publicArrows) {
+
+        if (classMetadataGenConfig.excludeOverriddenMethods && (publicArrow.hasOverrideKeyword() || !publicArrow.getParent())) {
+          continue;
+        }
         const arrowType = publicArrow.getType();
         const callSignature = arrowType.getCallSignatures()[0];
         if (!callSignature) continue;

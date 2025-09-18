@@ -109,7 +109,7 @@ class SimpleAgent extends BaseAgent {
   }
 
   // Overridden methods should be  not be considered as agent methods
-  override loadSnapshot(bytes: Uint8Array): Promise<void> {
+  loadSnapshot(bytes: Uint8Array): Promise<void> {
     return super.loadSnapshot(bytes);
   }
 
