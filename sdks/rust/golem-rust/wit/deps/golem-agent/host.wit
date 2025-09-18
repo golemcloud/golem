@@ -18,4 +18,7 @@ interface host {
 
     /// Constructs a string agent-id from the agent type and its constructor parameters
     make-agent-id: func(agent-type-name: string, input:  data-value) -> result<string, agent-error>;
+
+    /// Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
+    parse-agent-id: func(agent-id: string) -> result<tuple<string, data-value>, agent-error>;
 }
