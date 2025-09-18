@@ -478,6 +478,7 @@ export type ClassMetadataGenConfig = {
   sourceFiles: SourceFile[];
   classDecorators: string[];
   includeOnlyPublicScope: boolean;
+  excludeOverriddenMethods: boolean;
 };
 
 export function generateClassMetadata(
@@ -530,7 +531,12 @@ export function updateMetadataFromSourceFiles(
         : classDecl.getMethods();
 
       for (const method of publicMethods) {
-        if (method.hasOverrideKeyword()) continue;
+        if (
+          classMetadataGenConfig.excludeOverriddenMethods &&
+          method.hasOverrideKeyword()
+        ) {
+          continue;
+        }
 
         const methodParams = new Map(
           method.getParameters().map((p) => {

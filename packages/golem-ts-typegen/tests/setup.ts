@@ -31,4 +31,5 @@ generateClassMetadata({
   sourceFiles: sourceFiles,
   includeOnlyPublicScope: true,
   classDecorators: [],
+  excludeOverriddenMethods: true,
 });

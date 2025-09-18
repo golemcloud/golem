@@ -432,6 +432,26 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(simpleAgent.methods.length).toEqual(13);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
+
+  it('should not capture overridden functions in base agents as agent methods', () => {
+    const simpleAgent = Option.getOrThrowWith(
+      AgentTypeRegistry.lookup(SimpleAgentClassName),
+      () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+    );
+
+    const forbidden = [
+      'get-id',
+      'get-agent-type',
+      'load-snapshot',
+      'save-snapshot',
+    ];
+
+    [complexAgent, simpleAgent].forEach((agent) => {
+      forbidden.forEach((name) => {
+        expect(agent.methods.find((m) => m.name === name)).toBeUndefined();
+      });
+    });
+  });
 });
 
 function getWitType(dataSchema: DataSchema, parameterName: string) {

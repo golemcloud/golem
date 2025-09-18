@@ -25,7 +25,12 @@ program
   )
   .option(
     "--include-only-public-scope",
-    "Include all types regardless of decorator",
+    "Include only public scope methods and constructors",
+    true,
+  )
+  .option(
+    "--exclude-overridden-methods",
+    "Exclude methods that override parent class methods",
     true,
   )
   .action(
@@ -35,6 +40,7 @@ program
         files: string[];
         includeClassDecorators: string[];
         includeOnlyPublicScope: boolean;
+        excludeOverriddenMethods: boolean;
       },
     ) => {
       console.log(
@@ -54,6 +60,7 @@ program
         sourceFiles: sourceFiles,
         classDecorators: options.includeClassDecorators,
         includeOnlyPublicScope: options.includeOnlyPublicScope,
+        excludeOverriddenMethods: options.excludeOverriddenMethods,
       };
 
       updateMetadataFromSourceFiles(genConfig);
