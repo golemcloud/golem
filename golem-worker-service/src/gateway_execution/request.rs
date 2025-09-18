@@ -23,7 +23,6 @@ use golem_common::SafeDisplay;
 use http::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
-use urlencoding::decode;
 
 const COOKIE_HEADER_NAMES: [&str; 2] = ["cookie", "Cookie"];
 
@@ -32,7 +31,6 @@ pub struct RichRequest {
     pub underlying: poem::Request,
     path_segments: Vec<String>,
     path_param_extractors: Vec<PathParamExtractor>,
-    query_info: Vec<QueryInfo>,
     auth_data: Option<Value>,
     cached_request_body: Value,
 }
@@ -43,7 +41,6 @@ impl RichRequest {
             underlying,
             path_segments: vec![],
             path_param_extractors: vec![],
-            query_info: vec![],
             auth_data: None,
             cached_request_body: serde_json::Value::Null,
         }
@@ -61,7 +58,11 @@ impl RichRequest {
         self.underlying
             .uri()
             .query()
-            .map(query_components_from_str)
+            .map(|q| {
+                url::form_urlencoded::parse(q.as_bytes())
+                    .into_owned()
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
@@ -104,16 +105,6 @@ impl RichRequest {
                 }
             })
             .collect()
-    }
-
-    pub fn request_query_values(&self) -> Result<RequestQueryValues, String> {
-        RequestQueryValues::from(&self.query_params(), &self.query_info)
-            .map_err(|e| format!("Failed to extract query values, missing: [{}]", e.join(",")))
-    }
-
-    pub fn request_header_values(&self) -> Result<RequestHeaderValues, String> {
-        RequestHeaderValues::from(self.underlying.headers())
-            .map_err(|e| format!("Found malformed headers: [{}]", e.join(",")))
     }
 
     pub async fn request_body(&mut self) -> Result<&Value, String> {
@@ -233,7 +224,6 @@ pub fn split_resolved_route_entry(
         underlying: request,
         path_segments: entry.path_segments,
         path_param_extractors: entry.route_entry.path_params,
-        query_info: entry.route_entry.query_params,
         auth_data: None,
         cached_request_body: Value::Null,
     };
@@ -244,25 +234,6 @@ pub fn split_resolved_route_entry(
         middlewares,
         rich_request,
     }
-}
-
-fn query_components_from_str(query_path: &str) -> HashMap<String, String> {
-    let mut query_components: HashMap<String, String> = HashMap::new();
-    let query_parts = query_path.split('&').map(|x| x.trim());
-
-    for part in query_parts {
-        let key_value: Vec<&str> = part.split('=').map(|x| x.trim()).collect();
-
-        if let (Some(key), Some(value)) = (key_value.first(), key_value.get(1)) {
-            decode(value)
-                .map(|decoded_value| {
-                    query_components.insert(key.to_string(), decoded_value.to_string())
-                })
-                .unwrap_or_else(|_| query_components.insert(key.to_string(), value.to_string()));
-        }
-    }
-
-    query_components
 }
 
 pub fn authority_from_request(request: &poem::Request) -> Result<String, String> {
@@ -314,5 +285,25 @@ impl RequestHeaderValues {
         }
 
         Ok(RequestHeaderValues(headers_map))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use poem::http::Uri;
+    use test_r::test;
+
+    #[test]
+    fn test_query_params_with_plus_encoded_spaces() -> anyhow::Result<()> {
+        let uri: Uri = "/search?q=hello+world&lang=rust".parse()?;
+        let req = poem::Request::builder().uri(uri).finish();
+        let rich_req = RichRequest::new(req);
+        let params = rich_req.query_params();
+
+        assert_eq!(params.get("q"), Some(&"hello world".to_string())); // '+' decoded to space
+        assert_eq!(params.get("lang"), Some(&"rust".to_string()));
+
+        Ok(())
     }
 }

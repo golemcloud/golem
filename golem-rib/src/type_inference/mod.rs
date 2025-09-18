@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub use call_arguments_inference::*;
+pub use custom_instance_spec::*;
 pub use enum_inference::*;
 pub use errors::*;
 pub use expr_visitor::*;
@@ -38,6 +39,7 @@ pub use variant_inference::*;
 pub use worker_function_invocation::*;
 
 mod call_arguments_inference;
+mod custom_instance_spec;
 mod enum_inference;
 mod errors;
 mod expr_visitor;
@@ -98,13 +100,15 @@ mod tests {
         let type_spec =
             GlobalVariableTypeSpec::new("foo", Path::from_elems(vec![]), InferredType::string());
 
-        let with_type_spec = expr.infer_types(&ComponentDependencies::default(), &vec![type_spec]);
+        let with_type_spec =
+            expr.infer_types(&ComponentDependencies::default(), &vec![type_spec], &[]);
 
         assert!(with_type_spec.is_ok());
 
         let mut new_expr = Expr::from_text(rib_expr).unwrap();
 
-        let without_type_spec = new_expr.infer_types(&ComponentDependencies::default(), &vec![]);
+        let without_type_spec =
+            new_expr.infer_types(&ComponentDependencies::default(), &vec![], &[]);
 
         assert!(without_type_spec.is_err())
     }
@@ -125,7 +129,7 @@ mod tests {
         );
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![type_spec],)
+            .infer_types(&ComponentDependencies::default(), &vec![type_spec], &[])
             .is_ok());
     }
 
@@ -153,7 +157,7 @@ mod tests {
         ];
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &type_spec,)
+            .infer_types(&ComponentDependencies::default(), &type_spec, &[])
             .is_ok());
     }
 
@@ -173,7 +177,7 @@ mod tests {
         let mut expr = Expr::from_text(rib_expr).unwrap();
 
         assert!(expr
-            .infer_types(&ComponentDependencies::default(), &vec![])
+            .infer_types(&ComponentDependencies::default(), &vec![], &[])
             .is_ok());
     }
 
@@ -257,7 +261,8 @@ mod tests {
             InferredType::string(),
         );
 
-        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+        let rib_compiler =
+            RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec], vec![]));
 
         // by default foo.bar.* will be inferred to be a string (given the above type spec) and
         // foo.bar.baz + 1u32 should fail compilation since we are adding string with a u32.
@@ -283,7 +288,8 @@ mod tests {
         // foo + 1u32 should fail compilation since we are adding string with a u32.
         let invalid_rib_expr = Expr::from_text(r#"foo + 1u32"#).unwrap();
 
-        let rib_compiler = RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec]));
+        let rib_compiler =
+            RibCompiler::new(RibCompilerConfig::new(vec![], vec![type_spec], vec![]));
 
         let result = rib_compiler.compile(invalid_rib_expr);
 
@@ -1289,7 +1295,7 @@ mod tests {
 
         let mut expr = Expr::from_text(expr_str).unwrap();
 
-        expr.infer_types(&ComponentDependencies::default(), &vec![])
+        expr.infer_types(&ComponentDependencies::default(), &vec![], &[])
             .unwrap();
 
         let expected = expr_block(
@@ -2759,6 +2765,7 @@ mod tests {
                     metadata.clone(),
                 )],
                 vec![],
+                vec![],
             ))
         }
 
@@ -2801,6 +2808,7 @@ mod tests {
                     component_dependency_key.clone(),
                     exports,
                 )],
+                vec![],
                 vec![],
             ))
         }

@@ -15,8 +15,9 @@
 use golem_common::config::DbSqliteConfig;
 use golem_common::config::{ConfigLoader, ConfigLoaderConfig};
 use golem_common::model::RetryConfig;
+use golem_common::SafeDisplay;
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, time::Duration};
+use std::{fmt::Write, path::PathBuf, time::Duration};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerExecutorClientCacheConfig {
@@ -43,6 +44,36 @@ pub enum BlobStorageConfig {
     KVStoreSqlite(KVStoreSqliteBlobStorageConfig),
     Sqlite(DbSqliteConfig),
     InMemory(InMemoryBlobStorageConfig),
+}
+
+impl SafeDisplay for BlobStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            BlobStorageConfig::S3(inner) => {
+                let _ = writeln!(&mut result, "S3:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            BlobStorageConfig::LocalFileSystem(inner) => {
+                let _ = writeln!(&mut result, "local file system:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            BlobStorageConfig::KVStoreSqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite kv-store:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            BlobStorageConfig::Sqlite(inner) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+            BlobStorageConfig::InMemory(inner) => {
+                let _ = writeln!(&mut result, "in-memory:");
+                let _ = writeln!(&mut result, "{}", inner.to_safe_string_indented());
+            }
+        }
+
+        result
+    }
 }
 
 impl Default for BlobStorageConfig {
@@ -81,6 +112,58 @@ pub struct S3BlobStorageConfig {
     pub plugin_wasm_files_bucket: String,
 }
 
+impl SafeDisplay for S3BlobStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "region: {}", self.region);
+        let _ = writeln!(&mut result, "object_prefix: {}", self.object_prefix);
+        if let Some(endpoint_url) = &self.aws_endpoint_url {
+            let _ = writeln!(&mut result, "aws_endpoint_url: {endpoint_url}");
+        }
+        let _ = writeln!(
+            &mut result,
+            "compilation cache bucket: {}",
+            self.compilation_cache_bucket
+        );
+        let _ = writeln!(
+            &mut result,
+            "custom data bucket: {}",
+            self.custom_data_bucket
+        );
+        let _ = writeln!(
+            &mut result,
+            "oplog payload bucket: {}",
+            self.oplog_payload_bucket
+        );
+        let _ = writeln!(
+            &mut result,
+            "compressed oplog buckets: {:?}",
+            self.compressed_oplog_buckets
+        );
+        let _ = writeln!(
+            &mut result,
+            "use MinIO credentials: {}",
+            self.use_minio_credentials
+        );
+        let _ = writeln!(
+            &mut result,
+            "initial component files bucket: {}",
+            self.initial_component_files_bucket
+        );
+        let _ = writeln!(&mut result, "components bucket: {}", self.components_bucket);
+        let _ = writeln!(
+            &mut result,
+            "plugin wasm files bucket: {}",
+            self.plugin_wasm_files_bucket
+        );
+
+        result
+    }
+}
+
 impl Default for S3BlobStorageConfig {
     fn default() -> Self {
         Self {
@@ -112,11 +195,31 @@ impl Default for LocalFileSystemBlobStorageConfig {
     }
 }
 
+impl SafeDisplay for LocalFileSystemBlobStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "root: {:?}", self.root);
+        result
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct KVStoreSqliteBlobStorageConfig {}
 
+impl SafeDisplay for KVStoreSqliteBlobStorageConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InMemoryBlobStorageConfig {}
+
+impl SafeDisplay for InMemoryBlobStorageConfig {
+    fn to_safe_string(&self) -> String {
+        "".to_string()
+    }
+}
 
 pub struct MergedConfigLoader<T> {
     config_file_name: PathBuf,

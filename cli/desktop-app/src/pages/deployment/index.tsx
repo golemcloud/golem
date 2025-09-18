@@ -36,6 +36,7 @@ const RoutesCard = ({
     api => api.id === apiId && api.version === version,
   )?.routes;
   const navigate = useNavigate();
+  const { appId } = useParams();
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
@@ -68,7 +69,7 @@ const RoutesCard = ({
               onMouseLeave={() => setHoveredPath(null)}
               onClick={() =>
                 navigate(
-                  `/apis/${apiId}/version/${version}/routes?path=${endpoint.path}&method=${endpoint.method}`,
+                  `/app/${appId}/apis/${apiId}/version/${version}/routes?path=${encodeURIComponent(endpoint.path)}&method=${endpoint.method}`,
                 )
               }
             >

@@ -38,7 +38,6 @@ message OplogEntry {
     GrowMemoryParameters GrowMemory = 20;
     CreateResourceParameters CreateResource = 21;
     DropResourceParameters DropResource = 22;
-    DescribeResourceParameters DescribeResource = 23;
     LogParameters Log = 24;
     TimestampParameter Restart = 25;
     ActivatePluginParameters ActivatePlugin = 26;
@@ -49,8 +48,11 @@ message OplogEntry {
     FinishSpanParameters FinishSpan = 31;
     SetSpanAttributeParameters SetSpanAttribute = 32;
     ChangePersistenceLevelParameters ChangePersistenceLevel = 33;
-    CreateAgentInstanceParameters CreateAgentInstance = 34;
-    DropAgentInstanceParameters DropAgentInstance = 35;
+    BeginRemoteTransactionParameters BeginRemoteTransaction = 34;
+    RemoteTransactionParameters PreCommitRemoteTransaction = 35;
+    RemoteTransactionParameters PreRollbackRemoteTransaction = 36;
+    RemoteTransactionParameters CommittedRemoteTransaction = 37;
+    RemoteTransactionParameters RolledBackRemoteTransaction = 38;
   }
 }
 
@@ -61,6 +63,7 @@ message WrappedFunctionType {
     READ_REMOTE = 2;
     WRITE_REMOTE = 3;
     WRITE_REMOTE_BATCHED = 4;
+    WRITE_REMOTE_TRANSACTION = 5;
   }
   Type type = 1;
   optional uint64 oplog_index = 2;
@@ -157,6 +160,16 @@ message ExportedFunctionInvocationParameters {
   repeated InvocationSpan invocation_context = 7;
 }
 
+message BeginRemoteTransactionParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  string transaction_id = 2;
+}
+
+message RemoteTransactionParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  uint64 begin_index = 2;
+}
+
 message WorkerInvocation {
   oneof invocation {
     ExportedFunctionInvocationParameters exported_function = 1;
@@ -218,14 +231,6 @@ message DropResourceParameters {
   string owner = 4;
 }
 
-message DescribeResourceParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  uint64 resource_id = 2;
-  string resource_name = 3;
-  repeated wasm.rpc.ValueAndType resource_params = 4;
-  string resource_owner = 5;
-}
-
 message TimestampParameter {
   google.protobuf.Timestamp timestamp = 1;
 }
@@ -274,19 +279,6 @@ message SetSpanAttributeParameters {
 message ChangePersistenceLevelParameters {
   google.protobuf.Timestamp timestamp = 1;
   PersistenceLevel persistence_level = 2;
-}
-
-message CreateAgentInstanceParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  string agent_type = 2;
-  string agent_id = 3;
-  golem.component.DataValue agent_parameters = 4;
-}
-
-message DropAgentInstanceParameters {
-  google.protobuf.Timestamp timestamp = 1;
-  string agent_type = 2;
-  string agent_id = 3;
 }
 
 enum OplogLogLevel {

@@ -170,7 +170,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                 FunctionCallError::invalid_function_call(
                                     &dynamic_parsed_function_name,
                                     source_span.clone(),
-                                    format!("invalid function name: {err}"),
+                                    format!("invalid function name: {dynamic_parsed_function_name} {err}"),
                                 )
                             })?;
 
@@ -307,7 +307,7 @@ pub fn infer_worker_function_invokes(expr: &mut Expr) -> Result<(), RibTypeError
                                     FunctionCallError::invalid_function_call(
                                         resource_method.method_name(),
                                         source_span.clone(),
-                                        format!("Invalid function name: {err}"),
+                                        format!("Invalid resource method name:  {err}"),
                                     )
                                 })?;
 

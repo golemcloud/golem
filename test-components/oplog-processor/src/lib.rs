@@ -2,7 +2,7 @@
 mod bindings;
 
 use bindings::{
-    exports::golem::api::oplog_processor::{self, GuestProcessor},
+    exports::golem::api::oplog_processor,
     golem::api::oplog::{ExportedFunctionInvokedParameters, OplogEntry},
 };
 use uuid::Uuid;
@@ -16,12 +16,14 @@ use std::{cell::RefCell, collections::HashMap};
 /// global across the entire program.
 struct State {
     invocations: Vec<String>,
+    current_invocations: HashMap<String, ExportedFunctionInvokedParameters>,
 }
 
 thread_local! {
     /// This holds the state of our application.
     static STATE: RefCell<State> = RefCell::new(State {
         invocations: Vec::new(),
+        current_invocations: HashMap::new()
     });
 }
 
@@ -34,63 +36,45 @@ impl Guest for Component {
 }
 
 impl oplog_processor::Guest for Component {
-    type Processor = OplogProcessor;
-}
-
-struct OplogProcessor {
-    account_id: oplog_processor::AccountId,
-    component_id: oplog_processor::ComponentId,
-    _config: HashMap<String, String>,
-    current_invocation: RefCell<Option<ExportedFunctionInvokedParameters>>,
-}
-
-impl GuestProcessor for OplogProcessor {
-    fn new(
-        account_info: oplog_processor::AccountInfo,
-        component_id: oplog_processor::ComponentId,
-        config: Vec<(String, String)>,
-    ) -> Self {
-        Self {
-            account_id: account_info.account_id,
-            component_id,
-            _config: config.into_iter().collect(),
-            current_invocation: RefCell::new(None),
-        }
-    }
-
     fn process(
-        &self,
+        account_info: oplog_processor::AccountInfo,
+        _config: Vec<(String, String)>,
+        component_id: oplog_processor::ComponentId,
         worker_id: oplog_processor::WorkerId,
         _metadata: oplog_processor::WorkerMetadata,
         _first_entry_index: oplog_processor::OplogIndex,
         entries: Vec<oplog_processor::OplogEntry>,
     ) -> Result<(), String> {
-        for entry in entries {
-            if let OplogEntry::ExportedFunctionInvoked(params) = &entry {
-                *self.current_invocation.borrow_mut() = Some(params.clone());
-            } else if let OplogEntry::ExportedFunctionCompleted(_params) = &entry {
-                if let Some(invocation) = self.current_invocation.borrow_mut().take() {
-                    let component_id = Uuid::from_u64_pair(
-                        self.component_id.uuid.high_bits,
-                        self.component_id.uuid.low_bits,
-                    );
+        STATE.with_borrow_mut(|state| {
+            for entry in entries {
+                if let OplogEntry::ExportedFunctionInvoked(params) = &entry {
+                    state
+                        .current_invocations
+                        .insert(format!("{worker_id:?}"), params.clone());
+                } else if let OplogEntry::ExportedFunctionCompleted(_params) = &entry {
+                    if let Some(invocation) =
+                        state.current_invocations.get(&format!("{worker_id:?}"))
+                    {
+                        let component_id = Uuid::from_u64_pair(
+                            component_id.uuid.high_bits,
+                            component_id.uuid.low_bits,
+                        );
 
-                    STATE.with_borrow_mut(|state| {
                         state.invocations.push(format!(
                             "{}/{:?}/{}/{}",
-                            self.account_id.value,
+                            account_info.account_id.value,
                             component_id,
                             worker_id.worker_name,
                             invocation.function_name
                         ));
-                    });
-                } else {
-                    println!(
+                    } else {
+                        println!(
                         "ExportedFunctionCompleted without corresponding ExportedFunctionInvoked"
                     )
+                    }
                 }
             }
-        }
+        });
 
         Ok(())
     }

@@ -23,6 +23,7 @@ use gethostname::gethostname;
 use golem_common::base_model::ProjectId;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{AccountId, OwnedWorkerId, WorkerId, WorkerMetadata};
 use golem_service_base::error::worker_executor::InterruptKind;
@@ -236,6 +237,7 @@ impl DebugServiceDefault {
                 Some(worker_wasi_config_vars),
                 Some(component_version),
                 parent,
+                &InvocationContextStack::fresh(),
             )
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
@@ -432,6 +434,7 @@ impl DebugService for DebugServiceDefault {
                     .component_version,
             ),
             session_data.worker_metadata.parent.clone(),
+            &InvocationContextStack::fresh(),
         )
         .await
         .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
@@ -559,6 +562,7 @@ impl DebugService for DebugServiceDefault {
                     .component_version,
             ),
             debug_session_data.worker_metadata.parent.clone(),
+            &InvocationContextStack::fresh(),
         )
         .await
         .map_err(|e| {

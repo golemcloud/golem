@@ -17,8 +17,10 @@ use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToKebabCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
-use moonbit_component_generator::{MoonBitComponent, MoonBitPackage, Warning, WarningControl};
+use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use moonbit_component_generator::{
+    to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
+};
 use std::fmt::Write;
 use std::path::Path;
 use wit_parser::PackageName;
@@ -29,6 +31,7 @@ pub fn generate_moonbit_wrapper(
 ) -> anyhow::Result<()> {
     let wit = &ctx.single_file_wrapper_wit_source;
     let mut component = MoonBitComponent::empty_from_wit(wit, Some("agent-wrapper"))?;
+    component.disable_cleanup(); // TODO: remove!!!
 
     component
         .define_bindgen_packages()
@@ -36,7 +39,9 @@ pub fn generate_moonbit_wrapper(
 
     let moonbit_root_package = component.moonbit_root_package()?;
     let pkg_namespace = component.root_pkg_namespace()?.to_snake_case();
+    let escaped_pkg_namespace = to_moonbit_ident(&pkg_namespace);
     let pkg_name = component.root_pkg_name()?.to_snake_case();
+    let escaped_pkg_name = to_moonbit_ident(&pkg_name);
 
     // Adding the builder and extractor packages
     add_builder_package(&mut component, &moonbit_root_package)?;
@@ -44,9 +49,10 @@ pub fn generate_moonbit_wrapper(
 
     setup_dependencies(
         &mut component,
+        ctx.has_types,
         &moonbit_root_package,
-        &pkg_namespace,
-        &pkg_name,
+        &escaped_pkg_namespace,
+        &escaped_pkg_name,
         &ctx.agent_types,
     )?;
 
@@ -67,31 +73,42 @@ pub fn generate_moonbit_wrapper(
         AGENT_GUEST_MBT,
     )?;
 
-    component.write_interface_stub(
-        &PackageName {
-            namespace: pkg_namespace.clone(),
-            name: pkg_name.clone(),
-            version: None,
-        },
-        "types",
-        "",
+    if ctx.has_types {
+        component.write_interface_stub(
+            &PackageName {
+                namespace: pkg_namespace.clone(),
+                name: pkg_name.clone(),
+                version: None,
+            },
+            "types",
+            "",
+        )?;
+    }
+
+    component.set_warning_control(
+        &format!("{moonbit_root_package}/interface/golem/agent/guest"),
+        vec![
+            WarningControl::Disable(Warning::Specific(35)), //  Warning: The word `constructor` is reserved for possible future use. Please consider using another name.
+        ],
     )?;
 
     for agent in &ctx.agent_types {
         let agent_stub = generate_agent_stub(&ctx, agent)?;
-        let agent_name = agent.type_name.to_kebab_case();
+        let agent_name = agent.type_name.to_lower_camel_case();
 
         component.set_warning_control(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             vec![
-                // These are disabled so we don't have to check if the generated inside of try .. catch is always
+                // These are disabled so we don't have to check if the generated inside try .. catch is always
                 // capable of throwing an exception
                 WarningControl::Disable(Warning::Specific(23)),
                 WarningControl::Disable(Warning::Specific(11)),
                 // Unused package warning (can be that @agentTypes is not used)
                 WarningControl::Disable(Warning::Specific(29)),
+                //  Warning: The word `constructor` is reserved for possible future use. Please consider using another name.
+                WarningControl::Disable(Warning::Specific(35)),
             ],
         )?;
 
@@ -140,6 +157,19 @@ fn add_builder_package(
     component.write_file(Utf8Path::new("builder/tests.mbt"), BUILDER_TESTS_MBT)?;
     component.write_file(Utf8Path::new("builder/top.mbt"), BUILDER_TOP_MBT)?;
 
+    let dependencies = vec![(
+        Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("rpc")
+            .join("types")
+            .join("types.mi"),
+        "types".to_string(),
+    )];
+
     let builder_package = MoonBitPackage {
         name: format!("{moonbit_root_package}/builder"),
         mbt_files: vec![
@@ -149,24 +179,14 @@ fn add_builder_package(
             Utf8Path::new("builder").join("top.mbt"),
         ],
         warning_control: vec![],
+        alert_control: vec![],
         output: Utf8Path::new("target")
             .join("wasm")
             .join("release")
             .join("build")
             .join("builder")
             .join("builder.core"),
-        dependencies: vec![(
-            Utf8Path::new("target")
-                .join("wasm")
-                .join("release")
-                .join("build")
-                .join("interface")
-                .join("golem")
-                .join("rpc")
-                .join("types")
-                .join("types.mi"),
-            "types".to_string(),
-        )],
+        dependencies,
         package_sources: vec![(
             format!("{moonbit_root_package}/builder"),
             Utf8Path::new("builder").to_path_buf(),
@@ -186,6 +206,42 @@ fn add_extractor_package(
     component.write_file(Utf8Path::new("extractor/tests.mbt"), EXTRACTOR_TESTS_MBT)?;
     component.write_file(Utf8Path::new("extractor/top.mbt"), EXTRACTOR_TOP_MBT)?;
 
+    let dependencies = vec![
+        (
+            Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("golem")
+                .join("rpc")
+                .join("types")
+                .join("types.mi"),
+            "types".to_string(),
+        ),
+        (
+            Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("golem")
+                .join("agent")
+                .join("common")
+                .join("common.mi"),
+            "common".to_string(),
+        ),
+        (
+            Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("builder")
+                .join("builder.mi"),
+            "builder".to_string(),
+        ),
+    ];
+
     let extractor_package = MoonBitPackage {
         name: format!("{moonbit_root_package}/extractor"),
         mbt_files: vec![
@@ -193,47 +249,14 @@ fn add_extractor_package(
             Utf8Path::new("extractor").join("top.mbt"),
         ],
         warning_control: vec![],
+        alert_control: vec![],
         output: Utf8Path::new("target")
             .join("wasm")
             .join("release")
             .join("build")
             .join("extractor")
             .join("extractor.core"),
-        dependencies: vec![
-            (
-                Utf8Path::new("target")
-                    .join("wasm")
-                    .join("release")
-                    .join("build")
-                    .join("interface")
-                    .join("golem")
-                    .join("rpc")
-                    .join("types")
-                    .join("types.mi"),
-                "types".to_string(),
-            ),
-            (
-                Utf8Path::new("target")
-                    .join("wasm")
-                    .join("release")
-                    .join("build")
-                    .join("interface")
-                    .join("golem")
-                    .join("agent")
-                    .join("common")
-                    .join("common.mi"),
-                "common".to_string(),
-            ),
-            (
-                Utf8Path::new("target")
-                    .join("wasm")
-                    .join("release")
-                    .join("build")
-                    .join("builder")
-                    .join("builder.mi"),
-                "builder".to_string(),
-            ),
-        ],
+        dependencies,
         package_sources: vec![(
             format!("{moonbit_root_package}/extractor"),
             Utf8Path::new("extractor").to_path_buf(),
@@ -245,9 +268,10 @@ fn add_extractor_package(
 
 fn setup_dependencies(
     component: &mut MoonBitComponent,
+    has_types: bool,
     moonbit_root_package: &str,
-    pkg_namespace: &str,
-    pkg_name: &str,
+    escaped_pkg_namespace: &str,
+    escaped_pkg_name: &str,
     agent_types: &[AgentType],
 ) -> anyhow::Result<()> {
     // NOTE: setting up additional dependencies. this could be automatically done by a better implementation of define_bindgen_packages
@@ -283,8 +307,12 @@ fn setup_dependencies(
         )
     };
 
-    let depends_on_types =
-        |component: &mut MoonBitComponent, pkg_namespace: &str, pkg_name: &str, name: &str| {
+    let depends_on_types = |component: &mut MoonBitComponent,
+                            has_types: bool,
+                            escaped_pkg_namespace: &str,
+                            escaped_pkg_name: &str,
+                            name: &str| {
+        if has_types {
             component.add_dependency(
                 &format!("{moonbit_root_package}/{name}"),
                 &Utf8Path::new("target")
@@ -293,13 +321,16 @@ fn setup_dependencies(
                     .join("build")
                     .join("gen")
                     .join("interface")
-                    .join(pkg_namespace)
-                    .join(pkg_name)
+                    .join(escaped_pkg_namespace)
+                    .join(escaped_pkg_name)
                     .join("types")
                     .join("types.mi"),
                 "types",
             )
-        };
+        } else {
+            Ok(())
+        }
+    };
 
     let depends_on_wasm_rpc_types = |component: &mut MoonBitComponent, name: &str| {
         component.add_dependency(
@@ -318,32 +349,36 @@ fn setup_dependencies(
     };
 
     depends_on_golem_agent_common(component, "interface/golem/agent/guest")?;
-    depends_on_golem_agent_common(
-        component,
-        &format!("gen/interface/{pkg_namespace}/{pkg_name}/types"),
-    )?;
+
+    if has_types {
+        depends_on_golem_agent_common(
+            component,
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/types"),
+        )?;
+    }
 
     for agent in agent_types {
-        let agent_name = agent.type_name.to_kebab_case();
+        let agent_name = agent.type_name.to_lower_camel_case();
 
         depends_on_golem_agent_common(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
         depends_on_golem_agent_guest(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
         depends_on_types(
             component,
-            pkg_namespace,
-            pkg_name,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            has_types,
+            escaped_pkg_namespace,
+            escaped_pkg_name,
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
 
         component.add_dependency(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             &Utf8Path::new("target")
                 .join("wasm")
@@ -355,7 +390,7 @@ fn setup_dependencies(
         )?;
         component.add_dependency(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             &Utf8Path::new("target")
                 .join("wasm")
@@ -364,6 +399,21 @@ fn setup_dependencies(
                 .join("extractor")
                 .join("extractor.mi"),
             "extractor",
+        )?;
+        component.add_dependency(
+            &format!(
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
+            ),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("wasi")
+                .join("logging")
+                .join("logging")
+                .join("logging.mi"),
+            "logging",
         )?;
     }
 
@@ -415,10 +465,7 @@ fn generate_agent_stub(
 
     let constructor_params =
         to_moonbit_parameter_list(ctx, &agent.constructor.input_schema, "constructor", false)?;
-    writeln!(
-        result,
-        "pub fn initialize({constructor_params}) -> Result[Unit, @common.AgentError] {{"
-    )?;
+    writeln!(result, "pub fn initialize({constructor_params}) -> Unit {{")?;
     writeln!(result, "  let encoded_params = try ")?;
     build_data_value(
         &mut result,
@@ -429,13 +476,16 @@ fn generate_agent_stub(
     writeln!(result, "    catch {{")?;
     writeln!(
         result,
-        "      BuilderError(msg) => return Err(@common.AgentError::InvalidInput(msg))"
+        "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", msg); panic(); }}"
     )?;
     writeln!(result, "    }}")?;
     writeln!(
         result,
-        "  @guest.initialize(\"{original_agent_name}\", encoded_params)"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params) {{"
     )?;
+    writeln!(result, "    Ok(result) => result")?;
+    writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
+    writeln!(result, "  }}")?;
     writeln!(result, "}}")?;
     writeln!(result)?;
 
@@ -446,37 +496,42 @@ fn generate_agent_stub(
 
     for method in &agent.methods {
         let original_method_name = &method.name;
-        let method_name = method.name.to_snake_case();
+        let method_name = to_moonbit_ident(&method.name);
 
         let moonbit_param_defs =
             to_moonbit_parameter_list(ctx, &method.input_schema, original_method_name, false)?;
         let moonbit_return_type =
             to_moonbit_return_type(ctx, &method.output_schema, original_method_name)?;
 
-        writeln!(result, "pub fn {method_name}({moonbit_param_defs}) -> Result[{moonbit_return_type}, @common.AgentError] {{")?;
+        writeln!(
+            result,
+            "pub fn {method_name}({moonbit_param_defs}) -> {moonbit_return_type} {{"
+        )?;
         writeln!(result, "  let input = try ")?;
         build_data_value(&mut result, ctx, &method.input_schema, original_method_name)?;
         writeln!(result, "    catch {{")?;
         writeln!(
             result,
-            "      BuilderError(msg) => return Err(@common.AgentError::InvalidInput(msg))"
+            "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", msg); panic(); }}"
         )?;
         writeln!(result, "    }}")?;
 
         writeln!(
             result,
-            "  @guest.invoke(\"{original_method_name}\", input).bind(result => {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input) {{"
         )?;
+        writeln!(result, "    Ok(result) => result")?;
+        writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;
+        writeln!(result, "  }}")?;
 
         extract_data_value(
             &mut result,
             ctx,
             &method.output_schema,
-            "    ",
+            "  ",
             original_method_name,
         )?;
 
-        writeln!(result, "  }})")?;
         writeln!(result, "}}")?;
         writeln!(result)?;
     }
@@ -500,10 +555,14 @@ fn to_moonbit_parameter_list(
                     write!(result, ", ")?;
                 }
 
-                let param_name = parameter.name.to_snake_case();
+                let param_name = to_moonbit_ident(&parameter.name);
                 match &parameter.schema {
                     ElementSchema::ComponentModel(typ) => {
-                        write!(result, "{param_name}: {}", moonbit_type_ref(ctx, typ)?)?;
+                        write!(
+                            result,
+                            "{param_name}: {}",
+                            moonbit_type_ref(ctx, &typ.element_type)?
+                        )?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         write!(result, "{param_name}: @common.TextReference")?;
@@ -549,7 +608,7 @@ fn to_moonbit_return_type(
                 let element = &elements[0];
                 match &element.schema {
                     ElementSchema::ComponentModel(typ) => {
-                        write!(result, "{}", moonbit_type_ref(ctx, typ)?)?;
+                        write!(result, "{}", moonbit_type_ref(ctx, &typ.element_type)?)?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         write!(result, "@common.TextReference")?;
@@ -566,7 +625,7 @@ fn to_moonbit_return_type(
                     }
                     match &element.schema {
                         ElementSchema::ComponentModel(typ) => {
-                            write!(result, "{}", moonbit_type_ref(ctx, typ)?)?;
+                            write!(result, "{}", moonbit_type_ref(ctx, &typ.element_type)?)?;
                         }
                         ElementSchema::UnstructuredText(_) => {
                             write!(result, "@common.TextReference")?;
@@ -678,12 +737,12 @@ fn build_element_value(
     indent: &str,
 ) -> anyhow::Result<()> {
     match schema {
-        ElementSchema::ComponentModel(typ) => {
+        ElementSchema::ComponentModel(schema) => {
             writeln!(result, "{indent}@common.ElementValue::ComponentModel(")?;
             write_builder(
                 result,
                 ctx,
-                typ,
+                &schema.element_type,
                 access,
                 "@builder.Builder::new()",
                 &format!("{indent}    "),
@@ -717,7 +776,7 @@ fn build_data_value(
             writeln!(result, "    @common.DataValue::Tuple([")?;
 
             for element in elements {
-                let param_name = element.name.to_snake_case();
+                let param_name = to_moonbit_ident(&element.name);
                 build_element_value(result, ctx, &element.schema, &param_name, "      ")?;
                 writeln!(result, ",")?;
             }
@@ -917,7 +976,7 @@ fn write_builder(
         AnalysedType::Record(record) => {
             writeln!(result, "{indent}{builder}.record(builder => {{")?;
             for field in &record.fields {
-                let field_name = field.name.to_snake_case();
+                let field_name = to_moonbit_ident(&field.name);
                 write_builder(
                     result,
                     ctx,
@@ -1014,7 +1073,6 @@ fn extract_data_value(
     match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => {
             if elements.is_empty() {
-                writeln!(result, "{indent}Ok(())")?;
             } else if elements.len() == 1 {
                 writeln!(
                     result,
@@ -1022,14 +1080,12 @@ fn extract_data_value(
                 )?;
                 let element = &elements[0];
                 match &element.schema {
-                    ElementSchema::ComponentModel(typ) => {
+                    ElementSchema::ComponentModel(schema) => {
                         writeln!(
                             result,
                             "{indent}let wit_value = @extractor.extract_component_model_value(values[0])"
                         )?;
-                        writeln!(result, "{indent}Ok(")?;
-                        extract_wit_value(result, ctx, typ, "wit_value", indent)?;
-                        writeln!(result, "{indent})")?;
+                        extract_wit_value(result, ctx, &schema.element_type, "wit_value", indent)?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         writeln!(
@@ -1049,10 +1105,9 @@ fn extract_data_value(
                     result,
                     "{indent}let values = @extractor.extract_tuple(result)"
                 )?;
-                writeln!(result, "{indent}Ok((")?;
                 for (idx, element) in elements.iter().enumerate() {
                     match &element.schema {
-                        ElementSchema::ComponentModel(typ) => {
+                        ElementSchema::ComponentModel(schema) => {
                             writeln!(
                                 result,
                                 "{indent}let wit_value = @extractor.extract_component_model_value(values[{idx}])"
@@ -1061,7 +1116,7 @@ fn extract_data_value(
                             extract_wit_value(
                                 result,
                                 ctx,
-                                typ,
+                                &schema.element_type,
                                 "@extractor.extract(wit_value)",
                                 &format!("{indent}  "),
                             )?;
@@ -1081,7 +1136,6 @@ fn extract_data_value(
                         }
                     }
                 }
-                writeln!(result, "{indent}))")?;
             }
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
@@ -1096,13 +1150,13 @@ fn extract_data_value(
                 result,
                 "{indent}let values = @extractor.extract_multimodal(result)"
             )?;
-            writeln!(result, "{indent}Ok(values.map(pair => {{")?;
+            writeln!(result, "{indent}values.map(pair => {{")?;
             writeln!(result, "{indent}  match pair.0 {{")?;
             for element in elements {
                 let case_name = element.name.to_kebab_case().to_upper_camel_case();
                 writeln!(result, "{indent}    \"{}\" => {{", element.name)?;
                 match &element.schema {
-                    ElementSchema::ComponentModel(typ) => {
+                    ElementSchema::ComponentModel(schema) => {
                         writeln!(result, "{indent}      match pair.1 {{")?;
                         writeln!(
                             result,
@@ -1115,7 +1169,7 @@ fn extract_data_value(
                         extract_wit_value(
                             result,
                             ctx,
-                            typ,
+                            &schema.element_type,
                             "wit_value",
                             &format!("{indent}          "),
                         )?;
@@ -1146,7 +1200,7 @@ fn extract_data_value(
                 writeln!(result, "{indent}    }}")?;
             }
             writeln!(result, "{indent}  }}")?;
-            writeln!(result, "{indent}}}))")?;
+            writeln!(result, "{indent}}})")?;
         }
     }
 
@@ -1228,7 +1282,7 @@ fn extract_wit_value(
                 .to_upper_camel_case();
             writeln!(
                 result,
-                "{indent}{enum_type_name}::from({from}.enum_value().unwrap().reinterpret_as_int())"
+                "{indent}@types.{enum_type_name}::from({from}.enum_value().unwrap().reinterpret_as_int())"
             )?;
         }
         AnalysedType::Flags(flags) => {
@@ -1258,10 +1312,10 @@ fn extract_wit_value(
                 .ok_or_else(|| anyhow!("Missing type name for record: {typ:?}"))?
                 .to_upper_camel_case();
 
-            writeln!(result, "{indent}{record_name}::{{")?;
+            writeln!(result, "{indent}@types.{record_name}::{{")?;
 
             for (idx, field) in record.fields.iter().enumerate() {
-                let field_name = field.name.to_snake_case();
+                let field_name = to_moonbit_ident(&field.name);
 
                 writeln!(result, "{indent}  {field_name}: {{")?;
                 extract_wit_value(
@@ -1351,9 +1405,13 @@ fn extract_wit_value(
 }
 
 #[cfg(test)]
+#[test_r::sequential]
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
+    use crate::model::agent::test::{
+        reproducer_for_issue_with_enums, reproducer_for_multiple_types_called_element,
+    };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
     use tempfile::NamedTempFile;
@@ -1376,6 +1434,46 @@ mod tests {
     fn multi_agent_example(_trace: &Trace) {
         let component_name: AppComponentName = "example:multi1".into();
         let agent_types = test::multi_agent_wrapper_2_types();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn single_agent_with_wit_keywords(_trace: &Trace) {
+        let component_name: AppComponentName = "example:single1".into();
+        let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn bug_multiple_types_called_element() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_multiple_types_called_element();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn single_agent_with_test_in_package_name(_trace: &Trace) {
+        let component_name: AppComponentName = "test:agent".into();
+        let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn enum_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_enums();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

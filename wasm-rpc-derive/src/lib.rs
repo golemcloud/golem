@@ -109,6 +109,18 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         let case_ident = &variant.ident;
                         let idx = idx as u32;
 
+                        let wit_fields = variant.fields
+                            .iter()
+                            .map(|field| {
+                                field
+                                    .attrs
+                                    .iter()
+                                    .find(|attr| attr.path().is_ident("wit_field"))
+                                    .map(parse_wit_field_attribute)
+                                    .unwrap_or_default()
+                            })
+                            .collect::<Vec<_>>();
+
                         if variant.fields.is_empty() {
                             quote! {
                                 #ident::#case_ident => golem_wasm_rpc::Value::Variant {
@@ -126,10 +138,12 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                     }
                                 }
                             } else {
+                                let wit_field = wit_fields.first().unwrap();
+                                let into_value = apply_conversions(wit_field, quote! { inner });
                                 quote! {
                                     #ident::#case_ident(inner) => golem_wasm_rpc::Value::Variant {
                                         case_idx: #idx,
-                                        case_value: Some(Box::new(inner.into_value()))
+                                        case_value: Some(Box::new(#into_value))
                                     }
                                 }
                             }
@@ -210,6 +224,18 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
                 let case_defs = data.variants.iter()
                     .map(|variant| {
+                        let wit_fields = variant.fields
+                            .iter()
+                            .map(|field| {
+                                field
+                                    .attrs
+                                    .iter()
+                                    .find(|attr| attr.path().is_ident("wit_field"))
+                                    .map(parse_wit_field_attribute)
+                                    .unwrap_or_default()
+                            })
+                            .collect::<Vec<_>>();
+
                         let case_name = variant.ident.to_string().to_kebab_case();
                         if is_unit_case(variant) {
                             quote! {
@@ -218,6 +244,8 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         } else if has_single_anonymous_field(&variant.fields) {
                             let single_field = variant.fields.iter().next().unwrap();
                             let typ = &single_field.ty;
+                            let wit_field = wit_fields.first().unwrap();
+                            let typ = get_field_type(typ, wit_field);
 
                             quote! {
                                 golem_wasm_ast::analysis::analysed_type::case(#case_name, <#typ as golem_wasm_rpc::IntoValue>::get_type())
@@ -293,19 +321,7 @@ fn record_or_tuple(
                     None
                 } else {
                     let field_name = field.ident.as_ref().unwrap();
-
-                    match (&wit_field.convert, &wit_field.convert_vec, &wit_field.convert_option) {
-                        (Some(convert_to), None, None) => Some(
-                            quote! { Into::<#convert_to>::into(self.#field_name).into_value() },
-                        ),
-                        (None, Some(convert_to), None) => Some(
-                            quote! { self.#field_name.into_iter().map(Into::<#convert_to>::into).collect::<Vec<_>>().into_value() },
-                        ),
-                        (None, None, Some(convert_to)) => Some(
-                            quote! { self.#field_name.map(Into::<#convert_to>::into).into_value() },
-                        ),
-                        _ => Some(quote! { self.#field_name.into_value() }),
-                    }
+                    Some(apply_conversions(wit_field, quote! { self.#field_name }))
                 }
             })
             .collect::<Vec<_>>();
@@ -317,22 +333,14 @@ fn record_or_tuple(
                 if wit_field.skip {
                     None
                 } else {
-                    let field_name = wit_field.rename.map(|lit| lit.value()).unwrap_or_else(|| {
-                        field.ident.as_ref().unwrap().to_string().to_kebab_case()
-                    });
-                    let field_type = match (
-                        &wit_field.convert,
-                        &wit_field.convert_vec,
-                        &wit_field.convert_option,
-                    ) {
-                        (Some(convert_to), None, None) => quote! { #convert_to },
-                        (None, Some(convert_to), None) => quote! { Vec<#convert_to> },
-                        (None, None, Some(convert_to)) => quote! { Option<#convert_to> },
-                        _ => {
-                            let ty = &field.ty;
-                            quote! { #ty }
-                        }
-                    };
+                    let field_name = wit_field
+                        .rename
+                        .as_ref()
+                        .map(|lit| lit.value())
+                        .unwrap_or_else(|| {
+                            field.ident.as_ref().unwrap().to_string().to_kebab_case()
+                        });
+                    let field_type = get_field_type(&field.ty, &wit_field);
                     Some(quote! {
                         golem_wasm_ast::analysis::analysed_type::field(
                             #field_name,
@@ -389,6 +397,21 @@ fn record_or_tuple(
     }
 }
 
+fn get_field_type(ty: &Type, wit_field: &WitField) -> proc_macro2::TokenStream {
+    match (
+        &wit_field.convert,
+        &wit_field.convert_vec,
+        &wit_field.convert_option,
+    ) {
+        (Some(convert_to), None, None) => quote! { #convert_to },
+        (None, Some(convert_to), None) => quote! { Vec<#convert_to> },
+        (None, None, Some(convert_to)) => quote! { Option<#convert_to> },
+        _ => {
+            quote! { #ty }
+        }
+    }
+}
+
 fn has_single_anonymous_field(fields: &Fields) -> bool {
     fields.len() == 1 && fields.iter().next().unwrap().ident.is_none()
 }
@@ -403,6 +426,28 @@ fn is_unit_case(variant: &Variant) -> bool {
             .attrs
             .iter()
             .any(|attr| attr.path().is_ident("unit_case"))
+}
+
+fn apply_conversions(
+    wit_field: &WitField,
+    field_access: proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    match (
+        &wit_field.convert,
+        &wit_field.convert_vec,
+        &wit_field.convert_option,
+    ) {
+        (Some(convert_to), None, None) => {
+            quote! { Into::<#convert_to>::into(#field_access).into_value() }
+        }
+        (None, Some(convert_to), None) => {
+            quote! { #field_access.into_iter().map(Into::<#convert_to>::into).collect::<Vec<_>>().into_value() }
+        }
+        (None, None, Some(convert_to)) => {
+            quote! { #field_access.map(Into::<#convert_to>::into).into_value() }
+        }
+        _ => quote! { #field_access.into_value() },
+    }
 }
 
 #[derive(Default)]

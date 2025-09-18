@@ -18,12 +18,13 @@ use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
+use golem_common::SafeDisplay;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
-use std::fmt::Debug;
+use std::fmt::{Debug, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 use url::Url;
@@ -52,6 +53,76 @@ pub struct WorkerServiceConfig {
 impl WorkerServiceConfig {
     pub fn is_local_env(&self) -> bool {
         self.environment.to_lowercase() == "local"
+    }
+}
+
+impl SafeDisplay for WorkerServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "environment: {}", self.environment);
+        let _ = writeln!(&mut result, "tracing:");
+        let _ = writeln!(&mut result, "{}", self.tracing.to_safe_string_indented());
+        let _ = writeln!(&mut result, "gateway session storage:");
+        let _ = writeln!(
+            result,
+            "{}",
+            self.gateway_session_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "db:");
+        let _ = writeln!(&mut result, "{}", self.db.to_safe_string_indented());
+        let _ = writeln!(&mut result, "component service:");
+        let _ = writeln!(
+            result,
+            "{}",
+            self.component_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "HTTP port: {}", self.port);
+        let _ = writeln!(
+            &mut result,
+            "Custom request port: {}",
+            self.custom_request_port
+        );
+        let _ = writeln!(&mut result, "gRPC port: {}", self.worker_grpc_port);
+        let _ = writeln!(&mut result, "routing table:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.routing_table.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "worker executor retries:");
+        let _ = writeln!(
+            result,
+            "{}",
+            self.worker_executor_retries.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "blob storage:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.blob_storage.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "API definition service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.api_definition.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "workspace: {}", self.workspace);
+        let _ = writeln!(&mut result, "domain records:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.domain_records.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "cloud service:");
+        let _ = writeln!(
+            &mut result,
+            "{}",
+            self.cloud_service.to_safe_string_indented()
+        );
+        let _ = writeln!(&mut result, "CORS origin regex: {}", self.cors_origin_regex);
+
+        result
     }
 }
 
@@ -116,6 +187,23 @@ pub enum GatewaySessionStorageConfig {
     Sqlite(DbSqliteConfig),
 }
 
+impl SafeDisplay for GatewaySessionStorageConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        match self {
+            GatewaySessionStorageConfig::Redis(redis) => {
+                let _ = writeln!(&mut result, "redis:");
+                let _ = writeln!(&mut result, "{}", redis.to_safe_string_indented());
+            }
+            GatewaySessionStorageConfig::Sqlite(sqlite) => {
+                let _ = writeln!(&mut result, "sqlite:");
+                let _ = writeln!(&mut result, "{}", sqlite.to_safe_string_indented());
+            }
+        }
+        result
+    }
+}
+
 impl Default for GatewaySessionStorageConfig {
     fn default() -> Self {
         Self::default_redis()
@@ -153,6 +241,19 @@ impl ComponentServiceConfig {
     }
 }
 
+impl SafeDisplay for ComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "host: {}", self.host);
+        let _ = writeln!(&mut result, "port: {}", self.port);
+        let _ = writeln!(&mut result, "access token: ****");
+        let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
+        let _ = writeln!(&mut result, "retries:");
+        let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        result
+    }
+}
+
 impl Default for ComponentServiceConfig {
     fn default() -> Self {
         Self {
@@ -171,6 +272,28 @@ pub struct DomainRecordsConfig {
     pub subdomain_black_list: Vec<String>,
     pub domain_allow_list: Vec<String>,
     pub register_domain_black_list: Vec<String>,
+}
+
+impl SafeDisplay for DomainRecordsConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(
+            &mut result,
+            "subdomain black list: {}",
+            self.subdomain_black_list.join(", ")
+        );
+        let _ = writeln!(
+            &mut result,
+            "domain allow list: {}",
+            self.domain_allow_list.join(", ")
+        );
+        let _ = writeln!(
+            &mut result,
+            "register domain black list: {}",
+            self.register_domain_black_list.join(", ")
+        );
+        result
+    }
 }
 
 impl Default for DomainRecordsConfig {

@@ -13,9 +13,8 @@
 // limitations under the License.
 
 use crate::context::check_http_response_success;
-use crate::log::{log_action, LogColorize};
+use crate::log::{log_action, log_warn_action, LogColorize};
 use anyhow::{anyhow, Context};
-use base64::prelude::*;
 use std::path::PathBuf;
 use url::Url;
 
@@ -35,14 +34,14 @@ impl RemoteComponents {
     }
 
     pub async fn get_from_url(&self, url: &Url) -> anyhow::Result<PathBuf> {
-        let parent_dir = self.temp_dir.join("remote_components");
+        let parent_dir = self.temp_dir.join("remote-components");
         crate::fs::create_dir_all(&parent_dir)?;
 
-        let url_hash = BASE64_STANDARD.encode(url.to_string());
+        let url_hash = blake3::hash(url.as_str().as_bytes()).to_hex();
         let path = parent_dir.join(format!("{url_hash}.wasm"));
 
         if std::fs::exists(&path)? {
-            log_action(
+            log_warn_action(
                 "Skipping",
                 format!(
                     "download of remote WASM component: {}, using a previously downloaded version",

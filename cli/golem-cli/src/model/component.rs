@@ -20,6 +20,9 @@ use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
 };
+use golem_common::model::agent::{
+    AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
+};
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
@@ -27,6 +30,8 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
+use heck::ToKebabCase;
+use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -152,6 +157,8 @@ impl ComponentUpsertResult {
 pub struct ComponentView {
     #[serde(skip)]
     pub show_sensitive: bool,
+    #[serde(skip)]
+    pub show_exports_for_rib: bool,
 
     pub component_name: ComponentName,
     pub component_id: Uuid,
@@ -169,9 +176,41 @@ pub struct ComponentView {
 }
 
 impl ComponentView {
-    pub fn new(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_rib_style(show_sensitive: bool, value: Component) -> Self {
+        Self::new(show_sensitive, true, value)
+    }
+
+    pub fn new_wit_style(show_sensitive: bool, value: Component) -> Self {
+        Self::new(show_sensitive, false, value)
+    }
+
+    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: Component) -> Self {
+        let exports = {
+            if value.metadata.is_agent() {
+                if show_exports_for_rib {
+                    show_exported_agents(value.metadata.agent_types())
+                } else {
+                    value
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .flat_map(|agent| {
+                            show_exported_functions(
+                                value.metadata.exports(),
+                                true,
+                                agent_interface_name(&value, &agent.type_name).as_deref(),
+                            )
+                        })
+                        .collect()
+                }
+            } else {
+                show_exported_functions(value.metadata.exports(), true, None)
+            }
+        };
+
         ComponentView {
             show_sensitive,
+            show_exports_for_rib,
             component_name: value.component_name,
             component_id: value.versioned_component_id.component_id,
             component_type: value.component_type,
@@ -179,7 +218,7 @@ impl ComponentView {
             component_size: value.component_size,
             created_at: value.created_at,
             project_id: value.project_id,
-            exports: show_exported_functions(value.metadata.exports(), true),
+            exports,
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
@@ -220,8 +259,8 @@ pub fn render_type(typ: &AnalysedType) -> String {
             let cases_str = cases
                 .iter()
                 .map(|NameOptionTypePair { name, typ }| match typ {
-                    None => name.to_string(),
-                    Some(typ) => format!("{name}({})", render_type(typ)),
+                    None => name.to_kebab_case(),
+                    Some(typ) => format!("{}({})", name.to_kebab_case(), render_type(typ)),
                 })
                 .collect::<Vec<String>>()
                 .join(", ");
@@ -244,12 +283,20 @@ pub fn render_type(typ: &AnalysedType) -> String {
             }
         }
         AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        AnalysedType::Enum(TypeEnum { cases, .. }) => format!("enum {{ {} }}", cases.join(", ")),
-        AnalysedType::Flags(TypeFlags { names, .. }) => format!("flags {{ {} }}", names.join(", ")),
+        AnalysedType::Enum(TypeEnum { cases, .. }) => format!(
+            "enum {{ {} }}",
+            cases.iter().map(|c| c.to_kebab_case()).join(", ")
+        ),
+        AnalysedType::Flags(TypeFlags { names, .. }) => format!(
+            "flags {{ {} }}",
+            names.iter().map(|n| n.to_kebab_case()).join(", ")
+        ),
         AnalysedType::Record(TypeRecord { fields, .. }) => {
             let pairs: Vec<String> = fields
                 .iter()
-                .map(|NameTypePair { name, typ }| format!("{name}: {}", render_type(typ)))
+                .map(|NameTypePair { name, typ }| {
+                    format!("{}: {}", name.to_kebab_case(), render_type(typ))
+                })
                 .collect();
 
             format!("record {{ {} }}", pairs.join(", "))
@@ -279,13 +326,109 @@ pub fn render_type(typ: &AnalysedType) -> String {
     }
 }
 
-pub fn show_exported_functions(exports: &[AnalysedExport], with_parameters: bool) -> Vec<String> {
+pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
+    agents.iter().flat_map(render_exported_agent).collect()
+}
+
+pub fn show_exported_agent_constructors(agents: &[AgentType]) -> Vec<String> {
+    agents.iter().map(render_agent_constructor).collect()
+}
+
+fn render_exported_agent(agent: &AgentType) -> Vec<String> {
+    let mut result = Vec::new();
+    result.push(render_agent_constructor(agent));
+    for method in &agent.methods {
+        result.push(format!(
+            "{}.{}({}) -> {}",
+            agent.type_name,
+            method.name.to_kebab_case(),
+            render_data_schema(&method.input_schema),
+            render_data_schema(&method.output_schema)
+        ));
+    }
+
+    result
+}
+
+fn render_agent_constructor(agent: &AgentType) -> String {
+    format!(
+        "{}({}) agent constructor",
+        agent.type_name,
+        render_data_schema(&agent.constructor.input_schema)
+    )
+}
+
+fn render_data_schema(schema: &DataSchema) -> String {
+    match schema {
+        DataSchema::Tuple(elements) => elements
+            .elements
+            .iter()
+            .map(|named_elem| {
+                format!(
+                    "{}: {}",
+                    named_elem.name.to_kebab_case(),
+                    render_element_schema(&named_elem.schema)
+                )
+            })
+            .join(", "),
+        DataSchema::Multimodal(elements) => elements
+            .elements
+            .iter()
+            .map(|named_elem| {
+                format!(
+                    "{}({})",
+                    named_elem.name.to_kebab_case(),
+                    render_element_schema(&named_elem.schema)
+                )
+            })
+            .join(" | "),
+    }
+}
+
+fn render_element_schema(schema: &ElementSchema) -> String {
+    match schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            render_type(element_type)
+        }
+        ElementSchema::UnstructuredText(text_descriptor) => {
+            let mut result = "text".to_string();
+            if let Some(restrictions) = &text_descriptor.restrictions {
+                result.push('[');
+                result.push_str(&restrictions.iter().map(|r| &r.language_code).join(", "));
+                result.push(']');
+            }
+            result
+        }
+        ElementSchema::UnstructuredBinary(binary_descriptor) => {
+            let mut result = "binary".to_string();
+            if let Some(restrictions) = &binary_descriptor.restrictions {
+                result.push('[');
+                result.push_str(&restrictions.iter().map(|r| &r.mime_type).join(", "));
+                result.push(']');
+            }
+            result
+        }
+    }
+}
+
+pub fn show_exported_functions(
+    exports: &[AnalysedExport],
+    with_parameters: bool,
+    agent_instance_name_filter: Option<&str>,
+) -> Vec<String> {
+    let is_agent = agent_instance_name_filter.is_some();
     exports
         .iter()
         .flat_map(|exp| match exp {
             AnalysedExport::Instance(AnalysedInstance { name, functions }) => {
+                if let Some(instance_name_filter) = agent_instance_name_filter {
+                    if name != instance_name_filter {
+                        return vec![];
+                    }
+                }
                 let fs: Vec<String> = functions
                     .iter()
+                    .filter(|f| !is_agent || f.name != "get-definition")
                     .map(|f| render_exported_function(Some(name), f, with_parameters))
                     .collect();
                 fs
@@ -409,12 +552,19 @@ pub fn function_params_types<'t>(
     component: &'t Component,
     function: &str,
 ) -> anyhow::Result<Vec<&'t AnalysedType>> {
-    let (func, parsed) = resolve_function(component, function)?;
+    let (func, _parsed) = resolve_function(component, function)?;
 
-    if parsed.function().is_indexed_resource() {
-        Ok(func.parameters.iter().skip(1).map(|r| &r.typ).collect())
-    } else {
-        Ok(func.parameters.iter().map(|r| &r.typ).collect())
+    Ok(func.parameters.iter().map(|r| &r.typ).collect())
+}
+
+pub fn agent_interface_name(component: &Component, agent_type_name: &str) -> Option<String> {
+    match (
+        component.metadata.root_package_name(),
+        component.metadata.root_package_version(),
+    ) {
+        (Some(name), Some(version)) => Some(format!("{}/{}@{}", name, agent_type_name, version)),
+        (Some(name), None) => Some(format!("{}/{}", name, agent_type_name)),
+        _ => None,
     }
 }
 

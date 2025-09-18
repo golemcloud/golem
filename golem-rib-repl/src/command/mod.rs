@@ -35,6 +35,14 @@ pub trait Command {
     /// Error type returned when command execution fails.
     type ExecutionError;
 
+    /*
+     * Argument names to command,
+     * mainly for documentation purpose
+     */
+    fn command_argument_names() -> Vec<String> {
+        vec![]
+    }
+
     fn name(&self) -> String {
         let full = std::any::type_name::<Self>();
         let last = full.rsplit("::").next().unwrap_or(full);

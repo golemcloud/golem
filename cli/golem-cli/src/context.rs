@@ -29,6 +29,7 @@ use crate::model::{AccountDetails, AccountId, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use futures_util::future::BoxFuture;
+use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
 use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
 use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
@@ -78,6 +79,8 @@ pub struct Context {
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
+    dev_mode: bool,
+    server_no_limit_change: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -107,8 +110,10 @@ impl Context {
         let config_dir = global_flags.config_dir();
         let local_server_auto_start = global_flags.local_server_auto_start;
         let show_sensitive = global_flags.show_sensitive;
+        let server_no_limit_change = global_flags.server_no_limit_change;
 
         let mut yes = global_flags.yes;
+        let dev_mode = global_flags.dev_mode;
         let mut update_or_redeploy = UpdateOrRedeployArgs::none();
 
         let mut app_context_config = ApplicationContextConfig::new(global_flags);
@@ -149,7 +154,7 @@ impl Context {
             }
 
             if manifest_profile.redeploy_workers == Some(true) {
-                update_or_redeploy.redeploy_workers = true;
+                update_or_redeploy.redeploy_agents = true;
             }
 
             if manifest_profile.redeploy_http_api == Some(true) {
@@ -217,7 +222,9 @@ impl Context {
             auth_token_override: auth_token,
             project,
             yes,
+            dev_mode,
             show_sensitive,
+            server_no_limit_change,
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -256,12 +263,20 @@ impl Context {
         self.yes
     }
 
+    pub fn dev_mode(&self) -> bool {
+        self.dev_mode
+    }
+
     pub fn show_sensitive(&self) -> bool {
         self.show_sensitive
     }
 
     pub fn update_or_redeploy(&self) -> &UpdateOrRedeployArgs {
         &self.update_or_redeploy
+    }
+
+    pub fn server_no_limit_change(&self) -> bool {
+        self.server_no_limit_change
     }
 
     pub async fn silence_app_context_init(&self) {
@@ -442,14 +457,16 @@ impl Context {
         let rib_repl_state = self.rib_repl_state.read().await;
         ReplComponentDependencies {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
+            custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
         }
     }
 
     pub fn templates(
         &self,
+        dev_mode: bool,
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
-            .get_or_init(golem_templates::all_composable_app_templates)
+            .get_or_init(|| golem_templates::all_composable_app_templates(dev_mode))
     }
 
     pub async fn select_account_by_email_or_error(
@@ -503,6 +520,7 @@ pub struct GolemClients {
 
     pub account: AccountClientCloud,
     pub account_summary: AccountSummaryClientCloud,
+    pub agent_types: AgentTypesClientCloud,
     pub api_certificate: ApiCertificateClientCloud,
     pub api_definition: ApiDefinitionClientCloud,
     pub api_deployment: ApiDeploymentClientCloud,
@@ -593,6 +611,9 @@ impl GolemClients {
             account_summary: AccountSummaryClientCloud {
                 context: worker_context(),
             },
+            agent_types: AgentTypesClientCloud {
+                context: component_context(),
+            },
             api_certificate: ApiCertificateClientCloud {
                 context: worker_context(),
             },
@@ -663,6 +684,7 @@ struct ApplicationContextConfig {
     disable_app_manifest_discovery: bool,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
+    dev_mode: bool,
 }
 
 impl ApplicationContextConfig {
@@ -685,6 +707,7 @@ impl ApplicationContextConfig {
                 version_override: global_flags.golem_rust_version,
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
+            dev_mode: global_flags.dev_mode,
         }
     }
 
@@ -749,6 +772,7 @@ impl ApplicationContextState {
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
+            dev_mode: config.dev_mode,
         };
 
         debug!(app_config = ?app_config, "Initializing application context");
@@ -824,6 +848,7 @@ impl Default for RibReplState {
         Self {
             dependencies: ReplComponentDependencies {
                 component_dependencies: vec![],
+                custom_instance_spec: vec![],
             },
         }
     }

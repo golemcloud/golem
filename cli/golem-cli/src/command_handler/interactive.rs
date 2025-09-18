@@ -597,9 +597,17 @@ impl InteractiveHandler {
         &self,
         existing_component_names: HashSet<String>,
     ) -> anyhow::Result<Option<(String, PackageName)>> {
+        let available_languages = self
+            .ctx
+            .templates(self.ctx.dev_mode())
+            .keys()
+            .collect::<HashSet<_>>();
+
         let Some(language) = Select::new(
             "Select language for the new component",
-            GuestLanguage::iter().collect(),
+            GuestLanguage::iter()
+                .filter(|lang| available_languages.contains(lang))
+                .collect(),
         )
         .prompt()
         .none_if_not_interactive_logged()?
@@ -609,7 +617,7 @@ impl InteractiveHandler {
 
         let template_options = self
             .ctx
-            .templates()
+            .templates(self.ctx.dev_mode())
             .get(&language)
             .unwrap()
             .get(&ComposableAppGroupName::default())
@@ -820,8 +828,8 @@ impl Display for TemplateOption {
 
 #[derive(Debug, Clone, Copy, EnumIter)]
 enum AddComponentOrCreateApp {
-    AddComponent,
     CreateApp,
+    AddComponent,
 }
 
 impl Display for AddComponentOrCreateApp {

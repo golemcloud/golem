@@ -42,7 +42,9 @@ proptest-arbitrary-interop = { workspace = true }
 test-r = { workspace = true }
 
 [build-dependencies]
+miette = { workspace = true, optional = true }
 prost-build = { workspace = true, optional = true }
+protox = { workspace = true, optional = true }
 cargo_metadata = { workspace = true }
 
 [features]
@@ -75,7 +77,7 @@ poem_openapi = [
     "typeinfo",
     "golem-wasm-ast/poem_openapi",
 ]
-protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "golem-wasm-ast/protobuf"]
+protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "dep:protox", "dep:miette", "golem-wasm-ast/protobuf"]
 serde = ["dep:serde"]
 stub = ["dep:wit-bindgen-rt"]
 text = ["typeinfo", "dep:wasm-wave", "golem-wasm-ast/wave"]

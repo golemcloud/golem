@@ -18,6 +18,7 @@ use crate::model::{
     CurrentResourceLimits, ExecutionStatus, LastError, ReadFileResult, TrapType, WorkerConfig,
 };
 use crate::services::active_workers::ActiveWorkers;
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::FileLoader;
@@ -40,20 +41,20 @@ use crate::services::{
 };
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::UpdateDescription;
-use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, TargetWorkerId, WorkerId, WorkerMetadata,
-    WorkerStatus, WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, RwLock, Weak};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -71,18 +72,17 @@ pub trait WorkerCtx:
     + InvocationHooks
     + ExternalOperations<Self>
     + ResourceStore
-    + IndexedResourceStore
     + UpdateManagement
     + FileSystemReading
     + DynamicLinking<Self>
     + InvocationContextManagement
-    + AgentStore
+    + HasWasiConfigVars
     + Send
     + Sync
     + Sized
     + 'static
 {
-    /// PublicState is a subset of the worker context which is accessible outside the worker
+    /// PublicState is a subset of the worker context that is accessible outside the worker
     /// execution. This is useful to publish queues and similar objects to communicate with the
     /// executing worker from things like a request handler.
     type PublicState: PublicWorkerIo + HasWorker<Self> + HasOplog + Clone + Send + Sync;
@@ -116,6 +116,7 @@ pub trait WorkerCtx:
     async fn create(
         account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -140,6 +141,7 @@ pub trait WorkerCtx:
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -160,6 +162,12 @@ pub trait WorkerCtx:
     /// Get the owned worker ID associated with this worker context
     fn owned_worker_id(&self) -> &OwnedWorkerId;
 
+    /// Get the agent-id resolved from the worker name
+    fn agent_id(&self) -> Option<AgentId>;
+
+    /// Gets the account created this worker
+    fn created_by(&self) -> &AccountId;
+
     fn component_metadata(&self) -> &golem_service_base::model::Component;
 
     /// The WASI exit API can use a special error to exit from the WASM execution. As this depends
@@ -177,11 +185,6 @@ pub trait WorkerCtx:
     fn component_service(&self) -> Arc<dyn ComponentService>;
 
     fn worker_fork(&self) -> Arc<dyn WorkerForkService>;
-
-    async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError>;
 }
 
 /// The fuel management interface of a worker context is responsible for borrowing and returning
@@ -338,55 +341,6 @@ pub trait UpdateManagement {
     );
 }
 
-/// Stores resources created within the worker indexed by their constructor parameters
-///
-/// This is a secondary mapping on top of `ResourceStore`, which handles the mapping between
-/// resource identifiers to actual wasmtime `ResourceAny` instances.
-///
-/// Note that the parameters are passed as unparsed WAVE strings instead of their parsed `Value`
-/// representation - the string representation is easier to hash and allows us to reduce the number
-/// of times we need to parse the parameters.
-#[async_trait]
-pub trait IndexedResourceStore {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId>;
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    );
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    );
-}
-
-/// Stores information about living agent instances
-#[async_trait]
-pub trait AgentStore {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: golem_common::model::agent::DataValue,
-    );
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: golem_common::model::agent::DataValue,
-    );
-}
-
 /// Operations not requiring an active worker context, but still depending on the
 /// worker context implementation.
 #[async_trait]
@@ -506,6 +460,10 @@ pub trait InvocationContextManagement {
         key: &str,
         value: AttributeValue,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Clones every element of the stack belonging to the given current span id, and sets
+    /// the inherited flag to true on them, without changing the spans in this invocation context.
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack;
 }
 
 #[async_trait]
@@ -517,6 +475,10 @@ pub trait DynamicLinking<Ctx: WorkerCtx> {
         component: &Component,
         component_metadata: &golem_service_base::model::Component,
     ) -> anyhow::Result<()>;
+}
+
+pub trait HasWasiConfigVars {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String>;
 }
 
 pub enum LogEventEmitBehaviour {

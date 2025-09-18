@@ -20,7 +20,10 @@ use crate::repl_printer::{DefaultReplResultPrinter, ReplPrinter};
 use crate::repl_state::ReplState;
 use crate::rib_context::ReplContext;
 use crate::rib_edit::RibEdit;
-use crate::{CommandRegistry, ReplBootstrapError, RibExecutionError, UntypedCommand};
+use crate::{
+    CommandRegistry, ReplBootstrapError, ReplComponentDependencies, RibExecutionError,
+    UntypedCommand,
+};
 use colored::Colorize;
 use rib::{RibCompiler, RibCompilerConfig, RibResult};
 use rustyline::error::ReadlineError;
@@ -98,35 +101,44 @@ impl RibRepl {
                     .await
                     .map_err(|err| ReplBootstrapError::ComponentLoadError(err.to_string()))?;
 
-                Ok(vec![component_dependency])
+                Ok(ReplComponentDependencies {
+                    component_dependencies: vec![component_dependency],
+                    custom_instance_spec: vec![],
+                })
             }
             None => {
                 let dependencies = config.dependency_manager.get_dependencies().await;
 
                 match dependencies {
                     Ok(dependencies) => {
-                        let component_dependencies = dependencies.component_dependencies;
-
-                        if component_dependencies.is_empty() {
+                        if dependencies.component_dependencies.is_empty() {
                             return Err(ReplBootstrapError::NoComponentsFound);
                         }
 
-                        Ok(component_dependencies)
+                        Ok(dependencies)
                     }
                     Err(err) => Err(ReplBootstrapError::ComponentLoadError(format!(
                         "failed to register components: {err}"
                     ))),
                 }
             }
-        };
+        }?;
 
         // Once https://github.com/golemcloud/golem/issues/1608 is resolved,
         // component dependency will not be required in the REPL state
         let repl_state = ReplState::new(
             config.worker_function_invoke,
-            RibCompiler::new(RibCompilerConfig::new(component_dependencies?, vec![])),
+            RibCompiler::new(RibCompilerConfig::new(
+                component_dependencies.component_dependencies,
+                vec![],
+                component_dependencies.custom_instance_spec.clone(),
+            )),
             history_file_path.clone(),
         );
+
+        rl.helper_mut()
+            .unwrap()
+            .update_custom_instances(component_dependencies.custom_instance_spec);
 
         Ok(RibRepl {
             printer: config

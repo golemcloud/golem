@@ -219,7 +219,7 @@ pub async fn run(
 ) -> anyhow::Result<RunDetails> {
     debug!("Initializing shard manager");
 
-    let (mut health_reporter, health_service) = tonic_health::server::health_reporter();
+    let (health_reporter, health_service) = tonic_health::server::health_reporter();
     health_reporter
         .set_serving::<ShardManagerServiceServer<ShardManagerServiceImpl>>()
         .await;
@@ -241,23 +241,19 @@ pub async fn run(
     let persistence_service: Arc<dyn RoutingTablePersistence + Send + Sync> =
         match &shard_manager_config.persistence {
             PersistenceConfig::Redis(redis) => {
-                info!("Using Redis at {}", redis.url());
                 let pool = golem_common::redis::RedisPool::configured(redis).await?;
                 Arc::new(RoutingTableRedisPersistence::new(
                     &pool,
                     shard_manager_config.number_of_shards,
                 ))
             }
-            PersistenceConfig::FileSystem(fs) => {
-                info!("Using sharding file {:?}", fs.path);
-                Arc::new(
-                    RoutingTableFileSystemPersistence::new(
-                        &fs.path,
-                        shard_manager_config.number_of_shards,
-                    )
-                    .await?,
+            PersistenceConfig::FileSystem(fs) => Arc::new(
+                RoutingTableFileSystemPersistence::new(
+                    &fs.path,
+                    shard_manager_config.number_of_shards,
                 )
-            }
+                .await?,
+            ),
         };
     let worker_executors = Arc::new(WorkerExecutorServiceDefault::new(
         shard_manager_config.worker_executors.clone(),
@@ -294,7 +290,6 @@ pub async fn run(
 
     let shard_manager_port_str =
         env::var("GOLEM_SHARD_MANAGER_PORT").unwrap_or(shard_manager_config.grpc_port.to_string());
-    debug!("The port read from env is {}", shard_manager_port_str);
     let configured_port = shard_manager_port_str.parse::<u16>()?;
     let listener = TcpListener::bind(SocketAddrV4::new(
         Ipv4Addr::new(0, 0, 0, 0),

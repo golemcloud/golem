@@ -15,7 +15,7 @@
 use crate::app::build::task_result_marker::{
     GetServerComponentHash, GetServerIfsFileHash, TaskResultMarker,
 };
-use crate::app::context::ApplicationContext;
+use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
@@ -44,6 +44,7 @@ use crate::model::{
     AccountDetails, ComponentName, ComponentNameMatchKind, ComponentVersionSelection,
     ProjectRefAndId, ProjectReference, SelectedComponents, WorkerUpdateMode,
 };
+use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use golem_client::api::ComponentClient;
 use golem_client::model::ComponentQuery;
@@ -126,7 +127,7 @@ impl ComponentCommandHandler {
                 version,
             } => self.cmd_get(component_name.component_name, version).await,
 
-            ComponentSubcommand::UpdateWorkers {
+            ComponentSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
@@ -134,7 +135,7 @@ impl ComponentCommandHandler {
                 self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            ComponentSubcommand::RedeployWorkers { component_name } => {
+            ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
@@ -188,7 +189,9 @@ impl ComponentCommandHandler {
                 "Both TEMPLATE and COMPONENT_PACKAGE_NAME are required in non-interactive mode",
             );
             logln("");
-            self.ctx.app_handler().log_templates_help(None, None);
+            self.ctx
+                .app_handler()
+                .log_templates_help(None, None, self.ctx.dev_mode());
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
@@ -206,7 +209,8 @@ impl ComponentCommandHandler {
         }
 
         let app_handler = self.ctx.app_handler();
-        let (common_template, component_template) = app_handler.get_template(&template)?;
+        let (common_template, component_template) =
+            app_handler.get_template(&template, self.ctx.dev_mode())?;
 
         // Unloading app context, so we can reload after the new component is created
         self.ctx.unload_app_context().await;
@@ -296,16 +300,23 @@ impl ComponentCommandHandler {
         match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None);
+                    self.ctx.app_handler().log_templates_help(
+                        Some(language),
+                        None,
+                        self.ctx.dev_mode(),
+                    );
                 } else {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter));
+                    self.ctx.app_handler().log_templates_help(
+                        None,
+                        Some(&filter),
+                        self.ctx.dev_mode(),
+                    );
                 }
             }
-            None => self.ctx.app_handler().log_templates_help(None, None),
+            None => self
+                .ctx
+                .app_handler()
+                .log_templates_help(None, None, self.ctx.dev_mode()),
         }
     }
 
@@ -333,9 +344,9 @@ impl ComponentCommandHandler {
                 .map_service_error()?;
 
             component_views.extend(
-                results
-                    .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta))),
+                results.into_iter().map(|meta| {
+                    ComponentView::new_wit_style(show_sensitive, Component::from(meta))
+                }),
             );
         } else {
             for component_name in selected_component_names.component_names.iter() {
@@ -351,7 +362,7 @@ impl ComponentCommandHandler {
                     .await
                     .map_service_error()?
                     .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta)))
+                    .map(|meta| ComponentView::new_wit_style(show_sensitive, Component::from(meta)))
                     .collect::<Vec<_>>();
 
                 if results.is_empty() {
@@ -377,11 +388,7 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        if component_views.is_empty() {
-            bail!(NonSuccessfulExit)
-        } else {
-            self.ctx.log_handler().log_view(&component_views);
-        }
+        self.ctx.log_handler().log_view(&component_views);
 
         Ok(())
     }
@@ -424,7 +431,10 @@ impl ComponentCommandHandler {
                 .await?;
 
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new_wit_style(
+                    self.ctx.show_sensitive(),
+                    component,
+                ));
             }
         }
 
@@ -648,7 +658,7 @@ impl ComponentCommandHandler {
             components
         };
 
-        if let Some(update) = update_or_redeploy.update_workers {
+        if let Some(update) = update_or_redeploy.update_agents {
             self.update_workers_by_components(&components, update, true)
                 .await?;
         } else if update_or_redeploy.redeploy_workers(self.ctx.update_or_redeploy()) {
@@ -800,12 +810,9 @@ impl ComponentCommandHandler {
                     Component::from(component)
                 };
 
-                self.ctx
-                    .log_handler()
-                    .log_view(&ComponentUpdateView(ComponentView::new(
-                        self.ctx.show_sensitive(),
-                        component.clone(),
-                    )));
+                self.ctx.log_handler().log_view(&ComponentUpdateView(
+                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
+                ));
                 component
             }
             None => {
@@ -842,12 +849,9 @@ impl ComponentCommandHandler {
                     Component::from(component)
                 };
 
-                self.ctx
-                    .log_handler()
-                    .log_view(&ComponentCreateView(ComponentView::new(
-                        self.ctx.show_sensitive(),
-                        component.clone(),
-                    )));
+                self.ctx.log_handler().log_view(&ComponentCreateView(
+                    ComponentView::new_wit_style(self.ctx.show_sensitive(), component.clone()),
+                ));
 
                 component
             }
@@ -1614,7 +1618,9 @@ fn component_deploy_properties(
         .as_deployable_component_type()
         .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
     let files = component_properties.files.clone();
-    let env = (!component_properties.env.is_empty()).then(|| component_properties.env.clone());
+    let env = (!component_properties.env.is_empty())
+        .then(|| resolve_env_vars(component_name, &component_properties.env))
+        .transpose()?;
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
@@ -1679,4 +1685,59 @@ fn app_component_dynamic_linking(
             })),
         }))
     }
+}
+
+fn resolve_env_vars(
+    component_name: &AppComponentName,
+    env: &HashMap<String, String>,
+) -> anyhow::Result<HashMap<String, String>> {
+    let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
+
+    let minijinja_env = {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        env
+    };
+
+    let mut resolved_env = HashMap::with_capacity(env.len());
+    let mut validation = ValidationBuilder::new();
+    validation.with_context(
+        vec![("component", component_name.to_string())],
+        |validation| {
+            for key in env.keys().sorted() {
+                let value = env.get(key).unwrap();
+                match minijinja_env.render_str(value, &proc_env_vars) {
+                    Ok(resolved_value) => {
+                        resolved_env.insert(key.clone(), resolved_value);
+                    }
+                    Err(err) => {
+                        validation.with_context(
+                            vec![
+                                ("key", key.to_string()),
+                                ("template", value.to_string()),
+                                (
+                                    "error",
+                                    err.to_string().log_color_error_highlight().to_string(),
+                                ),
+                            ],
+                            |validation| {
+                                validation.add_error(
+                                    "Failed to substitute environment variable".to_string(),
+                                )
+                            },
+                        );
+                    }
+                };
+            }
+        },
+    );
+
+    to_anyhow(
+        &format!(
+            "Failed to prepare environment variables for component: {}",
+            component_name.as_str().log_color_highlight()
+        ),
+        validation.build(resolved_env),
+        None,
+    )
 }

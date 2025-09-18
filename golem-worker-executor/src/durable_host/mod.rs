@@ -37,13 +37,13 @@ pub mod wasm_rpc;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
-use crate::durable_host::serialized::SerializableError;
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
     CurrentResourceLimits, ExecutionStatus, InvocationContext, LastError, ReadFileResult, TrapType,
     WorkerConfig,
 };
+use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::BlobStoreService;
 use crate::services::component::ComponentService;
 use crate::services::file_loader::{FileLoader, FileUseToken};
@@ -69,9 +69,9 @@ use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
 use crate::worker::status::calculate_last_known_status;
 use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
 use crate::workerctx::{
-    AgentStore, ExternalOperations, FileSystemReading, IndexedResourceStore,
-    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
-    PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
+    InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
+    UpdateManagement, WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
@@ -81,19 +81,17 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
-use golem_common::model::agent::DataValue;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{
-    DurableFunctionType, IndexedResourceKey, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
+    DurableFunctionType, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{
-    AccountId, AgentInstanceDescription, AgentInstanceKey, ExportedResourceInstanceDescription,
-    ExportedResourceInstanceKey, PluginInstallationId, ProjectId, WorkerResourceKey,
-};
+use golem_common::model::RetryConfig;
+use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -101,7 +99,6 @@ use golem_common::model::{
     OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
     WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
 };
-use golem_common::model::{RetryConfig, TargetWorkerId};
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
@@ -119,6 +116,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
+use try_match::try_match;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
@@ -147,6 +145,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -168,6 +167,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         project_service: Arc<dyn ProjectService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -189,7 +189,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let component_metadata = component_service
             .get_metadata(
-                &owned_worker_id.project_id,
                 &owned_worker_id.component_id(),
                 Some(worker_config.component_version_for_replay),
             )
@@ -240,6 +239,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state: PrivateDurableWorkerState::new(
+                agent_id,
                 oplog_service,
                 oplog,
                 promise_service,
@@ -250,6 +250,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 blob_store_service,
                 rdbms_service,
                 component_service,
+                agent_types_service,
                 plugins,
                 config.clone(),
                 owned_worker_id.clone(),
@@ -334,6 +335,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by
     }
 
+    pub fn agent_id(&self) -> Option<AgentId> {
+        self.state.agent_id.clone()
+    }
+
     pub fn component_metadata(&self) -> &golem_service_base::model::Component {
         &self.state.component_metadata
     }
@@ -397,6 +402,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.component_service.clone()
     }
 
+    pub fn agent_types_service(&self) -> Arc<dyn AgentTypesService> {
+        self.state.agent_types_service.clone()
+    }
+
     pub fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
         self.state.worker_fork.clone()
     }
@@ -409,11 +418,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
             // was initialized with the correct amount of memory.
-            Ok(true)
+            Ok(())
         } else {
             // In live mode we need to try to get more memory permits and if we can't,
             // we fail the worker, unload it from memory and schedule a retry.
@@ -426,7 +435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             self.public_state.worker().increase_memory(delta).await?;
             self.state.total_linear_memory_size += delta;
-            Ok(true)
+            Ok(())
         }
     }
 
@@ -444,6 +453,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
             TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
             TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::ExceededMemoryLimit) => RetryDecision::None,
             TrapType::Error(WorkerError::Unknown(_)) => {
                 let retryable = previous_tries < (retry_config.max_attempts as u64);
                 if retryable {
@@ -541,35 +551,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    pub async fn generate_unique_local_worker_id(
-        &mut self,
-        remote_worker_id: TargetWorkerId,
-    ) -> Result<WorkerId, WorkerExecutorError> {
-        match remote_worker_id.clone().try_into_worker_id() {
-            Some(worker_id) => Ok(worker_id),
-            None => {
-                let durability = Durability::<WorkerId, SerializableError>::new(
-                    self,
-                    "golem::rpc::wasm-rpc",
-                    "generate_unique_local_worker_id",
-                    DurableFunctionType::ReadLocal,
-                )
-                .await?;
-                let worker_id = if durability.is_live() {
-                    let result = self
-                        .rpc()
-                        .generate_unique_local_worker_id(remote_worker_id)
-                        .await;
-                    durability.persist(self, (), result).await
-                } else {
-                    durability.replay(self).await
-                }?;
-
-                Ok(worker_id)
-            }
-        }
-    }
-
     /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
     /// It also returns the last error stored in these entries.
     pub async fn trailing_error_count(&self) -> u64 {
@@ -579,8 +560,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .map(|last_error| last_error.retry_count)
             .unwrap_or_default()
     }
+}
 
-    pub fn wasi_config_vars(&self) -> BTreeMap<String, String> {
+impl<Ctx: WorkerCtx> HasWasiConfigVars for DurableWorkerCtx<Ctx> {
+    fn wasi_config_vars(&self) -> BTreeMap<String, String> {
         self.state.wasi_config_vars.read().unwrap().clone()
     }
 }
@@ -749,9 +732,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        debug!("Applying pending side effects accumulated during replay");
-
         let replay_events = self.state.replay_state.take_new_replay_events().await;
+        if !replay_events.is_empty() {
+            debug!("Applying pending side effects accumulated during replay");
+        }
         for event in replay_events {
             match event {
                 ReplayEvent::UpdateReplayed { new_version } => {
@@ -831,11 +815,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let new_metadata = self
             .component_service()
-            .get_metadata(
-                &self.owned_worker_id.project_id,
-                &self.owned_worker_id.component_id(),
-                Some(new_version),
-            )
+            .get_metadata(&self.owned_worker_id.component_id(), Some(new_version))
             .await?;
 
         let mut current_files = self.state.files.write().await;
@@ -1203,17 +1183,12 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
             self.state.oplog.add(entry.clone()).await;
             self.update_worker_status(move |status| {
                 status.owned_resources.insert(
-                    WorkerResourceKey::ExportedResourceInstanceKey(ExportedResourceInstanceKey {
-                        resource_id,
-                    }),
-                    WorkerResourceDescription::ExportedResourceInstance(
-                        ExportedResourceInstanceDescription {
-                            created_at: entry.timestamp(),
-                            resource_owner: name.owner,
-                            resource_name: name.name,
-                            resource_params: None,
-                        },
-                    ),
+                    resource_id,
+                    WorkerResourceDescription {
+                        created_at: entry.timestamp(),
+                        resource_owner: name.owner,
+                        resource_name: name.name,
+                    },
                 );
             })
             .await;
@@ -1231,11 +1206,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
                     .add(OplogEntry::drop_resource(id, resource_type_id.clone()))
                     .await;
                 self.update_worker_status(move |status| {
-                    status
-                        .owned_resources
-                        .remove(&WorkerResourceKey::ExportedResourceInstanceKey(
-                            ExportedResourceInstanceKey { resource_id: id },
-                        ));
+                    status.owned_resources.remove(&id);
                 })
                 .await;
             }
@@ -1344,145 +1315,6 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
             }
         })
         .await;
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> IndexedResourceStore for DurableWorkerCtx<Ctx> {
-    fn get_indexed_resource(
-        &self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) -> Option<WorkerResourceId> {
-        let key = IndexedResourceKey {
-            resource_owner: resource_owner.to_string(),
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.get(&key).copied()
-    }
-
-    async fn store_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-        resource: WorkerResourceId,
-    ) {
-        let key = IndexedResourceKey {
-            resource_owner: resource_owner.to_string(),
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.insert(key.clone(), resource);
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::describe_resource(
-                    resource,
-                    ResourceTypeId {
-                        owner: resource_owner.to_string(),
-                        name: resource_name.to_string(),
-                    },
-                    key.resource_params.clone(),
-                ))
-                .await;
-            self.update_worker_status(|status| {
-                if let Some(WorkerResourceDescription::ExportedResourceInstance(description)) =
-                    status
-                        .owned_resources
-                        .get_mut(&WorkerResourceKey::ExportedResourceInstanceKey(
-                            ExportedResourceInstanceKey {
-                                resource_id: resource,
-                            },
-                        ))
-                {
-                    description.resource_params = Some(resource_params.to_vec());
-                }
-            })
-            .await;
-        }
-    }
-
-    fn drop_indexed_resource(
-        &mut self,
-        resource_owner: &str,
-        resource_name: &str,
-        resource_params: &[String],
-    ) {
-        let key = IndexedResourceKey {
-            resource_owner: resource_owner.to_string(),
-            resource_name: resource_name.to_string(),
-            resource_params: resource_params.to_vec(),
-        };
-        self.state.indexed_resources.remove(&key);
-    }
-}
-
-#[async_trait]
-impl<Ctx: WorkerCtx> AgentStore for DurableWorkerCtx<Ctx> {
-    async fn store_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        parameters: DataValue,
-    ) {
-        debug!(%agent_type, %agent_id, "Agent instance created");
-
-        let key = AgentInstanceKey {
-            agent_type,
-            agent_id,
-        };
-        let description = AgentInstanceDescription {
-            created_at: Timestamp::now_utc(),
-            agent_parameters: parameters.clone(),
-        };
-        self.state
-            .agent_instances
-            .insert(key.clone(), description.clone());
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::create_agent_instance(key.clone(), parameters))
-                .await;
-            self.update_worker_status(|status| {
-                status.owned_resources.insert(
-                    WorkerResourceKey::AgentInstanceKey(key),
-                    WorkerResourceDescription::AgentInstance(description.clone()),
-                );
-            })
-            .await;
-        }
-    }
-
-    async fn remove_agent_instance(
-        &mut self,
-        agent_type: String,
-        agent_id: String,
-        _parameters: DataValue,
-    ) {
-        debug!(%agent_type, %agent_id, "Agent instance dropped");
-
-        let key = AgentInstanceKey {
-            agent_type,
-            agent_id,
-        };
-
-        self.state.agent_instances.remove(&key);
-
-        if self.state.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::drop_agent_instance(key.clone()))
-                .await;
-            self.update_worker_status(|status| {
-                status
-                    .owned_resources
-                    .remove(&WorkerResourceKey::AgentInstanceKey(key));
-            })
-            .await;
-        }
     }
 }
 
@@ -1656,6 +1488,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             crate::get_oplog_entry!(self.state.replay_state, OplogEntry::SetSpanAttribute)?;
         }
         Ok(())
+    }
+
+    fn clone_as_inherited_stack(&self, current_span_id: &SpanId) -> InvocationContextStack {
+        self.state
+            .invocation_context
+            .clone_as_inherited_stack(current_span_id)
     }
 }
 
@@ -2134,6 +1972,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                         None,
                         None,
                         None,
+                        &InvocationContextStack::fresh(),
                     )
                     .await?;
                 }
@@ -2157,7 +1996,16 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     ) -> Result<(), WorkerExecutorError> {
         let worker = this
             .worker_activator()
-            .get_or_create_suspended(account_id, owned_worker_id, None, None, None, None, None)
+            .get_or_create_suspended(
+                account_id,
+                owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
             .await?;
 
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -2409,18 +2257,28 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
-/// number of entries, and at most until the first invocation start entry.
+/// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
+
+    // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
+    // have at most one pending batch we discard.
+    let mut collected_count = 0;
     let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
+    let mut current_stderr_entries_batch = Vec::new();
+    let mut first_seen_invocation = None;
+
     loop {
         // TODO: this could be read in batches to speed up the process
         let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+
+        // Because of retries we might have multiple invocation start entries.
+        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
         match oplog_entry.first_key_value() {
             Some((
                 _,
@@ -2430,12 +2288,37 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     ..
                 },
             )) => {
-                stderr_entries.push(message.clone());
-                if stderr_entries.len() >= max_count {
-                    break;
+                if collected_count < max_count {
+                    current_stderr_entries_batch.push(message.clone());
+                    collected_count += 1;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            Some((
+                _,
+                OplogEntry::ExportedFunctionInvoked {
+                    function_name,
+                    idempotency_key,
+                    ..
+                },
+            )) => match &first_seen_invocation {
+                None => {
+                    first_seen_invocation = Some((function_name.clone(), idempotency_key.clone()));
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some((expected_function, expected_idempotency_key))
+                    if function_name == expected_function
+                        && idempotency_key == expected_idempotency_key =>
+                {
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some(_) => break,
+            },
             _ => {}
         }
         if idx > OplogIndex::INITIAL {
@@ -2482,10 +2365,12 @@ struct PrivateDurableWorkerState {
     blob_store_service: Arc<dyn BlobStoreService>,
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
+    agent_types_service: Arc<dyn AgentTypesService>,
     plugins: Arc<dyn Plugins>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
+    agent_id: Option<AgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -2500,9 +2385,6 @@ struct PrivateDurableWorkerState {
     open_http_requests: HashMap<u32, HttpRequestState>,
 
     snapshotting_mode: Option<PersistenceLevel>,
-
-    indexed_resources: HashMap<IndexedResourceKey, WorkerResourceId>,
-    agent_instances: HashMap<AgentInstanceKey, AgentInstanceDescription>,
 
     component_metadata: golem_service_base::model::Component,
 
@@ -2529,6 +2411,7 @@ struct PrivateDurableWorkerState {
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
+        agent_id: Option<AgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -2539,6 +2422,7 @@ impl PrivateDurableWorkerState {
         blob_store_service: Arc<dyn BlobStoreService>,
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
+        agent_types_service: Arc<dyn AgentTypesService>,
         plugins: Arc<dyn Plugins>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
@@ -2568,6 +2452,7 @@ impl PrivateDurableWorkerState {
         let invocation_context = InvocationContext::new(None);
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
+            agent_id,
             oplog_service,
             oplog: oplog.clone(),
             promise_service,
@@ -2578,6 +2463,7 @@ impl PrivateDurableWorkerState {
             blob_store_service,
             rdbms_service,
             component_service,
+            agent_types_service,
             plugins,
             config,
             owned_worker_id,
@@ -2591,8 +2477,6 @@ impl PrivateDurableWorkerState {
             assume_idempotence: true,
             open_http_requests: HashMap::new(),
             snapshotting_mode: None,
-            indexed_resources: HashMap::new(),
-            agent_instances: HashMap::new(),
             component_metadata,
             total_linear_memory_size,
             replay_state,
@@ -2708,6 +2592,196 @@ impl PrivateDurableWorkerState {
                 Ok(())
             }
         } else {
+            Ok(())
+        }
+    }
+
+    pub async fn begin_transaction_function<Tx, Err>(
+        &mut self,
+        handler: impl RemoteTransactionHandler<Tx, Err>,
+    ) -> Result<(OplogIndex, Tx), Err>
+    where
+        Err: From<WorkerExecutorError>,
+    {
+        if self.is_live() {
+            let (tx_id, tx) = handler.create_new().await?;
+            self.oplog
+                .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            let begin_index = self.oplog.current_oplog_index().await;
+            Ok((begin_index, tx))
+        } else {
+            let (begin_index, begin_entry) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
+
+            let assume_idempotence = self.assume_idempotence;
+
+            let pre_entry = self
+                .replay_state
+                .lookup_oplog_entry_with_condition(
+                    begin_index,
+                    OplogEntry::is_pre_remote_transaction,
+                    |entry, index| {
+                        if !assume_idempotence {
+                            entry.no_concurrent_side_effect(index)
+                        } else {
+                            true
+                        }
+                    },
+                )
+                .await;
+
+            let tx_id = try_match!(
+                begin_entry,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: _,
+                    transaction_id,
+                }
+            )
+            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+
+            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+
+            let mut should_restart = false;
+
+            if let Some((_, pre_entry)) = pre_entry {
+                let end_entry = self
+                    .replay_state
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_end_remote_transaction,
+                        |entry, index| {
+                            if !assume_idempotence {
+                                entry.no_concurrent_side_effect(index)
+                            } else {
+                                true
+                            }
+                        },
+                    )
+                    .await;
+
+                if end_entry.is_none() {
+                    if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was committed, we need to restart
+                        should_restart = !handler.is_committed(&tx_id).await?;
+                    } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was rolled back, we need to restart
+                        should_restart = !handler.is_rolled_back(&tx_id).await?;
+                    }
+                }
+            } else {
+                // if pre entry is not found, we need to restart
+                should_restart = true;
+            }
+
+            if should_restart {
+                // We need to jump to the end of the oplog
+                self.replay_state.switch_to_live().await;
+
+                if !assume_idempotence {
+                    Err(WorkerExecutorError::runtime(
+                        "Non-idempotent remote write operation was not completed, cannot retry",
+                    )
+                    .into())
+                } else {
+                    // But this is not enough, because if the retried batched write operation succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index, // need to keep the BeginAtomicRegion entry
+                        end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.replay_state
+                        .add_skipped_region(deleted_region.clone())
+                        .await;
+                    self.oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
+
+                    let (tx_id, tx) = handler.create_new().await?;
+                    let begin_index = self
+                        .oplog
+                        .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?;
+
+                    Ok((begin_index, tx))
+                }
+            } else {
+                Ok((begin_index, tx))
+            }
+        }
+    }
+
+    pub async fn pre_commit_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::PreCommitRemoteTransaction)?;
+            Ok(())
+        }
+    }
+
+    pub async fn pre_rollback_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.replay_state,
+                OplogEntry::PreRollbackRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
+    pub async fn committed_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::CommittedRemoteTransaction)?;
+            Ok(())
+        }
+    }
+
+    pub async fn rolled_back_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.replay_state,
+                OplogEntry::RolledBackRemoteTransaction
+            )?;
             Ok(())
         }
     }
@@ -3030,7 +3104,7 @@ async fn update_filesystem(
             .map(|f| root.join(PathBuf::from(f.path.to_rel_string()))),
     );
 
-    // We do this in two phases to make errors less likely. First delete all files that are no longer needed and then create
+    // We do this in two phases to make errors less likely. First, delete all files that are no longer needed and then create
     // new ones.
     let futures_phase_1 = current_state.iter().map(|(path, file)| {
         let path = path.clone();
@@ -3202,7 +3276,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
@@ -3223,4 +3297,21 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[async_trait]
+pub trait RemoteTransactionHandler<Tx, Err>
+where
+    Err: From<WorkerExecutorError>,
+{
+    async fn create_new(&self) -> Result<(TransactionId, Tx), Err>;
+
+    async fn create_replay(
+        &self,
+        transaction_id: &TransactionId,
+    ) -> Result<(TransactionId, Tx), Err>;
+
+    async fn is_committed(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
+
+    async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
 }

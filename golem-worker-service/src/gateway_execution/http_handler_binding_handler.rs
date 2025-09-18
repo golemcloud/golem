@@ -77,7 +77,13 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
 
         let resolved_request = GatewayResolvedWorkerRequest {
             component_id,
-            worker_name: worker_detail.worker_name.clone(),
+            worker_name: worker_detail
+                .worker_name
+                .as_ref()
+                .ok_or_else(|| {
+                    HttpHandlerBindingError::InternalError("Missing worker name".to_string())
+                })?
+                .clone(),
             function_name: virtual_exports::http_incoming_handler::FUNCTION_NAME.to_string(),
             function_params: vec![type_annotated_param],
             idempotency_key: worker_detail.idempotency_key.clone(),

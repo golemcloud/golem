@@ -33,6 +33,7 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::{ComponentName, WorkerUpdateMode};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
+use golem_client::api::AgentTypesClient;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
     ComposableAppGroupName, GuestLanguage, PackageName, Template, TemplateName,
@@ -71,7 +72,7 @@ impl AppCommandHandler {
                     .await
             }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
-            AppSubcommand::UpdateWorkers {
+            AppSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
@@ -79,11 +80,12 @@ impl AppCommandHandler {
                 self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            AppSubcommand::RedeployWorkers { component_name } => {
+            AppSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
             AppSubcommand::Diagnose { component_name } => self.cmd_diagnose(component_name).await,
+            AppSubcommand::ListAgentTypes {} => self.cmd_list_agent_types().await,
             AppSubcommand::CustomCommand(command) => self.cmd_custom_command(command).await,
         }
     }
@@ -160,7 +162,7 @@ impl AppCommandHandler {
             let common_templates = languages
                 .iter()
                 .map(|language| {
-                    self.get_template(&language.id())
+                    self.get_template(&language.id(), self.ctx.dev_mode())
                         .map(|(common, _component)| common)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -202,7 +204,8 @@ impl AppCommandHandler {
                             .log_color_highlight()
                     ),
                 );
-                let (common_template, component_template) = self.get_template(template)?;
+                let (common_template, component_template) =
+                    self.get_template(template, self.ctx.dev_mode())?;
                 match add_component_by_template(
                     common_template,
                     Some(component_template),
@@ -376,6 +379,24 @@ impl AppCommandHandler {
             .component_handler()
             .redeploy_workers_by_components(&components)
             .await?;
+
+        Ok(())
+    }
+
+    async fn cmd_list_agent_types(&self) -> anyhow::Result<()> {
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .opt_select_project(None)
+            .await?;
+
+        let clients = self.ctx.golem_clients().await?;
+        let result = clients
+            .agent_types
+            .get_all_agent_types(project.as_ref().map(|p| &p.project_id.0))
+            .await?;
+
+        self.ctx.log_handler().log_view(&result);
 
         Ok(())
     }
@@ -609,6 +630,7 @@ impl AppCommandHandler {
     pub fn get_template(
         &self,
         requested_template_name: &str,
+        dev_mode: bool,
     ) -> anyhow::Result<(Option<&Template>, &Template)> {
         let segments = requested_template_name.split("/").collect::<Vec<_>>();
         let (language, template_name): (String, Option<String>) = match segments.len() {
@@ -623,7 +645,7 @@ impl AppCommandHandler {
             }),
             _ => {
                 log_error("Failed to parse template name");
-                self.log_templates_help(None, None);
+                self.log_templates_help(None, None, self.ctx.dev_mode());
                 bail!(NonSuccessfulExit);
             }
         };
@@ -632,7 +654,7 @@ impl AppCommandHandler {
             Some(language) => language,
             None => {
                 log_error("Failed to parse language part of the template!");
-                self.log_templates_help(None, None);
+                self.log_templates_help(None, None, self.ctx.dev_mode());
                 bail!(NonSuccessfulExit);
             }
         };
@@ -640,9 +662,9 @@ impl AppCommandHandler {
             .map(TemplateName::from)
             .unwrap_or_else(|| TemplateName::from("default"));
 
-        let Some(lang_templates) = self.ctx.templates().get(&language) else {
+        let Some(lang_templates) = self.ctx.templates(dev_mode).get(&language) else {
             log_error(format!("No templates found for language: {language}").as_str());
-            self.log_templates_help(None, None);
+            self.log_templates_help(None, None, self.ctx.dev_mode());
             bail!(NonSuccessfulExit);
         };
 
@@ -655,7 +677,7 @@ impl AppCommandHandler {
                 "Template {} not found!",
                 requested_template_name.log_color_highlight()
             ));
-            self.log_templates_help(None, None);
+            self.log_templates_help(None, None, self.ctx.dev_mode());
             bail!(NonSuccessfulExit);
         };
 
@@ -677,6 +699,7 @@ impl AppCommandHandler {
         &self,
         language_filter: Option<GuestLanguage>,
         template_filter: Option<&str>,
+        dev_mode: bool,
     ) {
         if language_filter.is_none() && template_filter.is_none() {
             logln(format!(
@@ -689,7 +712,7 @@ impl AppCommandHandler {
 
         let templates = self
             .ctx
-            .templates()
+            .templates(dev_mode)
             .iter()
             .filter_map(|(language, templates)| {
                 templates

@@ -19,12 +19,11 @@ use crate::parser::generic_type_parameter::generic_type_parameter;
 use crate::parser::rib_expr::rib_expr;
 use crate::rib_source_span::GetSourcePosition;
 use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
-use combine::error::{Commit, StreamError};
 use combine::parser::char::{alpha_num, string};
 use combine::parser::char::{char, spaces};
 use combine::parser::repeat::take_until;
-use combine::{any, attempt, between, choice, many1, optional, parser, token, ParseError, Parser};
-use combine::{sep_by, ParseResult, Positioned};
+use combine::sep_by;
+use combine::{attempt, between, choice, many1, optional, token, ParseError, Parser};
 
 // A call can be a function or constructing an anonymous variant at the type of writing Rib which user expects to work at runtime
 pub fn call<Input>() -> impl Parser<Input, Output = Expr>
@@ -65,77 +64,6 @@ where
     let ns_pkg = (namespace, token(':'), package).map(|(ns, _, pkg)| (ns, pkg));
     let interface = many1(identifier());
 
-    let capture_resource_params = || {
-        parser(|input| {
-            let _: &mut Input = input;
-            let mut nesting = 1;
-            let mut current_param = String::new();
-            let mut result = Vec::new();
-            let mut result_committed: Option<Commit<()>> = None;
-
-            while nesting > 0 {
-                let (next_char, committed) = any().parse_stream(input).into_result()?;
-
-                if next_char == ')' {
-                    nesting -= 1;
-                    if nesting > 0 {
-                        current_param.push(next_char);
-                    }
-                } else if next_char == '(' || next_char == '{' || next_char == '[' {
-                    nesting += 1;
-                    current_param.push(next_char);
-                } else if next_char == '}' || next_char == ']' {
-                    nesting -= 1;
-                    current_param.push(next_char);
-                } else if next_char == ',' && nesting == 1 {
-                    let expr = Expr::from_text(current_param.trim());
-                    match expr {
-                        Ok(expr) => {
-                            result.push(expr);
-                            current_param.clear();
-                        }
-                        Err(err) => {
-                            return ParseResult::CommitErr(ParseError::from_error(
-                                input.position(),
-                                StreamError::message_format(format!(
-                                    "Failed to parse resource parameter {current_param}: {err}"
-                                )),
-                            ))
-                            .into_result();
-                        }
-                    }
-                } else {
-                    current_param.push(next_char);
-                }
-
-                result_committed = match result_committed {
-                    Some(c) => Some(c.merge(committed)),
-                    None => Some(committed),
-                };
-            }
-
-            if !current_param.is_empty() {
-                let expr = Expr::from_text(current_param.trim());
-                match expr {
-                    Ok(expr) => {
-                        result.push(expr);
-                    }
-                    Err(err) => {
-                        return ParseResult::CommitErr(ParseError::from_error(
-                            input.position(),
-                            StreamError::message_format(format!(
-                                "Failed to parse resource parameter {err}"
-                            )),
-                        ))
-                        .into_result();
-                    }
-                }
-            }
-
-            Ok((result, result_committed.unwrap()))
-        })
-    };
-
     let version = attempt(token('@'))
         .with(take_until(attempt(string(".{"))))
         .and_then(|v: String| {
@@ -149,44 +77,6 @@ where
 
     let single_function =
         identifier().map(|id| DynamicParsedFunctionReference::Function { function: id });
-
-    let indexed_resource_syntax = || (identifier(), token('(').with(capture_resource_params()));
-    let indexed_constructor_syntax = (indexed_resource_syntax(), token('.'), string("new")).map(
-        |((resource, resource_params), _, _)| {
-            DynamicParsedFunctionReference::IndexedResourceConstructor {
-                resource,
-                resource_params,
-            }
-        },
-    );
-    let indexed_drop_syntax = (indexed_resource_syntax(), token('.'), string("drop")).map(
-        |((resource, resource_params), _, _)| DynamicParsedFunctionReference::IndexedResourceDrop {
-            resource,
-            resource_params,
-        },
-    );
-    let indexed_method_syntax = (indexed_resource_syntax(), token('.'), identifier()).map(
-        |((resource, resource_params), _, method)| {
-            DynamicParsedFunctionReference::IndexedResourceMethod {
-                resource,
-                resource_params,
-                method,
-            }
-        },
-    );
-    let indexed_static_method_syntax = (
-        string("[static]"),
-        indexed_resource_syntax(),
-        token('.'),
-        identifier(),
-    )
-        .map(|(_, (resource, resource_params), _, method)| {
-            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
-                resource,
-                resource_params,
-                method,
-            }
-        });
 
     let raw_constructor_syntax = (identifier(), token('.'), string("new"))
         .map(|(resource, _, _)| DynamicParsedFunctionReference::RawResourceConstructor { resource })
@@ -223,10 +113,6 @@ where
         );
 
     let function = choice((
-        attempt(indexed_constructor_syntax),
-        attempt(indexed_drop_syntax),
-        attempt(indexed_method_syntax),
-        attempt(indexed_static_method_syntax),
         attempt(raw_constructor_syntax),
         attempt(raw_drop_syntax),
         attempt(raw_method_syntax),
@@ -264,7 +150,6 @@ where
 }
 #[cfg(test)]
 mod function_call_tests {
-    use bigdecimal::BigDecimal;
     use test_r::test;
 
     use crate::{DynamicParsedFunctionName, DynamicParsedFunctionReference};
@@ -807,93 +692,6 @@ mod function_call_tests {
     }
 
     #[test]
-    fn test_call_with_function_name_indexed_constructor1() {
-        let input = "ns:name/interface.{resource1().new}({bar, baz})";
-        let result = Expr::from_text(input);
-        let expected = Ok(Expr::call_worker_function(
-            DynamicParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: DynamicParsedFunctionReference::IndexedResourceConstructor {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![],
-                },
-            },
-            None,
-            None,
-            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            None,
-        ));
-        assert_eq!(result, expected);
-    }
-
-    // TODO: The resource parameters can be identifiers, but currently function name parser parses all arguments to be just string
-    #[test]
-    fn test_call_with_function_name_indexed_constructor2() {
-        let input = "ns:name/interface.{resource1(\"hello\", 1, true).new}({bar, baz})";
-        let result = Expr::from_text(input);
-        let expected = Ok(Expr::call_worker_function(
-            DynamicParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: DynamicParsedFunctionReference::IndexedResourceConstructor {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        Expr::literal("hello"),
-                        Expr::number(BigDecimal::from(1)),
-                        Expr::boolean(true),
-                    ],
-                },
-            },
-            None,
-            None,
-            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            None,
-        ));
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_call_with_function_name_indexed_constructor3() {
-        let input =
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).new}({bar, baz})";
-        let result = Expr::from_text(input);
-        let expected = Ok(Expr::call_worker_function(
-            DynamicParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: DynamicParsedFunctionReference::IndexedResourceConstructor {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        Expr::literal("hello"),
-                        Expr::record(vec![(
-                            "field-a".to_string(),
-                            Expr::option(Some(Expr::number(BigDecimal::from(1)))),
-                        )]),
-                    ],
-                },
-            },
-            None,
-            None,
-            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            None,
-        ));
-        assert_eq!(result, expected);
-    }
-
-    #[test]
     fn test_call_with_function_name_method_syntax_sugar() {
         let input = "ns:name/interface.{resource1.do-something}({bar, baz})";
         let result = Expr::from_text(input).unwrap();
@@ -1008,92 +806,6 @@ mod function_call_tests {
                 },
                 function: DynamicParsedFunctionReference::RawResourceDrop {
                     resource: "resource1".to_string(),
-                },
-            },
-            None,
-            None,
-            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            None,
-        ));
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_call_with_function_name_indexed_drop_1() {
-        let input = "ns:name/interface.{resource1().drop}({bar, baz})";
-        let result = Expr::from_text(input);
-        let expected = Ok(Expr::call_worker_function(
-            DynamicParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: DynamicParsedFunctionReference::IndexedResourceDrop {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![],
-                },
-            },
-            None,
-            None,
-            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            None,
-        ));
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_call_with_function_name_indexed_drop_2() {
-        let input = "ns:name/interface.{resource1(\"hello\", 1, true).drop}({bar, baz})";
-        let result = Expr::from_text(input);
-        let expected = Ok(Expr::call_worker_function(
-            DynamicParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: DynamicParsedFunctionReference::IndexedResourceDrop {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        Expr::literal("hello"),
-                        Expr::number(BigDecimal::from(1)),
-                        Expr::boolean(true),
-                    ],
-                },
-            },
-            None,
-            None,
-            vec![Expr::flags(vec!["bar".to_string(), "baz".to_string()])],
-            None,
-        ));
-        assert_eq!(result, expected);
-    }
-
-    #[test]
-    fn test_call_with_function_name_indexed_drop_3() {
-        let input =
-            "ns:name/interface.{resource1(\"hello\", { field-a: some(1) }).drop}({bar, baz})";
-        let result = Expr::from_text(input);
-        let expected = Ok(Expr::call_worker_function(
-            DynamicParsedFunctionName {
-                site: ParsedFunctionSite::PackagedInterface {
-                    namespace: "ns".to_string(),
-                    package: "name".to_string(),
-                    interface: "interface".to_string(),
-                    version: None,
-                },
-                function: DynamicParsedFunctionReference::IndexedResourceDrop {
-                    resource: "resource1".to_string(),
-                    resource_params: vec![
-                        Expr::literal("hello"),
-                        Expr::record(vec![(
-                            "field-a".to_string(),
-                            Expr::option(Some(Expr::number(BigDecimal::from(1)))),
-                        )]),
-                    ],
                 },
             },
             None,

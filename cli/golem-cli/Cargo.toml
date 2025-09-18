@@ -59,11 +59,11 @@ clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
-envsubst = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
+gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
 indexmap = { workspace = true }
@@ -75,6 +75,7 @@ lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
+nanoid = { workspace = true }
 nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }
@@ -103,6 +104,7 @@ tokio-tungstenite = { workspace = true }
 toml = { workspace = true }
 toml_edit = { workspace = true }
 tracing = { workspace = true }
+tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
@@ -128,9 +130,8 @@ globwalk = "0.9"                # for manifest discovery
 
 
 [dev-dependencies]
-# External deps
-# (remove axum from here if it’s present)
 log = { workspace = true }
+pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 reqwest = { workspace = true }
 serde_json_path = { workspace = true }

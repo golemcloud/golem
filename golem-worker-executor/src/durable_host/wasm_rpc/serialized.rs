@@ -15,6 +15,7 @@
 use crate::durable_host::serialized::{SerializableDateTime, SerializableError};
 use crate::services::rpc::RpcError;
 use bincode::{Decode, Encode};
+use golem_common::model::agent::DataValue;
 use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
 use golem_wasm_rpc::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
@@ -43,8 +44,31 @@ pub struct SerializableInvokeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+pub struct EnrichedSerializableInvokeRequest {
+    pub remote_worker_id: WorkerId,
+    pub remote_agent_type: Option<String>,
+    pub remote_agent_parameters: Option<DataValue>,
+    pub idempotency_key: IdempotencyKey,
+    pub function_name: String,
+    #[wit_field(convert_vec = WitValue)]
+    pub function_params: Vec<ValueAndType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
 pub struct SerializableScheduleInvocationRequest {
     pub remote_worker_id: WorkerId,
+    pub idempotency_key: IdempotencyKey,
+    pub function_name: String,
+    #[wit_field(convert_vec = WitValue)]
+    pub function_params: Vec<ValueAndType>,
+    pub datetime: SerializableDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Encode, Decode, IntoValue)]
+pub struct EnrichedSerializableScheduleInvocationRequest {
+    pub remote_worker_id: WorkerId,
+    pub remote_agent_type: Option<String>,
+    pub remote_agent_parameters: Option<DataValue>,
     pub idempotency_key: IdempotencyKey,
     pub function_name: String,
     #[wit_field(convert_vec = WitValue)]

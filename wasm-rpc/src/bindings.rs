@@ -660,29 +660,6 @@ pub mod golem {
             }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn ephemeral(component_id: ComponentId) -> WasmRpc {
-                    unsafe {
-                        let ComponentId { uuid: uuid0 } = component_id;
-                        let Uuid { high_bits: high_bits1, low_bits: low_bits1 } = uuid0;
-                        #[cfg(target_arch = "wasm32")]
-                        #[link(wasm_import_module = "golem:rpc/types@0.2.2")]
-                        unsafe extern "C" {
-                            #[link_name = "[static]wasm-rpc.ephemeral"]
-                            fn wit_import2(_: i64, _: i64) -> i32;
-                        }
-                        #[cfg(not(target_arch = "wasm32"))]
-                        unsafe extern "C" fn wit_import2(_: i64, _: i64) -> i32 {
-                            unreachable!()
-                        }
-                        let ret = unsafe {
-                            wit_import2(_rt::as_i64(high_bits1), _rt::as_i64(low_bits1))
-                        };
-                        unsafe { WasmRpc::from_handle(ret as u32) }
-                    }
-                }
-            }
-            impl WasmRpc {
-                #[allow(unused_unsafe, clippy::all)]
                 pub fn invoke_and_await(
                     &self,
                     function_name: &str,
@@ -5712,15 +5689,15 @@ mod _rt {
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2566] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x87\x13\x01A\x02\x01\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 2516] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd5\x12\x01A\x02\x01\
 A\x08\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08datetime\x03\0\0\x01\
 @\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\0\x1cwasi:clocks/\
 wall-clock@0.2.3\x05\0\x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04sel\
 f\x01\0\x7f\x04\0\x16[method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\
 \0\x16[method]pollable.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\
 \0\x04poll\x01\x06\x03\0\x12wasi:io/poll@0.2.3\x05\x01\x02\x03\0\0\x08datetime\x02\
-\x03\0\x01\x08pollable\x01B[\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
+\x03\0\x01\x08pollable\x01BY\x02\x03\x02\x01\x02\x04\0\x08datetime\x03\0\0\x02\x03\
 \x02\x01\x03\x04\0\x08pollable\x03\0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\
 \0\x04uuid\x03\0\x04\x01r\x01\x04uuid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\
 \x0ccomponent-id\x07\x0bworker-names\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0a\
@@ -5747,22 +5724,21 @@ es)\x04\0\x09wit-value\x03\0*\x01r\x02\x05value+\x03typ\x20\x04\0\x0evalue-and-t
 ype\x03\0,\x01q\x04\x0eprotocol-error\x01s\0\x06denied\x01s\0\x09not-found\x01s\0\
 \x15remote-internal-error\x01s\0\x04\0\x09rpc-error\x03\0.\x04\0\x08wasm-rpc\x03\
 \x01\x04\0\x14future-invoke-result\x03\x01\x04\0\x12cancellation-token\x03\x01\x01\
-i0\x01@\x01\x09worker-id\x09\03\x04\0\x15[constructor]wasm-rpc\x014\x01@\x01\x0c\
-component-id\x07\03\x04\0\x1a[static]wasm-rpc.ephemeral\x015\x01h0\x01p+\x01j\x01\
-+\x01/\x01@\x03\x04self6\x0dfunction-names\x0ffunction-params7\08\x04\0![method]\
-wasm-rpc.invoke-and-await\x019\x01j\0\x01/\x01@\x03\x04self6\x0dfunction-names\x0f\
-function-params7\0:\x04\0\x17[method]wasm-rpc.invoke\x01;\x01i1\x01@\x03\x04self\
-6\x0dfunction-names\x0ffunction-params7\0<\x04\0'[method]wasm-rpc.async-invoke-a\
-nd-await\x01=\x01@\x04\x04self6\x0escheduled-time\x01\x0dfunction-names\x0ffunct\
-ion-params7\x01\0\x04\0$[method]wasm-rpc.schedule-invocation\x01>\x01i2\x01@\x04\
-\x04self6\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params7\0?\x04\0/[\
-method]wasm-rpc.schedule-cancelable-invocation\x01@\x01h1\x01i\x03\x01@\x01\x04s\
-elf\xc1\0\0\xc2\0\x04\0&[method]future-invoke-result.subscribe\x01C\x01k8\x01@\x01\
-\x04self\xc1\0\0\xc4\0\x04\0\x20[method]future-invoke-result.get\x01E\x01h2\x01@\
-\x01\x04self\xc6\0\x01\0\x04\0![method]cancellation-token.cancel\x01G\x01j\x01\x05\
-\x01s\x01@\x01\x04uuids\0\xc8\0\x04\0\x0aparse-uuid\x01I\x01@\x01\x04uuid\x05\0s\
-\x04\0\x0euuid-to-string\x01J\x01@\x01\x03vnt-\0+\x04\0\x0dextract-value\x01K\x01\
-@\x01\x03vnt-\0\x20\x04\0\x0cextract-type\x01L\x03\0\x15golem:rpc/types@0.2.2\x05\
+i0\x01@\x01\x09worker-id\x09\03\x04\0\x15[constructor]wasm-rpc\x014\x01h0\x01p+\x01\
+j\x01+\x01/\x01@\x03\x04self5\x0dfunction-names\x0ffunction-params6\07\x04\0![me\
+thod]wasm-rpc.invoke-and-await\x018\x01j\0\x01/\x01@\x03\x04self5\x0dfunction-na\
+mes\x0ffunction-params6\09\x04\0\x17[method]wasm-rpc.invoke\x01:\x01i1\x01@\x03\x04\
+self5\x0dfunction-names\x0ffunction-params6\0;\x04\0'[method]wasm-rpc.async-invo\
+ke-and-await\x01<\x01@\x04\x04self5\x0escheduled-time\x01\x0dfunction-names\x0ff\
+unction-params6\x01\0\x04\0$[method]wasm-rpc.schedule-invocation\x01=\x01i2\x01@\
+\x04\x04self5\x0escheduled-time\x01\x0dfunction-names\x0ffunction-params6\0>\x04\
+\0/[method]wasm-rpc.schedule-cancelable-invocation\x01?\x01h1\x01i\x03\x01@\x01\x04\
+self\xc0\0\0\xc1\0\x04\0&[method]future-invoke-result.subscribe\x01B\x01k7\x01@\x01\
+\x04self\xc0\0\0\xc3\0\x04\0\x20[method]future-invoke-result.get\x01D\x01h2\x01@\
+\x01\x04self\xc5\0\x01\0\x04\0![method]cancellation-token.cancel\x01F\x01j\x01\x05\
+\x01s\x01@\x01\x04uuids\0\xc7\0\x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\
+\x04\0\x0euuid-to-string\x01I\x01@\x01\x03vnt-\0+\x04\0\x0dextract-value\x01J\x01\
+@\x01\x03vnt-\0\x20\x04\0\x0cextract-type\x01K\x03\0\x15golem:rpc/types@0.2.2\x05\
 \x04\x04\0\x12golem:rpc/wasm-rpc\x04\0\x0b\x0e\x01\0\x08wasm-rpc\x03\0\0\0G\x09p\
 roducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\
 \x060.41.0";

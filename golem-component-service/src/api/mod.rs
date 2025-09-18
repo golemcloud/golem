@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod agent_types;
 pub mod common;
 pub mod component;
 pub mod dto;
@@ -27,7 +28,12 @@ use poem::error::ReadBodyError;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, OpenApiService};
 
-pub type Apis = (HealthcheckApi, component::ComponentApi, plugin::PluginApi);
+pub type Apis = (
+    HealthcheckApi,
+    component::ComponentApi,
+    plugin::PluginApi,
+    agent_types::AgentTypesApi,
+);
 
 pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
     OpenApiService::new(
@@ -38,6 +44,7 @@ pub fn make_open_api_service(services: &Services) -> OpenApiService<Apis, ()> {
                 services.api_mapper.clone(),
             ),
             plugin::PluginApi::new(services.plugin_service.clone()),
+            agent_types::AgentTypesApi::new(services.agent_types_service.clone()),
         ),
         "Golem API",
         "1.0",

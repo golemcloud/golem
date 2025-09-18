@@ -15,7 +15,7 @@
 use crate::router::start_router;
 use crate::StartedComponents;
 use anyhow::Context;
-use cloud_service::config::CloudServiceConfig;
+use cloud_service::config::{CloudServiceConfig, PlanConfig, PlansConfig};
 use cloud_service::CloudService;
 use golem_common::config::DbConfig;
 use golem_common::config::DbSqliteConfig;
@@ -28,7 +28,8 @@ use golem_service_base::config::LocalFileSystemBlobStorageConfig;
 use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
-    GolemConfig as WorkerExecutorConfig, ProjectServiceConfig, ProjectServiceGrpcConfig,
+    AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, ProjectServiceConfig,
+    ProjectServiceGrpcConfig,
 };
 use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
@@ -151,6 +152,18 @@ fn cloud_service_config(args: &LaunchArgs) -> CloudServiceConfig {
         accounts.insert(root_account.id.clone(), root_account);
     }
 
+    // no need for limits in the single executable, just set them to max values for convenience
+    let default_plan = PlanConfig {
+        plan_id: Uuid::nil(),
+        project_limit: i32::MAX,
+        component_limit: i32::MAX,
+        worker_limit: i32::MAX,
+        storage_limit: i32::MAX,
+        monthly_gas_limit: i64::MAX,
+        monthly_upload_limit: i32::MAX,
+        max_memory_per_worker: i64::MAX,
+    };
+
     CloudServiceConfig {
         grpc_port: 0,
         http_port: 0,
@@ -159,6 +172,9 @@ fn cloud_service_config(args: &LaunchArgs) -> CloudServiceConfig {
             max_connections: 4,
         }),
         accounts: AccountsConfig { accounts },
+        plans: PlansConfig {
+            default: default_plan,
+        },
         ..Default::default()
     }
 }
@@ -313,6 +329,15 @@ fn worker_executor_config(
             batch_update_interval: Duration::from_secs(60),
             retries: RetryConfig::default(),
         }),
+        agent_types_service: AgentTypesServiceConfig::Grpc(
+            golem_worker_executor::services::golem_config::AgentTypesServiceGrpcConfig {
+                host: args.router_addr.clone(),
+                port: component_service_run_details.grpc_port,
+                access_token: ADMIN_TOKEN.to_string(),
+                retries: RetryConfig::default(),
+                ..Default::default()
+            },
+        ),
         ..Default::default()
     };
 

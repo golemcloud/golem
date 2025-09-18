@@ -69,6 +69,7 @@ run_task = [
         "wit-template-golem-agent-ts",
         "wit-test-components",
         "wit-golem-templates",
+        "wit-sdks",
     ] },
 ]
 
@@ -106,6 +107,18 @@ mkdir cli/golem-templates/wit/deps
 glob_cp wit/deps/**/* cli/golem-templates/wit/deps
 """
 
+[tasks.wit-sdks]
+private = true
+script_runner = "@duckscript"
+script = """
+rm -r sdks/rust/golem-rust/wit/deps
+rm -r sdks/ts/wit/deps
+mkdir sdks/rust/golem-rust/wit/deps
+mkdir sdks/ts/wit/deps
+glob_cp wit/deps/**/* sdks/rust/golem-rust/wit/deps
+glob_cp wit/deps/**/* sdks/ts/wit/deps
+"""
+
 [tasks.wit-golem-cli]
 private = true
 script_runner = "@duckscript"
@@ -117,14 +130,13 @@ cp wit/deps/io cli/golem-cli/wit/deps
 cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-rpc cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
+cp wit/deps/logging cli/golem-cli/wit/deps
 """
 
 [tasks.wit-template-golem-agent-ts]
 private = true
 script_runner = "@duckscript"
 script = """
-rm -r cli/template-golem-agent-ts/wit/deps
-mkdir cli/template-golem-agent-ts/wit/deps
 glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
 """
 
@@ -132,7 +144,41 @@ glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
 private = true
 script_runner = "@duckscript"
 script = """
-components = array blob-store-service component-resolve component-transformer-example1/adapter custom-durability file-service high-volume-logging http-client ifs-update ifs-update-inside-exported-function invocation-context js-1 js-4 key-value-service networking oplog-processor promise python-http-client rdbms-service rpc runtime-service scheduled-invocation shopping-cart tinygo-wasi tinygo-wasi-http ts-rpc update-test-env-var update-test-v2-11 update-test-v3-11 update-test-v3-sdk update-test-v4 wasi-config wasi-http-incoming-request-handler wasi-http-incoming-request-handler-echo wasi-http-incoming-request-handler-state low-level-agent
+components = array
+array_push ${components} blob-store-service
+array_push ${components} component-resolve
+array_push ${components} component-transformer-example1/adapter
+array_push ${components} custom-durability
+array_push ${components} file-service
+array_push ${components} high-volume-logging
+array_push ${components} http-client
+array_push ${components} ifs-update
+array_push ${components} ifs-update-inside-exported-function
+array_push ${components} invocation-context
+array_push ${components} js-1
+array_push ${components} js-4
+array_push ${components} key-value-service
+array_push ${components} networking
+array_push ${components} oplog-processor
+array_push ${components} promise
+array_push ${components} python-http-client
+array_push ${components} rdbms-service
+array_push ${components} rpc
+array_push ${components} runtime-service
+array_push ${components} scheduled-invocation
+array_push ${components} shopping-cart
+array_push ${components} tinygo-wasi
+array_push ${components} tinygo-wasi-http
+array_push ${components} ts-rpc
+array_push ${components} update-test-env-var
+array_push ${components} update-test-v2-11
+array_push ${components} update-test-v3-11
+array_push ${components} update-test-v3-sdk
+array_push ${components} update-test-v4
+array_push ${components} wasi-config
+array_push ${components} wasi-http-incoming-request-handler
+array_push ${components} wasi-http-incoming-request-handler-echo
+array_push ${components} wasi-http-incoming-request-handler-state
 
 for component in ${components}
     echo "Updating wit directory for test component ${component}"
@@ -169,6 +215,20 @@ args = ["build", "--workspace", "--all-targets"]
 [tasks.build-bins]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
+command = "cargo"
+args = [
+    "build",
+    "--workspace",
+    "--bins",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
+
+[tasks.build-bins-all]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode, including the single-executable golem"
 command = "cargo"
 args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 
@@ -228,20 +288,48 @@ dependencies = [
 description = "Build the project in release mode"
 condition = { env_not_set = ["PLATFORM_OVERRIDE"] }
 command = "cargo"
-args = ["build", "--release"]
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
 
 [tasks.build-release-override-linux-amd64]
 description = "Build the project in release mode with target platform override to linux/amd64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/amd64" } }
 command = "cargo"
-args = ["build", "--release", "--target", "x86_64-unknown-linux-gnu"]
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--target",
+    "x86_64-unknown-linux-gnu",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
 
 [tasks.build-release-override-linux-arm64]
 description = "Build the project in release mode with target platform override to linux/arm64"
 condition = { env = { "PLATFORM_OVERRIDE" = "linux/arm64" } }
 install_crate = "cross"
 command = "cross"
-args = ["build", "--release", "--target", "aarch64-unknown-linux-gnu"]
+args = [
+    "build",
+    "--workspace",
+    "--release",
+    "--target",
+    "aarch64-unknown-linux-gnu",
+    "--exclude",
+    "integration-tests",
+    "--exclude",
+    "golem",
+]
 
 ## ** CHECK **
 
@@ -386,7 +474,6 @@ dependencies = [
     "integration-tests-group4",
     "integration-tests-group5",
     "cli-integration-tests",
-    "template-integration-tests"
 ]
 
 [tasks.integration-tests-group1]
@@ -434,21 +521,13 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build"]
+dependencies = ["build-bins-all"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
 exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-'''
-
-[tasks.template-integration-tests]
-dependencies = ["build"]
-description = "Run template integration tests"
-script_runner = "@duckscript"
-script = '''
-exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]
@@ -493,10 +572,7 @@ cargo test --package integration-tests --test api -- :tag: --nocapture --report-
 
 [tasks.check-openapi]
 description = "Generates openapi spec from the code and checks if it is the same as the ones in the openapi directory"
-dependencies = [
-    "merge-openapi",
-    "diff-openapi",
-]
+dependencies = ["merge-openapi", "diff-openapi"]
 
 [tasks.diff-openapi]
 description = "Checks if the generated openapi spec is the same as the one in the openapi directory"
@@ -541,10 +617,7 @@ script = '''
 ## ** GENERATE-OPENAPI **
 
 [tasks.generate-openapi]
-dependencies = [
-    "merge-openapi",
-    "store-openapi",
-]
+dependencies = ["merge-openapi", "store-openapi"]
 description = "Generates openapi spec from the code and saves it to the openapi directory"
 
 [tasks.generate-worker-service-openapi]
@@ -617,7 +690,7 @@ dependencies = [
     "publish-golem-service-base",
     "publish-golem-test-framework",
     "publish-golem-rib-repl",
-    "publish-golem-cli"
+    "publish-golem-cli",
 ]
 
 [tasks.set-version]
@@ -767,9 +840,7 @@ args = [
 
 [tasks.publish-golem-cli]
 description = "Publishes golem-cli package to crates.io"
-dependencies = [
-    "publish-golem-templates",
-]
+dependencies = ["publish-golem-templates"]
 command = "cargo"
 args = [
     "publish",
@@ -838,12 +909,7 @@ dependencies = ["build"]
 
 condition = { fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager" }
 
-condition_script = [
-    "nginx -v",
-    "lnav --version",
-    "redis-server --version",
-    ""
-]
+condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
 env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "Disabled" }
 
@@ -853,14 +919,12 @@ script = { file = "./local-run/start.sh" }
 description = "Runs all the services locally with the oauth2 login system enabled"
 dependencies = ["build"]
 
-condition = { env_set = ["GITHUB_CLIENT_ID", "GITHUB_CLIENT_SECRET"], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
+condition = { env_set = [
+    "GITHUB_CLIENT_ID",
+    "GITHUB_CLIENT_SECRET",
+], fail_message = "Requires lnav, nginx and redis on path. Install them with your package manager. GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET env vars must be set." }
 
-condition_script = [
-    "nginx -v",
-    "lnav --version",
-    "redis-server --version",
-    ""
-]
+condition_script = ["nginx -v", "lnav --version", "redis-server --version", ""]
 
 env = { "GOLEM_CLOUD_SERVICE_LOGIN_TYPE" = "OAuth2" }
 
@@ -999,12 +1063,7 @@ cwd = "./cli/desktop-app"
 [tasks.publish-app-manifest-json-schema]
 description = "Publish application manifest schemas to S3 (https://schema.golem.cloud)"
 command = "aws"
-args = [
-    "s3",
-    "sync",
-    "cli/schema.golem.cloud",
-    "s3://schema.golem.cloud",
-]
+args = ["s3", "sync", "cli/schema.golem.cloud", "s3://schema.golem.cloud"]
 
 [tasks.serve-app-manifest-json-schema]
 description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"

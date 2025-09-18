@@ -15,8 +15,8 @@
 use crate::call_type::CallType;
 use crate::rib_type_error::RibTypeErrorInternal;
 use crate::{
-    ComponentDependencies, DynamicParsedFunctionName, Expr, ExprVisitor, FunctionName,
-    GlobalVariableTypeSpec,
+    ComponentDependencies, CustomInstanceSpec, DynamicParsedFunctionName, Expr, ExprVisitor,
+    FunctionName, GlobalVariableTypeSpec,
 };
 use std::collections::HashSet;
 
@@ -31,11 +31,16 @@ impl InferredExpr {
     pub fn from_expr(
         expr: Expr,
         component_dependency: &ComponentDependencies,
-        type_spec: &Vec<GlobalVariableTypeSpec>,
+        global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<InferredExpr, RibTypeErrorInternal> {
         let mut mutable_expr = expr;
 
-        mutable_expr.infer_types(component_dependency, type_spec)?;
+        mutable_expr.infer_types(
+            component_dependency,
+            global_variable_type_spec,
+            custom_instance_spec,
+        )?;
 
         Ok(InferredExpr(mutable_expr))
     }

@@ -13,9 +13,11 @@ opt-level = 's'
 strip = true
 
 [dependencies]
+futures-concurrency = "7.6.3"
 once_cell = "1.17.1"
 rand = "0.8.5"
 wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
+wstd = "0.5.4"
 
 [package.metadata.component.target]
 path = "wit"

@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::sync::RwLock;
 use std::time::Instant;
-use test_r::{flaky, test, test_dep};
+use test_r::{test, test_dep};
 
 use assert2::check;
 use nonempty_collections::nev;
@@ -253,17 +253,6 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
             id,
             resource_type_id,
         },
-        OplogEntry::DescribeResource {
-            timestamp,
-            id,
-            resource_type_id,
-            indexed_resource_parameters,
-        } => OplogEntry::DescribeResource {
-            timestamp: rounded_ts(timestamp),
-            id,
-            resource_type_id,
-            indexed_resource_parameters,
-        },
         OplogEntry::Log {
             timestamp,
             level,
@@ -334,18 +323,40 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
                 level,
             }
         }
-        OplogEntry::CreateAgentInstance {
+        OplogEntry::BeginRemoteTransaction {
             timestamp,
-            key,
-            parameters,
-        } => OplogEntry::CreateAgentInstance {
+            transaction_id,
+        } => OplogEntry::BeginRemoteTransaction {
             timestamp: rounded_ts(timestamp),
-            key,
-            parameters,
+            transaction_id,
         },
-        OplogEntry::DropAgentInstance { timestamp, key } => OplogEntry::DropAgentInstance {
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::PreCommitRemoteTransaction {
             timestamp: rounded_ts(timestamp),
-            key,
+            begin_index,
+        },
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::PreRollbackRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::CommittedRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::CommittedRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::RolledBackRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
         },
     }
 }
@@ -719,37 +730,31 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 }
 
 #[test]
-#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }

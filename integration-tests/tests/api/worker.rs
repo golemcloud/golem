@@ -20,7 +20,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     InvokeAndAwaitResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
     LaunchNewWorkerSuccessResponse,
 };
-use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, TargetWorkerId};
+use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, WorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::Value;
@@ -63,6 +63,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
                     ("TEST_ENV_VAR_2".to_string(), "value_2".to_string()),
                 ]),
                 wasi_config_vars: Some(BTreeMap::new().into()),
+                ignore_already_existing: false,
             },
         )
         .await
@@ -75,9 +76,9 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
         .worker_service()
         .invoke_and_await(
             &admin.token,
-            TargetWorkerId {
+            WorkerId {
                 component_id: Some(component_id.clone().into()),
-                name: Some(create_result.worker_id.as_ref().unwrap().name.to_string()),
+                name: create_result.worker_id.as_ref().unwrap().name.to_string(),
             },
             None,
             "golem:it/api.{get-arguments}".to_string(),
@@ -103,9 +104,9 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
         .worker_service()
         .invoke_and_await(
             &admin.token,
-            TargetWorkerId {
+            WorkerId {
                 component_id: Some(component_id.clone().into()),
-                name: Some(create_result.worker_id.as_ref().unwrap().name.to_string()),
+                name: create_result.worker_id.as_ref().unwrap().name.to_string(),
             },
             None,
             "golem:it/api.{get-environment}".to_string(),
@@ -136,9 +137,7 @@ async fn add_and_invoke_worker_with_args_and_env(deps: &EnvBasedTestDependencies
     info!("env vars: {:?}", env_vars);
     check!(env_vars.get("GOLEM_COMPONENT_VERSION") == Some(&"1".to_string()));
     check!(env_vars.get("GOLEM_COMPONENT_ID") == Some(&component_id.0.to_string()));
-    check!(
-        env_vars.get("GOLEM_WORKER_NAME") == Some(&create_result.worker_id.as_ref().unwrap().name)
-    );
+    check!(env_vars.get("GOLEM_AGENT_ID") == Some(&create_result.worker_id.as_ref().unwrap().name));
     check!(env_vars.get("TEST_ENV_VAR_1") == Some(&"value_1".to_string()));
     check!(env_vars.get("TEST_ENV_VAR_2") == Some(&"value_2".to_string()));
 }

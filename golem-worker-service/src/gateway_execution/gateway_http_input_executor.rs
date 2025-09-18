@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::auth_call_back_binding_handler::AuthorisationSuccess;
-use super::file_server_binding_handler::FileServerBindingSuccess;
+use super::file_server_binding_handler::{FileServerBindingError, FileServerBindingSuccess};
 use super::http_handler_binding_handler::{HttpHandlerBindingHandler, HttpHandlerBindingResult};
 use super::request::{
     authority_from_request, split_resolved_route_entry, RichRequest, SplitResolvedRouteEntryResult,
@@ -194,8 +194,15 @@ impl DefaultGatewayInputExecutor {
             )
             .await?;
 
-        let worker_name = worker_detail.worker_name.clone();
-        let worker_name = worker_name.as_deref();
+        let worker_name = worker_detail
+            .worker_name
+            .as_ref()
+            .ok_or_else(|| {
+                GatewayHttpError::FileServerBindingError(FileServerBindingError::InternalError(
+                    "Missing worker name".to_string(),
+                ))
+            })?
+            .clone();
 
         let response_script_result = self
             .execute_response_mapping_script(
@@ -209,7 +216,7 @@ impl DefaultGatewayInputExecutor {
         self.file_server_binding_handler
             .handle_file_server_binding_result(
                 namespace,
-                worker_name,
+                &worker_name,
                 &component_id,
                 response_script_result,
             )

@@ -21,7 +21,7 @@ use crate::services::projects::ProjectService;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::component::ComponentOwner;
-use golem_common::model::{ComponentId, ComponentVersion, ProjectId};
+use golem_common::model::{ComponentId, ComponentVersion};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
@@ -37,25 +37,27 @@ pub trait ComponentService: Send + Sync {
     async fn get(
         &self,
         engine: &Engine,
-        project_id: &ProjectId,
         component_id: &ComponentId,
         component_version: ComponentVersion,
     ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>;
 
     async fn get_metadata(
         &self,
-        project_id: &ProjectId,
         component_id: &ComponentId,
         forced_version: Option<ComponentVersion>,
     ) -> Result<golem_service_base::model::Component, WorkerExecutorError>;
 
-    /// Resolve a component given a user provided string. The syntax of the provided string is allowed to vary between implementations.
-    /// Resolving component is the component in whoose context the resolution is being performed
+    /// Resolve a component given a user-provided string. The syntax of the provided string is allowed to vary between implementations.
+    /// Resolving component is the component in whose context the resolution is being performed
     async fn resolve_component(
         &self,
         component_reference: String,
         resolving_component: ComponentOwner,
     ) -> Result<Option<ComponentId>, WorkerExecutorError>;
+
+    /// Returns all the component metadata the implementation has cached.
+    /// This is useful for some mock/local implementations.
+    async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component>;
 }
 
 pub fn configured(
@@ -390,7 +392,6 @@ mod filesystem {
         async fn get(
             &self,
             engine: &Engine,
-            project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
         ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>
@@ -417,7 +418,7 @@ mod filesystem {
                 .get_component_from_path(
                     &wasm_path,
                     engine,
-                    project_id,
+                    &metadata.project_id,
                     component_id,
                     component_version,
                 )
@@ -428,7 +429,6 @@ mod filesystem {
 
         async fn get_metadata(
             &self,
-            _project_id: &ProjectId,
             component_id: &ComponentId,
             forced_version: Option<ComponentVersion>,
         ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
@@ -450,6 +450,18 @@ mod filesystem {
                 .id_by_name
                 .get(&component_reference)
                 .cloned())
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
+            self.index
+                .read()
+                .await
+                .metadata
+                .values()
+                .map(|local_metadata| {
+                    golem_service_base::model::Component::from(local_metadata.clone())
+                })
+                .collect()
         }
     }
 
@@ -650,7 +662,6 @@ mod grpc {
         async fn get(
             &self,
             engine: &Engine,
-            project_id: &ProjectId,
             component_id: &ComponentId,
             component_version: ComponentVersion,
         ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>
@@ -660,12 +671,16 @@ mod grpc {
                 component_version,
             };
             let client_clone = self.component_client.clone();
-            let project_id_clone = project_id.clone();
             let component_id_clone = component_id.clone();
             let engine = engine.clone();
             let access_token = self.access_token;
             let retry_config_clone = self.retry_config.clone();
             let compiled_component_service = self.compiled_component_service.clone();
+            let metadata = self
+                .get_metadata(component_id, Some(component_version))
+                .await?;
+            let project_id_clone = metadata.owner.project_id.clone();
+
             let component = self
                 .component_cache
                 .get_or_insert_simple(&key.clone(), || {
@@ -748,16 +763,12 @@ mod grpc {
                     })
                 })
                 .await?;
-            let metadata = self
-                .get_metadata(project_id, component_id, Some(component_version))
-                .await?;
 
             Ok((component, metadata))
         }
 
         async fn get_metadata(
             &self,
-            project_id: &ProjectId,
             component_id: &ComponentId,
             forced_version: Option<ComponentVersion>,
         ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
@@ -768,7 +779,6 @@ mod grpc {
                     let retry_config = self.retry_config.clone();
                     let component_id = component_id.clone();
                     let plugin_observations = self.plugin_observations.clone();
-                    let account_id = self.project_service.get_project_owner(project_id).await?;
                     self.component_metadata_cache
                         .get_or_insert_simple(
                             &ComponentKey {
@@ -785,6 +795,10 @@ mod grpc {
                                         forced_version,
                                     )
                                     .await?;
+                                    let account_id = self
+                                        .project_service
+                                        .get_project_owner(&metadata.owner.project_id)
+                                        .await?;
                                     for installation in &metadata.installed_plugins {
                                         plugin_observations
                                             .observe_plugin_installation(
@@ -859,6 +873,13 @@ mod grpc {
                     Box::pin(self.resolve_component_remotely(&project_id, &component_name))
                 })
                 .await
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
+            self.component_metadata_cache
+                .iter()
+                .map(|(_, v)| v)
+                .collect()
         }
     }
 

@@ -1,4 +1,3 @@
-use clap::error::ErrorKind;
 use clap::{Error, Parser};
 
 /// Helper for implementing `parse` function in `golem_rib_repl::Command` trait to obtain `Input`,
@@ -18,12 +17,10 @@ use clap::{Error, Parser};
 ///   at that point and can be passed through directly.
 ///
 pub fn parse_with_clap<Input: Parser>(command_name: &str, input: &str) -> Result<Input, Error> {
-    let args = shell_words::split(input).map_err(|e| {
-        Error::raw(
-            ErrorKind::InvalidValue,
-            format!("Failed to parse input to command: {e}"),
-        )
-    })?;
+    let args = input
+        .split_whitespace()
+        .map(|x| x.trim().to_string())
+        .collect::<Vec<_>>();
 
     let command = format!(":{command_name}");
 

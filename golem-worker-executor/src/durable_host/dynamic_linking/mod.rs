@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::dynamic_linking::mock::{mock_link, should_mock_dependency};
 use crate::durable_host::dynamic_linking::wasm_rpc::dynamic_wasm_rpc_link;
 use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::{DynamicLinking, WorkerCtx};
@@ -23,11 +24,16 @@ use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
+mod mock;
 mod wasm_rpc;
 
 #[async_trait]
-impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
-    for DurableWorkerCtx<Ctx>
+impl<
+        Ctx: WorkerCtx
+            + HostWasmRpc
+            + HostFutureInvokeResult
+            + wasmtime_wasi::p2::bindings::cli::environment::Host,
+    > DynamicLinking<Ctx> for DurableWorkerCtx<Ctx>
 {
     fn link(
         &mut self,
@@ -56,7 +62,10 @@ impl<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult> DynamicLinking<Ctx>
                             dynamic_wasm_rpc_link(&name, rpc_metadata, engine, &mut root, inst)?;
                         }
                         None => {
-                            // Instance not marked for dynamic linking
+                            // Instance is not marked for dynamic linking
+                            if should_mock_dependency(&name) {
+                                mock_link(&name, engine, &mut root, inst)?;
+                            }
                         }
                     }
                 }

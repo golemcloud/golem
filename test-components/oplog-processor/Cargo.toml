@@ -16,6 +16,8 @@ wit-bindgen-rt = { version = "0.37.0", features = ["bitflags"] }
 
 uuid = { version = "1.10", features = ["v4"] }
 
+[package.metadata.component.bindings]
+
 [package.metadata.component.target]
 path = "wit"
 

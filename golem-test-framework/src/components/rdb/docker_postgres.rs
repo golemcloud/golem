@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::docker::{get_docker_container_name, ContainerHandle};
+use crate::components::docker::{get_docker_container_name, network, ContainerHandle};
 use crate::components::rdb::{postgres_wait_for_startup, DbInfo, PostgresInfo, Rdb};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
@@ -47,6 +47,7 @@ impl DockerPostgresRdb {
                 .with_env_var("POSTGRES_DB", database)
                 .with_env_var("POSTGRES_PASSWORD", password)
                 .with_env_var("POSTGRES_USER", username)
+                .with_network(network(unique_network_id))
                 .start()
         })
         .retries(5)
@@ -87,6 +88,16 @@ impl DockerPostgresRdb {
     pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
         let db_info = PostgresInfo {
             database_name: db_name.to_string(),
+            ..self.info.clone()
+        };
+
+        db_info.public_connection_string()
+    }
+
+    pub fn public_connection_string_with_user(&self, username: &str, password: &str) -> String {
+        let db_info = PostgresInfo {
+            username: username.to_string(),
+            password: password.to_string(),
             ..self.info.clone()
         };
 

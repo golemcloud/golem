@@ -82,7 +82,16 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         owned_worker_id: &OwnedWorkerId,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         let worker = self
-            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None, None)
+            .get_or_create_suspended(
+                created_by,
+                owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
             .await?;
         Ok(worker.oplog())
     }
@@ -97,7 +106,16 @@ impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
         invocation_context: InvocationContextStack,
     ) -> Result<(), WorkerExecutorError> {
         let worker = self
-            .get_or_create_suspended(created_by, owned_worker_id, None, None, None, None, None)
+            .get_or_create_suspended(
+                created_by,
+                owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
             .await?;
 
         worker
@@ -244,6 +262,7 @@ impl SchedulerServiceDefault {
                                     "scheduler",
                                     worker_id = owned_worker_id.worker_id.to_string()
                                 );
+
                                 self.worker_access
                                     .activate_worker(&account_id, &owned_worker_id)
                                     .instrument(span)

@@ -23,6 +23,7 @@ use crate::durable_host::serialized::{
     SerializableIpAddresses, SerializableStreamError,
 };
 use crate::durable_host::wasm_rpc::serialized::{
+    EnrichedSerializableInvokeRequest, EnrichedSerializableScheduleInvocationRequest,
     SerializableInvokeRequest, SerializableInvokeResult, SerializableScheduleId,
     SerializableScheduleInvocationRequest,
 };
@@ -39,22 +40,22 @@ use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_common::model::exports::find_resource_site;
+use golem_common::model::agent::{AgentId, DataValue};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
-    ActivatePluginParameters, CancelInvocationParameters, ChangePersistenceLevelParameters,
-    ChangeRetryPolicyParameters, CreateAgentInstanceParameters, CreateParameters,
-    DeactivatePluginParameters, DescribeResourceParameters, DropAgentInstanceParameters,
-    EndRegionParameters, ErrorParameters, ExportedFunctionCompletedParameters,
-    ExportedFunctionInvokedParameters, ExportedFunctionParameters, FailedUpdateParameters,
-    FinishSpanParameters, GrowMemoryParameters, ImportedFunctionInvokedParameters, JumpParameters,
-    LogParameters, ManualUpdateParameters, PendingUpdateParameters,
-    PendingWorkerInvocationParameters, PluginInstallationDescription, PublicAttribute,
-    PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
-    PublicUpdateDescription, PublicWorkerInvocation, ResourceParameters, RevertParameters,
-    SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
-    SuccessfulUpdateParameters, TimestampParameter,
+    ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
+    ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
+    DeactivatePluginParameters, EndRegionParameters, ErrorParameters,
+    ExportedFunctionCompletedParameters, ExportedFunctionInvokedParameters,
+    ExportedFunctionParameters, FailedUpdateParameters, FinishSpanParameters, GrowMemoryParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, LogParameters, ManualUpdateParameters,
+    PendingUpdateParameters, PendingWorkerInvocationParameters, PluginInstallationDescription,
+    PublicAttribute, PublicExternalSpanData, PublicLocalSpanData, PublicOplogEntry, PublicSpanData,
+    PublicUpdateDescription, PublicWorkerInvocation, RemoteTransactionParameters,
+    ResourceParameters, RevertParameters, SetSpanAttributeParameters,
+    SnapshotBasedUpdateParameters, StartSpanParameters, SuccessfulUpdateParameters,
+    TimestampParameter,
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
@@ -66,10 +67,7 @@ use golem_wasm_ast::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
 use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
-use golem_wasm_rpc::{
-    parse_value_and_type, IntoValue, IntoValueAndType, Value, ValueAndType, WitValue,
-};
-use rib::{ParsedFunctionName, ParsedFunctionReference};
+use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -84,7 +82,7 @@ pub struct PublicOplogChunk {
 }
 
 pub async fn get_public_oplog_chunk(
-    component_service: Arc<dyn ComponentService>,
+    components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     plugins: Arc<dyn Plugins>,
     projects: Arc<dyn ProjectService>,
@@ -115,7 +113,7 @@ pub async fn get_public_oplog_chunk(
         let entry = PublicOplogEntry::from_oplog_entry(
             raw_entry,
             oplog_service.clone(),
-            component_service.clone(),
+            components.clone(),
             plugins.clone(),
             projects.clone(),
             owned_worker_id,
@@ -314,8 +312,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let response_bytes = oplog_service
                     .download_payload(owned_worker_id, &response)
                     .await?;
-                let request =
-                    encode_host_function_request_as_value(&function_name, &request_bytes)?;
+                let request = encode_host_function_request_as_value(
+                    components,
+                    &function_name,
+                    &request_bytes,
+                )
+                .await?;
                 let response =
                     encode_host_function_response_as_value(&function_name, &response_bytes)?;
                 Ok(PublicOplogEntry::ImportedFunctionInvoked(
@@ -349,7 +351,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
 
                 let metadata = components
                     .get_metadata(
-                        &owned_worker_id.project_id,
                         &owned_worker_id.worker_id.component_id,
                         Some(component_version),
                     )
@@ -359,13 +360,8 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
-                let parsed = ParsedFunctionName::parse(&function_name)?;
                 let param_types: Box<dyn Iterator<Item = &AnalysedFunctionParameter>> =
-                    if parsed.function().is_indexed_resource() {
-                        Box::new(function.analysed_export.parameters.iter().skip(1))
-                    } else {
-                        Box::new(function.analysed_export.parameters.iter())
-                    };
+                    Box::new(function.analysed_export.parameters.iter());
 
                 let request = param_types
                     .zip(params)
@@ -470,7 +466,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     } => {
                         let metadata = components
                             .get_metadata(
-                                &owned_worker_id.project_id,
                                 &owned_worker_id.worker_id.component_id,
                                 Some(component_version),
                             )
@@ -621,58 +616,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 name: resource_type_id.name,
                 owner: resource_type_id.owner,
             })),
-            OplogEntry::DescribeResource {
-                timestamp,
-                id,
-                resource_type_id,
-                indexed_resource_parameters,
-            } => {
-                let metadata = components
-                    .get_metadata(
-                        &owned_worker_id.project_id,
-                        &owned_worker_id.worker_id.component_id,
-                        Some(component_version),
-                    )
-                    .await
-                    .map_err(|err| err.to_string())?;
 
-                let resource_name = resource_type_id.name.clone();
-                let resource_owner = resource_type_id.owner.clone();
-                let resource_constructor_name = ParsedFunctionName::new(
-                    find_resource_site(metadata.metadata.exports(), &resource_name).ok_or(
-                        format!(
-                            "Resource site for resource {} not found in component {} version {}",
-                            resource_name,
-                            owned_worker_id.component_id(),
-                            component_version
-                        ),
-                    )?,
-                    ParsedFunctionReference::RawResourceConstructor {
-                        resource: resource_name.clone(),
-                    },
-                );
-                let constructor_def = metadata.metadata.find_function(&resource_constructor_name.to_string()).await?.ok_or(
-                    format!("Resource constructor {resource_constructor_name} not found in component {} version {component_version}", owned_worker_id.component_id())
-                )?;
-
-                let mut resource_params = Vec::new();
-                for (value_str, param) in indexed_resource_parameters
-                    .iter()
-                    .zip(constructor_def.analysed_export.parameters)
-                {
-                    let value_and_type = parse_value_and_type(&param.typ, value_str)?;
-                    resource_params.push(value_and_type);
-                }
-                Ok(PublicOplogEntry::DescribeResource(
-                    DescribeResourceParameters {
-                        timestamp,
-                        id,
-                        resource_name,
-                        resource_params,
-                        resource_owner,
-                    },
-                ))
-            }
             OplogEntry::Log {
                 timestamp,
                 level,
@@ -795,20 +739,51 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     persistence_level: level,
                 }),
             ),
-            OplogEntry::CreateAgentInstance {
+            OplogEntry::BeginRemoteTransaction {
                 timestamp,
-                key,
-                parameters,
-            } => Ok(PublicOplogEntry::CreateAgentInstance(
-                CreateAgentInstanceParameters {
+                transaction_id,
+            } => Ok(PublicOplogEntry::BeginRemoteTransaction(
+                BeginRemoteTransactionParameters {
                     timestamp,
-                    key,
-                    parameters,
+                    transaction_id,
                 },
             )),
-            OplogEntry::DropAgentInstance { timestamp, key } => Ok(
-                PublicOplogEntry::DropAgentInstance(DropAgentInstanceParameters { timestamp, key }),
-            ),
+            OplogEntry::PreCommitRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::PreCommitRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
+            OplogEntry::PreRollbackRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::PreRollbackRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
+            OplogEntry::CommittedRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::CommittedRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
+            OplogEntry::RolledBackRemoteTransaction {
+                timestamp,
+                begin_index,
+            } => Ok(PublicOplogEntry::RolledBackRemoteTransaction(
+                RemoteTransactionParameters {
+                    timestamp,
+                    begin_index,
+                },
+            )),
         }
     }
 }
@@ -821,13 +796,66 @@ fn no_payload() -> Result<ValueAndType, String> {
     Ok(ValueAndType::new(Value::Option(None), option(str())))
 }
 
-fn encode_host_function_request_as_value(
+async fn try_resolve_agent_id(
+    component_service: Arc<dyn ComponentService>,
+    worker_id: &WorkerId,
+) -> Option<AgentId> {
+    if let Ok(component) = component_service
+        .get_metadata(&worker_id.component_id, None)
+        .await
+    {
+        AgentId::parse(&worker_id.worker_name, &component.metadata)
+            .await
+            .ok()
+    } else {
+        None
+    }
+}
+
+async fn enrich_serializable_invoke_request(
+    components: Arc<dyn ComponentService>,
+    payload: SerializableInvokeRequest,
+) -> EnrichedSerializableInvokeRequest {
+    let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
+    EnrichedSerializableInvokeRequest {
+        remote_worker_id: payload.remote_worker_id,
+        remote_agent_type: agent_id
+            .as_ref()
+            .map(|agent_id| agent_id.agent_type.clone()),
+        remote_agent_parameters: agent_id.map(|agent_id| agent_id.parameters),
+        idempotency_key: payload.idempotency_key,
+        function_name: payload.function_name,
+        function_params: payload.function_params,
+    }
+}
+
+async fn enrich_serializable_schedule_invocation_request(
+    components: Arc<dyn ComponentService>,
+    payload: SerializableScheduleInvocationRequest,
+) -> EnrichedSerializableScheduleInvocationRequest {
+    let agent_id = try_resolve_agent_id(components, &payload.remote_worker_id).await;
+    EnrichedSerializableScheduleInvocationRequest {
+        remote_worker_id: payload.remote_worker_id,
+        remote_agent_type: agent_id
+            .as_ref()
+            .map(|agent_id| agent_id.agent_type.clone()),
+        remote_agent_parameters: agent_id.map(|agent_id| agent_id.parameters),
+        idempotency_key: payload.idempotency_key,
+        function_name: payload.function_name,
+        function_params: payload.function_params,
+        datetime: payload.datetime,
+    }
+}
+
+async fn encode_host_function_request_as_value(
+    components: Arc<dyn ComponentService>,
     function_name: &str,
     bytes: &[u8],
 ) -> Result<ValueAndType, String> {
     match function_name {
         "golem::rpc::future-invoke-result::get" => {
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
+            let payload = enrich_serializable_invoke_request(components, payload).await;
             Ok(payload.into_value_and_type())
         }
         "http::types::future_incoming_response::get" => {
@@ -838,6 +866,7 @@ fn encode_host_function_request_as_value(
             let count: usize = try_deserialize(bytes)?;
             Ok(ValueAndType::new(Value::U64(count as u64), u64()))
         }
+        "golem io::poll::ready" => no_payload(),
         "golem blobstore::container::object_info" => {
             let payload: (String, String) = try_deserialize(bytes)?;
             Ok(container_and_object(payload.0, payload.1))
@@ -966,14 +995,23 @@ fn encode_host_function_request_as_value(
         }
         "golem::api::update-worker" => {
             let payload: (WorkerId, ComponentVersion, UpdateMode) = try_deserialize(bytes)?;
+            let agent_id = try_resolve_agent_id(components, &payload.0).await;
+
             Ok(ValueAndType::new(
                 Value::Record(vec![
                     payload.0.into_value(),
+                    agent_id
+                        .as_ref()
+                        .map(|agent_id| agent_id.agent_type.clone())
+                        .into_value(),
+                    agent_id.map(|agent_id| agent_id.parameters).into_value(),
                     payload.1.into_value(),
                     Value::String(format!("{:?}", payload.2)),
                 ]),
                 record(vec![
                     field("worker_id", WorkerId::get_type()),
+                    field("agent_type", Option::<String>::get_type()),
+                    field("agent_parameters", Option::<DataValue>::get_type()),
                     field("component_version", u64()),
                     field("update_mode", str()),
                 ]),
@@ -981,25 +1019,56 @@ fn encode_host_function_request_as_value(
         }
         "golem::api::fork-worker" => {
             let payload: (WorkerId, WorkerId, OplogIndex) = try_deserialize(bytes)?;
+            let source_agent_id = try_resolve_agent_id(components.clone(), &payload.0).await;
+            let target_agent_id = try_resolve_agent_id(components, &payload.1).await;
             Ok(ValueAndType::new(
                 Value::Record(vec![
                     payload.0.into_value(),
+                    source_agent_id
+                        .as_ref()
+                        .map(|agent_id| agent_id.agent_type.clone())
+                        .into_value(),
+                    source_agent_id
+                        .map(|agent_id| agent_id.parameters)
+                        .into_value(),
                     payload.1.into_value(),
+                    target_agent_id
+                        .as_ref()
+                        .map(|agent_id| agent_id.agent_type.clone())
+                        .into_value(),
+                    target_agent_id
+                        .map(|agent_id| agent_id.parameters)
+                        .into_value(),
                     payload.2.into_value(),
                 ]),
                 record(vec![
                     field("source_worker_id", WorkerId::get_type()),
+                    field("source_agent_type", Option::<String>::get_type()),
+                    field("source_agent_parameters", Option::<DataValue>::get_type()),
                     field("target_worker_id", WorkerId::get_type()),
+                    field("target_agent_type", Option::<String>::get_type()),
+                    field("target_agent_parameters", Option::<DataValue>::get_type()),
                     field("oplog_idx_cut_off", u64()),
                 ]),
             ))
         }
         "golem::api::revert-worker" => {
             let payload: (WorkerId, RevertWorkerTarget) = try_deserialize(bytes)?;
+            let agent_id = try_resolve_agent_id(components, &payload.0).await;
             Ok(ValueAndType::new(
-                Value::Record(vec![payload.0.into_value(), payload.1.into_value()]),
+                Value::Record(vec![
+                    payload.0.into_value(),
+                    agent_id
+                        .as_ref()
+                        .map(|agent_id| agent_id.agent_type.clone())
+                        .into_value(),
+                    agent_id.map(|agent_id| agent_id.parameters).into_value(),
+                    payload.1.into_value(),
+                ]),
                 record(vec![
                     field("worker_id", WorkerId::get_type()),
+                    field("agent_type", Option::<String>::get_type()),
+                    field("agent_parameters", Option::<DataValue>::get_type()),
                     field("target", RevertWorkerTarget::get_type()),
                 ]),
             ))
@@ -1094,15 +1163,16 @@ fn encode_host_function_request_as_value(
         }
         "golem::rpc::wasm-rpc::invoke" => {
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
+            let payload = enrich_serializable_invoke_request(components, payload).await;
             Ok(payload.into_value_and_type())
         }
         "golem::rpc::wasm-rpc::invoke-and-await"
         | "golem::rpc::wasm-rpc::invoke-and-await result" => {
             let payload: SerializableInvokeRequest = try_deserialize(bytes)?;
+            let payload = enrich_serializable_invoke_request(components, payload).await;
             Ok(payload.into_value_and_type())
         }
         "golem::rpc::wasm-rpc::generate_unique_local_worker_id" => no_payload(),
-        "cli::preopens::get_directories" => no_payload(),
         "filesystem::types::descriptor::stat" => {
             let payload: String = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
@@ -1121,6 +1191,8 @@ fn encode_host_function_request_as_value(
         "golem::rpc::wasm-rpc::async-invoke-and-await idempotency key" => no_payload(),
         "golem::rpc::wasm-rpc::schedule_invocation" => {
             let payload: SerializableScheduleInvocationRequest = try_deserialize(bytes)?;
+            let payload =
+                enrich_serializable_schedule_invocation_request(components, payload).await;
             Ok(payload.into_value_and_type())
         }
         "golem::rpc::cancellation-token::cancel" => {
@@ -1148,9 +1220,7 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<MysqlType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-transaction::rollback"
-        | "rdbms::mysql::db-transaction::commit"
-        | "rdbms::mysql::db-result-stream::get-columns"
+        "rdbms::mysql::db-result-stream::get-columns"
         | "rdbms::mysql::db-result-stream::get-next" => no_payload(),
         "rdbms::postgres::db-connection::query"
         | "rdbms::postgres::db-connection::execute"
@@ -1161,9 +1231,7 @@ fn encode_host_function_request_as_value(
             let payload: Option<RdbmsRequest<PostgresType>> = try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::postgres::db-transaction::rollback"
-        | "rdbms::postgres::db-transaction::commit"
-        | "rdbms::postgres::db-result-stream::get-columns"
+        "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
@@ -1250,6 +1318,10 @@ fn encode_host_function_response_as_value(
         }
         "golem io::poll::poll" => {
             let payload: Result<Vec<u32>, SerializableError> = try_deserialize(bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem io::poll::ready" => {
+            let payload: Result<bool, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
         "golem blobstore::container::object_info" => {
@@ -1473,10 +1545,6 @@ fn encode_host_function_response_as_value(
             let payload: Result<WorkerId, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "cli::preopens::get_directories" => {
-            let payload: Result<Vec<String>, SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "filesystem::types::descriptor::stat" => {
             let payload: Result<SerializableFileTimes, SerializableError> = try_deserialize(bytes)?;
             Ok(payload.into_value_and_type())
@@ -1548,10 +1616,6 @@ fn encode_host_function_response_as_value(
                 try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
         }
-        "rdbms::mysql::db-transaction::rollback" | "rdbms::mysql::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "rdbms::mysql::db-result-stream::get-columns" => {
             let payload: Result<Vec<mysql_types::DbColumn>, SerializableError> =
                 try_deserialize(bytes)?;
@@ -1578,10 +1642,6 @@ fn encode_host_function_response_as_value(
             let payload: Result<RdbmsRequest<PostgresType>, SerializableError> =
                 try_deserialize(bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
-        }
-        "rdbms::postgres::db-transaction::rollback" | "rdbms::postgres::db-transaction::commit" => {
-            let payload: Result<(), SerializableError> = try_deserialize(bytes)?;
-            Ok(payload.into_value_and_type())
         }
         "rdbms::postgres::db-result-stream::get-columns" => {
             let payload: Result<Vec<postgres_types::DbColumn>, SerializableError> =

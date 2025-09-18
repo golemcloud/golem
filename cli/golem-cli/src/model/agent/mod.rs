@@ -14,6 +14,7 @@
 
 pub mod extraction;
 pub mod moonbit;
+pub mod view;
 pub mod wit;
 
 #[cfg(test)]

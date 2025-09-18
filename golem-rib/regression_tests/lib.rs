@@ -476,6 +476,7 @@ async fn test_rib_regression() {
     let compiler = RibCompiler::new(RibCompilerConfig::new(
         component_metadata::component_metadata(),
         vec![],
+        vec![],
     ));
 
     use std::time::Instant;
@@ -1921,7 +1922,7 @@ mod mock_interpreter {
             &self,
             _component_info: ComponentDependencyKey,
             _instruction_id: &InstructionId,
-            _worker_name: Option<EvaluatedWorkerName>,
+            _worker_name: EvaluatedWorkerName,
             function_name: EvaluatedFqFn,
             _args: EvaluatedFnArgs,
             _return_type: Option<AnalysedType>,

@@ -425,42 +425,6 @@ impl FunctionName {
                     static_function: true,
                 })
             }
-            DynamicParsedFunctionReference::IndexedResourceConstructor { resource, .. } => {
-                FunctionName::ResourceConstructor(FullyQualifiedResourceConstructor {
-                    package_name,
-                    interface_name,
-                    resource_name: resource.clone(),
-                })
-            }
-            DynamicParsedFunctionReference::IndexedResourceMethod {
-                resource, method, ..
-            } => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                package_name,
-                interface_name,
-                resource_name: resource.clone(),
-                method_name: method.clone(),
-                static_function: false,
-            }),
-            DynamicParsedFunctionReference::IndexedResourceStaticMethod {
-                resource,
-                method,
-                ..
-            } => FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                package_name,
-                interface_name,
-                resource_name: resource.clone(),
-                method_name: method.clone(),
-                static_function: true,
-            }),
-            DynamicParsedFunctionReference::IndexedResourceDrop { resource, .. } => {
-                FunctionName::ResourceMethod(FullyQualifiedResourceMethod {
-                    package_name,
-                    interface_name,
-                    resource_name: resource.clone(),
-                    method_name: "drop".to_string(),
-                    static_function: false,
-                })
-            }
         }
     }
 
@@ -582,13 +546,13 @@ impl FullyQualifiedResourceMethod {
             dynamic_parsed_str.push('.');
         }
 
-        // Start the dynamic function name with resource
         dynamic_parsed_str.push('{');
         if self.static_function {
             dynamic_parsed_str.push_str("[static]");
         } else {
             dynamic_parsed_str.push_str("[method]");
         }
+
         dynamic_parsed_str.push_str(&self.resource_name);
         dynamic_parsed_str.push('.');
         dynamic_parsed_str.push_str(&self.method_name);
