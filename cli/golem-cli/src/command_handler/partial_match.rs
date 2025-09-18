@@ -125,7 +125,7 @@ impl ErrorHandler {
                 log_action(
                     "Checking",
                     format!(
-                        "provided worker name: {}",
+                        "provided agent name: {}",
                         worker_name.0.log_color_highlight()
                     ),
                 );
@@ -146,7 +146,7 @@ impl ErrorHandler {
                     };
 
                     logln(format!(
-                        "[{}]{} component: {} / worker: {}, {}",
+                        "[{}]{} component: {} / agent: {}, {}",
                         "ok".green(),
                         project_formatted,
                         worker_name_match.component_name.0.log_color_highlight(),

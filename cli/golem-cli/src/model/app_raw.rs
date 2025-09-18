@@ -229,11 +229,13 @@ pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_confirm: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_workers: Option<bool>,
+    pub redeploy_agents: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_http_api: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_all: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reset: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
