@@ -142,21 +142,21 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        let redirect = BufferRedirect::stderr().ok();
+        // let redirect = BufferRedirect::stderr().ok();
 
         let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
             wrapper_context,
             wrapper_wasm_path.as_std_path(),
         );
 
-        if result.is_err() || dev_mode {
-            if let Some(mut redirect) = redirect {
-                let mut output = String::new();
-                redirect.read_to_string(&mut output)?;
-                drop(redirect);
-                eprint!("{}", output);
-            }
-        }
+        // if result.is_err() || dev_mode {
+        //     if let Some(mut redirect) = redirect {
+        //         let mut output = String::new();
+        //         redirect.read_to_string(&mut output)?;
+        //         drop(redirect);
+        //         eprint!("{}", output);
+        //     }
+        // }
 
         result
     })())

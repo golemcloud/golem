@@ -1397,12 +1397,31 @@ fn extract_wit_value(
             writeln!(result, "{indent})")?;
         }
         AnalysedType::List(list) => {
-            writeln!(
-                result,
-                "{indent}{from}.list_elements().unwrap().map(item => {{"
-            )?;
-            extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
-            writeln!(result, "{indent}}})")?;
+            if matches!(
+                &*list.inner,
+                AnalysedType::U8(_)
+                    | AnalysedType::U32(_)
+                    | AnalysedType::U64(_)
+                    | AnalysedType::S32(_)
+                    | AnalysedType::S64(_)
+                    | AnalysedType::F32(_)
+                    | AnalysedType::F64(_)
+            ) {
+                // based on https://github.com/bytecodealliance/wit-bindgen/blob/main/crates/moonbit/src/lib.rs#L998-L1009
+                writeln!(
+                    result,
+                    "{indent}FixedArray::from_array({from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}}))")?;
+            } else {
+                writeln!(
+                    result,
+                    "{indent}{from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}})")?;
+            }
         }
         AnalysedType::Str(_) => {
             writeln!(result, "{indent}{from}.string().unwrap()")?;
