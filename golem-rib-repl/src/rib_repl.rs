@@ -239,30 +239,33 @@ impl RibRepl {
             match readline {
                 Ok(rib) => {
                     let result = self.execute(rib.as_str()).await;
-
-                    match result {
-                        Ok(Some(result)) => {
-                            self.printer.print_rib_result(&result);
-                        }
-
-                        Ok(None) => {}
-
-                        Err(err) => match err {
-                            RibExecutionError::RibRuntimeError(runtime_error) => {
-                                self.printer.print_rib_runtime_error(&runtime_error);
-                            }
-                            RibExecutionError::RibCompilationError(runtime_error) => {
-                                self.printer.print_rib_compilation_error(&runtime_error);
-                            }
-                            RibExecutionError::Custom(custom_error) => {
-                                self.printer.print_custom_error(&custom_error);
-                            }
-                        },
-                    }
+                    self.print_execute_result(&result);
                 }
                 Err(ReadlineError::Eof) | Err(ReadlineError::Interrupted) => break,
                 Err(_) => continue,
             }
+        }
+    }
+
+    pub fn print_execute_result(&mut self, result: &Result<Option<RibResult>, RibExecutionError>) {
+        match result {
+            Ok(Some(result)) => {
+                self.printer.print_rib_result(&result);
+            }
+
+            Ok(None) => {}
+
+            Err(err) => match err {
+                RibExecutionError::RibRuntimeError(runtime_error) => {
+                    self.printer.print_rib_runtime_error(&runtime_error);
+                }
+                RibExecutionError::RibCompilationError(runtime_error) => {
+                    self.printer.print_rib_compilation_error(&runtime_error);
+                }
+                RibExecutionError::Custom(custom_error) => {
+                    self.printer.print_custom_error(&custom_error);
+                }
+            },
         }
     }
 

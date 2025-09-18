@@ -346,10 +346,18 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 component_name,
                 version,
                 deploy_args,
+                script,
+                script_file,
             } => {
                 self.ctx
                     .rib_repl_handler()
-                    .cmd_repl(component_name.component_name, version, deploy_args.as_ref())
+                    .cmd_repl(
+                        component_name.component_name,
+                        version,
+                        deploy_args.as_ref(),
+                        script,
+                        script_file,
+                    )
                     .await
             }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),

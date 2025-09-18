@@ -16,12 +16,14 @@ use crate::command::shared_args::DeployArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::logln;
+use crate::fs;
+use crate::log::{logln, set_log_output, Output};
 use crate::model::component::ComponentView;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, IdempotencyKey, WorkerName,
+    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
+    WorkerName,
 };
 use anyhow::bail;
 use async_trait::async_trait;
@@ -36,7 +38,7 @@ use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -55,7 +57,19 @@ impl RibReplHandler {
         component_name: Option<ComponentName>,
         component_version: Option<u64>,
         deploy_args: Option<&DeployArgs>,
+        script: Option<String>,
+        script_file: Option<PathBuf>,
     ) -> anyhow::Result<()> {
+        let script_input = {
+            if let Some(script) = script {
+                Some(script)
+            } else if let Some(script_path) = script_file {
+                Some(fs::read_to_string(script_path)?)
+            } else {
+                None
+            }
+        };
+
         let selected_components = self
             .ctx
             .component_handler()
@@ -169,18 +183,37 @@ impl RibReplHandler {
         })
         .await?;
 
-        logln("");
+        if script_input.is_none() {
+            logln("");
+            self.ctx.log_handler().log_view(&ComponentReplStartedView(
+                ComponentView::new_rib_style(self.ctx.show_sensitive(), component),
+            ));
+            logln("");
+        }
 
-        self.ctx
-            .log_handler()
-            .log_view(&ComponentReplStartedView(ComponentView::new_rib_style(
-                self.ctx.show_sensitive(),
-                component,
-            )));
+        match script_input {
+            Some(script) => {
+                let result = repl.execute(&script).await;
+                match &result {
+                    Ok(rib_result) => match self.ctx.format() {
+                        Format::Json | Format::Yaml => {
+                            let result = rib_result.as_ref().and_then(|r| r.get_val());
+                            self.ctx.log_handler().log_serializable(&result);
+                        }
+                        Format::Text => {
+                            repl.print_execute_result(&result);
+                        }
+                    },
+                    Err(_) => {
+                        set_log_output(Output::Stderr);
+                        repl.print_execute_result(&result);
+                        bail!(NonSuccessfulExit);
+                    }
+                }
+            }
+            None => repl.run().await,
+        }
 
-        logln("");
-
-        repl.run().await;
         Ok(())
     }
 }
