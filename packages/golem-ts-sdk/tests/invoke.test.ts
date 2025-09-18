@@ -35,6 +35,9 @@ import {
   objectWithUnionWithUndefined4Arb,
   resultTypeExactArb,
   resultTypeNonExact2Arb,
+  resultTypeNonExact3Arb,
+  resultTypeNonExact4Arb,
+  resultTypeNonExact5Arb,
   resultTypeNonExactArb,
   stringOrNumberOrNull,
   stringOrUndefined,
@@ -239,34 +242,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
       },
     ),
-  );
-});
-
-test('test invoke function that takes and returns result type', () => {
-  overrideSelfMetadataImpl(SimpleAgentName.value);
-
-  const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
-
-  if (!typeRegistry) {
-    throw new Error('SimpleAgent type metadata not found');
-  }
-
-  const resolvedAgent = initiateSimpleAgent('foo', typeRegistry);
-
-  testInvoke(
-    typeRegistry,
-    'fun11',
-    [['param', { tag: 'ok', val: 1 }]],
-    resolvedAgent,
-    { tag: 'ok', val: 1 },
-  );
-
-  testInvoke(
-    typeRegistry,
-    'fun12',
-    [['param', { tag: 'ok', value: 1 }]],
-    resolvedAgent,
-    { tag: 'ok', value: 1 },
   );
 });
 

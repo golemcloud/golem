@@ -35,9 +35,9 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact,
   ResultTypeNonExact2,
-  ResultTypeNonExact3,
-  ResultTypeNonExact4,
-  ResultTypeNonExact5,
+  ResultTypeInvalid1,
+  ResultTypeInvalid2,
+  ResultTypeInvalid3,
 } from './testTypes';
 
 import { AgentClassName } from '../src';
@@ -92,19 +92,19 @@ export const resultTypeNonExact2Arb: Arbitrary<ResultTypeNonExact2> = fc.oneof(
   fc.record({ tag: fc.constant('err'), errValue: fc.string() }),
 );
 
-export const resultTypeNonExact3Arb: Arbitrary<ResultTypeNonExact3> = fc.oneof(
+export const resultTypeNonExact3Arb: Arbitrary<ResultTypeInvalid1> = fc.oneof(
   fc.record({ tag: fc.constant('ok'), okVal: fc.integer() }),
   fc.record({ tag: fc.constant('ok') }),
   fc.record({ tag: fc.constant('err'), errVal: fc.string() }),
 );
 
-export const resultTypeNonExact4Arb: Arbitrary<ResultTypeNonExact4> = fc.oneof(
+export const resultTypeNonExact4Arb: Arbitrary<ResultTypeInvalid2> = fc.oneof(
   fc.record({ tag: fc.constant('ok'), okVal: fc.integer() }),
   fc.record({ tag: fc.constant('err'), errVal: fc.string() }),
   fc.record({ tag: fc.constant('err') }),
 );
 
-export const resultTypeNonExact5Arb: Arbitrary<ResultTypeNonExact5> = fc.oneof(
+export const resultTypeNonExact5Arb: Arbitrary<ResultTypeInvalid3> = fc.oneof(
   fc.record({ tag: fc.constant('ok'), okVal: fc.integer() }),
   fc.record({ tag: fc.constant('ok') }),
   fc.record({ tag: fc.constant('err'), errVal: fc.string() }),

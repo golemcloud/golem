@@ -1065,12 +1065,18 @@ function handleUnion(
             const keys = Object.keys(tsValue);
             const valueKey = keys.find((k) => k !== 'tag');
 
-            if (
-              keys.length === 2 &&
-              tsValue['tag'] === typeInfo.tagLiteralName
-            ) {
+            if (tsValue['tag'] === typeInfo.tagLiteralName) {
               // If there is no value key, implies only tag is present
               if (!valueKey) {
+                if (
+                  typeInfo.tagLiteralName === 'ok' ||
+                  typeInfo.tagLiteralName === 'err'
+                ) {
+                  return Either.left(
+                    `Missing value correspond to the tag ${typeInfo.tagLiteralName}`,
+                  );
+                }
+
                 return Either.right({
                   kind: 'variant',
                   caseIdx: caseIdx,
@@ -1409,16 +1415,24 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
       if (innerType.tag === 'some') {
         if (!value.value) {
+          if (innerType.val[1].optional) {
+            return { tag: tagName };
+          }
+
           throw new Error(
-            `Expected value for the tag '${tagName}' of the union type '${name}'`,
+            `Expected value for the tag 1 '${tagName}' of the union type '${name}'`,
           );
         }
 
         const okOrErrValue = value.value[okOrErrTag];
 
         if (!okOrErrValue) {
+          if (innerType.val[1].optional) {
+            return { tag: tagName };
+          }
+
           throw new Error(
-            `Expected value for the tag '${tagName}' of the union type '${name}'`,
+            `Expected value for the tag 2 '${tagName}' of the union type '${name}'`,
           );
         }
 
@@ -1450,8 +1464,12 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
       if (innerType.tag === 'some') {
         if (!value.caseValue) {
+          if (innerType.val[1].optional) {
+            return { tag: tagName };
+          }
+
           throw new Error(
-            `Expected value for the tag '${tagName}' of the union type '${name}'`,
+            `Expected value for the tag 3 '${tagName}' of the union type '${name}'`,
           );
         }
 
@@ -1672,7 +1690,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
             if (!okOrErrvalue) {
               throw new Error(
-                `Expected value for the tag '${tagName}' of the union type '${name}'`,
+                `Expected value for the tag 4 '${tagName}' of the union type '${name}'`,
               );
             }
 

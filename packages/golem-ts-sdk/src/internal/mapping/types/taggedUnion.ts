@@ -116,7 +116,13 @@ export function getTaggedUnion(
           valueType: Option.none()
         });
       } else {
+        const nodes = nextSymbol.getDeclarations();
+        const node = nodes[0];
+
         const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
+
+        propType.optional = node.hasQuestionToken();
+
         taggedTypeMetadata.push({
           tagLiteralName: tagValueTrimmed,
           valueType: Option.some([nextSymbol.getName(), propType])
@@ -127,10 +133,14 @@ export function getTaggedUnion(
     }
   }
 
-  const eitherType = checkEitherType(taggedTypeMetadata);
+  const eitherType = getResultType(taggedTypeMetadata);
 
-  if (Option.isSome(eitherType)) {
-    return Either.right(Option.some({tag: 'result', val: eitherType.val}));
+  if (Either.isLeft(eitherType)) {
+    return eitherType;
+  }
+
+  if (Option.isSome(eitherType.val)) {
+    return Either.right(Option.some({tag: 'result', val: eitherType.val.val}));
   }
 
   const keys = taggedTypeMetadata
@@ -148,26 +158,36 @@ export function getTaggedUnion(
   return Either.right(Option.some({tag: 'custom', val: taggedTypeMetadata}));
 }
 
-function checkEitherType(taggedTypes: TaggedTypeMetadata[]): Option.Option<UserDefinedResultType> {
+function getResultType(taggedTypes: TaggedTypeMetadata[]): Either.Either<Option.Option<UserDefinedResultType>, string> {
   if (taggedTypes.length !== 2) {
-    return Option.none();
+    return Either.right(Option.none());
   }
 
   const okTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'ok');
   const errTypeMetadata = taggedTypes.find(t => t.tagLiteralName === 'err');
 
   if (!okTypeMetadata || !errTypeMetadata) {
-    return Option.none();
+    return Either.right(Option.none());
   }
 
   const okType = Option.isSome(okTypeMetadata.valueType) ? okTypeMetadata.valueType.val : undefined;
   const errType = Option.isSome(errTypeMetadata.valueType) ? errTypeMetadata.valueType.val : undefined;
 
+
   if (!okType || !errType) {
-    return Option.none();
+    return Either.right(Option.none());
   }
 
-  return Option.some({ okType, errType });
+
+  if (okType[1].optional) {
+    return Either.left("The value corresponding to the tag 'ok'  cannot be optional. Avoid using the tag names `ok`, `err`. Alternatively, make the value type non optional");
+  }
+
+  if(errType[1].optional) {
+    return Either.left("The value corresponding to the tag 'err' cannot be optional. Avoid using the tag names `ok , `err`. Alternatively,  make the value type non optional");
+  }
+
+  return Either.right(Option.some({ okType, errType }));
 }
 
 

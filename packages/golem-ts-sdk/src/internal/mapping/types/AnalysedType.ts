@@ -19,7 +19,6 @@ import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
 import { convertTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './string-format';
 import { getTaggedUnion, getUnionOfLiterals, TaggedTypeMetadata, UserDefinedResultType } from './taggedUnion';
-import { TagKeyWords } from './keywords';
 
 type TsType = CoreType.Type;
 

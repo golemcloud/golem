@@ -47,15 +47,15 @@ export type ResultTypeNonExact2 =
   | { tag: 'ok'; okValue: number }
   | { tag: 'err'; errValue: string };
 
-export type ResultTypeNonExact3 =
-  | { tag: 'ok'; okVal?: number }
+export type ResultTypeInvalid1 =
+  | { tag: 'ok'; okValOpt?: number }
   | { tag: 'err'; errVal: string };
 
-export type ResultTypeNonExact4 =
+export type ResultTypeInvalid2 =
   | { tag: 'ok'; okVal: number }
   | { tag: 'err'; errVal?: string };
 
-export type ResultTypeNonExact5 =
+export type ResultTypeInvalid3 =
   | { tag: 'ok'; okVal?: number }
   | { tag: 'err'; errVal?: string };
 
