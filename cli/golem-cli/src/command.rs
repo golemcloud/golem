@@ -555,8 +555,10 @@ pub enum GolemCliSubcommand {
         version: Option<u64>,
         #[command(flatten)]
         deploy_args: Option<DeployArgs>,
+        /// Optional script to run, when defined the repl will execute the script and exit
         #[clap(long, short, conflicts_with_all = ["script_file"])]
         script: Option<String>,
+        /// Optional script_file to run, when defined the repl will execute the script and exit
         #[clap(long, conflicts_with_all = ["script"])]
         script_file: Option<PathBuf>,
     },
