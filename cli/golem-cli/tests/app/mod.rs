@@ -57,6 +57,7 @@ mod cmd {
 mod flag {
     pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
+    pub static REDEPLOY_ALL: &str = "--redeploy-all";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
     pub static YES: &str = "--yes";
 }
@@ -793,9 +794,7 @@ async fn build_all_templates() {
     let mut ctx = TestContext::new();
     let app_name = "all-templates-app";
 
-    let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::TEMPLATES, flag::DEV_MODE])
-        .await;
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::TEMPLATES]).await;
     assert!(outputs.success());
 
     let template_prefix = "  - ";
@@ -925,7 +924,7 @@ async fn test_common_dep_plugs_errors() {
                 url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_tavily-dev.wasm
         "# },
     )
-    .unwrap();
+        .unwrap();
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(!outputs.success());
@@ -1077,6 +1076,187 @@ async fn test_component_env_var_substitution() {
         "NORMAL=REALLY",
         "VERY_CUSTOM_ENV_VAR_SECRET_1=123",
         "VERY_CUSTOM_ENV_VAR_SECRET_2=456",
+    ]));
+}
+
+#[test]
+async fn test_http_api_merging() {
+    let mut ctx = TestContext::new();
+    let app_name = "http_api_merging";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent1"])
+        .await;
+    assert!(outputs.success());
+    let component1_manifest_path = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-weather-agent1")
+            .join("golem.yaml"),
+    );
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent2"])
+        .await;
+    assert!(outputs.success());
+    let component2_manifest_path = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-weather-agent2")
+            .join("golem.yaml"),
+    );
+
+    // Add mergable definitions and deployments to both components
+    fs::write_str(
+        &component1_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent1:
+                template: ts
+            
+            httpApi:
+              definitions:
+                def-a:
+                  version: 0.0.1
+                  routes:
+                  - method: GET
+                    path: /a
+                    binding:
+                      componentName: app:weather-agent1
+                      response: |
+                        let agent = assistant-agent();
+                        agent.ask("a")
+
+              deployments:
+                local:
+                - host: localhost:9006
+                  definitions:
+                  - def-a
+        "# },
+    )
+    .unwrap();
+
+    fs::write_str(
+        &component2_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent2:
+                template: ts
+
+            httpApi:
+              definitions:
+                def-b:
+                  version: 0.0.2
+                  routes:
+                  - method: GET
+                    path: /b
+                    binding:
+                      componentName: app:weather-agent2
+                      response: |
+                        let agent = assistant-agent();
+                        agent.ask("b")
+
+              deployments:
+                local:
+                - host: localhost:9006
+                  definitions:
+                  - def-b
+        "# },
+    )
+    .unwrap();
+
+    // Check that the merged manifest is loadable
+    let outputs = ctx.cli([cmd::APP]).await;
+    assert!(!outputs.success());
+    assert!(!outputs.stdout_contains("error"));
+    assert!(!outputs.stderr_contains("error"));
+    assert!(outputs.stderr_contains_ordered([
+        "Application API definitions:",
+        "  def-a@0.0.1",
+        "  def-b@0.0.2",
+        "Application API deployments for profile local:",
+        "  localhost:9006",
+        "    def-a",
+        "    def-b",
+    ]));
+
+    // But we still cannot define the same deployment <-> definition in two places:
+    fs::write_str(
+        &component2_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent2:
+                template: ts
+
+            httpApi:
+              definitions:
+                def-b:
+                  version: 0.0.2
+                  routes:
+                  - method: GET
+                    path: /b
+                    binding:
+                      componentName: app:weather-agent2
+                      response: |
+                        let agent = assistant-agent();
+                        agent.ask("b")
+
+              deployments:
+                local:
+                - host: localhost:9006
+                  definitions:
+                  - def-b
+                  - def-a
+        "# },
+    )
+    .unwrap();
+
+    let outputs = ctx.cli([cmd::APP]).await;
+    assert!(!outputs.success());
+    assert!(outputs.stderr_contains(
+        "error: HTTP API Deployment local - localhost:9006 - def-a is defined in multiple sources"
+    ));
+
+    // Let's switch back to the good config and deploy, then call the exposed APIs
+    fs::write_str(
+        &component2_manifest_path,
+        indoc! { r#"
+            components:
+              app:weather-agent2:
+                template: ts
+
+            httpApi:
+              definitions:
+                def-b:
+                  version: 0.0.2
+                  routes:
+                  - method: GET
+                    path: /b
+                    binding:
+                      componentName: app:weather-agent2
+                      response: |
+                        let agent = assistant-agent();
+                        agent.ask("b")
+
+              deployments:
+                local:
+                - host: localhost:9006
+                  definitions:
+                  - def-b
+        "# },
+    )
+    .unwrap();
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::REDEPLOY_ALL, flag::YES]).await;
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        "API def-a/0.0.1 deployed at localhost:9006",
+        "API def-b/0.0.2 deployed at localhost:9006"
     ]));
 }
 
