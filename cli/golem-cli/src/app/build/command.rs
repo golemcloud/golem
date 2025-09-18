@@ -17,9 +17,7 @@ use crate::app::build::task_result_marker::{
     GenerateQuickJSCrateCommandMarkerHash, GenerateQuickJSDTSCommandMarkerHash,
     InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
-use crate::app::build::{
-    delete_path_logged, is_up_to_date, new_task_up_to_date_check, valid_env_vars,
-};
+use crate::app::build::{delete_path_logged, is_up_to_date, new_task_up_to_date_check};
 use crate::app::context::ApplicationContext;
 use crate::app::error::CustomCommandError;
 use crate::fs::compile_and_collect_globs;
@@ -31,9 +29,11 @@ use crate::model::app_raw::{
     InjectToPrebuiltQuickJs,
 };
 use crate::wasm_rpc_stubgen::commands;
+use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
-use std::collections::HashMap;
+use gag::BufferRedirect;
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, ExitStatus};
 use tracing::debug;
@@ -43,7 +43,6 @@ pub async fn execute_build_command(
     ctx: &mut ApplicationContext,
     component_name: &AppComponentName,
     command: &app_raw::BuildCommand,
-    additional_env_vars: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let base_build_dir = ctx
         .application
@@ -51,7 +50,7 @@ pub async fn execute_build_command(
         .to_path_buf();
     match command {
         app_raw::BuildCommand::External(external_command) => {
-            execute_external_command(ctx, &base_build_dir, external_command, additional_env_vars)
+            execute_external_command(ctx, &base_build_dir, external_command)
         }
         app_raw::BuildCommand::QuickJSCrate(command) => {
             execute_quickjs_create(ctx, &base_build_dir, command)
@@ -119,6 +118,8 @@ async fn execute_agent_wrapper(
         .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
         .await;
 
+    let dev_mode = ctx.config.dev_mode;
+
     task_result_marker.result((|| {
         let agent_types = agent_types?;
 
@@ -141,12 +142,23 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        crate::model::agent::moonbit::generate_moonbit_wrapper(
+        let redirect = BufferRedirect::stderr().ok();
+
+        let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
             wrapper_context,
             wrapper_wasm_path.as_std_path(),
-        )?;
+        );
 
-        Ok(())
+        if result.is_err() || dev_mode {
+            if let Some(mut redirect) = redirect {
+                let mut output = String::new();
+                redirect.read_to_string(&mut output)?;
+                drop(redirect);
+                eprint!("{}", output);
+            }
+        }
+
+        result
     })())
 }
 
@@ -181,7 +193,10 @@ async fn execute_compose_agent_wrapper(
 
                 commands::composition::compose(
                     wrapper_wasm_path.as_std_path(),
-                    &[user_component.as_std_path().to_path_buf()],
+                    vec![Plug {
+                        name: user_component.to_string(),
+                        wasm: user_component.as_std_path().to_path_buf(),
+                    }],
                     target_component.as_std_path(),
                 )
                 .await
@@ -235,7 +250,10 @@ async fn execute_inject_to_prebuilt_quick_js(
 
                 commands::composition::compose(
                     base_wasm.as_std_path(),
-                    &[js_module_wasm.as_std_path().to_path_buf()],
+                    vec![Plug {
+                        name: "JS module".to_string(),
+                        wasm: js_module_wasm.as_std_path().to_path_buf(),
+                    }],
                     target.as_std_path(),
                 )
                 .await?;
@@ -280,8 +298,7 @@ pub fn execute_custom_command(
         let _indent = LogIndent::new();
 
         for step in &command.value {
-            if let Err(error) = execute_external_command(ctx, &command.source, step, HashMap::new())
-            {
+            if let Err(error) = execute_external_command(ctx, &command.source, step) {
                 return Err(CustomCommandError::CommandError { error });
             }
         }
@@ -307,7 +324,6 @@ pub fn execute_custom_command(
                     ctx,
                     ctx.application.component_source_dir(component_name),
                     step,
-                    HashMap::new(),
                 ) {
                     return Err(CustomCommandError::CommandError { error });
                 }
@@ -421,13 +437,19 @@ pub fn execute_external_command(
     ctx: &ApplicationContext,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
-    additional_env_vars: HashMap<String, String>,
 ) -> anyhow::Result<()> {
     let build_dir = command
         .dir
         .as_ref()
         .map(|dir| base_command_dir.join(dir))
         .unwrap_or_else(|| base_command_dir.to_path_buf());
+    if !std::fs::exists(&build_dir)? {
+        log_action(
+            "Creating",
+            format!("directory {}", build_dir.log_color_highlight()),
+        );
+        std::fs::create_dir_all(&build_dir)?
+    }
 
     // NOTE: cannot use new_task_up_to_date_check yet, because of the special source and target handling
     let task_result_marker = TaskResultMarker::new(
@@ -446,16 +468,6 @@ pub fn execute_external_command(
         "execute external command"
     );
 
-    let env_vars = {
-        let mut map = HashMap::new();
-        map.extend(valid_env_vars());
-        map.extend(additional_env_vars);
-        map
-    };
-
-    let command_string = envsubst::substitute(&command.command, &env_vars)
-        .context("Failed to substitute env vars in command")?;
-
     if !command.sources.is_empty() && !command.targets.is_empty() {
         let sources = compile_and_collect_globs(&build_dir, &command.sources)?;
         let targets = compile_and_collect_globs(&build_dir, &command.targets)?;
@@ -463,7 +475,7 @@ pub fn execute_external_command(
         if is_up_to_date(skip_up_to_date_checks, || sources, || targets) {
             log_skipping_up_to_date(format!(
                 "executing external command '{}' in directory {}",
-                command_string.log_color_highlight(),
+                command.command.log_color_highlight(),
                 build_dir.log_color_highlight()
             ));
             return Ok(());
@@ -474,7 +486,7 @@ pub fn execute_external_command(
         "Executing",
         format!(
             "external command '{}' in directory {}",
-            command_string.log_color_highlight(),
+            command.command.log_color_highlight(),
             build_dir.log_color_highlight()
         ),
     );
@@ -502,8 +514,8 @@ pub fn execute_external_command(
             }
         }
 
-        let command_tokens = shlex::split(&command_string).ok_or_else(|| {
-            anyhow::anyhow!("Failed to parse external command: {}", command_string)
+        let command_tokens = shlex::split(&command.command).ok_or_else(|| {
+            anyhow::anyhow!("Failed to parse external command: {}", command.command)
         })?;
         if command_tokens.is_empty() {
             return Err(anyhow!("Empty command!"));

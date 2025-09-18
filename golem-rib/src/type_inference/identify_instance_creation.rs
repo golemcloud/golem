@@ -160,7 +160,7 @@ pub fn identify_instance_creation_with_worker(
 fn get_instance_creation_details(
     call_type: &CallType,
     type_parameter: Option<TypeParameter>,
-    args: &[Expr],
+    args: &mut [Expr],
     component_dependency: &ComponentDependencies,
     custom_instance_spec: &[CustomInstanceSpec],
 ) -> Result<(Option<InstanceCreationType>, Option<TypeParameter>), String> {
@@ -206,11 +206,14 @@ fn get_instance_creation_details(
                             }
 
                             let mut args_iter = args
-                                .iter()
+                                .iter_mut()
                                 .zip(custom_instance_spec.parameter_types)
                                 .peekable();
 
                             while let Some((arg, analysed_type)) = args_iter.next() {
+                                let inferred_type = InferredType::from(&analysed_type);
+                                arg.add_infer_type_mut(inferred_type);
+
                                 match arg {
                                     // chances of being a string after interpretation
                                     Expr::Literal { .. }

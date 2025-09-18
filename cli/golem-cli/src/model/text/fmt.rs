@@ -163,7 +163,9 @@ pub fn format_stack(stack: &str) -> String {
     stack
         .lines()
         .map(|line| {
-            if line.contains("<unknown>!<wasm function") {
+            if line.contains("called without being linked with an implementation") {
+                line.red().bold().to_string()
+            } else if line.contains("<unknown>!<wasm function") {
                 line.bright_black().to_string()
             } else {
                 line.yellow().to_string()
@@ -178,6 +180,24 @@ pub fn format_error(error: &str) -> String {
     } else {
         error.yellow().to_string()
     }
+}
+
+pub fn format_stderr(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(|line| {
+            if line.starts_with("JavaScript exception:")
+                || line.starts_with("JavaScript error:")
+                || line.starts_with("Error:")
+            {
+                line.red().bold().to_string()
+            } else if line.contains("RUST_BACKTRACE=1") {
+                line.bright_black().to_string()
+            } else {
+                line.yellow().to_string()
+            }
+        })
+        .join("\n")
 }
 
 pub fn format_binary_size(size: &u64) -> String {

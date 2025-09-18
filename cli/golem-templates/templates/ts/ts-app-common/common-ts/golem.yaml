@@ -3,9 +3,11 @@
 templates:
   ts:
     build:
-    - command: npx --no golem-typegen tsconfig.json --files src/**/*.ts
+    - command: npx tsc --noemit
+    - command: npx --no golem-typegen ../../../components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files ../../../components-ts/{{ component_name | to_kebab_case }}/src/**/*.ts
+      dir: ../../golem-temp/ts-metadata/{{ component_name | to_kebab_case }}
       sources:
-      - src
+      - ../../../components-ts/{{ component_name | to_kebab_case }}/src
       targets:
       - .metadata
     - command: npx --no rollup -- -c
@@ -14,11 +16,11 @@ templates:
       - ../../common-ts
       - rollup.config.mjs
       - tsconfig.js
-      - .metadata
+      - ../../golem-temp/ts-metadata/{{ component_name | to_kebab_case }}
       targets:
-      - dist/main.js
+      - ../../golem-temp/ts-dist/{{ component_name | to_kebab_case }}/main.js
     - injectToPrebuiltQuickjs: ../../wasm/golem_agent.wasm
-      module: dist/main.js
+      module: ../../golem-temp/ts-dist/{{ component_name | to_kebab_case }}/main.js
       moduleWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.module.wasm
       into: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
     - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
@@ -26,14 +28,10 @@ templates:
     - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
       withAgent: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
       to: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
-
     sourceWit: ../../wasm/golem_agent.wasm
     generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
     componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
     linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
-    clean:
-    - dist
-    - .metadata
 customCommands:
   ts-npm-install:
   - command: npm install

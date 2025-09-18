@@ -293,6 +293,10 @@ async fn dynamic_worker_creation(
     check!(
         env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
                 Value::String("dynamic-worker-creation-1".to_string())
             ]),
@@ -842,6 +846,10 @@ async fn component_env_variables(
                 Value::String("bar".to_string())
             ]),
             Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String("component-env-variables-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
                 Value::String("component-env-variables-1".to_string())
             ]),
@@ -906,7 +914,7 @@ async fn component_env_variables_update(
 
     check!(env.get("FOO") == Some(&"bar".to_string()));
     check!(env.get("BAR") == Some(&"baz".to_string()));
-    check!(env.get("GOLEM_WORKER_NAME") == Some(&"component-env-variables-1".to_string()));
+    check!(env.get("GOLEM_AGENT_ID") == Some(&"component-env-variables-1".to_string()));
 }
 
 #[test]
@@ -2984,9 +2992,7 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "thread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
-
-    println!("result3: {result3:?}");
+    let expected_stderr = "error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
     check!(worker_error_logs(&result2.clone().err().unwrap())
         .unwrap()

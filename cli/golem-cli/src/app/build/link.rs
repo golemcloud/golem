@@ -19,6 +19,7 @@ use crate::fs;
 use crate::log::{log_action, log_skipping_up_to_date, LogColorize, LogIndent};
 use crate::model::app::DependencyType;
 use crate::wasm_rpc_stubgen::commands;
+use crate::wasm_rpc_stubgen::commands::composition::Plug;
 use itertools::Itertools;
 use std::collections::BTreeSet;
 
@@ -46,14 +47,18 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
             .filter(|dep| dep.dep_type == DependencyType::DynamicWasmRpc)
             .collect::<BTreeSet<_>>();
 
-        let mut wasms_to_compose_with = Vec::new();
+        let mut plugs = Vec::new();
         for static_dep in &static_wasm_rpc_dependencies {
-            let path = ctx.resolve_binary_component_source(static_dep).await?;
-            wasms_to_compose_with.push(path);
+            plugs.push(Plug {
+                name: static_dep.source.to_string(),
+                wasm: ctx.resolve_binary_component_source(static_dep).await?,
+            });
         }
         for library_dep in &library_dependencies {
-            let path = ctx.resolve_binary_component_source(library_dep).await?;
-            wasms_to_compose_with.push(path);
+            plugs.push(Plug {
+                name: library_dep.source.to_string(),
+                wasm: ctx.resolve_binary_component_source(library_dep).await?,
+            });
         }
 
         let component_wasm = ctx
@@ -116,9 +121,9 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
         if is_up_to_date(
             ctx.config.skip_up_to_date_checks || !task_result_marker.is_up_to_date(),
             || {
-                wasms_to_compose_with
+                plugs
                     .iter()
-                    .map(|s| s.as_path())
+                    .map(|p| p.wasm.as_path())
                     .chain(std::iter::once(component_wasm.as_path()))
             },
             || [&linked_wasm],
@@ -132,7 +137,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
 
         task_result_marker.result(
             async {
-                if wasms_to_compose_with.is_empty() {
+                if plugs.is_empty() {
                     log_action(
                         "Copying",
                         format!(
@@ -164,7 +169,7 @@ pub async fn link(ctx: &ApplicationContext) -> anyhow::Result<()> {
                         ctx.application
                             .component_wasm(component_name, ctx.build_profile())
                             .as_path(),
-                        &wasms_to_compose_with,
+                        plugs,
                         linked_wasm.as_path(),
                     )
                     .await

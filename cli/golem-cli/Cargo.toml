@@ -59,11 +59,11 @@ clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
-envsubst = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
+gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
 indexmap = { workspace = true }
@@ -75,6 +75,7 @@ lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
+nanoid = { workspace = true }
 nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }

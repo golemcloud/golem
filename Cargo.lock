@@ -3386,15 +3386,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "envsubst"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf2f29f6ee674d1229e5715dfc7e24f14395a20d66949e36032de68b31542643"
-dependencies = [
- "thiserror 1.0.69",
-]
-
-[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3557,6 +3548,17 @@ dependencies = [
  "toml 0.8.23",
  "uncased",
  "version_check",
+]
+
+[[package]]
+name = "filedescriptor"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e40758ed24c9b2eeb76c35fb0aebc66c626084edd827e07e1552279814c6682d"
+dependencies = [
+ "libc",
+ "thiserror 1.0.69",
+ "winapi",
 ]
 
 [[package]]
@@ -3908,6 +3910,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gag"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a713bee13966e9fbffdf7193af71d54a6b35a0bb34997cd6c9519ebeb5005972"
+dependencies = [
+ "filedescriptor",
+ "tempfile",
+]
+
+[[package]]
 name = "gen_ops"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4135,11 +4147,11 @@ dependencies = [
  "cli-table",
  "colored",
  "dirs 4.0.0",
- "envsubst",
  "flate2",
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",
+ "gag",
  "golem-client",
  "golem-common",
  "golem-rib",
@@ -4159,6 +4171,7 @@ dependencies = [
  "log",
  "minijinja",
  "moonbit-component-generator",
+ "nanoid",
  "native-tls",
  "nondestructive",
  "phf",
@@ -4786,6 +4799,7 @@ dependencies = [
  "prost 0.14.1",
  "rand 0.9.2",
  "redis",
+ "regex",
  "ringbuf",
  "serde",
  "serde_json",
@@ -12567,9 +12581,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.0.12"
+version = "0.0.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae9dbf8ce8a6e85067ac9a4823d54073b8a7ccadf5ef9776b99332240a50c33"
+checksum = "6c1663e84e32e1d6c4e9a3f94cc594b19cecfd264b4751ff1e879420ea1c3305"
 dependencies = [
  "anyhow",
  "camino",

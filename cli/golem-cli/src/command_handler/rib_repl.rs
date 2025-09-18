@@ -135,7 +135,7 @@ impl RibReplHandler {
 
         self.ctx
             .log_handler()
-            .log_view(&ComponentReplStartedView(ComponentView::new(
+            .log_view(&ComponentReplStartedView(ComponentView::new_rib_style(
                 self.ctx.show_sensitive(),
                 component,
             )));

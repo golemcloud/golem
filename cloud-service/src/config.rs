@@ -139,6 +139,7 @@ impl Default for PlansConfig {
                 storage_limit: 500000000,
                 monthly_gas_limit: 1000000000000,
                 monthly_upload_limit: 1000000000,
+                max_memory_per_worker: 1024 * 1024 * 1024, // 1 GB
             },
         }
     }
@@ -153,6 +154,7 @@ pub struct PlanConfig {
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i32,
+    pub max_memory_per_worker: i64,
 }
 
 impl SafeDisplay for PlanConfig {
@@ -184,6 +186,7 @@ impl From<PlanConfig> for Plan {
                 storage_limit: config.storage_limit,
                 monthly_gas_limit: config.monthly_gas_limit,
                 monthly_upload_limit: config.monthly_upload_limit,
+                max_memory_per_worker: config.max_memory_per_worker,
             },
         }
     }

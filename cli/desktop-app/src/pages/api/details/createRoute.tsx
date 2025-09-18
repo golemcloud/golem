@@ -329,7 +329,7 @@ const CreateRoute = () => {
         .putApi(appId!, activeApiDetails.version, selectedApi)
         .then(() => {
           navigate(
-            `/app/${appId}/apis/${apiName}/version/${version}/routes?path=${values.path == "/" ? "" : values.path}&method=${values.method}&reload=${!reload}`,
+            `/app/${appId}/apis/${apiName}/version/${version}/routes?path=${values.path == "/" ? "" : encodeURIComponent(values.path)}&method=${values.method}&reload=${!reload}`,
           );
         });
     } catch (error) {
