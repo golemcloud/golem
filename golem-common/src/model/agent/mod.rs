@@ -101,8 +101,7 @@ impl Display for AgentError {
                 write!(
                     f,
                     "{}",
-                    print_value_and_type(&value_and_type)
-                        .unwrap_or("Unprintable error".to_string())
+                    print_value_and_type(value_and_type).unwrap_or("Unprintable error".to_string())
                 )
             }
         }
