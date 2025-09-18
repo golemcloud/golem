@@ -37,3 +37,18 @@ export function createCustomError(error: string): AgentError {
     },
   };
 }
+
+export function isAgentError(error: any): error is AgentError {
+  return (
+    error.tag !== undefined &&
+    error.val !== undefined &&
+    ((error.tag === 'invalid-input' && typeof error.val === 'string') ||
+      (error.tag === 'invalid-method' && typeof error.val === 'string') ||
+      (error.tag === 'invalid-type' && typeof error.val === 'string') ||
+      (error.tag === 'invalid-agent-id' && typeof error.val === 'string') ||
+      (error.tag === 'custom-error' &&
+        typeof error.val === 'object' &&
+        error.val.value !== undefined &&
+        error.val.typ !== undefined))
+  );
+}

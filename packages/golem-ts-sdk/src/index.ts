@@ -15,7 +15,7 @@
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
-import { createCustomError } from './internal/agentError';
+import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
@@ -105,9 +105,8 @@ async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
     return AgentTypeRegistry.getRegisteredAgents();
   } catch (e) {
     // Have to throw AgentError, as the discover-agent-types WIT function returns result<list<agent-type>, AgentError>
-    let agentError = e as AgentError;
-    if (agentError) {
-      throw agentError;
+    if (isAgentError(e)) {
+      throw e;
     } else {
       throw createCustomError(String(e));
     }
