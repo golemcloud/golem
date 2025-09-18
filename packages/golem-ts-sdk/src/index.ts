@@ -20,6 +20,7 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { AgentTypeName } from './newTypes/agentTypeName';
+import { makeAgentId, parseAgentId } from 'golem:agent/host';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -100,7 +101,17 @@ async function invoke(
 }
 
 async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
-  return AgentTypeRegistry.getRegisteredAgents();
+  try {
+    return AgentTypeRegistry.getRegisteredAgents();
+  } catch (e) {
+    // Have to throw AgentError, as the discover-agent-types WIT function returns result<list<agent-type>, AgentError>
+    let agentError = e as AgentError;
+    if (agentError) {
+      throw agentError;
+    } else {
+      throw createCustomError(String(e));
+    }
+  }
 }
 
 async function getDefinition(): Promise<AgentType> {
@@ -111,28 +122,24 @@ async function save(): Promise<Uint8Array> {
   if (Option.isNone(resolvedAgent)) {
     throw UninitializedAgentError;
   }
+
   const textEncoder = new TextEncoder();
 
   const agentType = resolvedAgent.val.getDefinition().typeName;
   const agentParameters = resolvedAgent.val.getParameters();
-  const agentParametersString = JSON.stringify(agentParameters);
-  const agentParameterBytes = textEncoder.encode(agentParametersString);
+
+  const agentIdString = makeAgentId(agentType, agentParameters);
+  const agentIdBytes = textEncoder.encode(agentIdString);
 
   const agentSnapshot = await resolvedAgent.val.saveSnapshot();
 
-  const agentTypeBytes = textEncoder.encode(agentType);
-  const totalLength = 1 + 4 + 4 + agentTypeBytes.length + agentSnapshot.length;
+  const totalLength = 1 + 4 + agentIdBytes.length + agentSnapshot.length;
   const fullSnapshot = new Uint8Array(totalLength);
   const view = new DataView(fullSnapshot.buffer);
   view.setUint8(0, 1); // version
-  view.setUint32(1, agentTypeBytes.length);
-  view.setUint32(1 + 4, agentParameterBytes.length);
-  fullSnapshot.set(agentTypeBytes, 1 + 4 + 4);
-  fullSnapshot.set(agentParameterBytes, 1 + 4 + 4 + agentTypeBytes.length);
-  fullSnapshot.set(
-    agentSnapshot,
-    1 + 4 + 4 + agentTypeBytes.length + agentParameterBytes.length,
-  );
+  view.setUint32(1, agentIdBytes.length);
+  fullSnapshot.set(agentIdBytes, 1 + 4);
+  fullSnapshot.set(agentSnapshot, 1 + 4 + agentIdBytes.length);
 
   return fullSnapshot;
 }
@@ -149,23 +156,12 @@ async function load(bytes: Uint8Array): Promise<void> {
   if (version !== 1) {
     throw `Unsupported snapshot version ${version}`;
   }
-  const agentTypeLength = view.getUint32(1);
-  const agentParameterLength = view.getUint32(1 + 4);
+  const agentIdLength = view.getUint32(1);
 
-  const agentType = textDecoder.decode(
-    bytes.slice(1 + 4 + 4, 1 + 4 + 4 + agentTypeLength),
-  );
-  const agentParametersString = textDecoder.decode(
-    bytes.slice(
-      1 + 4 + 4 + agentTypeLength,
-      1 + 4 + 4 + agentTypeLength + agentParameterLength,
-    ),
-  );
-  const agentSnapshot = bytes.slice(
-    1 + 4 + 4 + agentTypeLength + agentParameterLength,
-  );
+  const agentId = textDecoder.decode(bytes.slice(1 + 4, 1 + 4 + agentIdLength));
+  const agentSnapshot = bytes.slice(1 + 4 + agentIdLength);
 
-  const agentParameters: DataValue = JSON.parse(agentParametersString);
+  const [agentType, agentParameters] = parseAgentId(agentId);
 
   const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
 
@@ -185,7 +181,14 @@ async function load(bytes: Uint8Array): Promise<void> {
 
     resolvedAgent = Option.some(agent);
   } else {
-    throw JSON.stringify(initiateResult.val);
+    // Throwing a String because the load WIT function returns result<_, string>
+    let errorString = 'Failed to construct agent';
+    try {
+      errorString = JSON.stringify(initiateResult.val);
+    } catch (e) {
+      console.error('Failed to stringify agent construction error: ', e);
+    }
+    throw errorString;
   }
 }
 

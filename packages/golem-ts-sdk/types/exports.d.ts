@@ -41,6 +41,7 @@ declare module 'agent-guest' {
     export function getDefinition(): Promise<AgentType>;
     /**
      * Gets the agent types defined by this component
+     * @throws AgentError
      */
     export function discoverAgentTypes(): Promise<AgentType[]>;
     export type AgentError = golemAgentCommon.AgentError;
