@@ -29,9 +29,6 @@ import {
   ResultTypeNonExact,
   ResultTypeExactBoth,
   ResultTypeNonExact2,
-  ResultTypeInvalid2,
-  ResultTypeInvalid3,
-  ResultTypeInvalid1,
 } from './testTypes';
 
 @agent()
