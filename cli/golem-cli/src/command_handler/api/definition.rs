@@ -14,7 +14,7 @@
 
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::api::definition::ApiDefinitionSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, DeployArgs};
+use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -58,10 +58,7 @@ impl ApiDefinitionCommandHandler {
             ApiDefinitionSubcommand::Deploy {
                 http_api_definition_name,
                 deploy_args,
-            } => {
-                self.cmd_deploy(http_api_definition_name, deploy_args)
-                    .await
-            }
+            } => self.cmd_deploy(http_api_definition_name, deploy_args).await,
             ApiDefinitionSubcommand::Get {
                 project,
                 id,

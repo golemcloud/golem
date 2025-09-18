@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::api::deployment::ApiDeploymentSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, DeployArgs};
+use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -277,7 +277,7 @@ impl ApiDeploymentCommandHandler {
             .map(DiffableHttpApiDeployment::from_server)
             .transpose()?;
         let manifest_diffable_api_deployment = DiffableHttpApiDeployment::from_manifest(
-            &api_definition,
+            api_definition,
             latest_api_definition_versions,
         )?;
 

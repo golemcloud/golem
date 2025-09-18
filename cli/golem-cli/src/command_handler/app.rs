@@ -16,7 +16,7 @@ use crate::app::error::CustomCommandError;
 use crate::command::app::AppSubcommand;
 use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, ForceBuildArg, DeployArgs,
+    AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -30,7 +30,7 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::{ComponentName, AgentUpdateMode};
+use crate::model::{AgentUpdateMode, ComponentName};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::AgentTypesClient;
@@ -294,8 +294,7 @@ impl AppCommandHandler {
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(component_name, force_build, deploy_args)
-            .await
+        self.deploy(component_name, force_build, deploy_args).await
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {

@@ -1252,7 +1252,9 @@ async fn test_http_api_merging() {
 
     ctx.start_server();
 
-    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::REDEPLOY_ALL, flag::YES]).await;
+    let outputs = ctx
+        .cli([cmd::APP, cmd::DEPLOY, flag::REDEPLOY_ALL, flag::YES])
+        .await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains_ordered([
         "API def-a/0.0.1 deployed at localhost:9006",

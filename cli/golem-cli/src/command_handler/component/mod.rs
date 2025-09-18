@@ -1165,7 +1165,7 @@ impl ComponentCommandHandler {
                     vec![component_name.clone()],
                     None,
                     &ApplicationComponentSelectMode::CurrentDir,
-                    &deploy_args.cloned().unwrap_or_else(|| DeployArgs::none()),
+                    &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
                 )
                 .await?;
         }
@@ -1218,7 +1218,7 @@ impl ComponentCommandHandler {
                             vec![component_name.clone()],
                             None,
                             &ApplicationComponentSelectMode::CurrentDir,
-                            &deploy_args.cloned().unwrap_or_else(|| DeployArgs::none()),
+                            &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
                         )
                         .await?;
                     self.ctx

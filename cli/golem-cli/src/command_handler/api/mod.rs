@@ -128,12 +128,7 @@ impl ApiCommandHandler {
         let latest_api_definition_versions = self
             .ctx
             .api_definition_handler()
-            .deploy(
-                project,
-                deploy_mode,
-                deploy_args,
-                latest_component_versions,
-            )
+            .deploy(project, deploy_mode, deploy_args, latest_component_versions)
             .await?;
 
         self.ctx
