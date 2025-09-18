@@ -38,10 +38,14 @@ use http::header::{HOST, LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
+use rib::RibCompilationError;
 use serde_json::{Number, Value as JsonValue};
 use std::str::FromStr;
 use std::sync::Arc;
-use test_r::test;
+use test_r::core::DynamicTestRegistration;
+use test_r::core::TestProperties;
+use test_r::test_gen;
+use test_r::{add_test, test};
 use url::Url;
 use uuid::uuid;
 
@@ -152,6 +156,88 @@ async fn test_api_def_with_agent() {
     );
 
     assert!(result.is_ok());
+}
+
+#[test_gen]
+async fn gen_agent_type_error_tests(r: &mut DynamicTestRegistration) {
+    let cases = vec![
+        (
+            "invalid_constructor_argument_type",
+            r#"
+                let my-agent = weather-agent(1);
+                let response = my-agent.get-weather("usa");
+                response
+            "#,
+        ),
+        (
+            "too_few_constructor_arguments",
+            r#"
+                let my-agent = weather-agent();
+                let response = my-agent.get-weather("usa");
+                response
+            "#,
+        ),
+        (
+            "too_many_constructor_arguments",
+            r#"
+              let my-agent = weather-agent("foo", "bar");
+              let response = my-agent.get-weather("usa");
+              response
+            "#,
+        ),
+        (
+            "invalid_method_argument_type",
+            r#"
+              let user_id = request.query.userid;
+              let my-agent = weather-agent(user_id);
+              let response = my-agent.get-weather(1);
+              response
+            "#,
+        ),
+        (
+            "too_few_method_arguments",
+            r#"
+              let user_id = request.query.userid;
+              let my-agent = weather-agent(user_id);
+              let response = my-agent.get-weather();
+              response
+            "#,
+        ),
+        (
+            "too_many_method_arguments",
+            r#"
+              let user_id = request.query.userid;
+              let my-agent = weather-agent(user_id);
+              let response = my-agent.get-weather();
+              response
+            "#,
+        ),
+    ];
+
+    async fn run_test(rib_response_mapping: &str) {
+        let api_specification: HttpApiDefinition =
+            get_api_def_with_worker_binding("/foo?{userid}", rib_response_mapping).await;
+
+        let result = CompiledHttpApiDefinition::from_http_api_definition(
+            &api_specification,
+            &internal::get_agent_component_metadata(),
+            &test_namespace(),
+            &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+        );
+
+        assert2::assert!(let Err(RouteCompilationErrors::RibError(RibCompilationError::RibTypeError(_))) = result);
+    }
+
+    for (name, rib_response_mapping) in cases {
+        add_test!(
+            r,
+            format!("test_api_def_with_agent_invalid_rib_{name}"),
+            TestProperties::unit_test(),
+            move || async {
+                run_test(rib_response_mapping).await;
+            }
+        );
+    }
 }
 
 #[test]
