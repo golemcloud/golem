@@ -1282,7 +1282,12 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::api::to_method_pattern;
-    use crate::model::app::{AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component, ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName, HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames, ResolvedComponentProperties, TemplateName, WithSource};
+    use crate::model::app::{
+        AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component,
+        ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName,
+        HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames, ResolvedComponentProperties,
+        TemplateName, WithSource,
+    };
     use crate::model::app_raw;
     use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
     use crate::model::text::fmt::format_rib_source_for_error;
