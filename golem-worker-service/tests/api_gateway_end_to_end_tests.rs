@@ -136,7 +136,7 @@ async fn test_api_def_with_agent() {
     let response_mapping = r#"
        let user_id = request.query.userid;
        let my-agent = weather-agent(user_id);
-       let response = my-agent.get-weather(user_id, "bar");
+       let response = my-agent.get-weather("usa");
       response
     "#;
 
@@ -149,7 +149,7 @@ async fn test_api_def_with_agent() {
         &test_namespace(),
         &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     );
-    
+
     assert!(result.is_ok());
 }
 
@@ -2744,6 +2744,25 @@ mod internal {
         create_record(record_elems)
     }
 
+    pub(crate) fn get_weather_agent_exports() -> Vec<AnalysedExport> {
+        // Exist in only amazon:shopping-cart/api1
+        let analysed_function_in_api1 = AnalysedFunction {
+            name: "get-weather".to_string(),
+            parameters: vec![AnalysedFunctionParameter {
+                name: "arg1".to_string(),
+                typ: str(),
+            }],
+            result: Some(AnalysedFunctionResult { typ: str() }),
+        };
+
+        let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+            name: "my:agent/weather-agent".to_string(),
+            functions: vec![analysed_function_in_api1],
+        });
+
+        vec![analysed_export1]
+    }
+
     pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
         // Exist in only amazon:shopping-cart/api1
         let analysed_function_in_api1 = AnalysedFunction {
@@ -2770,7 +2789,7 @@ mod internal {
         };
 
         let mut metadata_dict = HashMap::new();
-        let mut exports = get_bigw_shopping_metadata();
+        let mut exports = get_weather_agent_exports();
         exports.extend(get_bigw_shopping_metadata_with_resource());
         exports.extend(get_golem_shopping_cart_metadata());
 
