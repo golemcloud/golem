@@ -1,13 +1,13 @@
 #### Build and Test
 
 ```sh
-pnpm clean # if needed
-pnpm install
-pnpm run format
-pnpm run format:check
-pnpm run lint
-pnpm run build
-pnpm run test # or per package: Ex: cd packages/golem-ts-sdk && pnpm run test
+npx pnpm clean # if needed
+npx pnpm install
+npx pnpm run format
+npx pnpm run format:check
+npx pnpm run lint
+npx pnpm run build
+npx pnpm run test # or per package: Ex: cd packages/golem-ts-sdk && pnpm run test
 ```
 
 If making changes to `golem-ts-typegen` or `golem-ts-types-core`, it's good to run `pnpm install` and `pnpm run build` (from root) before
