@@ -75,6 +75,8 @@ use tonic::transport::Channel;
 use tracing::{debug, info, Level};
 use url::Url;
 use uuid::Uuid;
+use golem_common::model::agent::extraction::extract_agent_types;
+use golem_common::model::agent::AgentTypes;
 
 #[async_trait]
 pub trait ComponentService: Send + Sync {
@@ -486,6 +488,8 @@ pub trait ComponentService: Send + Sync {
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
+        let agent_types = extract_agent_types(&local_path).await.map_err(|err| AddComponentError::Other(err))?;
+
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
@@ -512,7 +516,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
-                            agent_types: vec![],
+                            agent_types: agent_types.into_iter().map(|a| a.into()).collect(),
                         },
                     )),
                 }];
@@ -601,7 +605,9 @@ pub trait ComponentService: Send + Sync {
                         Some(&golem_client::model::ComponentEnv {
                             key_values: env.clone(),
                         }),
-                        None,
+                        Some(&golem_client::model::AgentTypes {
+                            types: agent_types
+                        }),
                     )
                     .await
                 {

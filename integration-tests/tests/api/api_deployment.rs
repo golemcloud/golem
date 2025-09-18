@@ -1008,3 +1008,84 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
 
     check!(update_component.is_ok());
 }
+
+#[test]
+#[tracing::instrument]
+async fn create_and_invoke_api_deployment_with_agent(deps: &EnvBasedTestDependencies) {
+    let admin = deps.admin().await;
+    let project_id = admin.default_project().await;
+
+    let (_, component_name) = admin
+        .component("golem_it_constructor_parameter_echo")
+        .unique()
+        .store_and_get_name()
+        .await;
+
+    let worker_name = Uuid::new_v4();
+
+    let api_definition = deps.worker_service()
+        .create_api_definition(
+            &admin.token,
+            &project_id,
+            &HttpApiDefinitionRequest {
+                id: Uuid::new_v4().to_string(),
+                version: "1".to_string(),
+                draft: false,
+                security: None,
+                routes: vec![RouteRequestData {
+                    method: MethodPattern::Get,
+                    path: "/path/{worker-name}".to_string(),
+                    binding: GatewayBindingData {
+                        component: Some(GatewayBindingComponent {
+                            name: component_name.to_string(),
+                            version: Some(0),
+                        }),
+                        worker_name: None,
+                        response: Some(
+                            r#"
+                                let agent = echo-agent(request.path.worker-name);
+                                let name = worker.echo();
+                                let status: u64 = 200;
+                                {
+                                    headers: { ContentType: "json" },
+                                    body: { name: name },
+                                    status: 200
+                                }
+                            "#
+                            .to_string(),
+                        ),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default),
+                        invocation_context: None,
+                    },
+                    security: None,
+                }],
+            },
+        )
+        .await
+        .unwrap();
+
+    let request = ApiDeploymentRequest {
+        project_id: project_id.0,
+        api_definitions: vec![
+            ApiDefinitionInfo {
+                id: api_definition.id.clone(),
+                version: api_definition.version.clone(),
+            }
+        ],
+        site: ApiSite {
+            host: "localhost".to_string(),
+            subdomain: None,
+        },
+    };
+
+    let response = deps
+        .worker_service()
+        .create_or_update_api_deployment(&admin.token, request.clone())
+        .await
+        .unwrap();
+
+    check!(request.api_definitions == response.api_definitions);
+    check!(request.site == response.site);
+
+}
