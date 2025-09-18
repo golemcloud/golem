@@ -109,17 +109,20 @@ class SimpleAgent extends BaseAgent {
   }
 
   // Overridden methods should be  not be considered as agent methods
+  // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
     return super.loadSnapshot(bytes);
   }
 
+  // With override keyword
   override saveSnapshot(): Promise<Uint8Array> {
     return super.saveSnapshot();
   }
 
-  override getId(): AgentId {
+  // Without override keyword, and existing as an arrow function
+  getId = () => {
     return super.getId();
-  }
+  };
 }
 
 export interface CustomData {

@@ -13,11 +13,14 @@
 // limitations under the License.
 
 import {
+  MethodDeclaration,
   Node as TsMorphNode,
   Scope,
   SourceFile,
   SyntaxKind,
+  ts,
   Type as TsMorphType,
+  ClassDeclaration, PropertyDeclaration
 } from "ts-morph";
 import {
   buildJSONFromType,
@@ -531,8 +534,10 @@ export function updateMetadataFromSourceFiles(
         : classDecl.getMethods();
 
       for (const method of publicMethods) {
-
-        if (classMetadataGenConfig.excludeOverriddenMethods && (method.hasOverrideKeyword() || !method.getParent())) {
+        if (
+          classMetadataGenConfig.excludeOverriddenMethods &&
+          (method.hasOverrideKeyword() || isOverriddenMethod(method))
+        ) {
           continue;
         }
 
@@ -570,9 +575,13 @@ export function updateMetadataFromSourceFiles(
 
       for (const publicArrow of publicArrows) {
 
-        if (classMetadataGenConfig.excludeOverriddenMethods && (publicArrow.hasOverrideKeyword() || !publicArrow.getParent())) {
+        if (
+          classMetadataGenConfig.excludeOverriddenMethods &&
+          (publicArrow.hasOverrideKeyword() || isOverriddenProperty(publicArrow))
+        ) {
           continue;
         }
+
         const arrowType = publicArrow.getType();
         const callSignature = arrowType.getCallSignatures()[0];
         if (!callSignature) continue;
@@ -603,6 +612,44 @@ export function updateMetadataFromSourceFiles(
       TypeMetadata.update(className, constructorArgs, methods);
     }
   }
+}
+
+function isOverriddenMethod(method: MethodDeclaration): boolean {
+  const classDecl = method.getFirstAncestorByKind(SyntaxKind.ClassDeclaration);
+  if (!classDecl) return false;
+
+  let currentBase: ClassDeclaration | undefined = classDecl.getBaseClass();
+  const methodName = method.getName();
+
+  while (currentBase) {
+    const baseMethod = currentBase.getInstanceMethod(methodName);
+    if (baseMethod) return true;
+    
+    currentBase = currentBase.getBaseClass();
+  }
+
+  return false;
+}
+
+function isOverriddenProperty(prop: PropertyDeclaration): boolean {
+  const classDecl = prop.getFirstAncestorByKind(SyntaxKind.ClassDeclaration);
+  if (!classDecl) return false;
+
+  let currentBase: ClassDeclaration | undefined = classDecl.getBaseClass();
+  const propName = prop.getName();
+
+  while (currentBase) {
+    const baseProp = currentBase.getInstanceProperty(propName);
+    if (baseProp) return true;
+
+    // See if overriding a method with an arrow
+    const baseMethod = currentBase.getInstanceMethod(propName);
+    if (baseMethod) return true;
+
+    currentBase = currentBase.getBaseClass();
+  }
+
+  return false;
 }
 
 const METADATA_DIR = ".metadata";
