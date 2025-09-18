@@ -132,6 +132,28 @@ fn test_namespace() -> Namespace {
 }
 
 #[test]
+async fn test_api_def_with_agent() {
+    let response_mapping = r#"
+       let user_id = request.query.userid;
+       let my-agent = weather-agent(user_id);
+       let response = my-agent.get-weather("usa");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_agent_component_metadata(),
+        &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+    );
+
+    assert!(result.is_ok());
+}
+
+#[test]
 async fn test_api_def_with_resource_1() {
     let api_request = get_gateway_request("/foo/mystore", None, &HeaderMap::new(), JsonValue::Null);
 
@@ -2465,6 +2487,10 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 
 mod internal {
     use async_trait::async_trait;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
+        NamedElementSchema, NamedElementSchemas,
+    };
     use golem_common::model::auth::Namespace;
     use golem_common::model::component::VersionedComponentId;
     use golem_common::model::{ComponentId, IdempotencyKey};
@@ -2718,6 +2744,25 @@ mod internal {
         create_record(record_elems)
     }
 
+    pub(crate) fn get_weather_agent_exports() -> Vec<AnalysedExport> {
+        // Exist in only amazon:shopping-cart/api1
+        let analysed_function_in_api1 = AnalysedFunction {
+            name: "get-weather".to_string(),
+            parameters: vec![AnalysedFunctionParameter {
+                name: "arg1".to_string(),
+                typ: str(),
+            }],
+            result: Some(AnalysedFunctionResult { typ: str() }),
+        };
+
+        let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+            name: "my:agent/weather-agent".to_string(),
+            functions: vec![analysed_function_in_api1],
+        });
+
+        vec![analysed_export1]
+    }
+
     pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
         // Exist in only amazon:shopping-cart/api1
         let analysed_function_in_api1 = AnalysedFunction {
@@ -2735,6 +2780,53 @@ mod internal {
         });
 
         vec![analysed_export1]
+    }
+
+    pub(crate) fn get_agent_component_metadata() -> ComponentMetadataDictionary {
+        let versioned_component_id = VersionedComponentId {
+            component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
+            version: 0,
+        };
+
+        let mut metadata_dict = HashMap::new();
+        let mut exports = get_weather_agent_exports();
+        exports.extend(get_bigw_shopping_metadata_with_resource());
+        exports.extend(get_golem_shopping_cart_metadata());
+
+        let component_details = ComponentDetails {
+            component_info: ComponentDependencyKey {
+                component_name: "agent-component".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            },
+            metadata: exports,
+            agent_types: vec![AgentType {
+                type_name: "weather-agent".to_string(),
+                description: "".to_string(),
+                constructor: AgentConstructor {
+                    name: None,
+                    description: "".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "location".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                methods: vec![],
+                dependencies: vec![],
+            }],
+        };
+
+        metadata_dict.insert(versioned_component_id, component_details);
+
+        ComponentMetadataDictionary {
+            metadata: metadata_dict,
+        }
     }
 
     pub(crate) fn get_component_metadata() -> ComponentMetadataDictionary {

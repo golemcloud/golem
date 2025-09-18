@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::AgentType;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_common::model::agent::{AgentType, DataSchema, ElementSchema};
+use golem_wasm_ast::analysis::analysed_type::{str, variant};
+use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, NameOptionTypePair};
 use rib::{
     CompilerOutput, ComponentDependency, ComponentDependencyKey, Expr, GlobalVariableTypeSpec,
     InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig,
@@ -68,9 +69,12 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
 
         for (_component_index, agent_types) in agent_types {
             for agent_type in agent_types {
+                let constructor_schema = agent_type.constructor.input_schema;
+                let parameter_types = get_constructor_args(&constructor_schema);
+
                 custom_instance_spec.push(rib::CustomInstanceSpec {
                     instance_name: agent_type.type_name.clone(),
-                    parameter_types: vec![], // TODO; needed for compiler check, otherwise runtime error
+                    parameter_types,
                     interface_name: Some(InterfaceName {
                         name: agent_type.type_name,
                         version: None,
@@ -113,5 +117,42 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         let compiler = RibCompiler::new(compiler_config);
 
         compiler.compile(rib.clone())
+    }
+}
+
+fn get_constructor_args(input_schema: &DataSchema) -> Vec<AnalysedType> {
+    match input_schema {
+        DataSchema::Tuple(element_schemas) => element_schemas
+            .elements
+            .iter()
+            .map(|named_schema| get_analysed_type(&named_schema.schema))
+            .collect::<Vec<AnalysedType>>(),
+
+        DataSchema::Multimodal(named_element_schemas) => named_element_schemas
+            .elements
+            .iter()
+            .map(|named_schema| {
+                let name = &named_schema.name;
+
+                let analysed_type = get_analysed_type(&named_schema.schema);
+
+                let name_and_type = NameOptionTypePair {
+                    name: name.clone(),
+                    typ: Some(analysed_type),
+                };
+
+                variant(vec![name_and_type])
+            })
+            .collect::<Vec<_>>(),
+    }
+}
+
+fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
+    match schema {
+        ElementSchema::ComponentModel(component_model_elem_schema) => {
+            component_model_elem_schema.element_type.clone()
+        }
+        ElementSchema::UnstructuredText(_) => str(),
+        ElementSchema::UnstructuredBinary(_) => str(),
     }
 }
