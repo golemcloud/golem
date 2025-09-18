@@ -39,6 +39,10 @@ export class ResolvedAgent {
     return this.agentInternal.getId();
   }
 
+  getParameters(): DataValue {
+    return this.agentInternal.getParameters();
+  }
+
   invoke(
     methodName: string,
     args: DataValue,
@@ -51,5 +55,13 @@ export class ResolvedAgent {
       AgentTypeRegistry.lookup(this.agentClassName),
       () => new Error(`Agent class ${this.agentClassName} is not registered.`),
     );
+  }
+
+  saveSnapshot(): Promise<Uint8Array> {
+    return this.agentInternal.saveSnapshot();
+  }
+
+  loadSnapshot(bytes: Uint8Array): Promise<void> {
+    return this.agentInternal.loadSnapshot(bytes);
   }
 }

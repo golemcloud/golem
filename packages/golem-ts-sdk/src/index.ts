@@ -15,11 +15,12 @@
 import type * as bindings from 'agent-guest';
 import { ResolvedAgent } from './internal/resolvedAgent';
 import { AgentError, AgentType, DataValue } from 'golem:agent/common';
-import { createCustomError } from './internal/agentError';
+import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { AgentTypeName } from './newTypes/agentTypeName';
+import { makeAgentId, parseAgentId } from 'golem:agent/host';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -100,11 +101,94 @@ async function invoke(
 }
 
 async function discoverAgentTypes(): Promise<bindings.guest.AgentType[]> {
-  return AgentTypeRegistry.getRegisteredAgents();
+  try {
+    return AgentTypeRegistry.getRegisteredAgents();
+  } catch (e) {
+    // Have to throw AgentError, as the discover-agent-types WIT function returns result<list<agent-type>, AgentError>
+    if (isAgentError(e)) {
+      throw e;
+    } else {
+      throw createCustomError(String(e));
+    }
+  }
 }
 
 async function getDefinition(): Promise<AgentType> {
   return getResolvedAgentOrThrow(resolvedAgent).getDefinition();
+}
+
+async function save(): Promise<Uint8Array> {
+  if (Option.isNone(resolvedAgent)) {
+    throw UninitializedAgentError;
+  }
+
+  const textEncoder = new TextEncoder();
+
+  const agentType = resolvedAgent.val.getDefinition().typeName;
+  const agentParameters = resolvedAgent.val.getParameters();
+
+  const agentIdString = makeAgentId(agentType, agentParameters);
+  const agentIdBytes = textEncoder.encode(agentIdString);
+
+  const agentSnapshot = await resolvedAgent.val.saveSnapshot();
+
+  const totalLength = 1 + 4 + agentIdBytes.length + agentSnapshot.length;
+  const fullSnapshot = new Uint8Array(totalLength);
+  const view = new DataView(fullSnapshot.buffer);
+  view.setUint8(0, 1); // version
+  view.setUint32(1, agentIdBytes.length);
+  fullSnapshot.set(agentIdBytes, 1 + 4);
+  fullSnapshot.set(agentSnapshot, 1 + 4 + agentIdBytes.length);
+
+  return fullSnapshot;
+}
+
+async function load(bytes: Uint8Array): Promise<void> {
+  if (Option.isSome(resolvedAgent)) {
+    throw `Agent is already initialized in this container`;
+  }
+
+  const textDecoder = new TextDecoder();
+
+  const view = new DataView(bytes.buffer);
+  const version = view.getUint8(0);
+  if (version !== 1) {
+    throw `Unsupported snapshot version ${version}`;
+  }
+  const agentIdLength = view.getUint32(1);
+
+  const agentId = textDecoder.decode(bytes.slice(1 + 4, 1 + 4 + agentIdLength));
+  const agentSnapshot = bytes.slice(1 + 4 + agentIdLength);
+
+  const [agentType, agentParameters] = parseAgentId(agentId);
+
+  const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
+
+  if (Option.isNone(initiator)) {
+    const entries = Array.from(AgentInitiatorRegistry.entries()).map(
+      (entry) => entry[0].value,
+    );
+
+    throw `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`;
+  }
+
+  const initiateResult = initiator.val.initiate(agentType, agentParameters);
+
+  if (initiateResult.tag === 'ok') {
+    const agent = initiateResult.val;
+    await agent.loadSnapshot(agentSnapshot);
+
+    resolvedAgent = Option.some(agent);
+  } else {
+    // Throwing a String because the load WIT function returns result<_, string>
+    let errorString = 'Failed to construct agent';
+    try {
+      errorString = JSON.stringify(initiateResult.val);
+    } catch (e) {
+      console.error('Failed to stringify agent construction error: ', e);
+    }
+    throw errorString;
+  }
 }
 
 export const guest: typeof bindings.guest = {
@@ -112,4 +196,12 @@ export const guest: typeof bindings.guest = {
   discoverAgentTypes,
   invoke,
   getDefinition,
+};
+
+export const saveSnapshot: typeof bindings.saveSnapshot = {
+  save,
+};
+
+export const loadSnapshot: typeof bindings.loadSnapshot = {
+  load,
 };

@@ -14,6 +14,11 @@ declare module 'golem:agent/host' {
    * @throws AgentError
    */
   export function makeAgentId(agentTypeName: string, input: DataValue): string;
+  /**
+   * Parses an agent-id (created by `make-agent-id`) into an agent type name and its constructor parameters
+   * @throws AgentError
+   */
+  export function parseAgentId(agentId: string): [string, DataValue];
   export type ComponentId = golemRpc022Types.ComponentId;
   export type AgentError = golemAgentCommon.AgentError;
   export type AgentType = golemAgentCommon.AgentType;
