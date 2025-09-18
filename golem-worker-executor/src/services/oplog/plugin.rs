@@ -790,8 +790,10 @@ impl ForwardingOplogState {
     ) -> Result<(), WorkerExecutorError> {
         let mut public_entries = Vec::new();
 
-        for entry in entries {
+        for (delta, entry) in entries.iter().enumerate() {
+            let idx = initial_oplog_index.range_end(delta as u64 + 1);
             let public_entry = PublicOplogEntry::from_oplog_entry(
+                idx,
                 entry.clone(),
                 self.oplog_service.clone(),
                 self.components.clone(),

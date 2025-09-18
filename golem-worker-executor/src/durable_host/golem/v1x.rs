@@ -757,19 +757,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 component_id: self.owned_worker_id.component_id(),
                 worker_name: new_name.clone(),
             };
-            let oplog_index_cut_off = self.state.current_oplog_index().await.previous();
+            let oplog_index_cut_off = self.state.current_oplog_index().await;
 
-            let metadata = self
-                .state
-                .worker_service
-                .get(&self.owned_worker_id)
-                .await
-                .ok_or_else(|| anyhow::anyhow!("Worker does not exist"))?;
+            let created_by = self.created_by();
             let fork_result = self
                 .state
                 .worker_fork
                 .fork_and_write_fork_result(
-                    &metadata.created_by,
+                    created_by,
                     &self.owned_worker_id,
                     &target_worker_id,
                     oplog_index_cut_off,

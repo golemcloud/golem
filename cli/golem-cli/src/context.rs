@@ -684,6 +684,7 @@ struct ApplicationContextConfig {
     disable_app_manifest_discovery: bool,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
+    dev_mode: bool,
 }
 
 impl ApplicationContextConfig {
@@ -706,6 +707,7 @@ impl ApplicationContextConfig {
                 version_override: global_flags.golem_rust_version,
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
+            dev_mode: global_flags.dev_mode,
         }
     }
 
@@ -770,6 +772,7 @@ impl ApplicationContextState {
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
+            dev_mode: config.dev_mode,
         };
 
         debug!(app_config = ?app_config, "Initializing application context");
