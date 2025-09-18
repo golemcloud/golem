@@ -24,7 +24,7 @@ import * as util from 'node:util';
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
   const complexAgent: AgentType = Option.getOrThrowWith(
     AgentTypeRegistry.lookup(ComplexAgentClassName),
-    () => new Error('AssistantAgent not found in AgentTypeRegistry'),
+    () => new Error('ComplexAgent not found in AgentTypeRegistry'),
   );
 
   const complexAgentConstructor = complexAgent.constructor;
@@ -424,7 +424,7 @@ describe('Agent decorator should register the agent class and its methods into A
   it('captures all methods and constructor with correct number of parameters', () => {
     const simpleAgent = Option.getOrThrowWith(
       AgentTypeRegistry.lookup(SimpleAgentClassName),
-      () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+      () => new Error('SimpleAgent not found in AgentTypeRegistry'),
     );
 
     expect(complexAgent.methods.length).toEqual(22);
@@ -436,7 +436,7 @@ describe('Agent decorator should register the agent class and its methods into A
   it('should not capture overridden functions in base agents as agent methods', () => {
     const simpleAgent = Option.getOrThrowWith(
       AgentTypeRegistry.lookup(SimpleAgentClassName),
-      () => new Error('WeatherAgent not found in AgentTypeRegistry'),
+      () => new Error('SimpleAgent not found in AgentTypeRegistry'),
     );
 
     const forbidden = [

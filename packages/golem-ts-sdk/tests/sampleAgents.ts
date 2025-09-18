@@ -115,7 +115,7 @@ class SimpleAgent extends BaseAgent {
   }
 
   // With override keyword
-  override saveSnapshot(): Promise<Uint8Array> {
+  override async saveSnapshot(): Promise<Uint8Array> {
     return super.saveSnapshot();
   }
 

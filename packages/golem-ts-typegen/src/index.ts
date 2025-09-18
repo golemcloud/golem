@@ -624,7 +624,7 @@ function isOverriddenMethod(method: MethodDeclaration): boolean {
   while (currentBase) {
     const baseMethod = currentBase.getInstanceMethod(methodName);
     if (baseMethod) return true;
-    
+
     currentBase = currentBase.getBaseClass();
   }
 
