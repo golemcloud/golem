@@ -106,4 +106,17 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             Ok(Err(AgentError::InvalidType(agent_type_name)))
         }
     }
+
+    async fn parse_agent_id(
+        &mut self,
+        agent_id: String,
+    ) -> anyhow::Result<Result<(String, DataValue), AgentError>> {
+        DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
+
+        let component_metadata = &self.component_metadata().metadata;
+        match AgentId::parse(agent_id, component_metadata).await {
+            Ok(agent_id) => Ok(Ok((agent_id.agent_type, agent_id.parameters.into()))),
+            Err(error) => Ok(Err(AgentError::InvalidAgentId(error))),
+        }
+    }
 }

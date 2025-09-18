@@ -32,4 +32,6 @@ world golem-agent  {
   import golem:web-search/web-search@1.0.0;
 
   export golem:agent/guest;
+  export golem:api/save-snapshot@1.1.7;
+  export golem:api/load-snapshot@1.1.7;
 }

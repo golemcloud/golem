@@ -12,30 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::command::shared_args::DeployArgs;
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::NonSuccessfulExit;
-use crate::log::logln;
+use crate::fs;
+use crate::log::{logln, set_log_output, Output};
 use crate::model::component::ComponentView;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
 use crate::model::{
-    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, IdempotencyKey, WorkerName,
+    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
+    WorkerName,
 };
 use anyhow::bail;
 use async_trait::async_trait;
 use colored::Colorize;
-use golem_common::model::agent::{DataSchema, ElementSchema};
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
-use golem_wasm_ast::analysis::analysed_type::{str, variant};
-use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -53,7 +54,20 @@ impl RibReplHandler {
         &self,
         component_name: Option<ComponentName>,
         component_version: Option<u64>,
+        deploy_args: Option<&DeployArgs>,
+        script: Option<String>,
+        script_file: Option<PathBuf>,
     ) -> anyhow::Result<()> {
+        let script_input = {
+            if let Some(script) = script {
+                Some(script)
+            } else if let Some(script_path) = script_file {
+                Some(fs::read_to_string(script_path)?)
+            } else {
+                None
+            }
+        };
+
         let selected_components = self
             .ctx
             .component_handler()
@@ -80,6 +94,7 @@ impl RibReplHandler {
                 ComponentNameMatchKind::App,
                 &component_name,
                 component_version.map(|v| v.into()),
+                deploy_args,
             )
             .await?;
 
@@ -97,42 +112,9 @@ impl RibReplHandler {
             .agent_types()
             .iter()
             .map(|agent_type| {
-                // constructor args is mainly constructed for REPL to auto populate
-                // the constructor argument values.
-                // If constructor-args is kept empty, the REPL will still work
-                // but users need to manually enter the type - otherwise end up in other compile time or runtime errors.
-                let constructor_args = {
-                    match &agent_type.constructor.input_schema {
-                        DataSchema::Tuple(element_schemas) => element_schemas
-                            .elements
-                            .iter()
-                            .map(|named_schema| get_analysed_type(&named_schema.schema))
-                            .collect::<Vec<AnalysedType>>(),
-                        DataSchema::Multimodal(named_element_schemas) => {
-                            // the value is wrapped in names
-                            named_element_schemas
-                                .elements
-                                .iter()
-                                .map(|named_schema| {
-                                    let name = &named_schema.name;
-
-                                    let analysed_type = get_analysed_type(&named_schema.schema);
-
-                                    let name_and_type = NameOptionTypePair {
-                                        name: name.clone(),
-                                        typ: Some(analysed_type),
-                                    };
-
-                                    variant(vec![name_and_type])
-                                })
-                                .collect::<Vec<_>>()
-                        }
-                    }
-                };
-
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
-                    constructor_args,
+                    agent_type.constructor.wit_arg_types(),
                     Some(rib::InterfaceName {
                         name: agent_type.type_name.to_string(),
                         version: None,
@@ -166,37 +148,38 @@ impl RibReplHandler {
         })
         .await?;
 
-        logln("");
+        if script_input.is_none() {
+            logln("");
+            self.ctx.log_handler().log_view(&ComponentReplStartedView(
+                ComponentView::new_rib_style(self.ctx.show_sensitive(), component),
+            ));
+            logln("");
+        }
 
-        self.ctx
-            .log_handler()
-            .log_view(&ComponentReplStartedView(ComponentView::new_rib_style(
-                self.ctx.show_sensitive(),
-                component,
-            )));
+        match script_input {
+            Some(script) => {
+                let result = repl.execute(&script).await;
+                match &result {
+                    Ok(rib_result) => match self.ctx.format() {
+                        Format::Json | Format::Yaml => {
+                            let result = rib_result.as_ref().and_then(|r| r.get_val());
+                            self.ctx.log_handler().log_serializable(&result);
+                        }
+                        Format::Text => {
+                            repl.print_execute_result(&result);
+                        }
+                    },
+                    Err(_) => {
+                        set_log_output(Output::Stderr);
+                        repl.print_execute_result(&result);
+                        bail!(NonSuccessfulExit);
+                    }
+                }
+            }
+            None => repl.run().await,
+        }
 
-        logln("");
-
-        repl.run().await;
         Ok(())
-    }
-}
-
-fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
-    match schema {
-        ElementSchema::ComponentModel(component_model_elem_schema) => {
-            component_model_elem_schema.element_type.clone()
-        }
-        ElementSchema::UnstructuredText(_) => {
-            // the constructor args for unstructured text is just a text
-            // Ex: foo or [en]foo, where en is the language code
-            str()
-        }
-        ElementSchema::UnstructuredBinary(_) => {
-            // Example argument in constructor: [image/png]"iVBORw0KGA"
-            // The REPL can re-inspect the schema again and generate a proper base64
-            str()
-        }
     }
 }
 

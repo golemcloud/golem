@@ -16,7 +16,7 @@ use crate::app::error::CustomCommandError;
 use crate::command::app::AppSubcommand;
 use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, ForceBuildArg, UpdateOrRedeployArgs,
+    AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -30,7 +30,7 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::{ComponentName, WorkerUpdateMode};
+use crate::model::{AgentUpdateMode, ComponentName};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::AgentTypesClient;
@@ -66,9 +66,9 @@ impl AppCommandHandler {
             AppSubcommand::Deploy {
                 component_name,
                 force_build,
-                update_or_redeploy,
+                deploy_args,
             } => {
-                self.cmd_deploy(component_name, force_build, update_or_redeploy)
+                self.cmd_deploy(component_name, force_build, deploy_args)
                     .await
             }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
@@ -292,10 +292,9 @@ impl AppCommandHandler {
         &self,
         component_name: AppOptionalComponentNames,
         force_build: ForceBuildArg,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(component_name, force_build, update_or_redeploy)
-            .await
+        self.deploy(component_name, force_build, deploy_args).await
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -352,13 +351,13 @@ impl AppCommandHandler {
     async fn cmd_update_workers(
         &self,
         component_names: Vec<ComponentName>,
-        update_mode: WorkerUpdateMode,
+        update_mode: AgentUpdateMode,
         await_update: bool,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
 
-        let components = self.components_for_update_or_redeploy().await?;
+        let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
             .update_workers_by_components(&components, update_mode, await_update)
@@ -374,7 +373,7 @@ impl AppCommandHandler {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
 
-        let components = self.components_for_update_or_redeploy().await?;
+        let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
             .redeploy_workers_by_components(&components)
@@ -413,7 +412,7 @@ impl AppCommandHandler {
         &self,
         component_name: AppOptionalComponentNames,
         force_build: ForceBuildArg,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         let is_any_component_explicitly_selected = !component_name.component_name.is_empty();
 
@@ -431,7 +430,7 @@ impl AppCommandHandler {
                 component_name.component_name,
                 Some(force_build),
                 &ApplicationComponentSelectMode::All,
-                &update_or_redeploy,
+                &deploy_args,
             )
             .await?;
 
@@ -449,7 +448,7 @@ impl AppCommandHandler {
                 } else {
                     HttpApiDeployMode::All
                 },
-                &update_or_redeploy,
+                &deploy_args,
                 &components,
             )
             .await?;
@@ -488,7 +487,7 @@ impl AppCommandHandler {
         app_ctx.some_or_err()?.clean()
     }
 
-    async fn components_for_update_or_redeploy(&self) -> anyhow::Result<Vec<Component>> {
+    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<Component>> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 

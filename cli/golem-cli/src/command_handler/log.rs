@@ -28,6 +28,20 @@ impl LogHandler {
         Self { ctx }
     }
 
+    pub fn log_serializable<S: Serialize>(&self, value: &S) {
+        match self.ctx.format() {
+            Format::Json => {
+                println!("{}", serde_json::to_string(value).unwrap());
+            }
+            Format::Yaml => {
+                println!("---\n{}", serde_yaml::to_string(value).unwrap());
+            }
+            Format::Text => {
+                println!("{}", serde_json::to_string_pretty(value).unwrap());
+            }
+        }
+    }
+
     pub fn log_view<View: TextView + Serialize + DeserializeOwned>(&self, view: &View) {
         match self.ctx.format() {
             Format::Json => {
