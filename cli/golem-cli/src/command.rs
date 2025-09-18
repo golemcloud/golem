@@ -555,7 +555,7 @@ pub enum GolemCliSubcommand {
         version: Option<u64>,
         #[command(flatten)]
         deploy_args: Option<DeployArgs>,
-        #[clap(long, short, conflicts_with_all = ["script_path"])]
+        #[clap(long, short, conflicts_with_all = ["script_file"])]
         script: Option<String>,
         #[clap(long, conflicts_with_all = ["script"])]
         script_file: Option<PathBuf>,
