@@ -143,6 +143,7 @@ async fn execute_agent_wrapper(
         );
 
         let redirect = (!dev_mode).then(|| BufferRedirect::stderr().ok()).flatten();
+        // let redirect = BufferRedirect::stderr().ok();
 
         let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
             wrapper_context,

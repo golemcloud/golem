@@ -73,6 +73,28 @@ pub fn generate_moonbit_wrapper(
         AGENT_GUEST_MBT,
     )?;
 
+    const AGENT_LOAD_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/load_snapshot.mbt");
+    const AGENT_SAVE_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/save_snapshot.mbt");
+
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "loadSnapshot",
+        AGENT_LOAD_SNAPSHOT_MBT,
+    )?;
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "saveSnapshot",
+        AGENT_SAVE_SNAPSHOT_MBT,
+    )?;
+
     if ctx.has_types {
         component.write_interface_stub(
             &PackageName {
@@ -349,6 +371,33 @@ fn setup_dependencies(
     };
 
     depends_on_golem_agent_common(component, "interface/golem/agent/guest")?;
+
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/loadSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("loadSnapshot")
+            .join("loadSnapshot.mi"),
+        "loadSnapshot",
+    )?;
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/saveSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("saveSnapshot")
+            .join("saveSnapshot.mi"),
+        "saveSnapshot",
+    )?;
 
     if has_types {
         depends_on_golem_agent_common(
@@ -1348,12 +1397,31 @@ fn extract_wit_value(
             writeln!(result, "{indent})")?;
         }
         AnalysedType::List(list) => {
-            writeln!(
-                result,
-                "{indent}{from}.list_elements().unwrap().map(item => {{"
-            )?;
-            extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
-            writeln!(result, "{indent}}})")?;
+            if matches!(
+                &*list.inner,
+                AnalysedType::U8(_)
+                    | AnalysedType::U32(_)
+                    | AnalysedType::U64(_)
+                    | AnalysedType::S32(_)
+                    | AnalysedType::S64(_)
+                    | AnalysedType::F32(_)
+                    | AnalysedType::F64(_)
+            ) {
+                // based on https://github.com/bytecodealliance/wit-bindgen/blob/main/crates/moonbit/src/lib.rs#L998-L1009
+                writeln!(
+                    result,
+                    "{indent}FixedArray::from_array({from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}}))")?;
+            } else {
+                writeln!(
+                    result,
+                    "{indent}{from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}})")?;
+            }
         }
         AnalysedType::Str(_) => {
             writeln!(result, "{indent}{from}.string().unwrap()")?;

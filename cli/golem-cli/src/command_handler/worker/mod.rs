@@ -615,7 +615,7 @@ impl WorkerCommandHandler {
                 &idempotency_key.0,
             )
             .await
-            .map(|result| (result.canceled))
+            .map(|result| result.canceled)
             .map_service_error()?;
 
         // TODO: json / yaml response?
