@@ -529,6 +529,9 @@ impl Ord for DependentAppComponent {
         self.name.cmp(&other.name)
     }
 }
+
+pub type MultiSourceHttpApiDefinitionNames = Vec<WithSource<Vec<HttpApiDefinitionName>>>;
+
 #[derive(Clone, Debug)]
 pub struct Application {
     all_sources: BTreeSet<PathBuf>,
@@ -541,10 +544,8 @@ pub struct Application {
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
-    http_api_deployments: BTreeMap<
-        ProfileName,
-        BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>,
-    >,
+    http_api_deployments:
+        BTreeMap<ProfileName, BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>>,
 }
 
 impl Application {
@@ -1281,11 +1282,7 @@ mod app_builder {
     use crate::fuzzy::FuzzySearch;
     use crate::log::LogColorize;
     use crate::model::api::to_method_pattern;
-    use crate::model::app::{
-        AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component,
-        ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName,
-        HttpApiDeploymentSite, ResolvedComponentProperties, TemplateName, WithSource,
-    };
+    use crate::model::app::{AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component, ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName, HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames, ResolvedComponentProperties, TemplateName, WithSource};
     use crate::model::app_raw;
     use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
     use crate::model::text::fmt::format_rib_source_for_error;
@@ -1443,7 +1440,7 @@ mod app_builder {
             BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
         http_api_deployments: BTreeMap<
             ProfileName,
-            BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>,
+            BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>,
         >,
 
         // NOTE: raw component names are available (for validation) even after component resolving
