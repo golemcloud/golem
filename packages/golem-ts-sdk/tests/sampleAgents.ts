@@ -92,6 +92,18 @@ class SimpleAgent extends BaseAgent {
   async fun10(param: UnionWithOnlyLiterals): Promise<UnionWithOnlyLiterals> {
     return param;
   }
+
+  async fun11(
+    param: { tag: 'ok'; val: number } | { tag: 'err'; val: string },
+  ): Promise<{ tag: 'ok'; val: number } | { tag: 'err'; val: string }> {
+    return param;
+  }
+
+  async fun12(
+    param: { tag: 'ok'; value: number } | { tag: 'err'; value: string },
+  ): Promise<{ tag: 'ok'; value: number } | { tag: 'err'; value: string }> {
+    return param;
+  }
 }
 
 export interface CustomData {
@@ -138,6 +150,7 @@ class ComplexAgent extends BaseAgent {
     optionalUnionType: UnionType | undefined,
     taggedUnionType: TaggedUnion,
     unionWithOnlyLiterals: UnionWithOnlyLiterals,
+    resultType: { tag: 'ok'; val: number } | { tag: 'err'; val: string },
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

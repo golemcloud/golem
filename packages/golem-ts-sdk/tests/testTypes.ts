@@ -32,6 +32,16 @@ export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 
 export type UnionWithLiterals = 'a' | 'b' | 'c' | boolean;
 
+// tag and `val` are exact as wit-type result
+export type ResultTypeExactBoth =
+  | { tag: 'ok'; val: number }
+  | { tag: 'err'; val: string };
+
+// Result type Kind is similar looking, but it's value instead of val
+export type ResultTypeKind =
+  | { tag: 'ok'; value: number }
+  | { tag: 'err'; value: string };
+
 export type PromiseType = Promise<string>;
 
 export type ObjectType = {

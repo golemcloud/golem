@@ -17,10 +17,11 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
+import { convertTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './string-format';
+import { getTaggedUnion, getUnionOfLiterals, TaggedTypeMetadata, UserDefinedResultType } from './taggedUnion';
+import { TagKeyWords } from './keywords';
 
 type TsType = CoreType.Type;
-
-const KeyWords = ["ok", "err", "none", "some"];
 
 export interface NameTypePair {
   name: string;
@@ -225,7 +226,7 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
  export const resultErr = (name: string | undefined, err: AnalysedType): AnalysedType =>
       ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, err } });
 
- export const result = (name: string | undefined, ok: AnalysedType, err: AnalysedType): AnalysedType =>
+ export const result = (name: string | undefined, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
       ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, ok, err } });
 
 
@@ -311,44 +312,23 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         return Either.right(enum_(type.name, unionOfOnlyLiterals.val.val.literals));
       }
 
-      const taggedUnions =
-        getTaggedUnions(type.unionTypes);
+      const taggedUnion =
+        getTaggedUnion(type.unionTypes);
 
-      if (Either.isLeft(taggedUnions)) {
-        return taggedUnions;
+      if (Either.isLeft(taggedUnion)) {
+        return taggedUnion;
       }
 
-      if (Option.isSome(taggedUnions.val)) {
-        for (const taggedTypeMetadata of taggedUnions.val.val) {
+      if (Option.isSome(taggedUnion.val)) {
 
-          if (!isKebabCase(taggedTypeMetadata.tagLiteralName)) {
-            return Either.left(`Tagged union case names must be in kebab-case. Found: ${taggedTypeMetadata.tagLiteralName}`);
-          }
+        const unionType = taggedUnion.val.val;
 
-          if (Option.isSome(taggedTypeMetadata.valueType) && taggedTypeMetadata.valueType.val[1].kind === "literal") {
-            return Either.left("Tagged unions cannot have literal types in the value section")
-          }
-
-          if (Option.isNone(taggedTypeMetadata.valueType)) {
-            possibleTypes.push({
-              name: taggedTypeMetadata.tagLiteralName
-            })
-          } else {
-            const result =
-              fromTsTypeInternal(taggedTypeMetadata.valueType.val[1], Option.none());
-
-            if (Either.isLeft(result)) {
-              return result;
-            }
-
-            possibleTypes.push({
-              name: taggedTypeMetadata.tagLiteralName,
-              typ: result.val,
-            });
-          }
+        switch (unionType.tag) {
+          case "custom":
+            return convertTaggedTypesToVariant(type.name, unionType.val);
+          case "result":
+            return convertUserDefinedResultToWitResult(type.name, unionType.val);
         }
-
-        return Either.right(variant(type.name, possibleTypes));
       }
 
       // If the union includes undefined, we need to treat it as option
@@ -575,7 +555,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       const literalName = type.literalValue;
 
       if (!literalName) {
-        return Either.left(`Internal error: failed to retrieve the literal value from ${JSON.stringify(type)}`);
+        return Either.left(`internal error: failed to retrieve the literal value from type of kind ${type.kind}`);
       }
 
       if (literalName === 'true' || literalName === 'false') {
@@ -661,9 +641,6 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
   }
 }
 
-function isOptionalParam(scope: Option.Option<TypeMappingScope>) {
-  return Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val)
-}
 
 function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undefined {
   if (Option.isSome(optScope)) {
@@ -674,111 +651,72 @@ function getScopeName(optScope: Option.Option<TypeMappingScope>): string | undef
   return undefined;
 }
 
+function convertTaggedTypesToVariant(typeName: string | undefined, taggedTypes: TaggedTypeMetadata[]): Either.Either<AnalysedType, string> {
+  const possibleTypes: NameOptionTypePair[] = [];
+
+  for (const taggedTypeMetadata of taggedTypes) {
+
+    if (!isKebabCase(taggedTypeMetadata.tagLiteralName)) {
+      return Either.left(`Tagged union case names must be in kebab-case. Found: ${taggedTypeMetadata.tagLiteralName}`);
+    }
+
+    if (Option.isSome(taggedTypeMetadata.valueType) && taggedTypeMetadata.valueType.val[1].kind === "literal") {
+      return Either.left("Tagged unions cannot have literal types in the value section")
+    }
+
+    if (Option.isNone(taggedTypeMetadata.valueType)) {
+      possibleTypes.push({
+        name: taggedTypeMetadata.tagLiteralName
+      })
+    } else {
+      const result =
+        fromTsTypeInternal(taggedTypeMetadata.valueType.val[1], Option.none());
+
+      if (Either.isLeft(result)) {
+        return result;
+      }
+
+      possibleTypes.push({
+        name: taggedTypeMetadata.tagLiteralName,
+        typ: result.val,
+      });
+    }
+  }
+
+  return Either.right(variant(typeName, possibleTypes));
+}
+
+
+function convertUserDefinedResultToWitResult(typeName: string | undefined, resultType: UserDefinedResultType): Either.Either<AnalysedType, string> {
+  const okTypeResult = resultType.okType
+    ? fromTsTypeInternal(resultType.okType[1], Option.none())
+    : undefined;
+
+  if (okTypeResult && Either.isLeft(okTypeResult)) {
+    return Either.left(okTypeResult.val);
+  }
+
+  const errTypeResult = resultType.errType
+    ? fromTsTypeInternal(resultType.errType[1], Option.none())
+    : undefined;
+
+  if (errTypeResult && Either.isLeft(errTypeResult)) {
+    return Either.left(errTypeResult.val);
+  }
+
+  return Either.right(
+    result(
+      typeName,
+      okTypeResult ? okTypeResult.val : undefined,
+      errTypeResult ? errTypeResult.val : undefined
+    )
+  );
+}
+
 function includesUndefined(
   unionTypes: TsType[]
 ): boolean {
   return unionTypes.some((ut) => ut.kind === "undefined" || ut.kind === "null" || ut.kind === "void");
-}
-
-//  { tag: 'a', val: string }
-//  is { tagLiteral: 'a', valueType: Option.some(['val', string]) }
-export type TaggedTypeMetadata = {
-  tagLiteralName: string
-  valueType: Option.Option<[string, TsType]>,
-}
-
-export type LiteralUnions = {
-  literals: string[]
-}
-
-export function getUnionOfLiterals(
-  unionTypes: TsType[]
-): Either.Either<Option.Option<LiteralUnions>, string> {
-
-  const literals: string[] = [];
-
-  for (const ut of unionTypes) {
-    if (ut.kind === "literal" && ut.literalValue) {
-      const literalValue = ut.literalValue;
-      if (isNumberString(literalValue)) {
-        return Either.right(Option.none());
-      }
-
-      if (literalValue === 'true' || literalValue === 'false') {
-        return Either.right(Option.none());
-      }
-
-      const literalValueTrimmed = trimQuotes(literalValue);
-      
-      if (KeyWords.includes(literalValueTrimmed)) {
-        return Either.left(`\`${literalValueTrimmed}\` is a reserved keyword. The following keywords cannot be used as literals: ` + KeyWords.join(', '));
-      }
-
-      literals.push(literalValueTrimmed);
-    } else {
-      return Either.right(Option.none());
-    }
-  }
-
-  return Either.right(Option.some({ literals }));
-}
-
-export function getTaggedUnions(
-  unionTypes: TsType[]
-): Either.Either<Option.Option<TaggedTypeMetadata[]>, string> {
-
-  const taggedTypes: TaggedTypeMetadata[] = [];
-
-  for (const ut of unionTypes) {
-    if (ut.kind === "object") {
-
-      if (ut.properties.length > 2) {
-        return Either.right(Option.none());
-      }
-
-      const tag =
-        ut.properties.find((type) => type.getName() === "tag");
-
-      if (!tag) {
-        return Either.right(Option.none());
-      }
-
-      const tagType =
-        tag.getTypeAtLocation(tag.getValueDeclarationOrThrow());
-
-      if (tagType.kind !== "literal" || !tagType.literalValue) {
-        return Either.right(Option.none());
-      }
-
-      const tagValue = tagType.literalValue;
-
-      const tagValueTrimmed = trimQuotes(tagValue);
-
-      if (KeyWords.includes(tagValueTrimmed)) {
-        return Either.left(`\`${tagValueTrimmed}\` is a reserved keyword. The following keywords cannot be used as tag values: ` + KeyWords.join(', '));
-      }
-
-      const nextSymbol =
-        ut.properties.find((type) => type.getName() !== "tag");
-
-      if (!nextSymbol){
-        taggedTypes.push({
-          tagLiteralName: tagValueTrimmed,
-          valueType: Option.none()
-        });
-      } else {
-        const propType = nextSymbol.getTypeAtLocation(nextSymbol.getValueDeclarationOrThrow());
-        taggedTypes.push({
-          tagLiteralName: tagValueTrimmed,
-          valueType: Option.some([nextSymbol.getName(), propType])
-        });
-      }
-    } else {
-      return Either.right(Option.none())
-    }
-  }
-
-  return Either.right(Option.some(taggedTypes))
 }
 
 function filterUndefinedTypes(
@@ -817,27 +755,4 @@ function filterUndefinedTypes(
   }
 
   return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional  });
-}
-
-function isNumberString(name: string): boolean {
-  return !isNaN(Number(name));
-}
-
-function trimQuotes(s: string): string {
-  if (s.startsWith('"') && s.endsWith('"')) {
-    return s.slice(1, -1);
-  }
-  return s;
-}
-
-
-function isKebabCase(str: string): boolean {
-  return /^[a-z]+(-[a-z]+)*$/.test(str);
-}
-
-function convertTypeNameToKebab(typeName: string | undefined): string | undefined{
-  return typeName  ? typeName
-    .replace(/([a-z])([A-Z])/g, '$1-$2')
-    .replace(/[\s_]+/g, '-')
-    .toLowerCase() : undefined;
 }

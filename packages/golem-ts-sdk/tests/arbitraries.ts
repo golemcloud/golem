@@ -32,6 +32,8 @@ import {
   UnionType,
   TaggedUnion,
   UnionWithOnlyLiterals,
+  ResultTypeExactBoth,
+  ResultTypeKind,
 } from './testTypes';
 
 import { AgentClassName } from '../src';
@@ -71,39 +73,49 @@ export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUnde
 export const unionOfLiteralArb: Arbitrary<UnionWithLiterals> =
   fc.constantFrom<UnionWithLiterals>('a', 'b', 'c', true, false);
 
+export const resultTypeBothArb: Arbitrary<ResultTypeExactBoth> = fc.oneof(
+  fc.record({ tag: fc.constant('ok'), val: fc.integer() }),
+  fc.record({ tag: fc.constant('err'), val: fc.string() }),
+);
+
+export const resultTypeKindArb: Arbitrary<ResultTypeKind> = fc.oneof(
+  fc.record({ tag: fc.constant('ok'), value: fc.integer() }),
+  fc.record({ tag: fc.constant('err'), value: fc.string() }),
+);
+
 export const taggedUnionArb: Arbitrary<TaggedUnion> = fc.oneof(
-  // fc.record({ tag: fc.constant('a'), val: fc.string() }),
-  // fc.record({ tag: fc.constant('b'), val: fc.integer() }),
-  // fc.record({ tag: fc.constant('c'), val: fc.boolean() }),
-  // fc.record({
-  //   tag: fc.constant('d'),
-  //   val: fc.oneof(
-  //     fc.integer(),
-  //     fc.string(),
-  //     fc.boolean(),
-  //     fc.record({
-  //       a: fc.string(),
-  //       b: fc.integer(),
-  //       c: fc.boolean(),
-  //     }),
-  //   ),
-  // }),
-  // fc.record({
-  //   tag: fc.constant('e'),
-  //   val: fc.record({
-  //     a: fc.string(),
-  //     b: fc.integer(),
-  //     c: fc.boolean(),
-  //   }),
-  // }),
-  // fc.record({
-  //   tag: fc.constant('f'),
-  //   val: fc.array(fc.string()),
-  // }),
-  // fc.record({
-  //   tag: fc.constant('g'),
-  //   val: fc.tuple(fc.string(), fc.integer(), fc.boolean()),
-  // }),
+  fc.record({ tag: fc.constant('a'), val: fc.string() }),
+  fc.record({ tag: fc.constant('b'), val: fc.integer() }),
+  fc.record({ tag: fc.constant('c'), val: fc.boolean() }),
+  fc.record({
+    tag: fc.constant('d'),
+    val: fc.oneof(
+      fc.integer(),
+      fc.string(),
+      fc.boolean(),
+      fc.record({
+        a: fc.string(),
+        b: fc.integer(),
+        c: fc.boolean(),
+      }),
+    ),
+  }),
+  fc.record({
+    tag: fc.constant('e'),
+    val: fc.record({
+      a: fc.string(),
+      b: fc.integer(),
+      c: fc.boolean(),
+    }),
+  }),
+  fc.record({
+    tag: fc.constant('f'),
+    val: fc.array(fc.string()),
+  }),
+  fc.record({
+    tag: fc.constant('g'),
+    val: fc.tuple(fc.string(), fc.integer(), fc.boolean()),
+  }),
   fc.record({
     tag: fc.constant('i'),
   }),

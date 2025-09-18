@@ -30,6 +30,7 @@ import { AgentTypeName } from '../newTypes/agentTypeName';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { DataValue, ElementValue } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
+import * as util from 'node:util';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -108,8 +109,7 @@ function getMethodProxy(
     const parameterWitValues = Either.isLeft(parameterWitValuesEither)
       ? (() => {
           throw new Error(
-            'Failed to create remote agent: ' +
-              JSON.stringify(parameterWitValuesEither.val),
+            'Failed to create remote agent: ' + parameterWitValuesEither.val,
           );
         })()
       : parameterWitValuesEither.val;
@@ -227,7 +227,7 @@ function unwrapResult(witValue: WitValue.WitValue): Value.Value {
       ? innerResult.value.ok
       : (() => {
           throw new Error(
-            `Remote invocation failed: ${JSON.stringify(innerResult.value.err)}`,
+            `Remote agent method invocation failed. Cause: ${util.format(innerResult.value.err)}`,
           );
         })()
     : innerResult;

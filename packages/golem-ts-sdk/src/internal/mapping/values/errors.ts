@@ -16,18 +16,25 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
-import { getTaggedUnions, getUnionOfLiterals } from '../types/AnalysedType';
 import * as Either from '../../../newTypes/either';
+import {
+  getTaggedUnion,
+  getUnionOfLiterals,
+  TaggedUnion,
+} from '../types/taggedUnion';
 
 // type mismatch in tsValue when converting from TS to WIT
-export function typeMismatchIn(tsValue: any, expectedType: Type.Type): string {
+export function typeMismatchInSerialize(
+  tsValue: any,
+  expectedType: Type.Type,
+): string {
   const nameOrKind = expectedType.name ?? expectedType.kind;
   return `Type mismatch. Expected \`${nameOrKind}\`, but got \`${safeDisplay(tsValue)}\` which is of type \`${typeof tsValue}\``;
 }
 
 // Unable to convert the value to the expected type in the output direction
-export function typeMismatchOut(value: Value, expectedType: string) {
-  return `Unable to convert \`${safeDisplay(value)}\` to \`${expectedType}\``;
+export function typeMismatchInDeserialize(value: Value, expectedType: string) {
+  return `Failed to deserialize \`${safeDisplay(value)}\` to typescript type \`${expectedType}\``;
 }
 
 // Missing keys in tsValue when converting from TS to WIT
@@ -53,13 +60,13 @@ export function unionTypeMatchError(
     (err) => new Error(`Failed to analyse union types: ${err}`),
   );
 
-  const taggedUnions = Either.getOrThrowWith(
-    getTaggedUnions(unionTypes),
+  const taggedUnion = Either.getOrThrowWith(
+    getTaggedUnion(unionTypes),
     (err) => new Error(`Failed to analyse union types: ${err}`),
   );
 
-  const types = Option.isSome(taggedUnions)
-    ? taggedUnions.val.map((metadata) => metadata.tagLiteralName)
+  const types = Option.isSome(taggedUnion)
+    ? TaggedUnion.getTagNames(taggedUnion.val)
     : Option.isSome(unionOfLiterals)
       ? unionOfLiterals.val.literals
       : defaultTypes;

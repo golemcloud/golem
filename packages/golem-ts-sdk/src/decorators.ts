@@ -293,18 +293,9 @@ export function agent() {
               );
 
               if (!methodDef) {
-                const entriesAsStrings = Array.from(
-                  AgentTypeRegistry.entries(),
-                ).map(
-                  ([key, value]) =>
-                    `Key: ${key}, Value: ${JSON.stringify(value, null, 2)}`,
-                );
-
                 const error: AgentError = {
                   tag: 'invalid-method',
-                  val: `Method ${method} not found in agent type ${agentClassName}. Available methods: ${entriesAsStrings.join(
-                    ', ',
-                  )}`,
+                  val: `Method ${method} not found in agent type ${agentClassName}`,
                 };
 
                 return {
@@ -317,8 +308,8 @@ export function agent() {
 
               if (Either.isLeft(returnValue)) {
                 const agentError: AgentError = {
-                  tag: 'invalid-method',
-                  val: `Invalid return value from ${method}: ${returnValue.val}`,
+                  tag: 'invalid-type',
+                  val: `Failed to serialize the return value from ${method}: ${returnValue.val}`,
                 };
 
                 return {

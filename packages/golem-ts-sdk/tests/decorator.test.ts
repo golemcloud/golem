@@ -158,6 +158,20 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(wit).toEqual(expectedWit);
   });
 
+  it('should handle result type in method', () => {
+    const wit = getWitType(complexAgentMethod!.inputSchema, 'resultType');
+
+    const expectedWit = {
+      nodes: [
+        { type: { tag: 'result-type', val: [1, 2] } },
+        { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
   it('should handle union with null in constructor', () => {
     const wit = getWitType(
       complexAgentConstructor.inputSchema,
@@ -372,7 +386,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(complexAgent.methods.length).toEqual(22);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
-    expect(simpleAgent.methods.length).toEqual(10);
+    expect(simpleAgent.methods.length).toEqual(12);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 });
