@@ -149,9 +149,7 @@ async fn test_api_def_with_agent() {
         &test_namespace(),
         &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
     );
-
-    dbg!(&result);
-
+    
     assert!(result.is_ok());
 }
 
