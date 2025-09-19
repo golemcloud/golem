@@ -99,23 +99,15 @@ type TsType = Type.Type;
  *   }
  * }
  *
- * ### Remote and Local Clients
- *
- * A local client is a direct instance of the agent class,
- * which can be used to call methods directly. It is recommended to use the local clients
- * even if you can create a local client by directly calling the constructor.
- *
- * With a local client, any logic defined in the agent class is executed in the same container.
- *
- * const calc = CalculatorAgent.createLocal(10);
- * console.log(calc.add(5)); // 15
+ * ### Remote Client
  *
  * The purpose of a remote client is that it allows you to invoke the agent constructor
  * and methods of an agent (even if it's defined with in the same code) in a different container.
- * An immediate outcome of this is that you are offloading the work of this agent to a different container
- * than the current container.
+ * By passing the constructor parameters to `get()`, the SDK will ensure that an instance of the agent,
+ * is created in a different container, and the method calls are proxied to that container.
  *
- * const calcRemote = CalculatorAgent.createRemote();
+ *
+ * const calcRemote = CalculatorAgent.get(10);
  * calcRemote.add(5);
  * ```
  */
