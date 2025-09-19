@@ -33,6 +33,7 @@ import {
 import { TypeMappingScope } from './mapping/types/scope';
 import { languageCodes } from '../decorators';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
+import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 
 export function getConstructorDataSchema(
   agentClassName: AgentClassName,
@@ -50,7 +51,7 @@ export function getConstructorDataSchema(
 
       const paramTypeName = paramType.name;
 
-      if (!paramTypeName && paramTypeName === 'UnstructuredText') {
+      if (paramTypeName && paramTypeName === 'UnstructuredText') {
         const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
 
         const languageCodes = metadata?.get(paramInfo.name)?.languageCodes;
@@ -124,7 +125,11 @@ export function getAgentMethodSchema(
       const baseMeta =
         AgentMethodRegistry.lookup(agentClassName)?.get(methodName) ?? {};
 
-      const inputSchemaEither = buildMethodInputSchema(methodName, parameters);
+      const inputSchemaEither = buildMethodInputSchema(
+        agentClassName,
+        methodName,
+        parameters,
+      );
 
       if (Either.isLeft(inputSchemaEither)) {
         return Either.left(inputSchemaEither.val);
@@ -154,6 +159,7 @@ export function getAgentMethodSchema(
 }
 
 export function buildMethodInputSchema(
+  agentClassName: AgentClassName,
   methodName: string,
   paramTypes: MethodParams,
 ): Either.Either<DataSchema, string> {
@@ -161,6 +167,9 @@ export function buildMethodInputSchema(
     Array.from(paramTypes).map((parameterInfo) =>
       Either.mapBoth(
         convertToElementSchema(
+          agentClassName,
+          methodName,
+          parameterInfo[0],
           parameterInfo[1],
           Option.some(
             TypeMappingScope.method(
@@ -196,22 +205,55 @@ export function buildOutputSchema(
     return Either.right(undefinedSchema.val);
   }
 
-  return Either.map(
-    convertToElementSchema(returnType, Option.none()),
-    (result) => {
+  const schema: Either.Either<ElementSchema, string> = Either.map(
+    WitType.fromTsType(returnType, Option.none()),
+    (witType) => {
       return {
-        tag: 'tuple',
-        val: [['return-value', result]],
+        tag: 'component-model',
+        val: witType,
       };
     },
   );
+
+  return Either.map(schema, (result) => {
+    return {
+      tag: 'tuple',
+      val: [['return-value', result]],
+    };
+  });
 }
 
 function convertToElementSchema(
-  type: Type.Type,
+  agentClassName: AgentClassName,
+  methodName: string,
+  parameterName: string,
+  parameterType: Type.Type,
   scope: Option.Option<TypeMappingScope>,
 ): Either.Either<ElementSchema, string> {
-  return Either.map(WitType.fromTsType(type, scope), (witType) => {
+  const paramTypeName = parameterType.name;
+
+  if (paramTypeName && paramTypeName === 'UnstructuredText') {
+    const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
+
+    const parameterMetadata = methodMetadata?.get(methodName);
+
+    const languageCodes = parameterMetadata?.get(parameterName)?.languageCode;
+
+    const elementSchema: ElementSchema = languageCodes
+      ? {
+          tag: 'unstructured-text',
+          val: {
+            restrictions: languageCodes.map((code) => ({
+              languageCode: code,
+            })),
+          },
+        }
+      : { tag: 'unstructured-text', val: {} };
+
+    return Either.right(elementSchema);
+  }
+
+  return Either.map(WitType.fromTsType(parameterType, scope), (witType) => {
     return {
       tag: 'component-model',
       val: witType,
