@@ -34,6 +34,7 @@ import { TypeMappingScope } from './mapping/types/scope';
 import { languageCodes } from '../decorators';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
+import { AgentConstructorRegistry } from './registry/agentConstructorRegistry';
 
 export function getConstructorDataSchema(
   agentClassName: AgentClassName,
@@ -113,6 +114,19 @@ export function getConstructorDataSchema(
       });
     }),
   );
+
+  const constructorParam = AgentConstructorRegistry.lookup(agentClassName);
+
+  const isMultiModal = constructorParam?.multimodal ?? false;
+
+  if (isMultiModal) {
+    return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
+      return {
+        tag: 'multimodal',
+        val: nameAndElementSchema,
+      };
+    });
+  }
 
   return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
     return {
