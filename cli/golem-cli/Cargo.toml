@@ -63,6 +63,7 @@ flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
+gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
 indexmap = { workspace = true }

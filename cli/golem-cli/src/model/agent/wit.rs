@@ -124,8 +124,12 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
+        writeln!(result, "  import golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  import golem:api/load-snapshot@1.1.7;")?;
         writeln!(result, "  import wasi:logging/logging;")?;
         writeln!(result, "  export golem:agent/guest;")?;
+        writeln!(result, "  export golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  export golem:api/load-snapshot@1.1.7;")?;
         for interface_name in &interface_names {
             writeln!(result, "  export {interface_name};")?;
         }
@@ -753,8 +757,8 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 mod tests {
     use crate::model::agent::test;
     use crate::model::agent::test::{
-        agent_type_with_wit_keywords, reproducer_for_multiple_types_called_element,
-        single_agent_wrapper_types,
+        agent_type_with_wit_keywords, reproducer_for_issue_with_enums,
+        reproducer_for_multiple_types_called_element, single_agent_wrapper_types,
     };
 
     use golem_common::model::agent::{
@@ -786,9 +790,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
             }
             "#
             ),
@@ -830,9 +838,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -985,9 +997,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
             }
@@ -1077,9 +1093,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
               export agent2;
@@ -1124,9 +1144,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -1193,9 +1217,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
             
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export assistant-agent;
               export weather-agent;
@@ -1240,14 +1268,58 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
             ),
         );
+    }
+
+    #[test]
+    pub fn enum_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_enums();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        // println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! {
+                r#"package test:agent;
+
+                   interface types {
+                     use golem:agent/common.{text-reference, binary-reference};
+
+                     enum union-with-only-literals {
+                       foo,
+                       bar,
+                       baz,
+                     }
+                   }
+
+                   /// FooAgent
+                   interface foo-agent {
+                     use golem:agent/common.{agent-type, binary-reference, text-reference};
+                     use types.{union-with-only-literals};
+
+                     initialize: func(input: string);
+
+                     get-definition: func() -> agent-type;
+
+                     my-fun: func(param: union-with-only-literals) -> union-with-only-literals;
+                   }
+                "#
+            },
+        )
     }
 
     fn assert_wit(actual: &str, expected: &str) {

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::AgentType;
+use crate::model::agent::{AgentError, AgentType};
 use anyhow::anyhow;
 use rib::ParsedFunctionName;
 use std::path::Path;
@@ -81,16 +81,27 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
     let func = find_discover_function(&mut store, &instance)?;
-    let typed_func = func
-        .typed::<(), (Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,)>(
-            &mut store,
-        )?;
+    let typed_func = func.typed::<(), (
+        Result<
+            Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
+            crate::model::agent::bindings::golem::agent::common::AgentError,
+        >,
+    )>(&mut store)?;
     let results = typed_func.call_async(&mut store, ()).await?;
     typed_func.post_return_async(&mut store).await?;
 
-    let agent_types = results.0.into_iter().map(AgentType::from).collect();
-    debug!("Discovered agent types: {:#?}", agent_types);
-    Ok(agent_types)
+    match results.0 {
+        Ok(results) => {
+            let agent_types = results.into_iter().map(AgentType::from).collect();
+            debug!("Discovered agent types: {:#?}", agent_types);
+            Ok(agent_types)
+        }
+        Err(agent_error) => {
+            let agent_error: AgentError = agent_error.into();
+            error!("Error while discovering agent types: {agent_error}");
+            Err(anyhow!(agent_error.to_string()))
+        }
+    }
 }
 
 /// Checks if the given resolved component implements the `golem:agent/guest` interface.

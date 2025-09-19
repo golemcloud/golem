@@ -236,6 +236,11 @@ impl OplogIndex {
         OplogIndex(self.0 - 1)
     }
 
+    /// Subtract the given number of entries from the oplog index
+    pub fn subtract(&self, n: u64) -> OplogIndex {
+        OplogIndex(self.0 - n)
+    }
+
     /// Gets the next oplog index
     pub fn next(&self) -> OplogIndex {
         OplogIndex(self.0 + 1)
@@ -262,5 +267,41 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "model",
+    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+)]
+pub struct TransactionId(pub(crate) String);
+
+impl TransactionId {
+    pub fn new<Id: Display>(id: Id) -> Self {
+        Self(id.to_string())
+    }
+
+    pub fn generate() -> Self {
+        Self::new(uuid::Uuid::new_v4())
+    }
+}
+
+impl Display for TransactionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<TransactionId> for String {
+    fn from(value: TransactionId) -> Self {
+        value.0
+    }
+}
+
+impl From<String> for TransactionId {
+    fn from(value: String) -> Self {
+        TransactionId(value)
     }
 }

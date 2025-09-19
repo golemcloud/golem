@@ -91,7 +91,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, PluginInstallationId, ProjectId};
+use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
 use golem_common::model::{
     ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
     ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
@@ -116,6 +116,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
+use try_match::try_match;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
@@ -417,11 +418,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
             // was initialized with the correct amount of memory.
-            Ok(true)
+            Ok(())
         } else {
             // In live mode we need to try to get more memory permits and if we can't,
             // we fail the worker, unload it from memory and schedule a retry.
@@ -434,7 +435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             self.public_state.worker().increase_memory(delta).await?;
             self.state.total_linear_memory_size += delta;
-            Ok(true)
+            Ok(())
         }
     }
 
@@ -452,6 +453,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
             TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
             TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
+            TrapType::Error(WorkerError::ExceededMemoryLimit) => RetryDecision::None,
             TrapType::Error(WorkerError::Unknown(_)) => {
                 let retryable = previous_tries < (retry_config.max_attempts as u64);
                 if retryable {
@@ -730,9 +732,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        debug!("Applying pending side effects accumulated during replay");
-
         let replay_events = self.state.replay_state.take_new_replay_events().await;
+        if !replay_events.is_empty() {
+            debug!("Applying pending side effects accumulated during replay");
+        }
         for event in replay_events {
             match event {
                 ReplayEvent::UpdateReplayed { new_version } => {
@@ -2254,18 +2257,28 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
-/// number of entries, and at most until the first invocation start entry.
+/// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
+
+    // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
+    // have at most one pending batch we discard.
+    let mut collected_count = 0;
     let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
+    let mut current_stderr_entries_batch = Vec::new();
+    let mut first_seen_invocation = None;
+
     loop {
         // TODO: this could be read in batches to speed up the process
         let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+
+        // Because of retries we might have multiple invocation start entries.
+        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
         match oplog_entry.first_key_value() {
             Some((
                 _,
@@ -2275,12 +2288,37 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     ..
                 },
             )) => {
-                stderr_entries.push(message.clone());
-                if stderr_entries.len() >= max_count {
-                    break;
+                if collected_count < max_count {
+                    current_stderr_entries_batch.push(message.clone());
+                    collected_count += 1;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            Some((
+                _,
+                OplogEntry::ExportedFunctionInvoked {
+                    function_name,
+                    idempotency_key,
+                    ..
+                },
+            )) => match &first_seen_invocation {
+                None => {
+                    first_seen_invocation = Some((function_name.clone(), idempotency_key.clone()));
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some((expected_function, expected_idempotency_key))
+                    if function_name == expected_function
+                        && idempotency_key == expected_idempotency_key =>
+                {
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some(_) => break,
+            },
             _ => {}
         }
         if idx > OplogIndex::INITIAL {
@@ -2554,6 +2592,196 @@ impl PrivateDurableWorkerState {
                 Ok(())
             }
         } else {
+            Ok(())
+        }
+    }
+
+    pub async fn begin_transaction_function<Tx, Err>(
+        &mut self,
+        handler: impl RemoteTransactionHandler<Tx, Err>,
+    ) -> Result<(OplogIndex, Tx), Err>
+    where
+        Err: From<WorkerExecutorError>,
+    {
+        if self.is_live() {
+            let (tx_id, tx) = handler.create_new().await?;
+            self.oplog
+                .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            let begin_index = self.oplog.current_oplog_index().await;
+            Ok((begin_index, tx))
+        } else {
+            let (begin_index, begin_entry) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteTransaction)?;
+
+            let assume_idempotence = self.assume_idempotence;
+
+            let pre_entry = self
+                .replay_state
+                .lookup_oplog_entry_with_condition(
+                    begin_index,
+                    OplogEntry::is_pre_remote_transaction,
+                    |entry, index| {
+                        if !assume_idempotence {
+                            entry.no_concurrent_side_effect(index)
+                        } else {
+                            true
+                        }
+                    },
+                )
+                .await;
+
+            let tx_id = try_match!(
+                begin_entry,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: _,
+                    transaction_id,
+                }
+            )
+            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+
+            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+
+            let mut should_restart = false;
+
+            if let Some((_, pre_entry)) = pre_entry {
+                let end_entry = self
+                    .replay_state
+                    .lookup_oplog_entry_with_condition(
+                        begin_index,
+                        OplogEntry::is_end_remote_transaction,
+                        |entry, index| {
+                            if !assume_idempotence {
+                                entry.no_concurrent_side_effect(index)
+                            } else {
+                                true
+                            }
+                        },
+                    )
+                    .await;
+
+                if end_entry.is_none() {
+                    if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was committed, we need to restart
+                        should_restart = !handler.is_committed(&tx_id).await?;
+                    } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                        // if we can not confirm the transaction was rolled back, we need to restart
+                        should_restart = !handler.is_rolled_back(&tx_id).await?;
+                    }
+                }
+            } else {
+                // if pre entry is not found, we need to restart
+                should_restart = true;
+            }
+
+            if should_restart {
+                // We need to jump to the end of the oplog
+                self.replay_state.switch_to_live().await;
+
+                if !assume_idempotence {
+                    Err(WorkerExecutorError::runtime(
+                        "Non-idempotent remote write operation was not completed, cannot retry",
+                    )
+                    .into())
+                } else {
+                    // But this is not enough, because if the retried batched write operation succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index, // need to keep the BeginAtomicRegion entry
+                        end: self.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+                    self.replay_state
+                        .add_skipped_region(deleted_region.clone())
+                        .await;
+                    self.oplog
+                        .add_and_commit(OplogEntry::jump(deleted_region))
+                        .await;
+
+                    let (tx_id, tx) = handler.create_new().await?;
+                    let begin_index = self
+                        .oplog
+                        .add_and_commit_safe(OplogEntry::begin_remote_transaction(tx_id))
+                        .await
+                        .map_err(WorkerExecutorError::runtime)?;
+
+                    Ok((begin_index, tx))
+                }
+            } else {
+                Ok((begin_index, tx))
+            }
+        }
+    }
+
+    pub async fn pre_commit_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::PreCommitRemoteTransaction)?;
+            Ok(())
+        }
+    }
+
+    pub async fn pre_rollback_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.replay_state,
+                OplogEntry::PreRollbackRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
+    pub async fn committed_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) =
+                crate::get_oplog_entry!(self.replay_state, OplogEntry::CommittedRemoteTransaction)?;
+            Ok(())
+        }
+    }
+
+    pub async fn rolled_back_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            self.oplog
+                .add_and_commit_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.replay_state,
+                OplogEntry::RolledBackRemoteTransaction
+            )?;
             Ok(())
         }
     }
@@ -3048,7 +3276,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
@@ -3069,4 +3297,21 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[async_trait]
+pub trait RemoteTransactionHandler<Tx, Err>
+where
+    Err: From<WorkerExecutorError>,
+{
+    async fn create_new(&self) -> Result<(TransactionId, Tx), Err>;
+
+    async fn create_replay(
+        &self,
+        transaction_id: &TransactionId,
+    ) -> Result<(TransactionId, Tx), Err>;
+
+    async fn is_committed(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
+
+    async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
 }

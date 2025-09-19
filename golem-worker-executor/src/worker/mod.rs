@@ -52,7 +52,7 @@ use golem_common::model::{
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
-    InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_ast::analysis::AnalysedFunctionResult;
@@ -841,7 +841,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     running.merge_extra_permits(new_permits);
                     Ok(())
                 } else {
-                    Err(anyhow!(WorkerOutOfMemory))
+                    Err(anyhow!(GolemSpecificWasmTrap::WorkerOutOfMemory))
                 }
             }
             WorkerInstance::WaitingForPermit(_) => Ok(()),
@@ -1770,6 +1770,7 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
+                &parent.agent_id,
                 component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,
@@ -1945,6 +1946,7 @@ pub fn is_worker_error_retriable(
         WorkerError::InvalidRequest(_) => false,
         WorkerError::StackOverflow => false,
         WorkerError::OutOfMemory => true,
+        WorkerError::ExceededMemoryLimit => false,
     }
 }
 

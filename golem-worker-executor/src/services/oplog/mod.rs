@@ -166,6 +166,11 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered)
     async fn add(&self, entry: OplogEntry);
 
+    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+        self.add(entry).await;
+        Ok(())
+    }
+
     /// Drop a chunk of entries from the beginning of the oplog
     ///
     /// This should only be called _after_ `append` succeeded in the layer below this one
@@ -196,6 +201,13 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.current_oplog_index().await
     }
 
+    async fn add_and_commit_safe(&self, entry: OplogEntry) -> Result<OplogIndex, String> {
+        self.add_safe(entry).await?;
+        self.commit(CommitLevel::Always).await;
+        let idx = self.current_oplog_index().await;
+        Ok(idx)
+    }
+
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_payload(&self, data: &[u8]) -> Result<OplogPayload, String>;
 
@@ -205,7 +217,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
 pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>> {
     if oplog.deref().type_id() == TypeId::of::<T>() {
-        let raw: *const (dyn Oplog) = Arc::into_raw(oplog.clone());
+        let raw: *const dyn Oplog = Arc::into_raw(oplog.clone());
         let raw: *const T = raw.cast();
         Some(unsafe { Arc::from_raw(raw) })
     } else {

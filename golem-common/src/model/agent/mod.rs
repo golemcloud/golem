@@ -40,7 +40,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{case, variant};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeStr};
 use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,47 @@ pub struct AgentConstructor {
     pub input_schema: DataSchema,
 }
 
+impl AgentConstructor {
+    pub fn wit_arg_types(&self) -> Vec<AnalysedType> {
+        match &self.input_schema {
+            DataSchema::Tuple(element_schemas) => element_schemas
+                .elements
+                .iter()
+                .map(|named_schema| Self::get_analysed_type(&named_schema.schema))
+                .collect::<Vec<AnalysedType>>(),
+            DataSchema::Multimodal(named_element_schemas) => {
+                // the value is wrapped in names
+                named_element_schemas
+                    .elements
+                    .iter()
+                    .map(|named_schema| {
+                        let name = &named_schema.name;
+
+                        let analysed_type = Self::get_analysed_type(&named_schema.schema);
+
+                        let name_and_type = NameOptionTypePair {
+                            name: name.clone(),
+                            typ: Some(analysed_type),
+                        };
+
+                        variant(vec![name_and_type])
+                    })
+                    .collect::<Vec<_>>()
+            }
+        }
+    }
+
+    fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
+        match schema {
+            ElementSchema::ComponentModel(component_model_elem_schema) => {
+                component_model_elem_schema.element_type.clone()
+            }
+            ElementSchema::UnstructuredText(_) => AnalysedType::Str(TypeStr),
+            ElementSchema::UnstructuredBinary(_) => AnalysedType::Str(TypeStr),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
@@ -80,6 +121,32 @@ pub enum AgentError {
     InvalidType(String),
     InvalidAgentId(String),
     CustomError(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
+}
+
+impl Display for AgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentError::InvalidInput(msg) => {
+                write!(f, "Invalid input: {msg}")
+            }
+            AgentError::InvalidMethod(msg) => {
+                write!(f, "Invalid method: {msg}")
+            }
+            AgentError::InvalidType(msg) => {
+                write!(f, "Invalid type: {msg}")
+            }
+            AgentError::InvalidAgentId(msg) => {
+                write!(f, "Invalid agent id: {msg}")
+            }
+            AgentError::CustomError(value_and_type) => {
+                write!(
+                    f,
+                    "{}",
+                    print_value_and_type(value_and_type).unwrap_or("Unprintable error".to_string())
+                )
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]

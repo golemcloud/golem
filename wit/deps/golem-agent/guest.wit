@@ -14,7 +14,7 @@ interface guest {
   get-definition: func() -> agent-type;
 
   /// Gets the agent types defined by this component
-  discover-agent-types: func() -> list<agent-type>;
+  discover-agent-types: func() -> result<list<agent-type>, agent-error>;
 }
 
 world agent-guest {
