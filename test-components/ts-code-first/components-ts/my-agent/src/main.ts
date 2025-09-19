@@ -1,6 +1,6 @@
 import {BaseAgent, agent, UnstructuredText,} from '@golemcloud/golem-ts-sdk';
 
-// The commented types doesn't seem to work yet
+// TODO: Once the golem-ts-sdk is moved to golem, we could reuse the sample agents in the SDK tests
 import * as Types from './model';
 import {
     ObjectWithUnionWithUndefined1,
@@ -17,7 +17,7 @@ import {
     NumberType,
     StringType,
     BooleanType,
-    MapType, TupleComplexType, TupleType, ListComplexType, EitherBothOptional, Either, EitherOneOptional,
+    MapType, TupleComplexType, TupleType, ListComplexType, ResultKindBothOptional, ResultExact, ResultLike,
 } from './model';
 
 
@@ -81,9 +81,9 @@ class FooAgent extends BaseAgent {
         objectType: Types.ObjectType,
         unionWithLiterals: UnionWithLiterals,
         textType: UnstructuredText,
-        eitherType: Either,
-        eitherBothOptional: EitherBothOptional,
-        eitherOneOptional: EitherOneOptional,
+        eitherType: ResultExact,
+        eitherBothOptional: ResultKindBothOptional,
+        eitherOneOptional: ResultLike,
         unionWithNull: string | number | null,
         objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
         objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
@@ -118,7 +118,7 @@ class FooAgent extends BaseAgent {
             objectWithUnionWithUndefined4,
             optionalStringType,
             optionalUnionType,
-            //taggedUnionType,
+            taggedUnionType,
         )
     }
 
@@ -197,16 +197,7 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funObjectType(objectType);
     }
 
-    // Doesn't work when directly called
-    // This is because its not a union of just literals, but rather a union that includes literals
-    // >>> x.fun-union-with-literals(case1(true))
-    // [compilation error]
-    // [position] 0
-    // [expression]
-    // [cause] cannot determine the type
-    // [help] conflicting types: string, bool
-    // >>> (a)
-    // Unable to convert `{ kind: 'variant', caseIdx: 0, caseValue: undefined }` to `union`
+    // Unnable to convert `{ kind: 'variant', caseIdx: 0, caseValue: undefined }` to `union`
     async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
         return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
     }
@@ -234,16 +225,16 @@ class FooAgent extends BaseAgent {
     // Doesn't work with REPL
     // [cause] type mismatch. expected variant {ok(string), err(option<string>) }
     // [help] invalid argument to the function `fun-either-one-optional`
-    async funEitherOptional(eitherBothOptional: EitherBothOptional): Promise<EitherBothOptional> {
+    async funEitherOptional(eitherBothOptional: ResultKindBothOptional): Promise<ResultKindBothOptional> {
         return await this.barAgent.funEitherOptional(eitherBothOptional);
     }
 
-    async funEither(either: Either): Promise<Either> {
+    async funEither(either: ResultExact): Promise<ResultExact> {
         return await this.barAgent.funEither(either);
     }
 
 
-    async funEitherOneOptional(eitherOneOptional: EitherOneOptional): Promise<EitherOneOptional> {
+    async funEitherOneOptional(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return await this.barAgent.funEitherOneOptional(eitherOneOptional);
     }
 
@@ -292,7 +283,7 @@ class BarAgent extends BaseAgent {
         // unionWithLiterals: UnionWithLiterals,
         //  textType: UnstructuredText,
         // eitherType: Either,
-        eitherBothOptional: EitherBothOptional,
+        eitherBothOptional: ResultKindBothOptional,
         // eitherOneOptional: EitherOneOptional,
         unionWithNull: string | number | null,
         objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
@@ -301,7 +292,7 @@ class BarAgent extends BaseAgent {
         objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
         optionalStringType: string | undefined,
         optionalUnionType: UnionType | undefined,
-        //taggedUnionType: TaggedUnion,
+        taggedUnionType: TaggedUnion,
         //        unionWithOnlyLiterals: UnionWithOnlyLiterals,
     ): Types.PromiseType {
         return Promise.resolve(`Weather for is sunny!`);
@@ -411,17 +402,17 @@ class BarAgent extends BaseAgent {
     }
 
     // works
-    async funEitherOptional(eitherBothOptional: EitherBothOptional): Promise<EitherBothOptional> {
+    async funEitherOptional(eitherBothOptional: ResultKindBothOptional): Promise<ResultKindBothOptional> {
         return eitherBothOptional
     }
 
     // no
-    async funEither(either: Either): Promise<Either> {
+    async funEither(either: ResultExact): Promise<ResultExact> {
         return either
     }
 
     // no
-    async funEitherOneOptional(eitherOneOptional: EitherOneOptional): Promise<EitherOneOptional> {
+    async funEitherOneOptional(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return eitherOneOptional
     }
 

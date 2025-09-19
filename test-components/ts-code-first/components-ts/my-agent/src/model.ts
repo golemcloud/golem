@@ -19,7 +19,6 @@ export type UnionWithLiterals = 'a' | 'b' | 'c' | boolean;
 
 export type UnionWithOnlyLiterals = "foo" | "bar" | "baz";
 
-
 export type PromiseType = Promise<string>;
 
 export type ObjectType = {
@@ -125,11 +124,11 @@ export interface InterfaceType {
     unionPropInlined: string | number;
 }
 
-export type EitherBothOptional = {
+export type ResultKindBothOptional = {
     ok?: string;
     err?: string;
 };
 
-export type Either = { tag: 'ok'; val: string; } | { tag: 'err'; val: string; };
+export type ResultExact = { tag: 'ok'; val: string; } | { tag: 'err'; val: string; };
 
-export type EitherOneOptional = { tag: 'ok'; val: string; } | { tag: 'err'; val?: string; };
+export type ResultLike = { tag: 'okay'; val: string; } | { tag: 'error'; val?: string; };
