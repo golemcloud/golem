@@ -408,33 +408,33 @@ impl FromStr for PathBufOrStdin {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WorkerUpdateMode {
+pub enum AgentUpdateMode {
     Automatic,
     Manual,
 }
 
-impl Display for WorkerUpdateMode {
+impl Display for AgentUpdateMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerUpdateMode::Automatic => {
+            AgentUpdateMode::Automatic => {
                 write!(f, "auto")
             }
-            WorkerUpdateMode::Manual => {
+            AgentUpdateMode::Manual => {
                 write!(f, "manual")
             }
         }
     }
 }
 
-impl FromStr for WorkerUpdateMode {
+impl FromStr for AgentUpdateMode {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "auto" => Ok(WorkerUpdateMode::Automatic),
-            "manual" => Ok(WorkerUpdateMode::Manual),
+            "auto" => Ok(AgentUpdateMode::Automatic),
+            "manual" => Ok(AgentUpdateMode::Manual),
             _ => Err(format!(
-                "Unknown worker update mode: {s}. Expected one of \"auto\", \"manual\""
+                "Unknown agent update mode: {s}. Expected one of \"auto\", \"manual\""
             )),
         }
     }

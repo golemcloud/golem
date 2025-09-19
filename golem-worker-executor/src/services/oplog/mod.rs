@@ -217,7 +217,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
 
 pub(crate) fn downcast_oplog<T: Oplog>(oplog: &Arc<dyn Oplog>) -> Option<Arc<T>> {
     if oplog.deref().type_id() == TypeId::of::<T>() {
-        let raw: *const (dyn Oplog) = Arc::into_raw(oplog.clone());
+        let raw: *const dyn Oplog = Arc::into_raw(oplog.clone());
         let raw: *const T = raw.cast();
         Some(unsafe { Arc::from_raw(raw) })
     } else {

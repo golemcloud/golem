@@ -542,7 +542,7 @@ impl ApplicationContext {
                         }
                     }
                 }
-                logln("\n")
+                logln("")
             } else {
                 logln("No components found in the application.\n");
             }
@@ -576,8 +576,11 @@ impl ApplicationContext {
                         format!("Application API deployments for profile {}:", profile.0)
                             .log_color_help_group()
                     ));
-                    for site in http_api_deployments.keys() {
+                    for (site, definitions) in http_api_deployments {
                         logln(format!("  {}", site.to_string().log_color_highlight(),));
+                        for definition in definitions.iter().flat_map(|defs| defs.value.iter()) {
+                            logln(format!("    {}", definition.as_str().log_color_highlight(),));
+                        }
                     }
                     logln("");
                 }
