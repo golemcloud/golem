@@ -27,13 +27,14 @@ import {
   getConstructorDataSchema,
 } from './internal/schema';
 import * as Option from './newTypes/option';
-import { AgentMethodMetadataRegistry } from './internal/registry/agentMethodMetadataRegistry';
+import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getSelfMetadata } from 'golem:api/host@1.1.7';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
 import { AgentTypeName } from './newTypes/agentTypeName';
+import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 
 type Type = Type.Type;
 
@@ -352,7 +353,7 @@ export function languageCodes(codes: string[]) {
   ) {
     const agentClassName = new AgentClassName(target.constructor.name);
 
-    AgentMethodMetadataRegistry.setLanguageCodes(
+    AgentConstructorParamRegistry.setLanguageCodes(
       agentClassName,
       String(propertyKey),
       codes,
@@ -380,11 +381,7 @@ export function languageCodes(codes: string[]) {
 export function prompt(prompt: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodMetadataRegistry.setPromptName(
-      agentClassName,
-      propertyKey,
-      prompt,
-    );
+    AgentMethodRegistry.setPromptName(agentClassName, propertyKey, prompt);
   };
 }
 
@@ -406,7 +403,7 @@ export function prompt(prompt: string) {
 export function description(description: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodMetadataRegistry.setDescription(
+    AgentMethodRegistry.setDescription(
       agentClassName,
       propertyKey,
       description,

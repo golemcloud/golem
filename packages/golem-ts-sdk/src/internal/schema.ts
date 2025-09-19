@@ -24,7 +24,7 @@ import {
 } from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
-import { AgentMethodMetadataRegistry } from './registry/agentMethodMetadataRegistry';
+import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import {
   ClassMetadata,
   ConstructorArg,
@@ -32,6 +32,7 @@ import {
 } from '@golemcloud/golem-ts-types-core';
 import { TypeMappingScope } from './mapping/types/scope';
 import { languageCodes } from '../decorators';
+import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 
 export function getConstructorDataSchema(
   agentClassName: AgentClassName,
@@ -50,7 +51,7 @@ export function getConstructorDataSchema(
       const paramTypeName = paramType.name;
 
       if (!paramTypeName && paramTypeName === 'UnstructuredText') {
-        const metadata = AgentMethodMetadataRegistry.lookup(agentClassName);
+        const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
 
         const languageCodes = metadata?.get(paramInfo.name)?.languageCodes;
 
@@ -121,8 +122,7 @@ export function getAgentMethodSchema(
       const returnType: Type.Type = signature.returnType;
 
       const baseMeta =
-        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
-        {};
+        AgentMethodRegistry.lookup(agentClassName)?.get(methodName) ?? {};
 
       const inputSchemaEither = buildMethodInputSchema(methodName, parameters);
 
