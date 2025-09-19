@@ -35,6 +35,7 @@ import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
 import { AgentTypeName } from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
+import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 
 type Type = Type.Type;
 
@@ -348,16 +349,51 @@ export function agent() {
 export function languageCodes(codes: string[]) {
   return function (
     target: Object,
-    propertyKey: string | symbol,
-    _parameterIndex: number,
+    propertyKey: string | symbol | undefined, // method name if its part of method or undefined if its constructor
+    parameterIndex: number, // parameter index
   ) {
-    const agentClassName = new AgentClassName(target.constructor.name);
+    if (propertyKey === undefined) {
+      const agentClassName = new AgentClassName((target as Function).name);
 
-    AgentConstructorParamRegistry.setLanguageCodes(
-      agentClassName,
-      String(propertyKey),
-      codes,
-    );
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const constructorInfo = classMetadata?.constructorArgs;
+
+      if (!constructorInfo) {
+        throw new Error(
+          `Constructor metadata not found for agent ${agentClassName}. Ensure the constructor exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = constructorInfo[parameterIndex].name;
+
+      AgentConstructorParamRegistry.setLanguageCodes(agentClassName, paramName, codes);
+
+    } else {
+
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const methodName = String(propertyKey);
+
+      const methodInfo =
+        classMetadata?.methods.get(methodName);
+
+      if (!methodInfo) {
+        throw new Error(
+          `Method ${methodName} not found in metadata for agent ${agentClassName}. Ensure the method exists and is not private/protected.`,
+        );
+      }
+
+      const paramName =
+        Array.from(methodInfo.methodParams).map((paramType) => paramType[0])[parameterIndex];
+
+     // console.log(`applying method param decorator to ${agentClassName.value}, ${methodName}, ${paramName} and ${codes}`)
+
+      AgentMethodParamRegistry.setLanguageCodes(agentClassName, methodName, paramName, codes);
+    }
+
   };
 }
 
