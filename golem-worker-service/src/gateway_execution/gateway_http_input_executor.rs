@@ -60,6 +60,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor: Send + Sync {
@@ -801,6 +802,27 @@ async fn resolve_rib_input(
 
                         values.push(auth_value.value);
                     }
+
+                    "request_id" => {
+                        // Limitation of the current GlobalVariableTypeSpec. We cannot tell rib to directly the type of this field, only of all children.
+                        // Add a dummy value field that needs to be used so inference works.
+                        let value_and_type = RequestIdContainer {
+                            value: rich_request.request_id,
+                        }
+                        .into_value_and_type();
+                        let expected_type = value_and_type.typ.with_optional_name(None);
+
+                        if record.typ != expected_type {
+                            return Err(GatewayHttpError::InternalError(format!(
+                                "invalid expected rib script input type for request.request_id: {:?}; Should be: {:?}",
+                                record.typ,
+                                expected_type
+                            )));
+                        }
+
+                        values.push(value_and_type.value);
+                    }
+
                     field_name => {
                         // This is already type checked during API registration,
                         // however we still fail if we happen to have other inputs
@@ -967,4 +989,9 @@ fn parse_to_value<T: FromStr + IntoValue + Sized>(
         format!("Invalid value for key {field_name}. Expected {type_name}, Found {field_value}")
     })?;
     Ok(value.into_value_and_type().value)
+}
+
+#[derive(golem_wasm_rpc_derive::IntoValue)]
+struct RequestIdContainer {
+    value: Uuid,
 }

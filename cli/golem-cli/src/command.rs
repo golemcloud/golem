@@ -38,7 +38,7 @@ use uuid::Uuid;
 
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
-use crate::command::shared_args::ComponentOptionalComponentName;
+use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
 use crate::error::ShowClapHelpTarget;
 
 /// Golem Command Line Interface
@@ -553,6 +553,14 @@ pub enum GolemCliSubcommand {
         component_name: ComponentOptionalComponentName,
         /// Optional component version to use, defaults to latest component version
         version: Option<u64>,
+        #[command(flatten)]
+        deploy_args: Option<DeployArgs>,
+        /// Optional script to run, when defined the repl will execute the script and exit
+        #[clap(long, short, conflicts_with_all = ["script_file"])]
+        script: Option<String>,
+        /// Optional script_file to run, when defined the repl will execute the script and exit
+        #[clap(long, conflicts_with_all = ["script"])]
+        script_file: Option<PathBuf>,
     },
     /// Generate shell completion
     Completion {
@@ -564,9 +572,7 @@ pub enum GolemCliSubcommand {
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
     use crate::model::{AccountId, PluginReference};
-    use crate::model::{
-        ComponentName, ProjectName, ProjectReference, WorkerName, WorkerUpdateMode,
-    };
+    use crate::model::{AgentUpdateMode, ComponentName, ProjectName, ProjectReference, WorkerName};
     use clap::Args;
     use golem_templates::model::GuestLanguage;
 
@@ -674,46 +680,67 @@ pub mod shared_args {
         pub stream_no_timestamp: bool,
     }
 
-    #[derive(Debug, Args)]
-    pub struct UpdateOrRedeployArgs {
+    #[derive(Debug, Args, Clone)]
+    pub struct DeployArgs {
         /// Update existing agents with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"], num_args = 0..=1
-        )]
-        pub update_agents: Option<WorkerUpdateMode>,
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"], num_args = 0..=1)]
+        pub update_agents: Option<AgentUpdateMode>,
         /// Delete and recreate existing agents
         #[clap(long, conflicts_with_all = ["update_agents"])]
         pub redeploy_agents: bool,
         /// Delete and recreate HTTP API definitions and deployment
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
-        /// Delete and recreate components and HTTP APIs
-        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"]
-        )]
+        /// Delete and recreate agents and HTTP APIs
+        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
         pub redeploy_all: bool,
+        /// Delete agents and redeploy HTTP APIs
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
+        pub reset: bool,
     }
 
-    impl UpdateOrRedeployArgs {
+    impl DeployArgs {
+        pub fn is_any_set(&self) -> bool {
+            self.update_agents.is_some()
+                || self.redeploy_agents
+                || self.redeploy_http_api
+                || self.redeploy_all
+                || self.reset
+        }
+
         pub fn none() -> Self {
-            UpdateOrRedeployArgs {
+            DeployArgs {
                 update_agents: None,
                 redeploy_agents: false,
                 redeploy_http_api: false,
                 redeploy_all: false,
+                reset: false,
             }
         }
 
-        pub fn redeploy_workers(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
-            profile_args.redeploy_all
-                || profile_args.redeploy_agents
-                || self.redeploy_all
-                || self.redeploy_agents
+        pub fn delete_agents(&self, profile_args: &DeployArgs) -> bool {
+            (profile_args.reset || self.reset)
+                && !self.redeploy_agents
+                && !self.redeploy_all
+                && self.update_agents.is_none()
         }
 
-        pub fn redeploy_http_api(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
+        pub fn redeploy_agents(&self, profile_args: &DeployArgs) -> bool {
+            (profile_args.redeploy_all
+                || profile_args.redeploy_agents
+                || self.redeploy_all
+                || self.redeploy_agents)
+                && !self.reset
+                && self.update_agents.is_none()
+        }
+
+        pub fn redeploy_http_api(&self, profile_args: &DeployArgs) -> bool {
             profile_args.redeploy_all
                 || profile_args.redeploy_http_api
+                || profile_args.reset
                 || self.redeploy_all
                 || self.redeploy_http_api
+                || self.reset
         }
     }
 
@@ -780,9 +807,9 @@ pub mod shared_args {
 
 pub mod app {
     use crate::command::shared_args::{
-        AppOptionalComponentNames, BuildArgs, ForceBuildArg, UpdateOrRedeployArgs,
+        AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
     };
-    use crate::model::WorkerUpdateMode;
+    use crate::model::AgentUpdateMode;
     use clap::Subcommand;
     use golem_templates::model::GuestLanguage;
 
@@ -809,7 +836,7 @@ pub mod app {
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
-            update_or_redeploy: UpdateOrRedeployArgs,
+            deploy_args: DeployArgs,
         },
         /// Clean all components in the application or by selection
         Clean {
@@ -822,7 +849,7 @@ pub mod app {
             component_name: AppOptionalComponentNames,
             /// Update mode - auto or manual, defaults to "auto"
             #[arg(long, short, default_value = "auto")]
-            update_mode: WorkerUpdateMode,
+            update_mode: AgentUpdateMode,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
@@ -849,10 +876,10 @@ pub mod component {
     use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplateName, ForceBuildArg, UpdateOrRedeployArgs,
+        ComponentTemplateName, DeployArgs, ForceBuildArg,
     };
     use crate::model::app::DependencyType;
-    use crate::model::{ComponentName, WorkerUpdateMode};
+    use crate::model::{AgentUpdateMode, ComponentName};
     use clap::Subcommand;
     use golem_templates::model::PackageName;
     use std::path::PathBuf;
@@ -886,7 +913,7 @@ pub mod component {
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
-            update_or_redeploy: UpdateOrRedeployArgs,
+            deploy_args: DeployArgs,
         },
         /// Clean component(s) based on the current directory or by selection
         Clean {
@@ -927,9 +954,9 @@ pub mod component {
         UpdateAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-            /// Update mode - auto or manual, defaults to "auto"
-            #[arg(long, short, default_value_t = WorkerUpdateMode::Automatic)]
-            update_mode: WorkerUpdateMode,
+            /// Agent update mode - auto or manual, defaults to "auto"
+            #[arg(long, short, default_value_t = AgentUpdateMode::Automatic)]
+            update_mode: AgentUpdateMode,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
@@ -1015,10 +1042,10 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        AgentIdArgs, ComponentOptionalComponentName, NewWorkerArgument, OptionalAgentTypeName,
-        StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
+        AgentIdArgs, ComponentOptionalComponentName, DeployArgs, NewWorkerArgument,
+        OptionalAgentTypeName, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
-    use crate::model::{IdempotencyKey, WorkerUpdateMode};
+    use crate::model::{AgentUpdateMode, IdempotencyKey};
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
 
@@ -1054,6 +1081,8 @@ pub mod worker {
             stream: bool,
             #[command(flatten)]
             stream_args: StreamArgs,
+            #[command(flatten)]
+            deploy_args: Option<DeployArgs>,
         },
         /// Get agent metadata
         Get {
@@ -1106,7 +1135,7 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
-            mode: Option<WorkerUpdateMode>,
+            mode: Option<AgentUpdateMode>,
             /// The new version of the updated agent (default is the latest version)
             target_version: Option<u64>,
             /// Await the update to be completed
@@ -1167,7 +1196,7 @@ pub mod api {
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
-    use crate::command::shared_args::UpdateOrRedeployArgs;
+    use crate::command::shared_args::DeployArgs;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
@@ -1175,7 +1204,7 @@ pub mod api {
         /// Deploy API Definitions and Deployments
         Deploy {
             #[command(flatten)]
-            update_or_redeploy: UpdateOrRedeployArgs,
+            deploy_args: DeployArgs,
         },
         /// Manage API definitions
         Definition {
@@ -1200,7 +1229,7 @@ pub mod api {
     }
 
     pub mod definition {
-        use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+        use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
         use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
         use crate::model::app::HttpApiDefinitionName;
         use crate::model::OpenApiDefinitionOutputFormat;
@@ -1213,7 +1242,7 @@ pub mod api {
                 /// API definition to deploy, if not specified, all definitions are deployed
                 http_api_definition_name: Option<HttpApiDefinitionName>,
                 #[command(flatten)]
-                update_or_redeploy: UpdateOrRedeployArgs,
+                deploy_args: DeployArgs,
             },
             /// Retrieves metadata about an existing API definition
             Get {
@@ -1280,7 +1309,7 @@ pub mod api {
     }
 
     pub mod deployment {
-        use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+        use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
         use crate::model::api::ApiDefinitionId;
         use clap::Subcommand;
 
@@ -1291,7 +1320,7 @@ pub mod api {
                 /// Host or site to deploy, if not defined, all deployments will be deployed
                 host_or_site: Option<String>,
                 #[command(flatten)]
-                update_or_redeploy: UpdateOrRedeployArgs,
+                deploy_args: DeployArgs,
             },
             /// Get API deployment
             Get {

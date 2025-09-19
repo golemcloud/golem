@@ -14,7 +14,7 @@
 
 use crate::app::context::ApplicationContext;
 use crate::auth::{Auth, Authentication};
-use crate::command::shared_args::UpdateOrRedeployArgs;
+use crate::command::shared_args::DeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::config::AuthenticationConfig;
@@ -68,7 +68,7 @@ pub struct Context {
     config_dir: PathBuf,
     format: Format,
     local_server_auto_start: bool,
-    update_or_redeploy: UpdateOrRedeployArgs,
+    deploy_args: DeployArgs,
     profile_name: ProfileName,
     profile: Profile,
     available_profile_names: BTreeSet<ProfileName>,
@@ -114,7 +114,7 @@ impl Context {
 
         let mut yes = global_flags.yes;
         let dev_mode = global_flags.dev_mode;
-        let mut update_or_redeploy = UpdateOrRedeployArgs::none();
+        let mut deploy_args = DeployArgs::none();
 
         let mut app_context_config = ApplicationContextConfig::new(global_flags);
 
@@ -153,16 +153,20 @@ impl Context {
                 *start_local_server_yes.write().await = true;
             }
 
-            if manifest_profile.redeploy_workers == Some(true) {
-                update_or_redeploy.redeploy_agents = true;
+            if manifest_profile.redeploy_agents == Some(true) {
+                deploy_args.redeploy_agents = true;
             }
 
             if manifest_profile.redeploy_http_api == Some(true) {
-                update_or_redeploy.redeploy_http_api = true;
+                deploy_args.redeploy_http_api = true;
             }
 
             if manifest_profile.redeploy_all == Some(true) {
-                update_or_redeploy.redeploy_all = true;
+                deploy_args.redeploy_all = true;
+            }
+
+            if manifest_profile.reset == Some(true) {
+                deploy_args.reset = true;
             }
         }
 
@@ -213,7 +217,7 @@ impl Context {
             config_dir,
             format,
             local_server_auto_start,
-            update_or_redeploy,
+            deploy_args,
             profile_name: profile.name,
             profile: profile.profile,
             available_profile_names,
@@ -271,8 +275,8 @@ impl Context {
         self.show_sensitive
     }
 
-    pub fn update_or_redeploy(&self) -> &UpdateOrRedeployArgs {
-        &self.update_or_redeploy
+    pub fn deploy_args(&self) -> &DeployArgs {
+        &self.deploy_args
     }
 
     pub fn server_no_limit_change(&self) -> bool {
@@ -684,6 +688,7 @@ struct ApplicationContextConfig {
     disable_app_manifest_discovery: bool,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
+    dev_mode: bool,
 }
 
 impl ApplicationContextConfig {
@@ -706,6 +711,7 @@ impl ApplicationContextConfig {
                 version_override: global_flags.golem_rust_version,
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
+            dev_mode: global_flags.dev_mode,
         }
     }
 
@@ -770,6 +776,7 @@ impl ApplicationContextState {
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
+            dev_mode: config.dev_mode,
         };
 
         debug!(app_config = ?app_config, "Initializing application context");

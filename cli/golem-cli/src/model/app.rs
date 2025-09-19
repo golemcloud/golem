@@ -32,6 +32,7 @@ pub struct ApplicationConfig {
     pub offline: bool,
     pub steps_filter: HashSet<AppBuildStep>,
     pub golem_rust_override: RustDependencyOverride,
+    pub dev_mode: bool,
 }
 
 impl ApplicationConfig {
@@ -243,6 +244,10 @@ pub struct HttpApiDefinitionName(String);
 impl HttpApiDefinitionName {
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    pub fn into_string(self) -> String {
+        self.0
     }
 }
 
@@ -524,6 +529,9 @@ impl Ord for DependentAppComponent {
         self.name.cmp(&other.name)
     }
 }
+
+pub type MultiSourceHttpApiDefinitionNames = Vec<WithSource<Vec<HttpApiDefinitionName>>>;
+
 #[derive(Clone, Debug)]
 pub struct Application {
     all_sources: BTreeSet<PathBuf>,
@@ -536,10 +544,8 @@ pub struct Application {
     custom_commands: HashMap<String, WithSource<Vec<app_raw::ExternalCommand>>>,
     clean: Vec<WithSource<String>>,
     http_api_definitions: BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
-    http_api_deployments: BTreeMap<
-        ProfileName,
-        BTreeMap<HttpApiDeploymentSite, WithSource<app_raw::HttpApiDeployment>>,
-    >,
+    http_api_deployments:
+        BTreeMap<ProfileName, BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>>,
 }
 
 impl Application {
@@ -940,7 +946,7 @@ impl Application {
     pub fn http_api_deployments(
         &self,
         profile: &ProfileName,
-    ) -> Option<&BTreeMap<HttpApiDeploymentSite, WithSource<app_raw::HttpApiDeployment>>> {
+    ) -> Option<&BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>> {
         self.http_api_deployments.get(profile)
     }
 }
@@ -1279,7 +1285,8 @@ mod app_builder {
     use crate::model::app::{
         AppComponentName, Application, BinaryComponentSource, BuildProfileName, Component,
         ComponentProperties, DependencyType, DependentComponent, HttpApiDefinitionName,
-        HttpApiDeploymentSite, ResolvedComponentProperties, TemplateName, WithSource,
+        HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames, ResolvedComponentProperties,
+        TemplateName, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::deploy_diff::api_definition::normalize_http_api_binding_path;
@@ -1331,6 +1338,7 @@ mod app_builder {
         HttpApiDeployment {
             profile: ProfileName,
             site: HttpApiDeploymentSite,
+            definition: HttpApiDefinitionName,
         },
         Profile(ProfileName),
     }
@@ -1397,9 +1405,13 @@ mod app_builder {
                         path.log_color_highlight(),
                     )
                 }
-                UniqueSourceCheckedEntityKey::HttpApiDeployment { profile, site } => {
+                UniqueSourceCheckedEntityKey::HttpApiDeployment {
+                    profile,
+                    site,
+                    definition,
+                } => {
                     format!(
-                        "{} - {}{}",
+                        "{} - {}{} - {}",
                         profile.0.as_str().log_color_highlight(),
                         match site.subdomain {
                             Some(subdomain) => {
@@ -1409,7 +1421,8 @@ mod app_builder {
                                 "".to_string()
                             }
                         },
-                        site.host.as_str().log_color_highlight()
+                        site.host.as_str().log_color_highlight(),
+                        definition.as_str().log_color_highlight(),
                     )
                 }
                 UniqueSourceCheckedEntityKey::Profile(profile_name) => {
@@ -1432,7 +1445,7 @@ mod app_builder {
             BTreeMap<HttpApiDefinitionName, WithSource<app_raw::HttpApiDefinition>>,
         http_api_deployments: BTreeMap<
             ProfileName,
-            BTreeMap<HttpApiDeploymentSite, WithSource<app_raw::HttpApiDeployment>>,
+            BTreeMap<HttpApiDeploymentSite, MultiSourceHttpApiDefinitionNames>,
         >,
 
         // NOTE: raw component names are available (for validation) even after component resolving
@@ -1650,10 +1663,9 @@ mod app_builder {
                         }
 
                         for (profile, deployments) in http_api.deployments {
-                            let mut collected_deployments = BTreeMap::<
-                                HttpApiDeploymentSite,
-                                WithSource<app_raw::HttpApiDeployment>,
-                            >::new();
+                            let mut collected_deployments =
+                                BTreeMap::<HttpApiDeploymentSite, Vec<HttpApiDefinitionName>>::new(
+                                );
 
                             for api_deployment in deployments {
                                 let api_deployment_site = HttpApiDeploymentSite {
@@ -1661,26 +1673,38 @@ mod app_builder {
                                     subdomain: api_deployment.subdomain.clone(),
                                 };
 
-                                if self.add_entity_source(
-                                    UniqueSourceCheckedEntityKey::HttpApiDeployment {
-                                        profile: profile.clone(),
-                                        site: api_deployment_site.clone(),
-                                    },
-                                    &app.source,
-                                ) {
-                                    collected_deployments.insert(
-                                        api_deployment_site,
-                                        WithSource::new(
-                                            app.source.to_path_buf(),
-                                            api_deployment.clone(),
-                                        ),
-                                    );
+                                let mut unique_definitions =
+                                    Vec::with_capacity(api_deployment.definitions.len());
+                                for definition in api_deployment.definitions {
+                                    let definition = HttpApiDefinitionName::from(definition);
+                                    if self.add_entity_source(
+                                        UniqueSourceCheckedEntityKey::HttpApiDeployment {
+                                            profile: profile.clone(),
+                                            site: api_deployment_site.clone(),
+                                            definition: definition.clone(),
+                                        },
+                                        &app.source,
+                                    ) {
+                                        unique_definitions.push(definition);
+                                    }
+                                }
+
+                                if !unique_definitions.is_empty() {
+                                    collected_deployments
+                                        .insert(api_deployment_site, unique_definitions);
                                 }
                             }
 
                             if !collected_deployments.is_empty() {
-                                self.http_api_deployments
-                                    .insert(profile, collected_deployments);
+                                let deployments =
+                                    self.http_api_deployments.entry(profile).or_default();
+
+                                for (site, definitions) in collected_deployments {
+                                    deployments.entry(site).or_default().push(WithSource::new(
+                                        app.source.to_path_buf(),
+                                        definitions,
+                                    ))
+                                }
                             }
                         }
                     }
@@ -1751,6 +1775,24 @@ mod app_builder {
                                             "Builtin profile '{}' cannot be used as Cloud profile, using 'cloud:true' or project are not allowed!",
                                             profile_name.0.log_color_highlight(),
                                         ))
+                                    }
+
+                                    if profile.reset.unwrap_or_default() {
+                                        if profile.redeploy_all.unwrap_or_default() {
+                                            validation.add_error(format!(
+                                                "Property '{}' and '{}' cannot be set to true at the same time!",
+                                                "reset".log_color_highlight(),
+                                                "redeploy".log_color_highlight()
+                                            ));
+                                        }
+
+                                        if profile.redeploy_agents.unwrap_or_default() {
+                                            validation.add_error(format!(
+                                                "Property '{}' and '{}' cannot be set to true at the same time!",
+                                                "reset".log_color_highlight(),
+                                                "redeploy_agents".log_color_highlight()
+                                            ));
+                                        }
                                     }
                                 },
                             );
@@ -2548,10 +2590,10 @@ mod app_builder {
                                             check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                         app_raw::HttpApiDefinitionBindingType::SwaggerUi => {
-                                                check_not_allowed(validation, "component_name", &route.binding.component_name);
-                                                check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
-                                                check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
-                                                check_not_allowed(validation, "response", &route.binding.response); 
+                                            check_not_allowed(validation, "component_name", &route.binding.component_name);
+                                            check_not_allowed(validation, "idempotency_key", &route.binding.idempotency_key);
+                                            check_not_allowed(validation, "invocation_context", &route.binding.invocation_context);
+                                            check_not_allowed(validation, "response", &route.binding.response);
                                         }
                                     }
                                 },
@@ -2582,60 +2624,62 @@ mod app_builder {
                 validation.with_context(
                     vec![("profile", profile.0.clone())],
                     |validation| {
-                        for (site, api_deployment) in api_deployments {
-                            validation.with_context(
-                                vec![
-                                    (
-                                        "source",
-                                        api_deployment.source.to_string_lossy().to_string(),
-                                    ),
-                                    ("HTTP API deployment site", site.to_string()),
-                                ],
-                                |validation| {
-                                    for def_name in &api_deployment.value.definitions {
-                                        let parts = def_name.split("@").collect::<Vec<_>>();
-                                        let (name, version) = match parts.len() {
-                                            1 => (HttpApiDefinitionName::from(def_name.as_str()), None),
-                                            2 => (HttpApiDefinitionName::from(parts[0]), Some(parts[1])),
-                                            _ => {
+                        for (site, api_definitions_with_source) in api_deployments {
+                            for api_definitions in api_definitions_with_source {
+                                validation.with_context(
+                                    vec![
+                                        (
+                                            "source",
+                                            api_definitions.source.to_string_lossy().to_string(),
+                                        ),
+                                        ("HTTP API deployment site", site.to_string()),
+                                    ],
+                                    |validation| {
+                                        for def_name in &api_definitions.value {
+                                            let parts = def_name.as_str().split("@").collect::<Vec<_>>();
+                                            let (name, version) = match parts.len() {
+                                                1 => (HttpApiDefinitionName::from(def_name.as_str()), None),
+                                                2 => (HttpApiDefinitionName::from(parts[0]), Some(parts[1])),
+                                                _ => {
+                                                    validation.add_error(
+                                                        format!(
+                                                            "Invalid definition name: {}, expected 'api-name', or 'api-name@version'",
+                                                            def_name.as_str().log_color_error_highlight(),
+                                                        ),
+                                                    );
+                                                    continue;
+                                                }
+                                            };
+                                            if name.0.is_empty() {
                                                 validation.add_error(
                                                     format!(
-                                                        "Invalid definition name: {}, expected 'api-name', or 'api-name@version'",
-                                                        def_name.log_color_error_highlight(),
+                                                        "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
+                                                        def_name.as_str().log_color_error_highlight(),
                                                     ),
                                                 );
-                                                continue;
-                                            }
-                                        };
-                                        if name.0.is_empty() {
-                                            validation.add_error(
-                                                format!(
-                                                    "Invalid definition name, empty API name part: {}, expected 'api-name', or 'api-name@version'",
-                                                    def_name.log_color_error_highlight(),
-                                                ),
-                                            );
-                                        } else if !self.http_api_definitions.contains_key(&name) {
-                                            validation.add_error(
-                                                format!(
-                                                    "Unknown HTTP API definition name: {}\n\n{}",
-                                                    def_name.as_str().log_color_error_highlight(),
-                                                    self.available_http_api_definitions(def_name.as_str())
-                                                ),
-                                            )
-                                        }
-                                        if let Some(version) = version {
-                                            if version.is_empty() {
+                                            } else if !self.http_api_definitions.contains_key(&name) {
                                                 validation.add_error(
                                                     format!(
-                                                        "Invalid definition name, empty version part: {}, expected 'api-name', or 'api-name@version'",
-                                                        def_name.log_color_error_highlight(),
+                                                        "Unknown HTTP API definition name: {}\n\n{}",
+                                                        def_name.as_str().log_color_error_highlight(),
+                                                        self.available_http_api_definitions(def_name.as_str())
                                                     ),
-                                                );
+                                                )
+                                            }
+                                            if let Some(version) = version {
+                                                if version.is_empty() {
+                                                    validation.add_error(
+                                                        format!(
+                                                            "Invalid definition name, empty version part: {}, expected 'api-name', or 'api-name@version'",
+                                                            def_name.as_str().log_color_error_highlight(),
+                                                        ),
+                                                    );
+                                                }
                                             }
                                         }
-                                    }
-                                },
-                            );
+                                    },
+                                );
+                            }
                         }
                     });
             }
