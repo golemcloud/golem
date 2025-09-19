@@ -37,8 +37,10 @@ import { AgentTypeName } from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
+import { UnstructuredText } from './newTypes/textInput';
+import { UnstructuredBinary } from './newTypes/binaryInput';
 
-type Type = Type.Type;
+type TsType = Type.Type;
 
 /**
  * Marks a class as an Agent and registers it in the global agent registry.
@@ -186,20 +188,16 @@ export function agent() {
         initiate: (agentName: string, constructorParams: DataValue) => {
           const constructorInfo = classMetadata.constructorArgs;
 
-          const constructorParamTypes: Type[] = constructorInfo.map(
+          const constructorParamTypes: TsType[] = constructorInfo.map(
             (p) => p.type,
           );
 
-          const constructorParamWitValues =
-            getWitValueFromDataValue(constructorParams);
-
-          const convertedConstructorArgs = constructorParamWitValues.map(
-            (witVal, idx) => {
-              return WitValue.toTsValue(witVal, constructorParamTypes[idx]);
-            },
+          const deserializedConstructorArgs = deserializeDataValue(
+            constructorParams,
+            constructorParamTypes,
           );
 
-          const instance = new ctor(...convertedConstructorArgs);
+          const instance = new ctor(...deserializedConstructorArgs);
 
           const containerName = getSelfMetadata().workerId.workerName;
 
@@ -245,11 +243,11 @@ export function agent() {
             saveSnapshot(): Promise<Uint8Array> {
               return (instance as BaseAgent).saveSnapshot();
             },
-            invoke: async (method, args) => {
-              const fn = instance[method];
+            invoke: async (methodName, methodArgs) => {
+              const fn = instance[methodName];
               if (!fn)
                 throw new Error(
-                  `Method ${method} not found on agent ${agentClassName}`,
+                  `Method ${methodName} not found on agent ${agentClassName}`,
                 );
 
               const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
@@ -267,12 +265,12 @@ export function agent() {
 
               const agentType = agentTypeOpt.val;
 
-              const methodInfo = classMetadata.methods.get(method);
+              const methodInfo = classMetadata.methods.get(methodName);
 
               if (!methodInfo) {
                 const error: AgentError = {
                   tag: 'invalid-method',
-                  val: `Method ${method} not found in metadata for agent ${agentClassName}.`,
+                  val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
                 };
                 return {
                   tag: 'err',
@@ -282,27 +280,25 @@ export function agent() {
 
               const paramTypes: MethodParams = methodInfo.methodParams;
 
-              const argsWitValues = getWitValueFromDataValue(args);
-
-              const returnType: Type = methodInfo.returnType;
+              const returnType: TsType = methodInfo.returnType;
 
               const paramTypeArray = Array.from(paramTypes.values());
 
-              const convertedArgs = argsWitValues.map((witVal, idx) => {
-                const paramType = paramTypeArray[idx];
-                return WitValue.toTsValue(witVal, paramType);
-              });
+              const convertedArgs = deserializeDataValue(
+                methodArgs,
+                paramTypeArray,
+              );
 
               const result = await fn.apply(instance, convertedArgs);
 
               const methodDef = agentType.methods.find(
-                (m) => m.name === method,
+                (m) => m.name === methodName,
               );
 
               if (!methodDef) {
                 const error: AgentError = {
                   tag: 'invalid-method',
-                  val: `Method ${method} not found in agent type ${agentClassName}`,
+                  val: `Method ${methodName} not found in agent type ${agentClassName}`,
                 };
 
                 return {
@@ -316,7 +312,7 @@ export function agent() {
               if (Either.isLeft(returnValue)) {
                 const agentError: AgentError = {
                   tag: 'invalid-type',
-                  val: `Failed to serialize the return value from ${method}: ${returnValue.val}`,
+                  val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
                 };
 
                 return {
@@ -585,20 +581,32 @@ export function description(description: string) {
   };
 }
 
-// FIXME: in the next version, handle all dataValues
-export function getWitValueFromDataValue(
+export function deserializeDataValue(
   dataValue: DataValue,
-): WitValue.WitValue[] {
-  if (dataValue.tag === 'tuple') {
-    return dataValue.val.map((elem) => {
-      if (elem.tag === 'component-model') {
-        return elem.val;
-      } else {
-        throw new Error(`Unsupported element type: ${elem.tag}`);
-      }
-    });
-  } else {
-    throw new Error(`Unsupported DataValue type: ${dataValue.tag}`);
+  paramTypes: TsType[],
+): any[] {
+  switch (dataValue.tag) {
+    case 'tuple':
+      const elements = dataValue.val;
+
+      return elements.map((elem, idx) => {
+        switch (elem.tag) {
+          case 'unstructured-text':
+            const textRef = elem.val;
+            return UnstructuredText.fromDataValue(textRef);
+
+          case 'unstructured-binary':
+            const binaryRef = elem.val;
+            return UnstructuredBinary.fromDataValue(binaryRef);
+
+          case 'component-model':
+            const witValue = elem.val;
+            return WitValue.toTsValue(witValue, paramTypes[idx]);
+        }
+      });
+
+    case 'multimodal':
+      return [];
   }
 }
 
