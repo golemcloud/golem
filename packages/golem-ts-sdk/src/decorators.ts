@@ -344,13 +344,14 @@ export function agent() {
   };
 }
 
-export function languageCode(codes: string[]) {
+export function languageCodes(codes: string[]) {
   return function (
     target: Object,
     propertyKey: string | symbol,
     _parameterIndex: number,
   ) {
     const agentClassName = new AgentClassName(target.constructor.name);
+
     AgentMethodMetadataRegistry.setLanguageCodes(
       agentClassName,
       String(propertyKey),

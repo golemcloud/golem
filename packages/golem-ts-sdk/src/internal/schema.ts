@@ -15,7 +15,13 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../newTypes/either';
 import * as Option from '../newTypes/option';
-import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
+import {
+  AgentMethod,
+  DataSchema,
+  ElementSchema,
+  TextDescriptor,
+  TextType,
+} from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { AgentMethodMetadataRegistry } from './registry/agentMethodMetadataRegistry';
@@ -25,6 +31,7 @@ import {
   MethodParams,
 } from '@golemcloud/golem-ts-types-core';
 import { TypeMappingScope } from './mapping/types/scope';
+import { languageCodes } from '../decorators';
 
 export function getConstructorDataSchema(
   agentClassName: AgentClassName,
@@ -33,9 +40,37 @@ export function getConstructorDataSchema(
   const constructorParamInfos: readonly ConstructorArg[] =
     classType.constructorArgs;
 
-  const constructorParamTypes = Either.all(
-    constructorParamInfos.map((paramInfo) =>
-      WitType.fromTsType(
+  const constructDataSchemaResult: Either.Either<
+    [string, ElementSchema][],
+    string
+  > = Either.all(
+    constructorParamInfos.map((paramInfo) => {
+      const paramType = paramInfo.type;
+
+      const paramTypeName = paramType.name;
+
+      if (!paramTypeName && paramTypeName === 'UnstructuredText') {
+        const metadata = AgentMethodMetadataRegistry.lookup(agentClassName);
+
+        const languageCodes = metadata?.get(paramInfo.name)?.languageCodes;
+
+        const elementSchema: ElementSchema = languageCodes
+          ? {
+              tag: 'unstructured-text',
+              val: {
+                restrictions: languageCodes.map((code) => ({
+                  languageCode: code,
+                })),
+              },
+            }
+          : { tag: 'unstructured-text', val: {} };
+
+        const result: [string, ElementSchema] = [paramInfo.name, elementSchema];
+
+        return Either.right(result);
+      }
+
+      const witType = WitType.fromTsType(
         paramInfo.type,
         Option.some(
           TypeMappingScope.constructor(
@@ -44,24 +79,16 @@ export function getConstructorDataSchema(
             paramInfo.type.optional,
           ),
         ),
-      ),
-    ),
-  );
+      );
 
-  const constructDataSchemaResult = Either.map(
-    constructorParamTypes,
-    (paramType) => {
-      return paramType.map((paramType, idx) => {
-        const paramName = constructorParamInfos[idx].name;
-        return [
-          paramName,
-          {
-            tag: 'component-model',
-            val: paramType,
-          },
-        ] as [string, ElementSchema];
+      return Either.map(witType, (witType) => {
+        const elementSchema: ElementSchema = {
+          tag: 'component-model',
+          val: witType,
+        };
+        return [paramInfo.name, elementSchema];
       });
-    },
+    }),
   );
 
   return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {

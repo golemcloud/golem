@@ -30,7 +30,7 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { languageCode } from '../src/decorators';
+import { languageCodes } from '../src/decorators';
 
 @agent()
 class SimpleAgent extends BaseAgent {
@@ -96,7 +96,7 @@ class SimpleAgent extends BaseAgent {
   // may be rename UnstructuredText to TextInput. too much
   async fun10(
     param: UnionWithOnlyLiterals,
-    @languageCode(['en']) param2: UnstructuredText,
+    @languageCodes(['en']) param2: UnstructuredText,
   ): Promise<UnionWithOnlyLiterals> {
     return param;
   }
