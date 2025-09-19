@@ -136,4 +136,5 @@ test-r = { workspace = true }
 wasm-metadata = { workspace = true }
 
 [build-dependencies]
+lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }

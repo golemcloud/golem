@@ -4276,6 +4276,7 @@ dependencies = [
  "humantime-serde",
  "iso8601-timestamp",
  "lazy_static 1.5.0",
+ "lenient_bool",
  "nonempty-collections",
  "poem",
  "poem-openapi",
