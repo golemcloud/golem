@@ -3,10 +3,7 @@ import {
   agent,
   prompt,
   description,
-  AtomicOperationGuard,
-  markAtomicOperation,
   atomically,
-  withRetryPolicy,
 } from '@golemcloud/golem-ts-sdk';
 import {
   send as sendToLLM
@@ -86,36 +83,24 @@ function searchWebForTopic(topic: string): SearchResult[] {
   // get 30 results in total
   const pagesToRetrieve = 3
 
-  const session = atomically(() => {
-    const result = startSearch({
-      query: topic,
-      language: "lang_en",
-      safeSearch: "off",
-      region: undefined,
-      maxResults: 10,
-      timeRange: undefined,
-      includeDomains: undefined,
-      excludeDomains: undefined,
-      includeImages: false,
-      includeHtml: false,
-      advancedAnswer: true
-    })
-    if (result.tag != "ok") {
-      throw result.val
-    }
-    return result.val
+  const session = startSearch({
+    query: topic,
+    language: "lang_en",
+    safeSearch: "off",
+    region: undefined,
+    maxResults: 10,
+    timeRange: undefined,
+    includeDomains: undefined,
+    excludeDomains: undefined,
+    includeImages: false,
+    includeHtml: false,
+    advancedAnswer: true
   })
 
   const content: SearchResult[] = []
 
   for (let i = 0; i < pagesToRetrieve; i++) {
-    const page = atomically(() => {
-      const result = session.nextPage()
-      if (result.tag != "ok") {
-        throw `Retrieving page ${i} failed: ${JSON.stringify(result.val)}`
-      }
-      return result.val
-    })
+    const page = session.nextPage()
 
     for (let item of page) {
       content.push({
