@@ -868,7 +868,7 @@ async fn test_ts_counter() {
             cmd::AGENT,
             cmd::INVOKE,
             &format!("app:counter/counter-agent(\"{uuid}\")"),
-            "increment"
+            "increment",
         ])
         .await;
     assert!(outputs.success());
