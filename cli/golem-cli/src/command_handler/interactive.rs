@@ -664,6 +664,7 @@ impl InteractiveHandler {
 
                 Ok(Validation::Valid)
             })
+            .with_placeholder("package-name:component-name")
             .prompt()
             .none_if_not_interactive_logged()?
         else {
