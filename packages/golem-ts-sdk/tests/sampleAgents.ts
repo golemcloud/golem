@@ -96,7 +96,7 @@ class SimpleAgent extends BaseAgent {
   // may be rename UnstructuredText to TextInput. too much
   async fun10(
     param: UnionWithOnlyLiterals,
-    @languageCode('en') param2: UnstructuredText,
+    @languageCode(['en']) param2: UnstructuredText,
   ): Promise<UnionWithOnlyLiterals> {
     return param;
   }

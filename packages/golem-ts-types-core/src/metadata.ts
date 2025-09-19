@@ -21,7 +21,11 @@ type MethodNameString = string;
 
 export type MethodParams = Map<string, Type>;
 
-export type ConstructorArg = { name: string; type: Type };
+export type ConstructorArg = {
+  name: string;
+  type: Type;
+  decorators?: string[];
+};
 
 export type ClassMetadata = {
   constructorArgs: ConstructorArg[];

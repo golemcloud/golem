@@ -260,15 +260,6 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
   const parameterInScope: Option.Option<string> =
     Option.isSome(scope) ? TypeMappingScope.paramName(scope.val) : Option.none();
 
-
-  if (type.name === 'UnstructuredText') {
-    // Special case for UnstructuredText
-    const textDescriptor =
-      record("text-descriptor", [field("restrictions", option(undefined, list(undefined, record("text-type", [field("language-code", str())]))))]);
-
-    return Either.right(textDescriptor);
-  }
-
   switch (type.kind) {
     case "boolean":
       return Either.right(bool())

@@ -24,6 +24,7 @@ const agentMethodMetadataRegistry = new Map<
     {
       prompt?: string;
       description?: string;
+      languageCodes?: string[];
     }
   >
 >();
@@ -51,6 +52,16 @@ export const AgentMethodMetadataRegistry = {
     AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.prompt = prompt;
+  },
+
+  setLanguageCodes(
+    agentClassName: AgentClassName,
+    method: string,
+    languageCodes: string[],
+  ) {
+    AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
+    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    classMeta.get(method)!.languageCodes = languageCodes;
   },
 
   setDescription(

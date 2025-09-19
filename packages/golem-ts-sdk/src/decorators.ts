@@ -344,18 +344,18 @@ export function agent() {
   };
 }
 
-export function languageCode(code: string) {
+export function languageCode(codes: string[]) {
   return function (
     target: Object,
     propertyKey: string | symbol,
-    parameterIndex: number,
+    _parameterIndex: number,
   ) {
     const agentClassName = new AgentClassName(target.constructor.name);
-    // AgentMethodMetadataRegistry.addParameterMetadata(agentClassName, String(propertyKey), {
-    //   kind: "languageCode",
-    //   index: parameterIndex,
-    //   code,
-    // });
+    AgentMethodMetadataRegistry.setLanguageCodes(
+      agentClassName,
+      String(propertyKey),
+      codes,
+    );
   };
 }
 
