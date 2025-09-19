@@ -519,7 +519,7 @@ describe('Agent decorator should register the agent class and its methods into A
       () => new Error('SimpleAgent not found in AgentTypeRegistry'),
     );
 
-    expect(complexAgent.methods.length).toEqual(22);
+    expect(complexAgent.methods.length).toEqual(23);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(7);
     expect(simpleAgent.methods.length).toEqual(13);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);

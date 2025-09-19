@@ -36,6 +36,7 @@ import { createCustomError } from './internal/agentError';
 import { AgentTypeName } from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
+import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
 
 type Type = Type.Type;
 
@@ -338,6 +339,56 @@ export function agent() {
         },
       },
     );
+  };
+}
+
+/**
+ * Marks a class or method as **multimodal**.
+ *
+ * Usage:
+ *
+ * ```ts
+ * @multimodal()
+ * class ImageTextAgent {
+ *   @multimodal()
+ *   classify(input: { text: string; image: string }): string {
+ *     // ...
+ *   }
+ * }
+ * ```
+ */
+export function multimodal() {
+  return function (
+    target: Object | Function,
+    propertyKey?: string | symbol,
+    descriptor?: PropertyDescriptor,
+  ) {
+    if (propertyKey === undefined) {
+      const className = (target as Function).name;
+      const agentClassName = new AgentClassName(className);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      AgentConstructorRegistry.setAsMultiModal(agentClassName);
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      const methodName = String(propertyKey);
+
+      AgentMethodRegistry.setAsMultimodal(agentClassName, methodName);
+    }
   };
 }
 

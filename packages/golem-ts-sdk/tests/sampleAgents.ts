@@ -36,7 +36,7 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { languageCodes, mimeTypes } from '../src/decorators';
+import { languageCodes, mimeTypes, multimodal } from '../src/decorators';
 
 @agent()
 class SimpleAgent extends BaseAgent {
@@ -292,6 +292,11 @@ class ComplexAgent extends BaseAgent {
   fun21 = (text: string) => {
     console.log('Hello World');
   };
+
+  @multimodal()
+  async fun22(text: string): Promise<string> {
+    return this.getId().value;
+  }
 }
 
 // If this class is decorated with agent, it will fail

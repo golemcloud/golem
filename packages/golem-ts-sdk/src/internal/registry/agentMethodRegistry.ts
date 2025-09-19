@@ -24,6 +24,7 @@ const agentMethodRegistry = new Map<
     {
       prompt?: string;
       description?: string;
+      multimodal?: boolean;
     }
   >
 >();
@@ -61,5 +62,11 @@ export const AgentMethodRegistry = {
     AgentMethodRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.description = description;
+  },
+
+  setAsMultimodal(agentClassName: AgentClassName, method: string) {
+    AgentMethodRegistry.ensureMeta(agentClassName, method);
+    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+    classMeta.get(method)!.multimodal = true;
   },
 };
