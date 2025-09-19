@@ -14,7 +14,6 @@
 
 import { ElementSchema, BinaryReference } from 'golem:agent/common';
 
-
 /**
  * Represents unstructured binary input, which can be either a URL or inline binary data.
  *
@@ -29,36 +28,16 @@ import { ElementSchema, BinaryReference } from 'golem:agent/common';
  */
 export type UnstructuredBinary =
   | {
-  tag: 'url';
-  val: string;
-}
+      tag: 'url';
+      val: string;
+    }
   | {
-  tag: 'inline';
-  val: Uint8Array;
-  mimeType?: string;
-};
+      tag: 'inline';
+      val: Uint8Array;
+      mimeType?: string;
+    };
 
-
-export const BinarySchema = {
-  fromMimeType(mimeTypes?: string[]): ElementSchema {
-    if (mimeTypes) {
-      return {
-        tag: 'unstructured-binary',
-        val: {
-          restrictions: mimeTypes.map((mimeType) => { return {mimeType: mimeType} })
-        }
-      }
-    }
-
-    return {
-      tag: 'unstructured-binary',
-      val: {}
-    }
-
-  }
-}
-
-export const UnstructuredText = {
+export const UnstructuredBinary = {
   fromDataValue(dataValue: BinaryReference): UnstructuredBinary {
     if (dataValue.tag === 'url') {
       return {
@@ -70,11 +49,16 @@ export const UnstructuredText = {
     return {
       tag: 'inline',
       val: dataValue.val.data,
-      mimeType: dataValue.val.binaryType?.mimeType
+      mimeType: dataValue.val.binaryType?.mimeType,
     };
   },
 
-
+  /**
+   *
+   * Creates a `UnstructuredBinary` from a URL.
+   *
+   * @param urlValue
+   */
   fromUrl(urlValue: string): UnstructuredBinary {
     return {
       tag: 'url',
@@ -82,12 +66,37 @@ export const UnstructuredText = {
     };
   },
 
-
+  /**
+   * Creates a `UnstructuredBinary` from inline binary data.
+   *
+   * @param data
+   * @param mimeType
+   */
   fromInline(data: Uint8Array, mimeType?: string): UnstructuredBinary {
     return {
       tag: 'inline',
       val: data,
       mimeType: mimeType,
+    };
+  },
+};
+
+export const BinarySchema = {
+  fromMimeType(mimeTypes?: string[]): ElementSchema {
+    if (mimeTypes) {
+      return {
+        tag: 'unstructured-binary',
+        val: {
+          restrictions: mimeTypes.map((mimeType) => {
+            return { mimeType: mimeType };
+          }),
+        },
+      };
+    }
+
+    return {
+      tag: 'unstructured-binary',
+      val: {},
     };
   },
 };

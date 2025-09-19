@@ -345,7 +345,11 @@ export function agent() {
 }
 
 export function languageCode(code: string) {
-  return function (target: Object, propertyKey: string | symbol, parameterIndex: number) {
+  return function (
+    target: Object,
+    propertyKey: string | symbol,
+    parameterIndex: number,
+  ) {
     const agentClassName = new AgentClassName(target.constructor.name);
     // AgentMethodMetadataRegistry.addParameterMetadata(agentClassName, String(propertyKey), {
     //   kind: "languageCode",

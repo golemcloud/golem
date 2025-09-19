@@ -14,12 +14,11 @@
 
 import { ElementSchema, TextReference } from 'golem:agent/common';
 
-
 /**
  * Represents unstructured text input, which can be either a URL or inline text.
  *
  * Example usage:
- * 
+ *
  * ```ts
  * const urlText: UnstructuredText = UnstructuredText.fromUrl("https://example.com");
  * const inlineText: UnstructuredText = UnstructuredText.fromInline("Hello, world!", "en");
@@ -36,26 +35,6 @@ export type UnstructuredText =
       languageCode?: string;
     };
 
-
-export const TextSchema = {
-  fromLanguageCode(languageCodes?: string[]): ElementSchema {
-      if (languageCodes) {
-        return {
-          tag: 'unstructured-text',
-          val: {
-            restrictions: languageCodes.map((code) => { return {languageCode: code} })
-          }
-        }
-      }
-
-      return {
-        tag: 'unstructured-text',
-        val: {}
-      }
-
-  }
-}
-
 export const UnstructuredText = {
   fromDataValue(dataValue: TextReference): UnstructuredText {
     if (dataValue.tag === 'url') {
@@ -68,7 +47,7 @@ export const UnstructuredText = {
     return {
       tag: 'inline',
       val: dataValue.val.data,
-      languageCode: dataValue.val.textType?.languageCode
+      languageCode: dataValue.val.textType?.languageCode,
     };
   },
 
@@ -98,6 +77,26 @@ export const UnstructuredText = {
       tag: 'inline',
       val: data,
       languageCode: languageCode,
+    };
+  },
+};
+
+export const TextSchema = {
+  fromLanguageCode(languageCodes?: string[]): ElementSchema {
+    if (languageCodes) {
+      return {
+        tag: 'unstructured-text',
+        val: {
+          restrictions: languageCodes.map((code) => {
+            return { languageCode: code };
+          }),
+        },
+      };
+    }
+
+    return {
+      tag: 'unstructured-text',
+      val: {},
     };
   },
 };
