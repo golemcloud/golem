@@ -34,13 +34,9 @@ import { languageCodes } from '../src/decorators';
 
 @agent()
 class SimpleAgent extends BaseAgent {
-  constructor(
-    readonly input: string,
-    @languageCodes(['en']) readonly hello: UnstructuredText,
-  ) {
+  constructor(readonly input: string) {
     super();
     this.input = input;
-    this.hello = hello;
   }
 
   async fun1(param: string): Types.PromiseType {
@@ -98,10 +94,7 @@ class SimpleAgent extends BaseAgent {
   }
 
   // may be rename UnstructuredText to TextInput. too much
-  async fun10(
-    param: UnionWithOnlyLiterals,
-    @languageCodes(['en']) param2: UnstructuredText,
-  ): Promise<UnionWithOnlyLiterals> {
+  async fun10(param: UnionWithOnlyLiterals): Promise<UnionWithOnlyLiterals> {
     return param;
   }
 
@@ -145,6 +138,9 @@ class ComplexAgent extends BaseAgent {
     readonly testInterfaceType: Types.TestInterfaceType,
     readonly optionalStringType: string | null,
     readonly optionalUnionType: UnionType | null,
+    readonly unstructuredText: UnstructuredText,
+    @languageCodes(['en'])
+    readonly unstructuredTextWithLanguageCode: UnstructuredText,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;
@@ -181,6 +177,8 @@ class ComplexAgent extends BaseAgent {
     resultTypeExact: ResultTypeExactBoth,
     resultTypeNonExact: ResultTypeNonExact,
     resultTypeNonExact2: ResultTypeNonExact2,
+    unstructuredText: UnstructuredText,
+    @languageCodes(['en']) unstructuredTextWithLanguageCode: UnstructuredText,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
