@@ -223,6 +223,19 @@ export function buildMethodInputSchema(
     ),
   );
 
+  const agentClass = AgentMethodRegistry.lookup(agentClassName);
+
+  const isMultiModal = agentClass?.get(methodName)?.multimodal ?? false;
+
+  if (isMultiModal) {
+    return Either.map(result, (res) => {
+      return {
+        tag: 'multimodal',
+        val: res,
+      };
+    });
+  }
+
   return Either.map(result, (res) => {
     return {
       tag: 'tuple',
