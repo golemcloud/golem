@@ -247,6 +247,7 @@ fn dynamic_import(
                 ComponentItem::Type(_) => {}
                 ComponentItem::Resource(_resource) => {
                     if &inner_name != "pollable"
+                        && inner_name != "wasi-io-pollable"
                         && &inner_name != "input-stream"
                         && &inner_name != "output-stream"
                     {
@@ -297,3 +298,20 @@ struct FunctionInfo {
 }
 
 struct ResourceEntry;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::assert;
+    use std::path::PathBuf;
+    use std::str::FromStr;
+    use test_r::test;
+
+    #[test]
+    async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
+        let result =
+            extract_agent_types(&PathBuf::from_str("../test-components/caller.wasm")?, false).await;
+        assert!(let Ok(_) = result);
+        Ok(())
+    }
+}

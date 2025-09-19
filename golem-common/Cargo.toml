@@ -134,6 +134,7 @@ wit-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+assert2 = { workspace = true }
 pretty_assertions = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }
