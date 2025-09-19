@@ -1022,6 +1022,7 @@ async fn create_and_invoke_api_deployment_with_agent(
     let (_, component_name) = admin
         .component("golem_it_constructor_parameter_echo")
         .unique()
+        .agentic()
         .store_and_get_name()
         .await;
 
