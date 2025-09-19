@@ -294,7 +294,7 @@ class ComplexAgent extends BaseAgent {
   };
 
   @multimodal()
-  async fun22(text: string): Promise<string> {
+  async fun22(text: [string]): Promise<string> {
     return this.getId().value;
   }
 }
