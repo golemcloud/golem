@@ -37,6 +37,7 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::info;
+use uuid::Uuid;
 
 mod cmd {
     pub static ADD_DEPENDENCY: &str = "add-dependency";
@@ -844,9 +845,9 @@ async fn build_all_templates() {
 }
 
 #[test]
-async fn test_ts_weather_agent() {
+async fn test_ts_counter() {
     let mut ctx = TestContext::new();
-    let app_name = "weather";
+    let app_name = "counter";
 
     ctx.start_server();
 
@@ -856,23 +857,23 @@ async fn test_ts_weather_agent() {
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent"])
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter"])
         .await;
     assert!(outputs.success());
 
+    let uuid = Uuid::new_v4().to_string();
     let outputs = ctx
         .cli([
             flag::YES,
             cmd::AGENT,
             cmd::INVOKE,
-            "app:weather-agent/assistant-agent()",
-            "ask",
-            "hello",
+            &format!("app:counter/counter-agent(\"{uuid}\")"),
+            "increment",
         ])
         .await;
     assert!(outputs.success());
 
-    assert!(outputs.stdout_contains("Weather in hello is sunny"));
+    assert!(outputs.stdout_contains("- 1"));
 }
 
 #[test]
@@ -1090,22 +1091,22 @@ async fn test_http_api_merging() {
     ctx.cd(app_name);
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent1"])
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter1"])
         .await;
     assert!(outputs.success());
     let component1_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
-            .join("app-weather-agent1")
+            .join("app-counter1")
             .join("golem.yaml"),
     );
 
     let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:weather-agent2"])
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "app:counter2"])
         .await;
     assert!(outputs.success());
     let component2_manifest_path = ctx.cwd_path_join(
         Path::new("components-ts")
-            .join("app-weather-agent2")
+            .join("app-counter2")
             .join("golem.yaml"),
     );
 
@@ -1114,7 +1115,7 @@ async fn test_http_api_merging() {
         &component1_manifest_path,
         indoc! { r#"
             components:
-              app:weather-agent1:
+              app:counter1:
                 template: ts
             
             httpApi:
@@ -1125,10 +1126,10 @@ async fn test_http_api_merging() {
                   - method: GET
                     path: /a
                     binding:
-                      componentName: app:weather-agent1
+                      componentName: app:counter1
                       response: |
-                        let agent = assistant-agent();
-                        agent.ask("a")
+                        let agent = counter-agent("a");
+                        agent.increment()
 
               deployments:
                 local:
@@ -1143,7 +1144,7 @@ async fn test_http_api_merging() {
         &component2_manifest_path,
         indoc! { r#"
             components:
-              app:weather-agent2:
+              app:counter2:
                 template: ts
 
             httpApi:
@@ -1154,10 +1155,10 @@ async fn test_http_api_merging() {
                   - method: GET
                     path: /b
                     binding:
-                      componentName: app:weather-agent2
+                      componentName: app:counter2
                       response: |
-                        let agent = assistant-agent();
-                        agent.ask("b")
+                        let agent = counter-agent("b");
+                        agent.increment()
 
               deployments:
                 local:
@@ -1188,7 +1189,7 @@ async fn test_http_api_merging() {
         &component2_manifest_path,
         indoc! { r#"
             components:
-              app:weather-agent2:
+              app:counter:
                 template: ts
 
             httpApi:
@@ -1199,10 +1200,10 @@ async fn test_http_api_merging() {
                   - method: GET
                     path: /b
                     binding:
-                      componentName: app:weather-agent2
+                      componentName: app:counter
                       response: |
-                        let agent = assistant-agent();
-                        agent.ask("b")
+                        let agent = counter-agent("b");
+                        agent.increment()
 
               deployments:
                 local:
@@ -1225,7 +1226,7 @@ async fn test_http_api_merging() {
         &component2_manifest_path,
         indoc! { r#"
             components:
-              app:weather-agent2:
+              app:counter2:
                 template: ts
 
             httpApi:
@@ -1236,10 +1237,10 @@ async fn test_http_api_merging() {
                   - method: GET
                     path: /b
                     binding:
-                      componentName: app:weather-agent2
+                      componentName: app:counter2
                       response: |
-                        let agent = assistant-agent();
-                        agent.ask("b")
+                        let agent = counter-agent("b");
+                        agent.increment()
 
               deployments:
                 local:
