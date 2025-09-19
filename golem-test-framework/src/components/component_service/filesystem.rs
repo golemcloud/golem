@@ -264,7 +264,7 @@ impl ComponentService for FileSystemComponentService {
         unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
-        agent: bool,
+        agentic: bool,
     ) -> Component {
         self.add_component(
             token,
@@ -276,7 +276,7 @@ impl ComponentService for FileSystemComponentService {
             unverified,
             env,
             project_id,
-            agent,
+            agentic,
         )
         .await
         .expect("Failed to add component")
