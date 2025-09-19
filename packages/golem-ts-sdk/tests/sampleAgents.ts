@@ -34,7 +34,10 @@ import { languageCodes } from '../src/decorators';
 
 @agent()
 class SimpleAgent extends BaseAgent {
-  constructor(readonly input: string, @languageCodes(["en"]) readonly hello: UnstructuredText) {
+  constructor(
+    readonly input: string,
+    @languageCodes(['en']) readonly hello: UnstructuredText,
+  ) {
     super();
     this.input = input;
     this.hello = hello;

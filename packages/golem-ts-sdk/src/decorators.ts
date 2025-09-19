@@ -367,18 +367,19 @@ export function languageCodes(codes: string[]) {
 
       const paramName = constructorInfo[parameterIndex].name;
 
-      AgentConstructorParamRegistry.setLanguageCodes(agentClassName, paramName, codes);
-
+      AgentConstructorParamRegistry.setLanguageCodes(
+        agentClassName,
+        paramName,
+        codes,
+      );
     } else {
-
       const agentClassName = new AgentClassName(target.constructor.name);
 
       const classMetadata = TypeMetadata.get(agentClassName.value);
 
       const methodName = String(propertyKey);
 
-      const methodInfo =
-        classMetadata?.methods.get(methodName);
+      const methodInfo = classMetadata?.methods.get(methodName);
 
       if (!methodInfo) {
         throw new Error(
@@ -386,14 +387,19 @@ export function languageCodes(codes: string[]) {
         );
       }
 
-      const paramName =
-        Array.from(methodInfo.methodParams).map((paramType) => paramType[0])[parameterIndex];
+      const paramName = Array.from(methodInfo.methodParams).map(
+        (paramType) => paramType[0],
+      )[parameterIndex];
 
-     // console.log(`applying method param decorator to ${agentClassName.value}, ${methodName}, ${paramName} and ${codes}`)
+      // console.log(`applying method param decorator to ${agentClassName.value}, ${methodName}, ${paramName} and ${codes}`)
 
-      AgentMethodParamRegistry.setLanguageCodes(agentClassName, methodName, paramName, codes);
+      AgentMethodParamRegistry.setLanguageCodes(
+        agentClassName,
+        methodName,
+        paramName,
+        codes,
+      );
     }
-
   };
 }
 
