@@ -49,7 +49,11 @@ pub async fn extract_agent_types(
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
 
-    let (wasi, io) = WasiCtx::builder().inherit_stdout().inherit_stderr().build();
+    let (wasi, io) = WasiCtx::builder()
+        .inherit_stdout()
+        .inherit_stderr()
+        .env("RUST_BACKTRACE", "1")
+        .build();
     let host = Host {
         table: Arc::new(Mutex::new(ResourceTable::new())),
         wasi: Arc::new(Mutex::new(wasi)),
