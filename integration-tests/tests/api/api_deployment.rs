@@ -22,6 +22,8 @@ use golem_client::model::{
 use golem_common::model::ProjectId;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
+use reqwest::StatusCode;
+use serde_json::json;
 use std::collections::HashMap;
 use std::panic;
 use test_r::{inherit_test_dep, test};
@@ -1007,4 +1009,102 @@ async fn undeploy_component_constraint_test(deps: &EnvBasedTestDependencies) {
         .await;
 
     check!(update_component.is_ok());
+}
+
+#[test]
+#[tracing::instrument]
+async fn create_and_invoke_api_deployment_with_agent(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let admin = deps.admin().await;
+    let project_id = admin.default_project().await;
+
+    let (_, component_name) = admin
+        .component("golem_it_constructor_parameter_echo")
+        .unique()
+        .store_and_get_name()
+        .await;
+
+    let api_definition = deps
+        .worker_service()
+        .create_api_definition(
+            &admin.token,
+            &project_id,
+            &HttpApiDefinitionRequest {
+                id: Uuid::new_v4().to_string(),
+                version: "1".to_string(),
+                draft: false,
+                security: None,
+                routes: vec![RouteRequestData {
+                    method: MethodPattern::Get,
+                    path: "/path/{agent-name}".to_string(),
+                    binding: GatewayBindingData {
+                        component: Some(GatewayBindingComponent {
+                            name: component_name.to_string(),
+                            version: Some(0),
+                        }),
+                        worker_name: None,
+                        response: Some(
+                            r#"
+                                let agent = echo-agent(request.path.agent-name);
+                                let name = agent.echo();
+                                let status: u64 = 200;
+                                {
+                                    headers: { ContentType: "json" },
+                                    body: { name: name },
+                                    status: 200
+                                }
+                            "#
+                            .to_string(),
+                        ),
+                        idempotency_key: None,
+                        binding_type: Some(GatewayBindingType::Default),
+                        invocation_context: None,
+                    },
+                    security: None,
+                }],
+            },
+        )
+        .await?;
+
+    let custom_request_port = deps.worker_service().public_custom_request_port();
+
+    // deploy api
+    {
+        let request = ApiDeploymentRequest {
+            project_id: project_id.0,
+            api_definitions: vec![ApiDefinitionInfo {
+                id: api_definition.id.clone(),
+                version: api_definition.version.clone(),
+            }],
+            site: ApiSite {
+                host: format!("127.0.0.1:{custom_request_port}"),
+                subdomain: None,
+            },
+        };
+
+        let response = deps
+            .worker_service()
+            .create_or_update_api_deployment(&admin.token, request.clone())
+            .await?;
+
+        check!(request.api_definitions == response.api_definitions);
+        check!(request.site == response.site);
+    }
+
+    // call custom request api
+    {
+        let agent_name = Uuid::new_v4();
+
+        let response = reqwest::get(format!(
+            "http://127.0.0.1:{custom_request_port}/path/{agent_name}"
+        ))
+        .await?;
+        assert!(response.status() == StatusCode::OK);
+
+        let response_body = response.json::<serde_json::Value>().await?;
+        assert!(response_body == json!({ "name": agent_name.to_string() }));
+    }
+
+    Ok(())
 }

@@ -50,6 +50,7 @@ use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
 use golem_client::model::ComponentQuery;
 use golem_client::{Context, Security};
+use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
@@ -358,6 +359,7 @@ pub trait ComponentService: Send + Sync {
         unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
+        agentic: bool,
     ) -> Component {
         let mut retries = 10;
         loop {
@@ -438,6 +440,7 @@ pub trait ComponentService: Send + Sync {
                     unverified,
                     env,
                     project_id.clone(),
+                    agentic,
                 )
                 .await
             {
@@ -485,7 +488,16 @@ pub trait ComponentService: Send + Sync {
         _unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
+        agentic: bool,
     ) -> Result<Component, AddComponentError> {
+        let agent_types = if agentic {
+            extract_agent_types(local_path).await.map_err(|err| {
+                AddComponentError::Other(format!("Failed analyzing component: {err}"))
+            })?
+        } else {
+            Vec::new()
+        };
+
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
@@ -512,7 +524,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
-                            agent_types: vec![],
+                            agent_types: agent_types.into_iter().map(|a| a.into()).collect(),
                         },
                     )),
                 }];
@@ -601,7 +613,7 @@ pub trait ComponentService: Send + Sync {
                         Some(&golem_client::model::ComponentEnv {
                             key_values: env.clone(),
                         }),
-                        None,
+                        Some(&golem_client::model::AgentTypes { types: agent_types }),
                     )
                     .await
                 {

@@ -85,6 +85,7 @@ pub struct StoreComponentBuilder<'a, DSL: TestDsl + ?Sized> {
     dynamic_linking: Vec<(&'static str, DynamicLinkedInstance)>,
     env: HashMap<String, String>,
     project_id: Option<ProjectId>,
+    agentic: bool,
 }
 
 impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
@@ -100,6 +101,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
             dynamic_linking: vec![],
             env: HashMap::new(),
             project_id: None,
+            agentic: false,
         }
     }
 
@@ -187,6 +189,11 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
         self
     }
 
+    pub fn agentic(mut self) -> Self {
+        self.agentic = true;
+        self
+    }
+
     /// Stores the component
     pub async fn store(self) -> ComponentId {
         self.store_and_get_name().await.0
@@ -206,6 +213,7 @@ impl<'a, DSL: TestDsl> StoreComponentBuilder<'a, DSL> {
                 &self.dynamic_linking,
                 &self.env,
                 self.project_id,
+                self.agentic,
             )
             .await
     }
@@ -226,6 +234,7 @@ pub trait TestDsl {
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
+        agentic: bool,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -507,6 +516,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
+        agentic: bool,
     ) -> (ComponentId, ComponentName) {
         let source_path = self
             .deps
@@ -552,6 +562,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                         unverified,
                         env,
                         project_id,
+                        agentic,
                     )
                     .await
                     .expect("Failed to add component")
@@ -568,6 +579,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
                         unverified,
                         env,
                         project_id,
+                        agentic,
                     )
                     .await
             }
@@ -2167,6 +2179,7 @@ pub trait TestDslUnsafe {
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
+        agentic: bool,
     ) -> (ComponentId, ComponentName);
 
     async fn store_component_with_id(&self, name: &str, component_id: &ComponentId);
@@ -2389,6 +2402,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
         dynamic_linking: &[(&'static str, DynamicLinkedInstance)],
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
+        agentic: bool,
     ) -> (ComponentId, ComponentName) {
         <T as TestDsl>::store_component_with(
             self,
@@ -2401,6 +2415,7 @@ impl<T: TestDsl + Sync> TestDslUnsafe for T {
             dynamic_linking,
             env,
             project_id,
+            agentic,
         )
         .await
     }
