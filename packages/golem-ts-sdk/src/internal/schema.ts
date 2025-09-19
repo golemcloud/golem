@@ -15,16 +15,26 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../newTypes/either';
 import * as Option from '../newTypes/option';
-import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
+import {
+  AgentMethod,
+  DataSchema,
+  ElementSchema,
+  TextDescriptor,
+  TextType,
+} from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
-import { AgentMethodMetadataRegistry } from './registry/agentMethodMetadataRegistry';
+import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import {
   ClassMetadata,
   ConstructorArg,
   MethodParams,
 } from '@golemcloud/golem-ts-types-core';
 import { TypeMappingScope } from './mapping/types/scope';
+import { languageCodes } from '../decorators';
+import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
+import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
+import { AgentConstructorRegistry } from './registry/agentConstructorRegistry';
 
 export function getConstructorDataSchema(
   agentClassName: AgentClassName,
@@ -33,9 +43,58 @@ export function getConstructorDataSchema(
   const constructorParamInfos: readonly ConstructorArg[] =
     classType.constructorArgs;
 
-  const constructorParamTypes = Either.all(
-    constructorParamInfos.map((paramInfo) =>
-      WitType.fromTsType(
+  const constructDataSchemaResult: Either.Either<
+    [string, ElementSchema][],
+    string
+  > = Either.all(
+    constructorParamInfos.map((paramInfo) => {
+      const paramType = paramInfo.type;
+
+      const paramTypeName = paramType.name;
+
+      if (paramTypeName && paramTypeName === 'UnstructuredText') {
+        const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
+
+        const languageCodes = metadata?.get(paramInfo.name)?.languageCodes;
+
+        const elementSchema: ElementSchema = languageCodes
+          ? {
+              tag: 'unstructured-text',
+              val: {
+                restrictions: languageCodes.map((code) => ({
+                  languageCode: code,
+                })),
+              },
+            }
+          : { tag: 'unstructured-text', val: {} };
+
+        const result: [string, ElementSchema] = [paramInfo.name, elementSchema];
+
+        return Either.right(result);
+      }
+
+      if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+        const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
+
+        const mimeTypes = metadata?.get(paramInfo.name)?.mimeTypes;
+
+        const elementSchema: ElementSchema = mimeTypes
+          ? {
+              tag: 'unstructured-binary',
+              val: {
+                restrictions: mimeTypes.map((mimeType) => ({
+                  mimeType: mimeType,
+                })),
+              },
+            }
+          : { tag: 'unstructured-binary', val: {} };
+
+        const result: [string, ElementSchema] = [paramInfo.name, elementSchema];
+
+        return Either.right(result);
+      }
+
+      const witType = WitType.fromTsType(
         paramInfo.type,
         Option.some(
           TypeMappingScope.constructor(
@@ -44,25 +103,30 @@ export function getConstructorDataSchema(
             paramInfo.type.optional,
           ),
         ),
-      ),
-    ),
+      );
+
+      return Either.map(witType, (witType) => {
+        const elementSchema: ElementSchema = {
+          tag: 'component-model',
+          val: witType,
+        };
+        return [paramInfo.name, elementSchema];
+      });
+    }),
   );
 
-  const constructDataSchemaResult = Either.map(
-    constructorParamTypes,
-    (paramType) => {
-      return paramType.map((paramType, idx) => {
-        const paramName = constructorParamInfos[idx].name;
-        return [
-          paramName,
-          {
-            tag: 'component-model',
-            val: paramType,
-          },
-        ] as [string, ElementSchema];
-      });
-    },
-  );
+  const constructorParam = AgentConstructorRegistry.lookup(agentClassName);
+
+  const isMultiModal = constructorParam?.multimodal ?? false;
+
+  if (isMultiModal) {
+    return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
+      return {
+        tag: 'multimodal',
+        val: nameAndElementSchema,
+      };
+    });
+  }
 
   return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
     return {
@@ -94,10 +158,13 @@ export function getAgentMethodSchema(
       const returnType: Type.Type = signature.returnType;
 
       const baseMeta =
-        AgentMethodMetadataRegistry.lookup(agentClassName)?.get(methodName) ??
-        {};
+        AgentMethodRegistry.lookup(agentClassName)?.get(methodName) ?? {};
 
-      const inputSchemaEither = buildMethodInputSchema(methodName, parameters);
+      const inputSchemaEither = buildMethodInputSchema(
+        agentClassName,
+        methodName,
+        parameters,
+      );
 
       if (Either.isLeft(inputSchemaEither)) {
         return Either.left(inputSchemaEither.val);
@@ -127,6 +194,7 @@ export function getAgentMethodSchema(
 }
 
 export function buildMethodInputSchema(
+  agentClassName: AgentClassName,
   methodName: string,
   paramTypes: MethodParams,
 ): Either.Either<DataSchema, string> {
@@ -134,6 +202,9 @@ export function buildMethodInputSchema(
     Array.from(paramTypes).map((parameterInfo) =>
       Either.mapBoth(
         convertToElementSchema(
+          agentClassName,
+          methodName,
+          parameterInfo[0],
           parameterInfo[1],
           Option.some(
             TypeMappingScope.method(
@@ -152,6 +223,19 @@ export function buildMethodInputSchema(
     ),
   );
 
+  const agentClass = AgentMethodRegistry.lookup(agentClassName);
+
+  const isMultiModal = agentClass?.get(methodName)?.multimodal ?? false;
+
+  if (isMultiModal) {
+    return Either.map(result, (res) => {
+      return {
+        tag: 'multimodal',
+        val: res,
+      };
+    });
+  }
+
   return Either.map(result, (res) => {
     return {
       tag: 'tuple',
@@ -169,22 +253,76 @@ export function buildOutputSchema(
     return Either.right(undefinedSchema.val);
   }
 
-  return Either.map(
-    convertToElementSchema(returnType, Option.none()),
-    (result) => {
+  const schema: Either.Either<ElementSchema, string> = Either.map(
+    WitType.fromTsType(returnType, Option.none()),
+    (witType) => {
       return {
-        tag: 'tuple',
-        val: [['return-value', result]],
+        tag: 'component-model',
+        val: witType,
       };
     },
   );
+
+  return Either.map(schema, (result) => {
+    return {
+      tag: 'tuple',
+      val: [['return-value', result]],
+    };
+  });
 }
 
 function convertToElementSchema(
-  type: Type.Type,
+  agentClassName: AgentClassName,
+  methodName: string,
+  parameterName: string,
+  parameterType: Type.Type,
   scope: Option.Option<TypeMappingScope>,
 ): Either.Either<ElementSchema, string> {
-  return Either.map(WitType.fromTsType(type, scope), (witType) => {
+  const paramTypeName = parameterType.name;
+
+  if (paramTypeName && paramTypeName === 'UnstructuredText') {
+    const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
+
+    const parameterMetadata = methodMetadata?.get(methodName);
+
+    const languageCodes = parameterMetadata?.get(parameterName)?.languageCode;
+
+    const elementSchema: ElementSchema = languageCodes
+      ? {
+          tag: 'unstructured-text',
+          val: {
+            restrictions: languageCodes.map((code) => ({
+              languageCode: code,
+            })),
+          },
+        }
+      : { tag: 'unstructured-text', val: {} };
+
+    return Either.right(elementSchema);
+  }
+
+  if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+    const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
+
+    const parameterMetadata = methodMetadata?.get(methodName);
+
+    const mimeTypes = parameterMetadata?.get(parameterName)?.mimeTypes;
+
+    const elementSchema: ElementSchema = mimeTypes
+      ? {
+          tag: 'unstructured-binary',
+          val: {
+            restrictions: mimeTypes.map((mimeType) => ({
+              mimeType: mimeType,
+            })),
+          },
+        }
+      : { tag: 'unstructured-binary', val: {} };
+
+    return Either.right(elementSchema);
+  }
+
+  return Either.map(WitType.fromTsType(parameterType, scope), (witType) => {
     return {
       tag: 'component-model',
       val: witType,

@@ -22,7 +22,7 @@ import { AgentError, AgentType, DataValue } from 'golem:agent/common';
 import { AgentInitiator } from '../src/internal/agentInitiator';
 import * as Option from '../src/newTypes/option';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
-import { AgentMethodMetadataRegistry } from '../src/internal/registry/agentMethodMetadataRegistry';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 describe('AgentType look up', () => {
   it('AgentInitiatorRegistry should return the initiator when looking up by string representation of agentType', () => {
@@ -84,19 +84,11 @@ describe('AgentType look up', () => {
   it('AgentMethodMetadataRegistry should return method details when looking up by string representation of agentClassName', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
 
-    AgentMethodMetadataRegistry.setDescription(
-      agentClassName,
-      'foo',
-      'sample desc',
-    );
+    AgentMethodRegistry.setDescription(agentClassName, 'foo', 'sample desc');
 
-    AgentMethodMetadataRegistry.setPromptName(
-      agentClassName,
-      'foo',
-      'sample prompt',
-    );
+    AgentMethodRegistry.setPromptName(agentClassName, 'foo', 'sample prompt');
 
-    const lookupResult = AgentMethodMetadataRegistry.lookup(
+    const lookupResult = AgentMethodRegistry.lookup(
       new AgentClassName('AssistantAgent'),
     );
 

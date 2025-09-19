@@ -33,6 +33,98 @@ describe('Agent decorator should register the agent class and its methods into A
     (method) => method.name === 'fun0',
   );
 
+  it('should handle UnstructuredText in method params', () => {
+    const elementSchema1 = getElementSchema(
+      complexAgentMethod!.inputSchema,
+      'unstructuredTextWithLanguageCode',
+    );
+
+    const expected = {
+      tag: 'unstructured-text',
+      val: { restrictions: [{ languageCode: 'en' }] },
+    };
+
+    expect(elementSchema1).toEqual(expected);
+
+    const elementSchema2 = getElementSchema(
+      complexAgentMethod!.inputSchema,
+      'unstructuredText',
+    );
+
+    const expected2 = { tag: 'unstructured-text', val: {} };
+
+    expect(elementSchema2).toEqual(expected2);
+  });
+
+  it('should handle UnstructuredText in constructor params', () => {
+    const elementSchema1 = getElementSchema(
+      complexAgentConstructor!.inputSchema,
+      'unstructuredTextWithLanguageCode',
+    );
+
+    const expected = {
+      tag: 'unstructured-text',
+      val: { restrictions: [{ languageCode: 'en' }] },
+    };
+
+    expect(elementSchema1).toEqual(expected);
+
+    const elementSchema2 = getElementSchema(
+      complexAgentConstructor!.inputSchema,
+      'unstructuredText',
+    );
+
+    const expected2 = { tag: 'unstructured-text', val: {} };
+
+    expect(elementSchema2).toEqual(expected2);
+  });
+
+  it('should handle UnstructuredBinary in method params', () => {
+    const elementSchema1 = getElementSchema(
+      complexAgentMethod!.inputSchema,
+      'unstructuredBinaryWithMimeType',
+    );
+
+    const expected = {
+      tag: 'unstructured-binary',
+      val: { restrictions: [{ mimeType: 'application/json' }] },
+    };
+
+    expect(elementSchema1).toEqual(expected);
+
+    const elementSchema2 = getElementSchema(
+      complexAgentMethod!.inputSchema,
+      'unstructuredBinary',
+    );
+
+    const expected2 = { tag: 'unstructured-binary', val: {} };
+
+    expect(elementSchema2).toEqual(expected2);
+  });
+
+  it('should handle UnstructuredBinary in constructor params', () => {
+    const elementSchema1 = getElementSchema(
+      complexAgentConstructor!.inputSchema,
+      'unstructuredBinaryWithMimeType',
+    );
+
+    const expected = {
+      tag: 'unstructured-binary',
+      val: { restrictions: [{ mimeType: 'application/json' }] },
+    };
+
+    expect(elementSchema1).toEqual(expected);
+
+    const elementSchema2 = getElementSchema(
+      complexAgentConstructor!.inputSchema,
+      'unstructuredBinary',
+    );
+
+    const expected2 = { tag: 'unstructured-binary', val: {} };
+
+    expect(elementSchema2).toEqual(expected2);
+  });
+
   it('should handle `a: string | undefined` in method params', () => {
     const optionalStringInGetWeather = getWitType(
       complexAgentMethod!.inputSchema,
@@ -427,8 +519,8 @@ describe('Agent decorator should register the agent class and its methods into A
       () => new Error('SimpleAgent not found in AgentTypeRegistry'),
     );
 
-    expect(complexAgent.methods.length).toEqual(22);
-    expect(complexAgent.constructor.inputSchema.val.length).toEqual(3);
+    expect(complexAgent.methods.length).toEqual(23);
+    expect(complexAgent.constructor.inputSchema.val.length).toEqual(7);
     expect(simpleAgent.methods.length).toEqual(13);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
@@ -453,6 +545,20 @@ describe('Agent decorator should register the agent class and its methods into A
     });
   });
 });
+
+function getElementSchema(inputSchema: DataSchema, parameterName: string) {
+  const optionalParamInput = inputSchema.val.find(
+    (s) => s[0] === parameterName,
+  );
+
+  if (!optionalParamInput) {
+    throw new Error(
+      `${parameterName} not found in scheme ${util.format(inputSchema)}`,
+    );
+  }
+
+  return optionalParamInput[1];
+}
 
 function getWitType(dataSchema: DataSchema, parameterName: string) {
   const optionalParamInput = dataSchema.val.find((s) => s[0] === parameterName);

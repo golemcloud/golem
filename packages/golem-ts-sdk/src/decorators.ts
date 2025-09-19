@@ -27,31 +27,31 @@ import {
   getConstructorDataSchema,
 } from './internal/schema';
 import * as Option from './newTypes/option';
-import { AgentMethodMetadataRegistry } from './internal/registry/agentMethodMetadataRegistry';
+import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
 import { AgentClassName } from './newTypes/agentClassName';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { getSelfMetadata } from 'golem:api/host@1.1.7';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
 import { AgentTypeName } from './newTypes/agentTypeName';
+import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
+import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
+import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
+import { UnstructuredText } from './newTypes/textInput';
+import { UnstructuredBinary } from './newTypes/binaryInput';
 
-type Type = Type.Type;
+type TsType = Type.Type;
 
 /**
  * Marks a class as an Agent and registers it in the global agent registry.
  * Note that the method generates a `local` and `remote` client for the agent.
  * The details of these clients are explained further below.
  *
- * The `@agent()` decorator:
- * - Registers the agent type for discovery by other agents.
- * - Inspects the constructor to determine its parameter types.
- * - Inspects all methods to determine their input/output parameter types.
- * - Associates metadata such as `prompt` and `description` with the agent.
- * - Creates `.createLocal()` and `.createRemote()` factory methods on the class.
- * - Enables schema-based validation of parameters and return values.
+ * The `@agent()` decorator: Registers the agent type for discovery by other agents.
  *
  * ### Naming
  * By default, the agent name is the kebab-case of the class name.
+ *
  * Example:
  * ```ts
  * @agent()
@@ -99,23 +99,15 @@ type Type = Type.Type;
  *   }
  * }
  *
- * ### Remote and Local Clients
- *
- * A local client is a direct instance of the agent class,
- * which can be used to call methods directly. It is recommended to use the local clients
- * even if you can create a local client by directly calling the constructor.
- *
- * With a local client, any logic defined in the agent class is executed in the same container.
- *
- * const calc = CalculatorAgent.createLocal(10);
- * console.log(calc.add(5)); // 15
+ * ### Remote Client
  *
  * The purpose of a remote client is that it allows you to invoke the agent constructor
  * and methods of an agent (even if it's defined with in the same code) in a different container.
- * An immediate outcome of this is that you are offloading the work of this agent to a different container
- * than the current container.
+ * By passing the constructor parameters to `get()`, the SDK will ensure that an instance of the agent,
+ * is created in a different container, and the method calls are proxied to that container.
  *
- * const calcRemote = CalculatorAgent.createRemote();
+ *
+ * const calcRemote = CalculatorAgent.get(10);
  * calcRemote.add(5);
  * ```
  */
@@ -188,20 +180,16 @@ export function agent() {
         initiate: (agentName: string, constructorParams: DataValue) => {
           const constructorInfo = classMetadata.constructorArgs;
 
-          const constructorParamTypes: Type[] = constructorInfo.map(
+          const constructorParamTypes: TsType[] = constructorInfo.map(
             (p) => p.type,
           );
 
-          const constructorParamWitValues =
-            getWitValueFromDataValue(constructorParams);
-
-          const convertedConstructorArgs = constructorParamWitValues.map(
-            (witVal, idx) => {
-              return WitValue.toTsValue(witVal, constructorParamTypes[idx]);
-            },
+          const deserializedConstructorArgs = deserializeDataValue(
+            constructorParams,
+            constructorParamTypes,
           );
 
-          const instance = new ctor(...convertedConstructorArgs);
+          const instance = new ctor(...deserializedConstructorArgs);
 
           const containerName = getSelfMetadata().workerId.workerName;
 
@@ -247,11 +235,11 @@ export function agent() {
             saveSnapshot(): Promise<Uint8Array> {
               return (instance as BaseAgent).saveSnapshot();
             },
-            invoke: async (method, args) => {
-              const fn = instance[method];
+            invoke: async (methodName, methodArgs) => {
+              const fn = instance[methodName];
               if (!fn)
                 throw new Error(
-                  `Method ${method} not found on agent ${agentClassName}`,
+                  `Method ${methodName} not found on agent ${agentClassName}`,
                 );
 
               const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
@@ -269,12 +257,12 @@ export function agent() {
 
               const agentType = agentTypeOpt.val;
 
-              const methodInfo = classMetadata.methods.get(method);
+              const methodInfo = classMetadata.methods.get(methodName);
 
               if (!methodInfo) {
                 const error: AgentError = {
                   tag: 'invalid-method',
-                  val: `Method ${method} not found in metadata for agent ${agentClassName}.`,
+                  val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
                 };
                 return {
                   tag: 'err',
@@ -284,27 +272,25 @@ export function agent() {
 
               const paramTypes: MethodParams = methodInfo.methodParams;
 
-              const argsWitValues = getWitValueFromDataValue(args);
-
-              const returnType: Type = methodInfo.returnType;
+              const returnType: TsType = methodInfo.returnType;
 
               const paramTypeArray = Array.from(paramTypes.values());
 
-              const convertedArgs = argsWitValues.map((witVal, idx) => {
-                const paramType = paramTypeArray[idx];
-                return WitValue.toTsValue(witVal, paramType);
-              });
+              const convertedArgs = deserializeDataValue(
+                methodArgs,
+                paramTypeArray,
+              );
 
               const result = await fn.apply(instance, convertedArgs);
 
               const methodDef = agentType.methods.find(
-                (m) => m.name === method,
+                (m) => m.name === methodName,
               );
 
               if (!methodDef) {
                 const error: AgentError = {
                   tag: 'invalid-method',
-                  val: `Method ${method} not found in agent type ${agentClassName}`,
+                  val: `Method ${methodName} not found in agent type ${agentClassName}`,
                 };
 
                 return {
@@ -318,7 +304,7 @@ export function agent() {
               if (Either.isLeft(returnValue)) {
                 const agentError: AgentError = {
                   tag: 'invalid-type',
-                  val: `Failed to serialize the return value from ${method}: ${returnValue.val}`,
+                  val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
                 };
 
                 return {
@@ -345,6 +331,199 @@ export function agent() {
 }
 
 /**
+ * Marks a class or method as **multimodal**.
+ *
+ * Usage:
+ *
+ * ```ts
+ * @multimodal()
+ * class ImageTextAgent {
+ *   @multimodal()
+ *   classify(input: { text: string; image: string }): string {
+ *     // ...
+ *   }
+ * }
+ * ```
+ */
+export function multimodal() {
+  return function (
+    target: Object | Function,
+    propertyKey?: string | symbol,
+    descriptor?: PropertyDescriptor,
+  ) {
+    if (propertyKey === undefined) {
+      const className = (target as Function).name;
+      const agentClassName = new AgentClassName(className);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      AgentConstructorRegistry.setAsMultiModal(agentClassName);
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      const methodName = String(propertyKey);
+
+      AgentMethodRegistry.setAsMultimodal(agentClassName, methodName);
+    }
+  };
+}
+
+/*
+ * Associates a list of **language codes** with a parameter in either constructor or method.
+ * languageCodes is valid only when the type is `UnstructuredText`.
+ *
+ * Example:
+ *
+ * ```ts
+ * class TextAgent extends BaseAgent {
+ *   constructor(@languageCodes(["en", "fr"]) text: UnstructuredText) {}
+ *  ..
+ * }
+ * ```
+ *
+ * @param codes A list of BCP-47 language codes (e.g., "en", "fr", "es").
+ */
+export function languageCodes(codes: string[]) {
+  return function (
+    target: Object,
+    propertyKey: string | symbol | undefined, // method name if its part of method or undefined if its constructor
+    parameterIndex: number, // parameter index
+  ) {
+    if (propertyKey === undefined) {
+      const agentClassName = new AgentClassName((target as Function).name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const constructorInfo = classMetadata?.constructorArgs;
+
+      if (!constructorInfo) {
+        throw new Error(
+          `Constructor metadata not found for agent ${agentClassName}. Ensure the constructor exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = constructorInfo[parameterIndex].name;
+
+      AgentConstructorParamRegistry.setLanguageCodes(
+        agentClassName,
+        paramName,
+        codes,
+      );
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const methodName = String(propertyKey);
+
+      const methodInfo = classMetadata?.methods.get(methodName);
+
+      if (!methodInfo) {
+        throw new Error(
+          `Method ${methodName} not found in metadata for agent ${agentClassName}. Ensure the method exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = Array.from(methodInfo.methodParams).map(
+        (paramType) => paramType[0],
+      )[parameterIndex];
+
+      // console.log(`applying method param decorator to ${agentClassName.value}, ${methodName}, ${paramName} and ${codes}`)
+
+      AgentMethodParamRegistry.setLanguageCodes(
+        agentClassName,
+        methodName,
+        paramName,
+        codes,
+      );
+    }
+  };
+}
+
+/*
+ * Associates a list of **MIME types** with a parameter in either constructor or method.
+ * mimeTypes is valid only when the type is `UnstructuredBinary` or `UnstructuredText`.
+ *
+ * Example:
+ *
+ * ```ts
+ * class FileAgent extends BaseAgent {
+ *   constructor(@mimeTypes(["application/pdf", "image/png"]) fileContent: UnstructuredBinary) {}
+ *   ..
+ * }
+ *
+ * ```
+ *
+ * @param mimeTypes A list of MIME types (e.g., "text/plain", "application/json").
+ */
+export function mimeTypes(mimeTypes: string[]) {
+  return function (
+    target: Object,
+    propertyKey: string | symbol | undefined, // method name if its part of method or undefined if its constructor
+    parameterIndex: number, // parameter index
+  ) {
+    if (propertyKey === undefined) {
+      const agentClassName = new AgentClassName((target as Function).name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const constructorInfo = classMetadata?.constructorArgs;
+
+      if (!constructorInfo) {
+        throw new Error(
+          `Constructor metadata not found for agent ${agentClassName}. Ensure the constructor exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = constructorInfo[parameterIndex].name;
+
+      AgentConstructorParamRegistry.setMimeTypes(
+        agentClassName,
+        paramName,
+        mimeTypes,
+      );
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const methodName = String(propertyKey);
+
+      const methodInfo = classMetadata?.methods.get(methodName);
+
+      if (!methodInfo) {
+        throw new Error(
+          `Method ${methodName} not found in metadata for agent ${agentClassName}. Ensure the method exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = Array.from(methodInfo.methodParams).map(
+        (paramType) => paramType[0],
+      )[parameterIndex];
+
+      AgentMethodParamRegistry.setMimeTypes(
+        agentClassName,
+        methodName,
+        paramName,
+        mimeTypes,
+      );
+    }
+  };
+}
+
+/**
  * Associates a **prompt** with a method of an agent.
  *
  * A prompt is valid only for classes that are decorated with `@agent()`.
@@ -364,11 +543,7 @@ export function agent() {
 export function prompt(prompt: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodMetadataRegistry.setPromptName(
-      agentClassName,
-      propertyKey,
-      prompt,
-    );
+    AgentMethodRegistry.setPromptName(agentClassName, propertyKey, prompt);
   };
 }
 
@@ -390,7 +565,7 @@ export function prompt(prompt: string) {
 export function description(description: string) {
   return function (target: Object, propertyKey: string) {
     const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodMetadataRegistry.setDescription(
+    AgentMethodRegistry.setDescription(
       agentClassName,
       propertyKey,
       description,
@@ -398,20 +573,32 @@ export function description(description: string) {
   };
 }
 
-// FIXME: in the next version, handle all dataValues
-export function getWitValueFromDataValue(
+export function deserializeDataValue(
   dataValue: DataValue,
-): WitValue.WitValue[] {
-  if (dataValue.tag === 'tuple') {
-    return dataValue.val.map((elem) => {
-      if (elem.tag === 'component-model') {
-        return elem.val;
-      } else {
-        throw new Error(`Unsupported element type: ${elem.tag}`);
-      }
-    });
-  } else {
-    throw new Error(`Unsupported DataValue type: ${dataValue.tag}`);
+  paramTypes: TsType[],
+): any[] {
+  switch (dataValue.tag) {
+    case 'tuple':
+      const elements = dataValue.val;
+
+      return elements.map((elem, idx) => {
+        switch (elem.tag) {
+          case 'unstructured-text':
+            const textRef = elem.val;
+            return UnstructuredText.fromDataValue(textRef);
+
+          case 'unstructured-binary':
+            const binaryRef = elem.val;
+            return UnstructuredBinary.fromDataValue(binaryRef);
+
+          case 'component-model':
+            const witValue = elem.val;
+            return WitValue.toTsValue(witValue, paramTypes[idx]);
+        }
+      });
+
+    case 'multimodal':
+      return [];
   }
 }
 

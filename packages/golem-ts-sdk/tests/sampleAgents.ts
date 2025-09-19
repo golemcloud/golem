@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, AgentId, BaseAgent, UnstructuredText } from '../src';
+import {
+  agent,
+  AgentId,
+  BaseAgent,
+  UnstructuredBinary,
+  UnstructuredText,
+} from '../src';
 import * as Types from './testTypes';
 import {
   EitherX,
@@ -30,6 +36,7 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
+import { languageCodes, mimeTypes, multimodal } from '../src/decorators';
 
 @agent()
 class SimpleAgent extends BaseAgent {
@@ -92,6 +99,7 @@ class SimpleAgent extends BaseAgent {
     return param;
   }
 
+  // may be rename UnstructuredText to TextInput. too much
   async fun10(param: UnionWithOnlyLiterals): Promise<UnionWithOnlyLiterals> {
     return param;
   }
@@ -136,6 +144,16 @@ class ComplexAgent extends BaseAgent {
     readonly testInterfaceType: Types.TestInterfaceType,
     readonly optionalStringType: string | null,
     readonly optionalUnionType: UnionType | null,
+
+    readonly unstructuredText: UnstructuredText,
+
+    @languageCodes(['en'])
+    readonly unstructuredTextWithLanguageCode: UnstructuredText,
+
+    readonly unstructuredBinary: UnstructuredBinary,
+
+    @mimeTypes(['application/json'])
+    readonly unstructuredBinaryWithMimeType: UnstructuredBinary,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;
@@ -172,6 +190,15 @@ class ComplexAgent extends BaseAgent {
     resultTypeExact: ResultTypeExactBoth,
     resultTypeNonExact: ResultTypeNonExact,
     resultTypeNonExact2: ResultTypeNonExact2,
+    unstructuredText: UnstructuredText,
+
+    @languageCodes(['en'])
+    unstructuredTextWithLanguageCode: UnstructuredText,
+
+    unstructuredBinary: UnstructuredBinary,
+
+    @mimeTypes(['application/json'])
+    unstructuredBinaryWithMimeType: UnstructuredBinary,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
@@ -265,6 +292,11 @@ class ComplexAgent extends BaseAgent {
   fun21 = (text: string) => {
     console.log('Hello World');
   };
+
+  @multimodal()
+  async fun22(text: [string]): Promise<string> {
+    return this.getId().value;
+  }
 }
 
 // If this class is decorated with agent, it will fail

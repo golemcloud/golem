@@ -14,7 +14,7 @@
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../src/newTypes/either';
-import { getWitValueFromDataValue } from '../src/decorators';
+import { deserializeDataValue } from '../src/decorators';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { expect, it } from 'vitest';
@@ -405,14 +405,13 @@ function testInvoke(
   };
 
   resolvedAgent.invoke(methodName, dataValues).then((invokeResult) => {
-    const invokeDataValue =
+    const resultDataValue =
       invokeResult.tag === 'ok'
         ? invokeResult.val
         : (() => {
             throw new Error(util.format(invokeResult.val));
           })();
-    const witValue = getWitValueFromDataValue(invokeDataValue)[0];
-    const result = WitValue.toTsValue(witValue, returnTypeInfo);
+    const result = deserializeDataValue(resultDataValue, [returnTypeInfo])[0];
 
     expect(result).toEqual(expectedOutput);
   });

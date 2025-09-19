@@ -17,30 +17,31 @@ import { AgentClassName } from '../../newTypes/agentClassName';
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
 
-const agentMethodMetadataRegistry = new Map<
+const agentMethodRegistry = new Map<
   AgentClassNameString,
   Map<
     AgentMethodNameString,
     {
       prompt?: string;
       description?: string;
+      multimodal?: boolean;
     }
   >
 >();
 
-export const AgentMethodMetadataRegistry = {
+export const AgentMethodRegistry = {
   ensureMeta(agentClassName: AgentClassName, method: string) {
-    if (!agentMethodMetadataRegistry.has(agentClassName.value)) {
-      agentMethodMetadataRegistry.set(agentClassName.value, new Map());
+    if (!agentMethodRegistry.has(agentClassName.value)) {
+      agentMethodRegistry.set(agentClassName.value, new Map());
     }
-    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
     if (!classMeta.has(method)) {
       classMeta.set(method, {});
     }
   },
 
   lookup(agentClassName: AgentClassName) {
-    return agentMethodMetadataRegistry.get(agentClassName.value);
+    return agentMethodRegistry.get(agentClassName.value);
   },
 
   setPromptName(
@@ -48,8 +49,8 @@ export const AgentMethodMetadataRegistry = {
     method: string,
     prompt: string,
   ) {
-    AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    AgentMethodRegistry.ensureMeta(agentClassName, method);
+    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.prompt = prompt;
   },
 
@@ -58,8 +59,14 @@ export const AgentMethodMetadataRegistry = {
     method: string,
     description: string,
   ) {
-    AgentMethodMetadataRegistry.ensureMeta(agentClassName, method);
-    const classMeta = agentMethodMetadataRegistry.get(agentClassName.value)!;
+    AgentMethodRegistry.ensureMeta(agentClassName, method);
+    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.description = description;
+  },
+
+  setAsMultimodal(agentClassName: AgentClassName, method: string) {
+    AgentMethodRegistry.ensureMeta(agentClassName, method);
+    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+    classMeta.get(method)!.multimodal = true;
   },
 };
