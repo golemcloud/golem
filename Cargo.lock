@@ -2053,6 +2053,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "colored_json"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e35980a1b846f8e3e359fd18099172a0857140ba9230affc4f71348081e039b6"
+dependencies = [
+ "serde",
+ "serde_json",
+ "yansi",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4146,6 +4157,7 @@ dependencies = [
  "clap_complete",
  "cli-table",
  "colored",
+ "colored_json",
  "dirs 4.0.0",
  "flate2",
  "fs_extra",

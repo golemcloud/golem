@@ -28,6 +28,7 @@ use crate::model::{app_raw, Format, ProjectReference};
 use crate::model::{AccountDetails, AccountId, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
+use colored::control::SHOULD_COLORIZE;
 use futures_util::future::BoxFuture;
 use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
@@ -81,6 +82,7 @@ pub struct Context {
     show_sensitive: bool,
     dev_mode: bool,
     server_no_limit_change: bool,
+    colored_json_color_mode: colored_json::ColorMode,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -189,8 +191,9 @@ impl Context {
         let log_output = log_output_for_help.unwrap_or_else(|| {
             if enabled!(Level::ERROR) {
                 match format {
-                    Format::Json => Output::Stderr,
-                    Format::Yaml => Output::Stderr,
+                    Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
+                        Output::Stderr
+                    }
                     Format::Text => Output::Stdout,
                 }
             } else {
@@ -235,6 +238,13 @@ impl Context {
             dev_mode,
             show_sensitive,
             server_no_limit_change,
+            colored_json_color_mode: {
+                if SHOULD_COLORIZE.should_colorize() {
+                    colored_json::ColorMode::On
+                } else {
+                    colored_json::ColorMode::Off
+                }
+            },
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -287,6 +297,10 @@ impl Context {
 
     pub fn server_no_limit_change(&self) -> bool {
         self.server_no_limit_change
+    }
+
+    pub fn colored_json_color_mode(&self) -> colored_json::ColorMode {
+        self.colored_json_color_mode
     }
 
     pub async fn silence_app_context_init(&self) {

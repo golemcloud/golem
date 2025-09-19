@@ -149,6 +149,7 @@ cli-table = "0.4.9"
 cloud-service = { path = "cloud-service" }
 colored = "3.0.0"
 colored-diff = "0.2.3"
+colored_json = "5.0.0"
 combine = "4.6.7"
 conditional-trait-gen = "0.4.1"
 console-subscriber = "0.4.1"

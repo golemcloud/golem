@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::context::Context;
-use crate::model::text::fmt::{NestedTextViewIndent, TextView};
+use crate::model::text::fmt::{to_colored_yaml, NestedTextViewIndent, TextView};
 use crate::model::Format;
 use serde::de::DeserializeOwned;
 use serde::Serialize;
@@ -33,8 +33,18 @@ impl LogHandler {
             Format::Json => {
                 println!("{}", serde_json::to_string(value).unwrap());
             }
+            Format::PrettyJson => {
+                println!(
+                    "{}",
+                    colored_json::to_colored_json(value, self.ctx.colored_json_color_mode())
+                        .unwrap(),
+                );
+            }
             Format::Yaml => {
                 println!("---\n{}", serde_yaml::to_string(value).unwrap());
+            }
+            Format::PrettyYaml => {
+                println!("---\n{}", to_colored_yaml(value).unwrap());
             }
             Format::Text => {
                 println!("{}", serde_json::to_string_pretty(value).unwrap());
@@ -47,9 +57,18 @@ impl LogHandler {
             Format::Json => {
                 println!("{}", serde_json::to_string(view).unwrap());
             }
+            Format::PrettyJson => {
+                println!(
+                    "{}",
+                    colored_json::to_colored_json(view, self.ctx.colored_json_color_mode())
+                        .unwrap(),
+                );
+            }
             Format::Yaml => {
-                // TODO: handle "streaming" optionally
                 println!("---\n{}", serde_yaml::to_string(view).unwrap());
+            }
+            Format::PrettyYaml => {
+                println!("---\n{}", to_colored_yaml(view).unwrap());
             }
             Format::Text => {
                 view.log();
