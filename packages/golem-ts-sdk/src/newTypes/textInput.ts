@@ -12,17 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { TextReference } from 'golem:agent/common';
+import { ElementSchema, TextReference } from 'golem:agent/common';
 
-export type TextType = {
-  languageCode: string;
-};
 
-export type TextSource = {
-  data: string;
-  textType: TextType;
-};
-
+/**
+ * Represents unstructured text input, which can be either a URL or inline text.
+ *
+ * Example usage:
+ * 
+ * ```ts
+ * const urlText: UnstructuredText = UnstructuredText.fromUrl("https://example.com");
+ * const inlineText: UnstructuredText = UnstructuredText.fromInline("Hello, world!", "en");
+ * ```
+ */
 export type UnstructuredText =
   | {
       tag: 'url';
@@ -30,11 +32,32 @@ export type UnstructuredText =
     }
   | {
       tag: 'inline';
-      val: TextSource;
+      val: string;
+      languageCode?: string;
     };
 
-export const TextInput = {
-  fromTextReferenceDataValue(dataValue: TextReference): UnstructuredText {
+
+export const TextSchema = {
+  fromLanguageCode(languageCodes?: string[]): ElementSchema {
+      if (languageCodes) {
+        return {
+          tag: 'unstructured-text',
+          val: {
+            restrictions: languageCodes.map((code) => { return {languageCode: code} })
+          }
+        }
+      }
+
+      return {
+        tag: 'unstructured-text',
+        val: {}
+      }
+
+  }
+}
+
+export const UnstructuredText = {
+  fromDataValue(dataValue: TextReference): UnstructuredText {
     if (dataValue.tag === 'url') {
       return {
         tag: 'url',
@@ -44,12 +67,8 @@ export const TextInput = {
 
     return {
       tag: 'inline',
-      val: {
-        data: dataValue.val.data,
-        textType: {
-          languageCode: dataValue.val.textType?.languageCode ?? 'en',
-        },
-      },
+      val: dataValue.val.data,
+      languageCode: dataValue.val.textType?.languageCode
     };
   },
 
@@ -77,12 +96,8 @@ export const TextInput = {
     languageCode = languageCode ? languageCode : 'en';
     return {
       tag: 'inline',
-      val: {
-        data: data,
-        textType: {
-          languageCode,
-        },
-      },
+      val: data,
+      languageCode: languageCode,
     };
   },
 };

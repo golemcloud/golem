@@ -344,6 +344,17 @@ export function agent() {
   };
 }
 
+export function languageCode(code: string) {
+  return function (target: Object, propertyKey: string | symbol, parameterIndex: number) {
+    const agentClassName = new AgentClassName(target.constructor.name);
+    // AgentMethodMetadataRegistry.addParameterMetadata(agentClassName, String(propertyKey), {
+    //   kind: "languageCode",
+    //   index: parameterIndex,
+    //   code,
+    // });
+  };
+}
+
 /**
  * Associates a **prompt** with a method of an agent.
  *
