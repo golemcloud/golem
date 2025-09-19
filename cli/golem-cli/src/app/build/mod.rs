@@ -16,6 +16,7 @@ use crate::app::build::add_metadata::add_metadata_to_selected_components;
 use crate::app::build::componentize::componentize;
 use crate::app::build::gen_rpc::gen_rpc;
 use crate::app::build::link::link;
+use crate::app::build::task_result_marker::{TaskResultMarker, TaskResultMarkerHashSource};
 use crate::app::context::ApplicationContext;
 use crate::fs;
 use crate::log::{log_warn_action, LogColorize};
@@ -23,8 +24,6 @@ use crate::model::app::AppBuildStep;
 use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::ffi::OsString;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -66,36 +65,6 @@ fn env_var_flag(name: &str) -> bool {
         .unwrap_or_default()
 }
 
-/// Similar to std::env::vars() but silently drops invalid env vars instead of panicing.
-/// Additionally, will ignore all env vars containing data incompatible with envsubst.
-fn valid_env_vars() -> HashMap<String, String> {
-    let mut result = HashMap::new();
-
-    fn validate(val: OsString) -> Option<String> {
-        let forbidden = &["$", "{", "}"];
-
-        let str = val.into_string().ok()?;
-        for c in forbidden {
-            if str.contains(c) {
-                return None;
-            }
-        }
-        Some(str)
-    }
-
-    for (k, v) in std::env::vars_os() {
-        if let (Some(k), Some(v)) = (validate(k.clone()), validate(v)) {
-            result.insert(k, v);
-        } else {
-            debug!(
-                "Env var `{}` contains invalid data and will be ignored",
-                k.to_string_lossy()
-            )
-        }
-    }
-    result
-}
-
 fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
     if path.exists() {
         log_warn_action(
@@ -113,10 +82,12 @@ fn delete_path_logged(context: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn is_up_to_date<S, T, FS, FT>(skip_check: bool, sources: FS, targets: FT) -> bool
+fn is_up_to_date<S, T, SP, TP, FS, FT>(skip_check: bool, sources: FS, targets: FT) -> bool
 where
-    S: Debug + IntoIterator<Item = PathBuf>,
-    T: Debug + IntoIterator<Item = PathBuf>,
+    S: Debug + IntoIterator<Item = SP>,
+    T: Debug + IntoIterator<Item = TP>,
+    SP: AsRef<Path>,
+    TP: AsRef<Path>,
     FS: FnOnce() -> S,
     FT: FnOnce() -> T,
 {
@@ -155,13 +126,13 @@ where
         max_modified
     }
 
-    fn max_modified_short_circuit_on_missing<I: IntoIterator<Item = PathBuf>>(
+    fn max_modified_short_circuit_on_missing<I: IntoIterator<Item = TP>, TP: AsRef<Path>>(
         paths: I,
     ) -> Option<SystemTime> {
         // Using Result and collect for short-circuit on any missing mod time
         paths
             .into_iter()
-            .map(|path| max_modified(path.as_path()).ok_or(()))
+            .map(|path| max_modified(path.as_ref()).ok_or(()))
             .collect::<Result<Vec<_>, _>>()
             .and_then(|mod_times| mod_times.into_iter().max().ok_or(()))
             .ok()
@@ -196,4 +167,128 @@ where
             false
         }
     }
+}
+
+pub struct TaskUpToDateCheck<S, T, SP, TP, FS, FT>
+where
+    S: Debug + IntoIterator<Item = SP>,
+    T: Debug + IntoIterator<Item = TP>,
+    SP: AsRef<Path>,
+    TP: AsRef<Path>,
+    FS: FnOnce() -> S,
+    FT: FnOnce() -> T,
+{
+    marker_dir: PathBuf,
+    skip_check: bool,
+    task_result_marker: Option<TaskResultMarker>,
+    sources: FS,
+    targets: FT,
+}
+
+impl<S, T, SP, TP, FS, FT> TaskUpToDateCheck<S, T, SP, TP, FS, FT>
+where
+    S: Debug + IntoIterator<Item = SP>,
+    T: Debug + IntoIterator<Item = TP>,
+    SP: AsRef<Path>,
+    TP: AsRef<Path>,
+    FS: FnOnce() -> S,
+    FT: FnOnce() -> T,
+{
+    pub fn with_task_result_marker<HS: TaskResultMarkerHashSource>(
+        mut self,
+        source: HS,
+    ) -> anyhow::Result<Self> {
+        self.task_result_marker = Some(TaskResultMarker::new(&self.marker_dir, source)?);
+        Ok(self)
+    }
+
+    pub fn with_sources<NS, NSP, NFS>(
+        self,
+        sources: NFS,
+    ) -> TaskUpToDateCheck<NS, T, NSP, TP, NFS, FT>
+    where
+        NS: Debug + IntoIterator<Item = NSP>,
+        NSP: AsRef<Path>,
+        NFS: FnOnce() -> NS,
+    {
+        TaskUpToDateCheck {
+            marker_dir: self.marker_dir,
+            skip_check: self.skip_check,
+            task_result_marker: self.task_result_marker,
+            sources,
+            targets: self.targets,
+        }
+    }
+
+    pub fn with_targets<NT, NTP, NFT>(
+        self,
+        targets: NFT,
+    ) -> TaskUpToDateCheck<S, NT, SP, NTP, FS, NFT>
+    where
+        NT: Debug + IntoIterator<Item = NTP>,
+        NTP: AsRef<Path>,
+        NFT: FnOnce() -> NT,
+    {
+        TaskUpToDateCheck {
+            marker_dir: self.marker_dir,
+            skip_check: self.skip_check,
+            task_result_marker: self.task_result_marker,
+            sources: self.sources,
+            targets,
+        }
+    }
+
+    pub fn run_or_skip<Run: FnOnce() -> anyhow::Result<()>, Skip: FnOnce()>(
+        self,
+        run: Run,
+        skip: Skip,
+    ) -> anyhow::Result<()> {
+        if is_up_to_date(self.skip_check, self.sources, self.targets) {
+            skip();
+            Ok(())
+        } else {
+            match self.task_result_marker {
+                Some(marker) => marker.result(run()),
+                None => run(),
+            }
+        }
+    }
+
+    pub async fn run_async_or_skip<Run: AsyncFnOnce() -> anyhow::Result<()>, Skip: FnOnce()>(
+        self,
+        run: Run,
+        skip: Skip,
+    ) -> anyhow::Result<()> {
+        if is_up_to_date(self.skip_check, self.sources, self.targets) {
+            skip();
+            Ok(())
+        } else {
+            match self.task_result_marker {
+                Some(marker) => marker.result(run().await),
+                None => run().await,
+            }
+        }
+    }
+}
+
+type EmptyIter = std::iter::Empty<PathBuf>;
+type EmptyFn = fn() -> EmptyIter;
+
+type EmptyTaskUpToDateCheck =
+    TaskUpToDateCheck<EmptyIter, EmptyIter, PathBuf, PathBuf, EmptyFn, EmptyFn>;
+
+impl EmptyTaskUpToDateCheck {
+    pub fn empty(ctx: &ApplicationContext) -> Self {
+        Self {
+            marker_dir: ctx.application.task_result_marker_dir(),
+            skip_check: ctx.config.skip_up_to_date_checks,
+            task_result_marker: None,
+            sources: std::iter::empty::<PathBuf>,
+            targets: std::iter::empty::<PathBuf>,
+        }
+    }
+}
+
+pub fn new_task_up_to_date_check(ctx: &ApplicationContext) -> EmptyTaskUpToDateCheck {
+    EmptyTaskUpToDateCheck::empty(ctx)
 }

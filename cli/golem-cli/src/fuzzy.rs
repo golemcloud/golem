@@ -19,6 +19,7 @@ use itertools::{Either, Itertools};
 use std::collections::HashSet;
 use std::fmt::Write;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Match {
     pub option: String,
     pub pattern: String,

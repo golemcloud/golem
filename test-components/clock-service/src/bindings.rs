@@ -55,8 +55,104 @@ pub mod exports {
                         }
                     }
                 }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_sleep_during_request_cabi<T: Guest>(
+                    arg0: i64,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::sleep_during_request(arg0 as u64);
+                    let ptr1 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    let vec2 = (result0.into_bytes()).into_boxed_slice();
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    ::core::mem::forget(vec2);
+                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len2;
+                    *ptr1.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_sleep_during_request<T: Guest>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_sleep_during_parallel_requests_cabi<T: Guest>(
+                    arg0: i64,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::sleep_during_parallel_requests(arg0 as u64);
+                    let ptr1 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    let vec2 = (result0.into_bytes()).into_boxed_slice();
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    ::core::mem::forget(vec2);
+                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len2;
+                    *ptr1.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_sleep_during_parallel_requests<T: Guest>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_sleep_between_requests_cabi<T: Guest>(
+                    arg0: i64,
+                    arg1: i64,
+                ) -> *mut u8 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::sleep_between_requests(arg0 as u64, arg1 as u64);
+                    let ptr1 = (&raw mut _RET_AREA.0).cast::<u8>();
+                    let vec2 = (result0.into_bytes()).into_boxed_slice();
+                    let ptr2 = vec2.as_ptr().cast::<u8>();
+                    let len2 = vec2.len();
+                    ::core::mem::forget(vec2);
+                    *ptr1.add(::core::mem::size_of::<*const u8>()).cast::<usize>() = len2;
+                    *ptr1.add(0).cast::<*mut u8>() = ptr2.cast_mut();
+                    ptr1
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn __post_return_sleep_between_requests<T: Guest>(
+                    arg0: *mut u8,
+                ) {
+                    let l0 = *arg0.add(0).cast::<*mut u8>();
+                    let l1 = *arg0
+                        .add(::core::mem::size_of::<*const u8>())
+                        .cast::<usize>();
+                    _rt::cabi_dealloc(l0, l1, 1);
+                }
+                #[doc(hidden)]
+                #[allow(non_snake_case)]
+                pub unsafe fn _export_healthcheck_cabi<T: Guest>() -> i32 {
+                    #[cfg(target_arch = "wasm32")] _rt::run_ctors_once();
+                    let result0 = T::healthcheck();
+                    match result0 {
+                        true => 1,
+                        false => 0,
+                    }
+                }
                 pub trait Guest {
                     fn sleep(secs: u64) -> Result<(), _rt::String>;
+                    fn sleep_during_request(secs: u64) -> _rt::String;
+                    fn sleep_during_parallel_requests(secs: u64) -> _rt::String;
+                    fn sleep_between_requests(secs: u64, n: u64) -> _rt::String;
+                    fn healthcheck() -> bool;
                 }
                 #[doc(hidden)]
                 macro_rules! __export_golem_it_api_cabi {
@@ -66,7 +162,36 @@ pub mod exports {
                         unsafe { $($path_to_types)*:: _export_sleep_cabi::<$ty > (arg0) }
                         } #[unsafe (export_name = "cabi_post_golem:it/api#sleep")] unsafe
                         extern "C" fn _post_return_sleep(arg0 : * mut u8,) { unsafe {
-                        $($path_to_types)*:: __post_return_sleep::<$ty > (arg0) } } };
+                        $($path_to_types)*:: __post_return_sleep::<$ty > (arg0) } }
+                        #[unsafe (export_name = "golem:it/api#sleep-during-request")]
+                        unsafe extern "C" fn export_sleep_during_request(arg0 : i64,) ->
+                        * mut u8 { unsafe { $($path_to_types)*::
+                        _export_sleep_during_request_cabi::<$ty > (arg0) } } #[unsafe
+                        (export_name = "cabi_post_golem:it/api#sleep-during-request")]
+                        unsafe extern "C" fn _post_return_sleep_during_request(arg0 : *
+                        mut u8,) { unsafe { $($path_to_types)*::
+                        __post_return_sleep_during_request::<$ty > (arg0) } } #[unsafe
+                        (export_name = "golem:it/api#sleep-during-parallel-requests")]
+                        unsafe extern "C" fn export_sleep_during_parallel_requests(arg0 :
+                        i64,) -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_sleep_during_parallel_requests_cabi::<$ty > (arg0) } }
+                        #[unsafe (export_name =
+                        "cabi_post_golem:it/api#sleep-during-parallel-requests")] unsafe
+                        extern "C" fn _post_return_sleep_during_parallel_requests(arg0 :
+                        * mut u8,) { unsafe { $($path_to_types)*::
+                        __post_return_sleep_during_parallel_requests::<$ty > (arg0) } }
+                        #[unsafe (export_name = "golem:it/api#sleep-between-requests")]
+                        unsafe extern "C" fn export_sleep_between_requests(arg0 : i64,
+                        arg1 : i64,) -> * mut u8 { unsafe { $($path_to_types)*::
+                        _export_sleep_between_requests_cabi::<$ty > (arg0, arg1) } }
+                        #[unsafe (export_name =
+                        "cabi_post_golem:it/api#sleep-between-requests")] unsafe extern
+                        "C" fn _post_return_sleep_between_requests(arg0 : * mut u8,) {
+                        unsafe { $($path_to_types)*::
+                        __post_return_sleep_between_requests::<$ty > (arg0) } } #[unsafe
+                        (export_name = "golem:it/api#healthcheck")] unsafe extern "C" fn
+                        export_healthcheck() -> i32 { unsafe { $($path_to_types)*::
+                        _export_healthcheck_cabi::<$ty > () } } };
                     };
                 }
                 #[doc(hidden)]
@@ -140,12 +265,15 @@ pub(crate) use __export_clock_service_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 210] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07O\x01A\x02\x01A\x02\x01\
-B\x03\x01j\0\x01s\x01@\x01\x04secsw\0\0\x04\0\x05sleep\x01\x01\x04\0\x0cgolem:it\
-/api\x05\0\x04\0\x16golem:it/clock-service\x04\0\x0b\x13\x01\0\x0dclock-service\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-\
-bindgen-rust\x060.41.0";
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 344] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xd4\x01\x01A\x02\x01\
+A\x02\x01B\x0a\x01j\0\x01s\x01@\x01\x04secsw\0\0\x04\0\x05sleep\x01\x01\x01@\x01\
+\x04secsw\0s\x04\0\x14sleep-during-request\x01\x02\x04\0\x1esleep-during-paralle\
+l-requests\x01\x02\x01@\x02\x04secsw\x01nw\0s\x04\0\x16sleep-between-requests\x01\
+\x03\x01@\0\0\x7f\x04\0\x0bhealthcheck\x01\x04\x04\0\x0cgolem:it/api\x05\0\x04\0\
+\x16golem:it/clock-service\x04\0\x0b\x13\x01\0\x0dclock-service\x03\0\0\0G\x09pr\
+oducers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x06\
+0.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

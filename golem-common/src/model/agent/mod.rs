@@ -79,7 +79,7 @@ pub enum AgentError {
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(ValueAndType),
+    CustomError(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
@@ -194,6 +194,15 @@ pub enum DataSchema {
     Multimodal(NamedElementSchemas),
 }
 
+impl DataSchema {
+    pub fn is_unit(&self) -> bool {
+        match self {
+            DataSchema::Tuple(element_schemas) => element_schemas.elements.is_empty(),
+            DataSchema::Multimodal(element_schemas) => element_schemas.elements.is_empty(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
@@ -249,14 +258,12 @@ impl DataValue {
                             })
                         } else {
                             return Err(format!(
-                                "Multimodal value does not end with `)`: {}; expected to be `name(value)`",
-                                s
+                                "Multimodal value does not end with `)`: {s}; expected to be `name(value)`"
                             ));
                         }
                     } else {
                         return Err(format!(
-                            "Invalid multimodal value: {}; expected to be `name(value)`",
-                            s
+                            "Invalid multimodal value: {s}; expected to be `name(value)`"
                         ));
                     }
                 }
@@ -405,7 +412,7 @@ impl Display for NamedElementValue {
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum ElementValue {
-    ComponentModel(ValueAndType),
+    ComponentModel(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
     UnstructuredText(TextReference),
     UnstructuredBinary(BinaryReference),
 }
@@ -618,20 +625,43 @@ impl AgentId {
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<Self, String> {
+        Self::parse_and_resolve_type(s, resolver)
+            .await
+            .map(|(agent_id, _)| agent_id)
+    }
+
+    pub async fn parse_and_resolve_type(
+        s: impl AsRef<str>,
+        resolver: impl AgentTypeResolver,
+    ) -> Result<(Self, AgentType), String> {
         let s = s.as_ref();
 
         if let Some((agent_type, param_list)) = s.split_once('(') {
             if let Some(param_list) = param_list.strip_suffix(')') {
                 let agent_type = resolver.resolve_agent_type(agent_type).await?;
-                let schema = agent_type.constructor.input_schema;
-                let value = DataValue::parse(param_list, &schema)?;
-                Ok(AgentId {
-                    agent_type: agent_type.type_name,
-                    parameters: value,
-                })
+                let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
+                Ok((
+                    AgentId {
+                        agent_type: agent_type.type_name.clone(),
+                        parameters: value,
+                    },
+                    agent_type,
+                ))
             } else {
                 Err("Unexpected agent-id format - missing closing )".to_string())
             }
+        } else {
+            Err(format!(
+                "Invalid agent-id {}. Unexpected agent-id format - must be agent-type(...)",
+                s
+            ))
+        }
+    }
+
+    pub fn parse_agent_type(s: impl AsRef<str>) -> Result<String, String> {
+        let s = s.as_ref();
+        if let Some((agent_type, _)) = s.split_once('(') {
+            Ok(agent_type.to_string())
         } else {
             Err("Unexpected agent-id format - must be agent-type(...)".to_string())
         }
@@ -665,6 +695,6 @@ where
 impl AgentTypeResolver for &ComponentMetadata {
     async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
         let result = self.find_agent_type(agent_type).await?;
-        result.ok_or_else(|| format!("Agent type not found: {}", agent_type))
+        result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

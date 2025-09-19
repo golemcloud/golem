@@ -5,6 +5,11 @@ import {
     description,
 } from '@golemcloud/golem-ts-sdk';
 
+type CustomData = {
+    data: string;
+    value: number;
+}
+
 @agent()
 class AssistantAgent extends BaseAgent {
     @prompt("Ask your question")
@@ -12,12 +17,12 @@ class AssistantAgent extends BaseAgent {
     async ask(name: string): Promise<string> {
         const customData = { data: "Sample data", value: 42 };
 
-        const remoteWeatherClient = WeatherAgent.get("my-user");
+        const remoteWeatherClient = WeatherAgent.get("Jon");
         const remoteWeather = await remoteWeatherClient.getWeather(name, customData);
 
         return (
-            `Hello! I'm the assistant agent (${this.getId()}) reporting on the weather in ${name}. ` +
-            `Here’s what the weather agent says: "\n${remoteWeather}\n". `
+            `${this.getId().value}) reporting on the weather in ${name}: ` +
+            remoteWeather
         );
     }
 }
@@ -35,13 +40,7 @@ class WeatherAgent extends BaseAgent {
     @description("Weather forecast weather for you")
     async getWeather(name: string, param2: CustomData): Promise<string> {
         return Promise.resolve(
-            `Hi ${this.userName} Weather in ${name} is sunny. Params passed: ${name} ${JSON.stringify(param2)}. ` +
-            `Computed by weather-agent ${this.getId()}. `
+            `Weather in ${name} is sunny.`
         );
     }
-}
-
-interface CustomData {
-    data: String;
-    value: number;
 }

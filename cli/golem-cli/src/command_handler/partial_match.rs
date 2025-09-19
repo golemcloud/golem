@@ -23,7 +23,6 @@ use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
 use crate::log::Output::Stdout;
 use crate::log::{log_action, logln, set_log_output, LogColorize};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::component::show_exported_functions;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};
 use crate::model::{ComponentNameMatchKind, Format};
@@ -151,12 +150,7 @@ impl ErrorHandler {
                         "ok".green(),
                         project_formatted,
                         worker_name_match.component_name.0.log_color_highlight(),
-                        worker_name_match
-                            .worker_name
-                            .as_ref()
-                            .map(|s| s.0.as_str())
-                            .unwrap_or("-")
-                            .log_color_highlight(),
+                        worker_name_match.worker_name.0.log_color_highlight(),
                         match worker_name_match.component_name_match_kind {
                             ComponentNameMatchKind::AppCurrentDir =>
                                 "component was selected based on current dir",
@@ -174,14 +168,24 @@ impl ErrorHandler {
                     .component(
                         worker_name_match.project.as_ref(),
                         (&worker_name_match.component_name).into(),
-                        worker_name_match.worker_name.as_ref().map(|wn| wn.into()),
+                        Some((&worker_name_match.worker_name).into()),
                     )
                     .await
                 {
-                    log_text_view(&AvailableFunctionNamesHelp {
-                        component_name: worker_name_match.component_name.0,
-                        function_names: show_exported_functions(component.metadata.exports(), true),
-                    });
+                    let agent_type = self
+                        .ctx
+                        .worker_handler()
+                        .validate_worker_and_function_names(
+                            &component,
+                            &worker_name_match.worker_name,
+                            None,
+                        )
+                        .await?;
+
+                    log_text_view(&AvailableFunctionNamesHelp::new(
+                        &component,
+                        agent_type.as_ref(),
+                    ));
                     logln("");
                 }
                 Ok(())
@@ -251,7 +255,9 @@ impl ErrorHandler {
                         self.ctx.app_handler().log_languages_help();
                     }
                     ShowClapHelpTarget::ComponentNew => {
-                        self.ctx.app_handler().log_templates_help(None, None);
+                        self.ctx
+                            .app_handler()
+                            .log_templates_help(None, None, self.ctx.dev_mode());
                     }
                     ShowClapHelpTarget::ComponentAddDependency => {}
                 }

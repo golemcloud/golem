@@ -34,9 +34,9 @@ use anyhow::{anyhow, bail, Context};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use itertools::Itertools;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 pub struct ApplicationContext {
     pub loaded_with_warnings: bool,
@@ -49,6 +49,7 @@ pub struct ApplicationContext {
     component_generated_base_wit_deps: HashMap<AppComponentName, WitDepsResolver>,
     selected_component_names: BTreeSet<AppComponentName>,
     remote_components: RemoteComponents,
+    tools_with_ensured_common_deps: RwLock<HashSet<String>>,
 }
 
 pub struct ApplicationPreloadResult {
@@ -111,6 +112,7 @@ impl ApplicationContext {
                             temp_dir,
                             offline,
                         ),
+                        tools_with_ensured_common_deps: RwLock::new(HashSet::new()),
                     }
                 })
             }),
@@ -634,6 +636,31 @@ impl ApplicationContext {
 
         Ok(())
     }
+
+    pub fn ensure_common_deps_for_tool_once(
+        &self,
+        tool: &str,
+        ensure: impl FnOnce() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        if self
+            .tools_with_ensured_common_deps
+            .read()
+            .unwrap()
+            .contains(tool)
+        {
+            return Ok(());
+        }
+
+        let mut lock = self.tools_with_ensured_common_deps.write().unwrap();
+
+        let result = ensure();
+
+        if result.is_ok() {
+            lock.insert(tool.to_string());
+        }
+
+        result
+    }
 }
 
 fn load_app(
@@ -787,7 +814,7 @@ fn find_main_source() -> Option<PathBuf> {
     last_source
 }
 
-fn to_anyhow<T>(
+pub fn to_anyhow<T>(
     message: &str,
     result: ValidatedResult<T>,
     mark_had_warns: Option<fn(T) -> T>,

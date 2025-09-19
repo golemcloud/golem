@@ -278,6 +278,6 @@ mod tests {
         env::set_current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
             .expect("Failed to set current directory");
 
-        make_config_loader().load().expect("Failed to load config");
+        let _ = make_config_loader().load().expect("Failed to load config");
     }
 }

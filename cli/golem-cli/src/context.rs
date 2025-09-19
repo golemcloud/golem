@@ -79,6 +79,8 @@ pub struct Context {
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
+    dev_mode: bool,
+    server_no_limit_change: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -108,8 +110,10 @@ impl Context {
         let config_dir = global_flags.config_dir();
         let local_server_auto_start = global_flags.local_server_auto_start;
         let show_sensitive = global_flags.show_sensitive;
+        let server_no_limit_change = global_flags.server_no_limit_change;
 
         let mut yes = global_flags.yes;
+        let dev_mode = global_flags.dev_mode;
         let mut update_or_redeploy = UpdateOrRedeployArgs::none();
 
         let mut app_context_config = ApplicationContextConfig::new(global_flags);
@@ -150,7 +154,7 @@ impl Context {
             }
 
             if manifest_profile.redeploy_workers == Some(true) {
-                update_or_redeploy.redeploy_workers = true;
+                update_or_redeploy.redeploy_agents = true;
             }
 
             if manifest_profile.redeploy_http_api == Some(true) {
@@ -218,7 +222,9 @@ impl Context {
             auth_token_override: auth_token,
             project,
             yes,
+            dev_mode,
             show_sensitive,
+            server_no_limit_change,
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -257,12 +263,20 @@ impl Context {
         self.yes
     }
 
+    pub fn dev_mode(&self) -> bool {
+        self.dev_mode
+    }
+
     pub fn show_sensitive(&self) -> bool {
         self.show_sensitive
     }
 
     pub fn update_or_redeploy(&self) -> &UpdateOrRedeployArgs {
         &self.update_or_redeploy
+    }
+
+    pub fn server_no_limit_change(&self) -> bool {
+        self.server_no_limit_change
     }
 
     pub async fn silence_app_context_init(&self) {
@@ -443,14 +457,16 @@ impl Context {
         let rib_repl_state = self.rib_repl_state.read().await;
         ReplComponentDependencies {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
+            custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
         }
     }
 
     pub fn templates(
         &self,
+        dev_mode: bool,
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
-            .get_or_init(golem_templates::all_composable_app_templates)
+            .get_or_init(|| golem_templates::all_composable_app_templates(dev_mode))
     }
 
     pub async fn select_account_by_email_or_error(
@@ -829,6 +845,7 @@ impl Default for RibReplState {
         Self {
             dependencies: ReplComponentDependencies {
                 component_dependencies: vec![],
+                custom_instance_spec: vec![],
             },
         }
     }

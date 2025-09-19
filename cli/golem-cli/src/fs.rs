@@ -480,6 +480,10 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
     let mut resolved_path = PathBuf::new();
     let mut prefix_ended = false;
 
+    for component in base_dir.as_ref().components() {
+        prefix_path.push( component );
+    }
+
     for component in path.components() {
         match &component {
             Component::Prefix(_) => {
@@ -517,7 +521,7 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
     }
 
     Ok((
-        base_dir.as_ref().join(prefix_path),
+        prefix_path.clone(),
         PathExtra::new(resolved_path).to_string()?,
     ))
 }
@@ -557,6 +561,7 @@ mod test {
     use test_r::test;
 
     #[test]
+    #[cfg(not(windows))]
     fn resolve_relative_globs() {
         let base_dir = PathBuf::from("somedir/somewhere");
 
@@ -572,6 +577,27 @@ mod test {
         check!(
             resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap()
                 == (base_dir.join("../../../"), "target/a".to_string())
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn resolve_relative_globs() {
+        let base_dir = PathBuf::from("somedir/somewhere");
+        let expect_base_dir = PathBuf::from("somedir\\somewhere");
+
+        check!(resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string()));
+        check!(
+            resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
+                == (expect_base_dir.clone(), "somepath\\a\\b\\c".to_string())
+        );
+        check!(
+            resolve_relative_glob(&base_dir, "../../target").unwrap()
+                == (expect_base_dir.join("..\\.."), "target".to_string())
+        );
+        check!(
+            resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap()
+                == (expect_base_dir.join("..\\..\\.."), "target\\a".to_string())
         );
     }
 }

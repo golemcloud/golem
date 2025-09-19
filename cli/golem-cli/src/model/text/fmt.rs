@@ -163,7 +163,9 @@ pub fn format_stack(stack: &str) -> String {
     stack
         .lines()
         .map(|line| {
-            if line.contains("<unknown>!<wasm function") {
+            if line.contains("called without being linked with an implementation") {
+                line.red().bold().to_string()
+            } else if line.contains("<unknown>!<wasm function") {
                 line.bright_black().to_string()
             } else {
                 line.yellow().to_string()
@@ -521,12 +523,6 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
             None => "".to_string(),
         },
         worker_name_match.component_name.0.blue().bold(),
-        worker_name_match
-            .worker_name
-            .as_ref()
-            .map(|wn| wn.0.as_str())
-            .unwrap_or("-")
-            .green()
-            .bold(),
+        worker_name_match.worker_name.0.green().bold(),
     )
 }

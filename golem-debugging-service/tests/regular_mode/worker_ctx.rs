@@ -1,5 +1,6 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -71,6 +72,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -99,6 +101,7 @@ impl WorkerCtx for TestWorkerCtx {
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
+            agent_id,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -150,6 +153,10 @@ impl WorkerCtx for TestWorkerCtx {
         self.durable_ctx.owned_worker_id()
     }
 
+    fn agent_id(&self) -> Option<AgentId> {
+        self.durable_ctx.agent_id()
+    }
+
     fn created_by(&self) -> &AccountId {
         self.durable_ctx.created_by()
     }
@@ -197,7 +204,8 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
             debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
-            Ok(self.durable_ctx.increase_memory(delta).await?)
+            self.durable_ctx.increase_memory(delta).await?;
+            Ok(true)
         } else {
             Ok(true)
         }

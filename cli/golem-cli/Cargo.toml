@@ -59,7 +59,6 @@ clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
-envsubst = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
@@ -73,8 +72,9 @@ iso8601 = { workspace = true }
 itertools = { workspace = true }
 lenient_bool = { workspace = true }
 minijinja = { workspace = true }
-# moonbit-component-generator = { workspace = true }
+moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
+nanoid = { workspace = true }
 nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }
@@ -124,10 +124,9 @@ webbrowser = { workspace = true }
 warp = { workspace = true }
 
 [dev-dependencies]
-
-# External deps
 axum = { workspace = true }
 log = { workspace = true }
+pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 reqwest = { workspace = true }
 serde_json_path = { workspace = true }

@@ -21,8 +21,8 @@ use crate::rib_source_span::SourceSpan;
 use crate::rib_type_error::RibTypeErrorInternal;
 use crate::{
     from_string, text, type_checker, type_inference, ComponentDependencies, ComponentDependencyKey,
-    DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec, InferredType,
-    InstanceIdentifier, ParsedFunctionName, VariableId,
+    CustomInstanceSpec, DynamicParsedFunctionName, ExprVisitor, GlobalVariableTypeSpec,
+    InferredType, InstanceIdentifier, ParsedFunctionName, VariableId,
 };
 use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use combine::parser::char::spaces;
@@ -1138,18 +1138,23 @@ impl Expr {
     pub fn infer_types(
         &mut self,
         component_dependency: &ComponentDependencies,
-        type_spec: &Vec<GlobalVariableTypeSpec>,
+        global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
-        self.infer_types_initial_phase(component_dependency, type_spec)?;
+        self.infer_types_initial_phase(
+            component_dependency,
+            global_variable_type_spec,
+            custom_instance_spec,
+        )?;
         self.bind_instance_types();
         // Identifying the first fix point with method calls to infer all
         // worker function invocations as this forms the foundation for the rest of the
         // compilation. This is compiler doing its best to infer all the calls such
         // as worker invokes or instance calls etc.
         type_inference::type_inference_fix_point(Self::resolve_method_calls, self)?;
-        self.infer_function_call_types(component_dependency)?;
+        self.infer_function_call_types(component_dependency, custom_instance_spec)?;
         type_inference::type_inference_fix_point(
-            |x| Self::inference_scan(x, component_dependency),
+            |x| Self::inference_scan(x, component_dependency, custom_instance_spec),
             self,
         )?;
         self.check_types(component_dependency)?;
@@ -1160,16 +1165,17 @@ impl Expr {
     pub fn infer_types_initial_phase(
         &mut self,
         component_dependency: &ComponentDependencies,
-        type_spec: &Vec<GlobalVariableTypeSpec>,
+        global_variable_type_spec: &Vec<GlobalVariableTypeSpec>,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
         self.set_origin();
-        self.bind_global_variable_types(type_spec);
+        self.bind_global_variable_types(global_variable_type_spec);
         self.bind_type_annotations();
         self.bind_variables_of_list_comprehension();
         self.bind_variables_of_list_reduce();
         self.bind_variables_of_pattern_match();
         self.bind_variables_of_let_assignment();
-        self.identify_instance_creation(component_dependency)?;
+        self.identify_instance_creation(component_dependency, custom_instance_spec)?;
         self.ensure_stateful_instance();
         self.infer_variants(component_dependency);
         self.infer_enums(component_dependency);
@@ -1200,13 +1206,14 @@ impl Expr {
     pub fn inference_scan(
         &mut self,
         component_dependencies: &ComponentDependencies,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
         self.infer_all_identifiers();
         self.push_types_down()?;
         self.infer_all_identifiers();
         self.pull_types_up(component_dependencies)?;
         self.infer_global_inputs();
-        self.infer_function_call_types(component_dependencies)?;
+        self.infer_function_call_types(component_dependencies, custom_instance_spec)?;
         Ok(())
     }
 
@@ -1239,8 +1246,9 @@ impl Expr {
     pub fn identify_instance_creation(
         &mut self,
         component_dependency: &ComponentDependencies,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
-        type_inference::identify_instance_creation(self, component_dependency)
+        type_inference::identify_instance_creation(self, component_dependency, custom_instance_spec)
     }
 
     pub fn ensure_stateful_instance(&mut self) {
@@ -1250,8 +1258,13 @@ impl Expr {
     pub fn infer_function_call_types(
         &mut self,
         component_dependency: &ComponentDependencies,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), RibTypeErrorInternal> {
-        type_inference::infer_function_call_types(self, component_dependency)?;
+        type_inference::infer_function_call_types(
+            self,
+            component_dependency,
+            custom_instance_spec,
+        )?;
         Ok(())
     }
 

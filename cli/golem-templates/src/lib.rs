@@ -44,17 +44,9 @@ static APP_MANIFEST_HEADER: &str = indoc! {"
 # For creating APIs see https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
-static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {"
-# Example for adding dependencies for Worker to Worker communication:
-# See https://learn.golem.cloud/docs/app-manifest#fields_dependencies for more information
-#
-#dependencies:
-#  componentname:
-#  - target: <target component name to be called>
-#    type: wasm-rpc
-"};
+static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {""};
 
-fn all_templates() -> Vec<Template> {
+fn all_templates(dev_mode: bool) -> Vec<Template> {
     let mut result: Vec<Template> = vec![];
     for entry in TEMPLATES.entries() {
         if let Some(lang_dir) = entry.as_dir() {
@@ -74,7 +66,9 @@ fn all_templates() -> Vec<Template> {
                                 template_dir.path(),
                             );
 
-                            result.push(template);
+                            if dev_mode || !template.dev_only {
+                                result.push(template);
+                            }
                         }
                     }
                 }
@@ -87,7 +81,7 @@ fn all_templates() -> Vec<Template> {
 }
 
 pub fn all_standalone_templates() -> Vec<Template> {
-    all_templates()
+    all_templates(true)
         .into_iter()
         .filter(|template| matches!(template.kind, TemplateKind::Standalone))
         .collect()
@@ -100,6 +94,7 @@ pub struct ComposableAppTemplate {
 }
 
 pub fn all_composable_app_templates(
+    dev_mode: bool,
 ) -> BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
     let mut templates =
         BTreeMap::<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>::new();
@@ -119,7 +114,7 @@ pub fn all_composable_app_templates(
         groups.get_mut(group).unwrap()
     }
 
-    for template in all_templates() {
+    for template in all_templates(dev_mode) {
         match &template.kind {
             TemplateKind::Standalone => continue,
             TemplateKind::ComposableAppCommon { group, .. } => {
@@ -648,5 +643,6 @@ fn parse_template(
             .map(|te| te.iter().cloned().collect())
             .unwrap_or_default(),
         transform: metadata.transform.unwrap_or(true),
+        dev_only: metadata.dev_only.unwrap_or(false),
     }
 }

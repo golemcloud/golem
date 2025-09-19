@@ -20,17 +20,26 @@ use golem_cli::command_handler::CommandHandlerHooks;
 use golem_cli::context::Context;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tracing::debug;
 
 pub struct ServerCommandHandler;
 
 impl CommandHandlerHooks for ServerCommandHandler {
     async fn handler_server_commands(
         &self,
-        _ctx: Arc<Context>,
+        ctx: Arc<Context>,
         subcommand: ServerSubcommand,
     ) -> anyhow::Result<()> {
         match subcommand {
             ServerSubcommand::Run { args } => {
+                if !ctx.server_no_limit_change() {
+                    let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
+                    debug!(
+                        "File limit increase result: {:?}",
+                        file_limit_increase_result
+                    );
+                }
+
                 let data_dir = match &args.data_dir {
                     Some(data_dir) => data_dir.to_path_buf(),
                     None => default_data_dir()?,

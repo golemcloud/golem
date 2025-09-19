@@ -94,6 +94,16 @@ impl DockerPostgresRdb {
         db_info.public_connection_string()
     }
 
+    pub fn public_connection_string_with_user(&self, username: &str, password: &str) -> String {
+        let db_info = PostgresInfo {
+            username: username.to_string(),
+            password: password.to_string(),
+            ..self.info.clone()
+        };
+
+        db_info.public_connection_string()
+    }
+
     pub fn private_connection_string(&self) -> String {
         self.info.private_connection_string()
     }

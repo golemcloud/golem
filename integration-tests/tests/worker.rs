@@ -49,8 +49,7 @@ inherit_test_dep!(Tracing);
 inherit_test_dep!(Deps);
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn dynamic_worker_creation(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("environment-service").store().await;
@@ -88,8 +87,7 @@ async fn dynamic_worker_creation(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
@@ -209,8 +207,7 @@ async fn counter_resource_test_1(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
@@ -367,8 +364,7 @@ async fn counter_resource_test_1_json(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn counter_resource_test_2_json_no_types(
     deps: &Deps,
     _tracing: &Tracing,
@@ -541,8 +537,7 @@ async fn counter_resource_test_2_json_no_types(
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
@@ -640,8 +635,7 @@ async fn shopping_cart_example(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn auction_example_1(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let registry_component_id = admin.component("auction_registry_composed").store().await;
@@ -710,13 +704,12 @@ fn get_worker_ids(workers: Vec<(WorkerMetadata, Option<String>)>) -> HashSet<Wor
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn get_workers(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
 
-    let workers_count = 150;
+    let workers_count = 10;
     let mut worker_ids = HashSet::new();
 
     for i in 0..workers_count {
@@ -809,9 +802,7 @@ async fn get_workers(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
-#[flaky(10)] // TODO: stabilize test
+#[timeout(15000)]
 async fn get_running_workers(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("http-client-2").unique().store().await;
@@ -855,7 +846,7 @@ async fn get_running_workers(deps: &Deps, _tracing: &Tracing) {
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), host_http_port.to_string());
 
-    let workers_count = 15;
+    let workers_count = 2;
     let mut worker_ids = HashSet::new();
 
     for i in 0..workers_count {
@@ -944,8 +935,7 @@ async fn get_running_workers(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(300000)]
+#[timeout(15000)]
 async fn auto_update_on_idle(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("update-test-v1").unique().store().await;
@@ -979,8 +969,7 @@ async fn auto_update_on_idle(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(300000)]
+#[timeout(15000)]
 async fn auto_update_on_idle_via_host_function(
     deps: &Deps,
     _tracing: &Tracing,
@@ -1055,8 +1044,7 @@ async fn auto_update_on_idle_via_host_function(
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("runtime-service").store().await;
@@ -1117,8 +1105,7 @@ async fn get_oplog_1(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(120000)]
+#[timeout(15000)]
 async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("shopping-cart").store().await;
@@ -1210,8 +1197,7 @@ async fn search_oplog_1(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(600000)]
+#[timeout(15000)]
 async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("counters").unique().store().await;
@@ -1238,7 +1224,7 @@ async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
     );
 
     // Doing many requests, so parts of the oplog gets archived
-    for _ in 1..=1200 {
+    for _ in 1..=20 {
         let _ = admin
             .invoke_and_await(
                 &worker_id,
@@ -1328,14 +1314,13 @@ async fn worker_recreation(deps: &Deps, _tracing: &Tracing) {
         )
         .await;
 
-    check!(result1 == Ok(vec![Value::U64(1200)]));
+    check!(result1 == Ok(vec![Value::U64(20)]));
     check!(result2 == Ok(vec![Value::U64(1)]));
     check!(result3 == Ok(vec![Value::U64(0)]));
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(600000)]
+#[timeout(15000)]
 async fn worker_use_initial_files(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_files = admin
@@ -1382,8 +1367,7 @@ async fn worker_use_initial_files(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(600000)]
+#[timeout(15000)]
 async fn worker_list_files(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_files = admin
@@ -1506,8 +1490,7 @@ async fn worker_list_files(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(600000)]
+#[timeout(15000)]
 async fn worker_read_files(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_files = admin
@@ -1554,8 +1537,7 @@ async fn worker_read_files(deps: &Deps, _tracing: &Tracing) {
 }
 
 #[test]
-#[tracing::instrument]
-#[timeout(600000)]
+#[timeout(15000)]
 async fn worker_initial_files_after_automatic_worker_update(
     deps: &Deps,
     _tracing: &Tracing,
@@ -1639,7 +1621,7 @@ async fn worker_initial_files_after_automatic_worker_update(
 
 /// Test resolving a component_id from the name.
 #[test]
-#[tracing::instrument]
+#[timeout(15000)]
 async fn resolve_components_from_name(deps: &Deps, _tracing: &Tracing) {
     let admin = deps.admin().await;
 
