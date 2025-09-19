@@ -124,11 +124,13 @@ export interface InterfaceType {
     unionPropInlined: string | number;
 }
 
-export type ResultKindBothOptional = {
+export type ResultLikeWithNoTag = {
     ok?: string;
     err?: string;
 };
 
-export type ResultExact = { tag: 'ok'; val: string; } | { tag: 'err'; val: string; };
+export type ResultLike = { tag: 'okay'; value: string; } | { tag: 'error'; value?: string; };
 
-export type ResultLike = { tag: 'okay'; val: string; } | { tag: 'error'; val?: string; };
+// Result exact doesn't work.
+export type ResultExact = { tag: 'ok'; value: string; } | { tag: 'err'; value: string; };
+

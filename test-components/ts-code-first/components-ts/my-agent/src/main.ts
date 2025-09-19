@@ -17,7 +17,7 @@ import {
     NumberType,
     StringType,
     BooleanType,
-    MapType, TupleComplexType, TupleType, ListComplexType, ResultKindBothOptional, ResultExact, ResultLike,
+    MapType, TupleComplexType, TupleType, ListComplexType, ResultLikeWithNoTag, ResultExact, ResultLike,
 } from './model';
 
 
@@ -45,7 +45,19 @@ class FooAgent extends BaseAgent {
                 n: 1
             },
             numberProp: 0,
-            objectComplexProp: {a: "foo", b: 1, c: true, d: {a: "foo", b: 1, c: true}, e: 1, f: ["foo"], g: [{a: "foo", b: 1, c: true}], h: ["foo", 1, false], i: ["foo", 1, {a: "foo", b: 1, c: true}], j: new Map(), k: { n: 1}},
+            objectComplexProp: {
+                a: "foo",
+                b: 1,
+                c: true,
+                d: {a: "foo", b: 1, c: true},
+                e: 1,
+                f: ["foo"],
+                g: [{a: "foo", b: 1, c: true}],
+                h: ["foo", 1, false],
+                i: ["foo", 1, {a: "foo", b: 1, c: true}],
+                j: new Map(),
+                k: {n: 1}
+            },
             objectProp: {a: "foo", b: 1, c: true},
             objectPropInlined: {a: "", b: 0, c: false},
             optionalProp: 0,
@@ -62,7 +74,7 @@ class FooAgent extends BaseAgent {
             unionPropInlined: "afsal"
         }
 
-        this.barAgent = BarAgent.get();
+        this.barAgent = BarAgent.get(interfaceType, null, 1);
 
         this.input = input;
     }
@@ -79,11 +91,8 @@ class FooAgent extends BaseAgent {
         tupleType: Types.TupleType,
         listComplexType: Types.ListComplexType,
         objectType: Types.ObjectType,
-        unionWithLiterals: UnionWithLiterals,
-        textType: UnstructuredText,
-        eitherType: ResultExact,
-        eitherBothOptional: ResultKindBothOptional,
-        eitherOneOptional: ResultLike,
+        resultLike: ResultLike,
+        resultLikeWithNoTag: ResultLikeWithNoTag,
         unionWithNull: string | number | null,
         objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
         objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
@@ -92,7 +101,6 @@ class FooAgent extends BaseAgent {
         optionalStringType: string | undefined,
         optionalUnionType: UnionType | undefined,
         taggedUnionType: TaggedUnion,
-        //        unionWithOnlyLiterals: UnionWithOnlyLiterals,
     ): Types.PromiseType {
         return await this.barAgent.funAll(
             complexType,
@@ -106,11 +114,8 @@ class FooAgent extends BaseAgent {
             tupleType,
             listComplexType,
             objectType,
-            //unionWithLiterals,
-            // textType,
-            // eitherType,
-            eitherBothOptional,
-            //eitherOneOptional,
+            resultLike,
+            resultLikeWithNoTag,
             unionWithNull,
             objectWithUnionWithUndefined1,
             objectWithUnionWithUndefined2,
@@ -122,13 +127,13 @@ class FooAgent extends BaseAgent {
         )
     }
 
-    async funOptional(  param1: string | number | null,
-                        param2: ObjectWithUnionWithUndefined1,
-                        param3: ObjectWithUnionWithUndefined2,
-                        param4: ObjectWithUnionWithUndefined3,
-                        param5: ObjectWithUnionWithUndefined4,
-                        param6: string | undefined,
-                        param7: UnionType | undefined,) {
+    async funOptional(param1: string | number | null,
+                      param2: ObjectWithUnionWithUndefined1,
+                      param3: ObjectWithUnionWithUndefined2,
+                      param4: ObjectWithUnionWithUndefined3,
+                      param5: ObjectWithUnionWithUndefined4,
+                      param6: string | undefined,
+                      param7: UnionType | undefined,) {
         const concatenatedResult = {
             param1: param1,
             param2: param2.a,
@@ -144,7 +149,7 @@ class FooAgent extends BaseAgent {
 
 
     async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
-        return  await this.barAgent.funObjectComplexType(text);
+        return await this.barAgent.funObjectComplexType(text);
     }
 
 
@@ -197,10 +202,10 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funObjectType(objectType);
     }
 
-    // Unnable to convert `{ kind: 'variant', caseIdx: 0, caseValue: undefined }` to `union`
-    async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
-        return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
-    }
+    // FIXME: runtime error:
+    // async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
+    //     return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
+    // }
 
 
     async funVoidReturn(text: string): Promise<void> {
@@ -217,25 +222,22 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUndefinedReturn(text);
     }
 
-    // Doesn't work when directly called
     async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
         return await this.barAgent.funUnstructuredText(unstructuredText);
     }
 
-    // Doesn't work with REPL
-    // [cause] type mismatch. expected variant {ok(string), err(option<string>) }
-    // [help] invalid argument to the function `fun-either-one-optional`
-    async funEitherOptional(eitherBothOptional: ResultKindBothOptional): Promise<ResultKindBothOptional> {
-        return await this.barAgent.funEitherOptional(eitherBothOptional);
+    async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
+        return await this.barAgent.funResultNoTag(eitherBothOptional);
     }
 
-    async funEither(either: ResultExact): Promise<ResultExact> {
-        return await this.barAgent.funEither(either);
-    }
+    // FIXME: moonbit generation fails
+    // async funEither(either: ResultExact): Promise<ResultExact> {
+    //     return await this.barAgent.funEither(either);
+    // }
 
 
-    async funEitherOneOptional(eitherOneOptional: ResultLike): Promise<ResultLike> {
-        return await this.barAgent.funEitherOneOptional(eitherOneOptional);
+    async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
+        return await this.barAgent.funResultLike(eitherOneOptional);
     }
 
 
@@ -247,23 +249,20 @@ class FooAgent extends BaseAgent {
         return this.barAgent.funArrowSync(text);
     };
 
-    // async fun10(param: "foo" | "bar" | "baz"): Promise<UnionWithOnlyLiterals> {
-    //     return param;
-    // }
 }
 
 
 @agent()
 class BarAgent extends BaseAgent {
     constructor(
-        // readonly interfaceType: Types.InterfaceType,
-        // readonly optionalStringType: string | null,
-        // readonly optionalUnionType: UnionType | null,
+        readonly interfaceType: Types.InterfaceType,
+        readonly optionalStringType: string | null,
+        readonly optionalUnionType: UnionType | null,
     ) {
         super();
-        // this.interfaceType = interfaceType;
-        // this.optionalStringType = optionalStringType;
-        // this.optionalUnionType = optionalUnionType;
+        this.interfaceType = interfaceType;
+        this.optionalStringType = optionalStringType;
+        this.optionalUnionType = optionalUnionType;
     }
 
     // A function that takes all complex types
@@ -280,11 +279,8 @@ class BarAgent extends BaseAgent {
         tupleType: Types.TupleType,
         listComplexType: Types.ListComplexType,
         objectType: Types.ObjectType,
-        // unionWithLiterals: UnionWithLiterals,
-        //  textType: UnstructuredText,
-        // eitherType: Either,
-        eitherBothOptional: ResultKindBothOptional,
-        // eitherOneOptional: EitherOneOptional,
+        resultLike: ResultLike,
+        resultLikeWithNoTag: ResultLikeWithNoTag,
         unionWithNull: string | number | null,
         objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
         objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
@@ -293,20 +289,19 @@ class BarAgent extends BaseAgent {
         optionalStringType: string | undefined,
         optionalUnionType: UnionType | undefined,
         taggedUnionType: TaggedUnion,
-        //        unionWithOnlyLiterals: UnionWithOnlyLiterals,
     ): Types.PromiseType {
         return Promise.resolve(`Weather for is sunny!`);
     }
 
 
     // Works
-    async funOptional(  param1: string | number | null,
-                        param2: ObjectWithUnionWithUndefined1,
-                        param3: ObjectWithUnionWithUndefined2,
-                        param4: ObjectWithUnionWithUndefined3,
-                        param5: ObjectWithUnionWithUndefined4,
-                        param6: string | undefined,
-                        param7: UnionType | undefined,) {
+    async funOptional(param1: string | number | null,
+                      param2: ObjectWithUnionWithUndefined1,
+                      param3: ObjectWithUnionWithUndefined2,
+                      param4: ObjectWithUnionWithUndefined3,
+                      param5: ObjectWithUnionWithUndefined4,
+                      param6: string | undefined,
+                      param7: UnionType | undefined,) {
         const concatenatedResult = {
             param1: param1,
             param2: param2.a,
@@ -401,18 +396,18 @@ class BarAgent extends BaseAgent {
         return unstructuredText
     }
 
-    // works
-    async funEitherOptional(eitherBothOptional: ResultKindBothOptional): Promise<ResultKindBothOptional> {
+    //works
+    async funResultNoTag(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
         return eitherBothOptional
     }
 
-    // no
-    async funEither(either: ResultExact): Promise<ResultExact> {
-        return either
-    }
+    // doesn't work - moonbit generation fails
+    // async funEither(either: ResultExact): Promise<ResultExact> {
+    //     return either
+    // }
 
     // no
-    async funEitherOneOptional(eitherOneOptional: ResultLike): Promise<ResultLike> {
+    async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return eitherOneOptional
     }
 
