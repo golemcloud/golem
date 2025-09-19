@@ -30,5 +30,5 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         ),
     );
 
-    golem_common::model::agent::extraction::extract_agent_types(wasm_path).await
+    golem_common::model::agent::extraction::extract_agent_types(wasm_path, true).await
 }

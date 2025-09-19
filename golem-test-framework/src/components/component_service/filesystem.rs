@@ -128,7 +128,11 @@ impl FileSystemComponentService {
         let agent_types = if skip_analysis {
             vec![]
         } else {
-            extract_agent_types(&target_path).await.unwrap_or_default()
+            extract_agent_types(&target_path, false)
+                .await
+                .map_err(|err| {
+                    AddComponentError::Other(format!("Failed analyzing component: {err}"))
+                })?
         };
 
         let size = tokio::fs::metadata(&target_path)
