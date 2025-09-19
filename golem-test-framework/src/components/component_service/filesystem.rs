@@ -128,7 +128,11 @@ impl FileSystemComponentService {
         let agent_types = if skip_analysis {
             vec![]
         } else {
-            extract_agent_types(&target_path).await.unwrap_or_default()
+            extract_agent_types(&target_path, false)
+                .await
+                .map_err(|err| {
+                    AddComponentError::Other(format!("Failed analyzing component: {err}"))
+                })?
         };
 
         let size = tokio::fs::metadata(&target_path)
@@ -264,7 +268,6 @@ impl ComponentService for FileSystemComponentService {
         unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
-        agentic: bool,
     ) -> Component {
         self.add_component(
             token,
@@ -276,7 +279,6 @@ impl ComponentService for FileSystemComponentService {
             unverified,
             env,
             project_id,
-            agentic,
         )
         .await
         .expect("Failed to add component")
@@ -293,7 +295,6 @@ impl ComponentService for FileSystemComponentService {
         unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
-        _agentic: bool,
     ) -> Result<Component, AddComponentError> {
         self.write_component_to_filesystem(
             local_path,

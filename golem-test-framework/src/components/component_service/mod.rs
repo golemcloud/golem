@@ -359,7 +359,6 @@ pub trait ComponentService: Send + Sync {
         unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
-        agentic: bool,
     ) -> Component {
         let mut retries = 10;
         loop {
@@ -440,7 +439,6 @@ pub trait ComponentService: Send + Sync {
                     unverified,
                     env,
                     project_id.clone(),
-                    agentic,
                 )
                 .await
             {
@@ -488,15 +486,12 @@ pub trait ComponentService: Send + Sync {
         _unverified: bool,
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
-        agentic: bool,
     ) -> Result<Component, AddComponentError> {
-        let agent_types = if agentic {
-            extract_agent_types(local_path).await.map_err(|err| {
+        let agent_types = extract_agent_types(local_path, false)
+            .await
+            .map_err(|err| {
                 AddComponentError::Other(format!("Failed analyzing component: {err}"))
-            })?
-        } else {
-            Vec::new()
-        };
+            })?;
 
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
