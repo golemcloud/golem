@@ -92,14 +92,14 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(elementSchema1).toEqual(expected);
 
-    // const elementSchema2 = getElementSchema(
-    //   complexAgentMethod!.inputSchema,
-    //   'unstructuredBinary',
-    // );
-    //
-    // const expected2 = { tag: 'unstructured-binary', val: {} };
-    //
-    // expect(elementSchema2).toEqual(expected2);
+    const elementSchema2 = getElementSchema(
+      complexAgentMethod!.inputSchema,
+      'unstructuredBinary',
+    );
+
+    const expected2 = { tag: 'unstructured-binary', val: {} };
+
+    expect(elementSchema2).toEqual(expected2);
   });
 
   it('should handle UnstructuredBinary in constructor params', () => {
