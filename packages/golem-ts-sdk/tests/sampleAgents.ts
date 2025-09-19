@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, AgentId, BaseAgent, UnstructuredText } from '../src';
+import {
+  agent,
+  AgentId,
+  BaseAgent,
+  UnstructuredBinary,
+  UnstructuredText,
+} from '../src';
 import * as Types from './testTypes';
 import {
   EitherX,
@@ -30,7 +36,7 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { languageCodes } from '../src/decorators';
+import { languageCodes, mimeTypes } from '../src/decorators';
 
 @agent()
 class SimpleAgent extends BaseAgent {
@@ -138,9 +144,16 @@ class ComplexAgent extends BaseAgent {
     readonly testInterfaceType: Types.TestInterfaceType,
     readonly optionalStringType: string | null,
     readonly optionalUnionType: UnionType | null,
+
     readonly unstructuredText: UnstructuredText,
+
     @languageCodes(['en'])
     readonly unstructuredTextWithLanguageCode: UnstructuredText,
+
+    readonly unstructuredBinary: UnstructuredBinary,
+
+    @mimeTypes(['application/json'])
+    readonly unstructuredBinaryWithMimeType: UnstructuredBinary,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;
@@ -178,7 +191,14 @@ class ComplexAgent extends BaseAgent {
     resultTypeNonExact: ResultTypeNonExact,
     resultTypeNonExact2: ResultTypeNonExact2,
     unstructuredText: UnstructuredText,
-    @languageCodes(['en']) unstructuredTextWithLanguageCode: UnstructuredText,
+
+    @languageCodes(['en'])
+    unstructuredTextWithLanguageCode: UnstructuredText,
+
+    unstructuredBinary: UnstructuredBinary,
+
+    @mimeTypes(['application/json'])
+    unstructuredBinaryWithMimeType: UnstructuredBinary,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

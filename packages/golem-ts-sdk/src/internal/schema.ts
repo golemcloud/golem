@@ -72,6 +72,27 @@ export function getConstructorDataSchema(
         return Either.right(result);
       }
 
+      if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+        const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
+
+        const mimeTypes = metadata?.get(paramInfo.name)?.mimeTypes;
+
+        const elementSchema: ElementSchema = mimeTypes
+          ? {
+              tag: 'unstructured-binary',
+              val: {
+                restrictions: mimeTypes.map((mimeType) => ({
+                  mimeType: mimeType,
+                })),
+              },
+            }
+          : { tag: 'unstructured-binary', val: {} };
+
+        const result: [string, ElementSchema] = [paramInfo.name, elementSchema];
+
+        return Either.right(result);
+      }
+
       const witType = WitType.fromTsType(
         paramInfo.type,
         Option.some(
@@ -249,6 +270,27 @@ function convertToElementSchema(
           },
         }
       : { tag: 'unstructured-text', val: {} };
+
+    return Either.right(elementSchema);
+  }
+
+  if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+    const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
+
+    const parameterMetadata = methodMetadata?.get(methodName);
+
+    const mimeTypes = parameterMetadata?.get(parameterName)?.mimeTypes;
+
+    const elementSchema: ElementSchema = mimeTypes
+      ? {
+          tag: 'unstructured-binary',
+          val: {
+            restrictions: mimeTypes.map((mimeType) => ({
+              mimeType: mimeType,
+            })),
+          },
+        }
+      : { tag: 'unstructured-binary', val: {} };
 
     return Either.right(elementSchema);
   }

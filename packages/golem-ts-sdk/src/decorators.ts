@@ -44,16 +44,11 @@ type Type = Type.Type;
  * Note that the method generates a `local` and `remote` client for the agent.
  * The details of these clients are explained further below.
  *
- * The `@agent()` decorator:
- * - Registers the agent type for discovery by other agents.
- * - Inspects the constructor to determine its parameter types.
- * - Inspects all methods to determine their input/output parameter types.
- * - Associates metadata such as `prompt` and `description` with the agent.
- * - Creates `.createLocal()` and `.createRemote()` factory methods on the class.
- * - Enables schema-based validation of parameters and return values.
+ * The `@agent()` decorator: Registers the agent type for discovery by other agents.
  *
  * ### Naming
  * By default, the agent name is the kebab-case of the class name.
+ *
  * Example:
  * ```ts
  * @agent()
@@ -346,6 +341,21 @@ export function agent() {
   };
 }
 
+/*
+ * Associates a list of **language codes** with a parameter in either constructor or method.
+ * languageCodes is valid only when the type is `UnstructuredText`.
+ *
+ * Example:
+ *
+ * ```ts
+ * class TextAgent extends BaseAgent {
+ *   constructor(@languageCodes(["en", "fr"]) text: UnstructuredText) {}
+ *  ..
+ * }
+ * ```
+ *
+ * @param codes A list of BCP-47 language codes (e.g., "en", "fr", "es").
+ */
 export function languageCodes(codes: string[]) {
   return function (
     target: Object,
@@ -398,6 +408,77 @@ export function languageCodes(codes: string[]) {
         methodName,
         paramName,
         codes,
+      );
+    }
+  };
+}
+
+/*
+ * Associates a list of **MIME types** with a parameter in either constructor or method.
+ * mimeTypes is valid only when the type is `UnstructuredBinary` or `UnstructuredText`.
+ *
+ * Example:
+ *
+ * ```ts
+ * class FileAgent extends BaseAgent {
+ *   constructor(@mimeTypes(["application/pdf", "image/png"]) fileContent: UnstructuredBinary) {}
+ *   ..
+ * }
+ *
+ * ```
+ *
+ * @param mimeTypes A list of MIME types (e.g., "text/plain", "application/json").
+ */
+export function mimeTypes(mimeTypes: string[]) {
+  return function (
+    target: Object,
+    propertyKey: string | symbol | undefined, // method name if its part of method or undefined if its constructor
+    parameterIndex: number, // parameter index
+  ) {
+    if (propertyKey === undefined) {
+      const agentClassName = new AgentClassName((target as Function).name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const constructorInfo = classMetadata?.constructorArgs;
+
+      if (!constructorInfo) {
+        throw new Error(
+          `Constructor metadata not found for agent ${agentClassName}. Ensure the constructor exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = constructorInfo[parameterIndex].name;
+
+      AgentConstructorParamRegistry.setMimeTypes(
+        agentClassName,
+        paramName,
+        mimeTypes,
+      );
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+
+      const methodName = String(propertyKey);
+
+      const methodInfo = classMetadata?.methods.get(methodName);
+
+      if (!methodInfo) {
+        throw new Error(
+          `Method ${methodName} not found in metadata for agent ${agentClassName}. Ensure the method exists and is not private/protected.`,
+        );
+      }
+
+      const paramName = Array.from(methodInfo.methodParams).map(
+        (paramType) => paramType[0],
+      )[parameterIndex];
+
+      AgentMethodParamRegistry.setMimeTypes(
+        agentClassName,
+        methodName,
+        paramName,
+        mimeTypes,
       );
     }
   };

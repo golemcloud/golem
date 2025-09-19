@@ -26,6 +26,7 @@ const agentMethodParamRegistry = new Map<
       AgentMethodParamNameString,
       {
         languageCode?: string[];
+        mimeTypes?: string[];
       }
     >
   >
@@ -70,5 +71,21 @@ export const AgentMethodParamRegistry = {
     const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
     const methodMeta = classMeta.get(agentMethodName)!;
     methodMeta.get(paramName)!.languageCode = languageCodes;
+  },
+
+  setMimeTypes(
+    agentClassName: AgentClassName,
+    agentMethodName: string,
+    paramName: string,
+    mimeTypes: string[],
+  ) {
+    AgentMethodParamRegistry.ensureMeta(
+      agentClassName,
+      agentMethodName,
+      paramName,
+    );
+    const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
+    const methodMeta = classMeta.get(agentMethodName)!;
+    methodMeta.get(paramName)!.mimeTypes = mimeTypes;
   },
 };

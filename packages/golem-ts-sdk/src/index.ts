@@ -28,6 +28,7 @@ export { prompt, description, agent } from './decorators';
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';
+export * from './newTypes/binaryInput';
 
 export { AgentClassName } from './newTypes/agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';

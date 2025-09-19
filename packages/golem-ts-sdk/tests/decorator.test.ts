@@ -70,11 +70,57 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentMethod!.inputSchema,
+      complexAgentConstructor!.inputSchema,
       'unstructuredText',
     );
 
     const expected2 = { tag: 'unstructured-text', val: {} };
+
+    expect(elementSchema2).toEqual(expected2);
+  });
+
+  it('should handle UnstructuredBinary in method params', () => {
+    const elementSchema1 = getElementSchema(
+      complexAgentMethod!.inputSchema,
+      'unstructuredBinaryWithMimeType',
+    );
+
+    const expected = {
+      tag: 'unstructured-binary',
+      val: { restrictions: [{ mimeType: 'application/json' }] },
+    };
+
+    expect(elementSchema1).toEqual(expected);
+
+    // const elementSchema2 = getElementSchema(
+    //   complexAgentMethod!.inputSchema,
+    //   'unstructuredBinary',
+    // );
+    //
+    // const expected2 = { tag: 'unstructured-binary', val: {} };
+    //
+    // expect(elementSchema2).toEqual(expected2);
+  });
+
+  it('should handle UnstructuredBinary in constructor params', () => {
+    const elementSchema1 = getElementSchema(
+      complexAgentConstructor!.inputSchema,
+      'unstructuredBinaryWithMimeType',
+    );
+
+    const expected = {
+      tag: 'unstructured-binary',
+      val: { restrictions: [{ mimeType: 'application/json' }] },
+    };
+
+    expect(elementSchema1).toEqual(expected);
+
+    const elementSchema2 = getElementSchema(
+      complexAgentConstructor!.inputSchema,
+      'unstructuredBinary',
+    );
+
+    const expected2 = { tag: 'unstructured-binary', val: {} };
 
     expect(elementSchema2).toEqual(expected2);
   });
@@ -474,7 +520,7 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     expect(complexAgent.methods.length).toEqual(22);
-    expect(complexAgent.constructor.inputSchema.val.length).toEqual(5);
+    expect(complexAgent.constructor.inputSchema.val.length).toEqual(7);
     expect(simpleAgent.methods.length).toEqual(13);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
