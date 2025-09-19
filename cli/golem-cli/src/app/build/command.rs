@@ -36,7 +36,7 @@ use gag::BufferRedirect;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Command, ExitStatus};
-use tracing::debug;
+use tracing::{debug, enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
@@ -118,8 +118,6 @@ async fn execute_agent_wrapper(
         .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
         .await;
 
-    let dev_mode = ctx.config.dev_mode;
-
     task_result_marker.result((|| {
         let agent_types = agent_types?;
 
@@ -142,8 +140,9 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        let redirect = (!dev_mode).then(|| BufferRedirect::stderr().ok()).flatten();
-        // let redirect = BufferRedirect::stderr().ok();
+        let redirect = (!enabled!(Level::WARN))
+            .then(|| BufferRedirect::stderr().ok())
+            .flatten();
 
         let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
             wrapper_context,
