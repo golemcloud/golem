@@ -409,8 +409,8 @@ impl ApplicationContext {
         build_app(self).await
     }
 
-    pub fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
-        execute_custom_command(self, command_name)
+    pub async fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
+        execute_custom_command(self, command_name).await
     }
 
     pub fn clean(&self) -> anyhow::Result<()> {
@@ -640,10 +640,10 @@ impl ApplicationContext {
         Ok(())
     }
 
-    pub fn ensure_common_deps_for_tool_once(
+    pub async fn ensure_common_deps_for_tool_once(
         &self,
         tool: &str,
-        ensure: impl FnOnce() -> anyhow::Result<()>,
+        ensure: impl AsyncFnOnce() -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         if self
             .tools_with_ensured_common_deps
@@ -656,7 +656,7 @@ impl ApplicationContext {
 
         let mut lock = self.tools_with_ensured_common_deps.write().unwrap();
 
-        let result = ensure();
+        let result = ensure().await;
 
         if result.is_ok() {
             lock.insert(tool.to_string());

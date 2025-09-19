@@ -23,6 +23,7 @@ use textwrap::WordSplitter;
 use tracing::debug;
 
 static LOG_STATE: LazyLock<RwLock<LogState>> = LazyLock::new(RwLock::default);
+static LOG_STATE_BUFFER: LazyLock<RwLock<Vec<String>>> = LazyLock::new(RwLock::default);
 static TERMINAL_WIDTH: OnceLock<Option<usize>> = OnceLock::new();
 static WRAP_PADDING: usize = 2;
 
@@ -30,16 +31,18 @@ fn terminal_width() -> Option<usize> {
     *TERMINAL_WIDTH.get_or_init(|| terminal_size().map(|(width, _)| width.0 as usize))
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Output {
     Stdout,
     Stderr,
     None,
     TracingDebug,
+    BufferedUntilErr,
 }
 
 struct LogState {
     indents: Vec<Option<String>>,
+    stashed_indents: Vec<Option<String>>,
     calculated_indent: String,
     max_width: Option<usize>,
     output: Output,
@@ -49,6 +52,7 @@ impl LogState {
     pub fn new() -> Self {
         Self {
             indents: Vec::new(),
+            stashed_indents: Vec::new(),
             calculated_indent: String::new(),
             max_width: terminal_width().map(|w| w - WRAP_PADDING),
             output: Output::Stdout,
@@ -65,6 +69,18 @@ impl LogState {
         self.regen_indent_prefix()
     }
 
+    pub fn stash_indent(&mut self) {
+        self.stashed_indents.clear();
+        std::mem::swap(&mut self.indents, &mut self.stashed_indents);
+        self.regen_indent_prefix();
+    }
+
+    pub fn pop_indent(&mut self) {
+        std::mem::swap(&mut self.indents, &mut self.stashed_indents);
+        self.stashed_indents.clear();
+        self.regen_indent_prefix();
+    }
+
     fn regen_indent_prefix(&mut self) {
         self.calculated_indent = String::with_capacity(self.indents.len() * 2);
         for indent in &self.indents {
@@ -75,7 +91,18 @@ impl LogState {
     }
 
     fn set_output(&mut self, output: Output) {
+        let switching_from_buffered_to_err =
+            self.output == Output::BufferedUntilErr && output == Output::Stderr;
+
         self.output = output;
+
+        if switching_from_buffered_to_err {
+            let mut buffer = LOG_STATE_BUFFER.write().unwrap();
+            for line in buffer.iter() {
+                eprintln!("{}", line);
+            }
+            buffer.clear();
+        }
     }
 }
 
@@ -85,17 +112,24 @@ impl Default for LogState {
     }
 }
 
-pub struct LogIndent;
+pub struct LogIndent {
+    stash: bool,
+}
 
 impl LogIndent {
     pub fn new() -> Self {
         LOG_STATE.write().unwrap().inc_indent(None);
-        Self
+        Self { stash: false }
     }
 
     pub fn prefix<S: AsRef<str>>(prefix: S) -> Self {
         LOG_STATE.write().unwrap().inc_indent(Some(prefix.as_ref()));
-        Self
+        Self { stash: false }
+    }
+
+    pub fn stash() -> Self {
+        LOG_STATE.write().unwrap().stash_indent();
+        Self { stash: true }
     }
 }
 
@@ -108,7 +142,11 @@ impl Default for LogIndent {
 impl Drop for LogIndent {
     fn drop(&mut self) {
         let mut state = LOG_STATE.write().unwrap();
-        state.dec_indent();
+        if self.stash {
+            state.pop_indent();
+        } else {
+            state.dec_indent();
+        }
     }
 }
 
@@ -167,7 +205,7 @@ pub fn logln_internal(message: &str) {
             textwrap::wrap(
                 message,
                 textwrap::Options::new(width)
-                    // deliberately 5 spaces, to makes this indent different from normal ones
+                    // deliberately 5 spaces, to make this indent different from normal ones
                     .subsequent_indent("     ")
                     .word_splitter(WordSplitter::NoHyphenation),
             )
@@ -188,6 +226,10 @@ pub fn logln_internal(message: &str) {
             Output::None => {}
             Output::TracingDebug => {
                 debug!("{}{}", state.calculated_indent, line);
+            }
+            Output::BufferedUntilErr => {
+                let mut buffer = LOG_STATE_BUFFER.write().unwrap();
+                buffer.push(format!("{}{}", state.calculated_indent, line.to_string()));
             }
         }
     }

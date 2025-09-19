@@ -57,7 +57,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, enabled, Level};
 use url::Url;
 use uuid::Uuid;
 
@@ -186,10 +186,16 @@ impl Context {
 
         let format = format.unwrap_or(profile.profile.config.default_format);
 
-        let log_output = log_output_for_help.unwrap_or(match format {
-            Format::Json => Output::Stderr,
-            Format::Yaml => Output::Stderr,
-            Format::Text => Output::Stdout,
+        let log_output = log_output_for_help.unwrap_or_else(|| {
+            if enabled!(Level::ERROR) {
+                match format {
+                    Format::Json => Output::Stderr,
+                    Format::Yaml => Output::Stderr,
+                    Format::Text => Output::Stdout,
+                }
+            } else {
+                Output::BufferedUntilErr
+            }
         });
 
         set_log_output(log_output);
