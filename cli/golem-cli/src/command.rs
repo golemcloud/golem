@@ -138,6 +138,16 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, global = true, display_order = 111)]
     pub dev_mode: bool,
 
+    /// Start MCP server mode
+    #[cfg(feature = "mcp")]
+    #[arg(long, global = true, display_order = 112)]
+    pub serve: bool,
+
+    /// Port for MCP server mode (default: 1232)
+    #[cfg(feature = "mcp")]
+    #[arg(long, global = true, requires = "serve", display_order = 113)]
+    pub serve_port: Option<u16>,
+
     #[command(flatten)]
     pub verbosity: Verbosity,
 
