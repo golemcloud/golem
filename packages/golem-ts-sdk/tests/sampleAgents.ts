@@ -115,25 +115,17 @@ class SimpleAgent extends BaseAgent {
     testInterfaceType: Types.TestInterfaceType,
     optionalStringType: string | null,
     optionalUnionType: UnionType | null,
-
     unstructuredText: UnstructuredText,
-
-    @languageCodes(['en'])
-    unstructuredTextWithLanguageCode: UnstructuredText,
-
     unstructuredBinary: UnstructuredBinary,
-
-    @mimeTypes(['application/json'])
-    unstructuredBinaryWithMimeType: UnstructuredBinary,
   ): Promise<void> {
     const remoteClient = ComplexAgent.get(
       testInterfaceType,
       optionalStringType,
       optionalUnionType,
       unstructuredText,
-      unstructuredTextWithLanguageCode,
+      unstructuredText,
       unstructuredBinary,
-      unstructuredBinaryWithMimeType,
+      unstructuredBinary,
     );
 
     await remoteClient.fun2('foo');
