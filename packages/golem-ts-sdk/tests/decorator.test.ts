@@ -320,10 +320,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case23', 2],
-              ['case24', 3],
-              ['case25', 4],
-              ['case26', 5],
+              ['case29', 2],
+              ['case30', 3],
+              ['case31', 4],
+              ['case32', 5],
             ],
           },
         },
@@ -360,10 +360,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case33', 2],
-              ['case34', 3],
-              ['case35', 4],
-              ['case36', 5],
+              ['case39', 2],
+              ['case40', 3],
+              ['case41', 4],
+              ['case42', 5],
             ],
           },
         },
@@ -400,8 +400,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case27', 2],
-              ['case28', 3],
+              ['case33', 2],
+              ['case34', 3],
             ],
           },
         },
@@ -450,8 +450,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case29', 3],
-              ['case30', 4],
+              ['case35', 3],
+              ['case36', 4],
             ],
           },
         },
@@ -480,8 +480,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case31', 3],
-              ['case32', 4],
+              ['case37', 3],
+              ['case38', 4],
             ],
           },
         },
@@ -521,7 +521,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
     expect(complexAgent.methods.length).toEqual(23);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(7);
-    expect(simpleAgent.methods.length).toEqual(13);
+    expect(simpleAgent.methods.length).toEqual(14);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 
