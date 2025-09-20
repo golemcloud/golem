@@ -28,6 +28,7 @@ use crate::model::{app_raw, Format, ProjectReference};
 use crate::model::{AccountDetails, AccountId, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
+use colored::control::SHOULD_COLORIZE;
 use futures_util::future::BoxFuture;
 use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
@@ -57,7 +58,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, enabled, Level};
 use url::Url;
 use uuid::Uuid;
 
@@ -81,6 +82,7 @@ pub struct Context {
     show_sensitive: bool,
     dev_mode: bool,
     server_no_limit_change: bool,
+    should_colorize: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -186,10 +188,17 @@ impl Context {
 
         let format = format.unwrap_or(profile.profile.config.default_format);
 
-        let log_output = log_output_for_help.unwrap_or(match format {
-            Format::Json => Output::Stderr,
-            Format::Yaml => Output::Stderr,
-            Format::Text => Output::Stdout,
+        let log_output = log_output_for_help.unwrap_or_else(|| {
+            if enabled!(Level::ERROR) {
+                match format {
+                    Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
+                        Output::Stderr
+                    }
+                    Format::Text => Output::Stdout,
+                }
+            } else {
+                Output::BufferedUntilErr
+            }
         });
 
         set_log_output(log_output);
@@ -229,6 +238,7 @@ impl Context {
             dev_mode,
             show_sensitive,
             server_no_limit_change,
+            should_colorize: SHOULD_COLORIZE.should_colorize(),
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -281,6 +291,10 @@ impl Context {
 
     pub fn server_no_limit_change(&self) -> bool {
         self.server_no_limit_change
+    }
+
+    pub fn should_colorize(&self) -> bool {
+        self.should_colorize
     }
 
     pub async fn silence_app_context_init(&self) {

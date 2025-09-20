@@ -93,7 +93,7 @@ impl WorkerCommandHandler {
                 agent_id: worker_name,
                 function_name,
                 arguments,
-                enqueue,
+                trigger,
                 idempotency_key,
                 stream,
                 stream_args,
@@ -103,7 +103,7 @@ impl WorkerCommandHandler {
                     worker_name,
                     &function_name,
                     arguments,
-                    enqueue,
+                    trigger,
                     idempotency_key,
                     stream,
                     stream_args,
@@ -237,7 +237,7 @@ impl WorkerCommandHandler {
         worker_name: AgentIdArgs,
         function_name: &WorkerFunctionName,
         arguments: Vec<WorkerFunctionArgument>,
-        enqueue: bool,
+        trigger: bool,
         idempotency_key: Option<IdempotencyKey>,
         stream: bool,
         stream_args: StreamArgs,
@@ -350,9 +350,9 @@ impl WorkerCommandHandler {
         )
         .await?;
 
-        if enqueue {
+        if trigger {
             log_action(
-                "Enqueueing",
+                "Triggering",
                 format!(
                     "invocation for agent {}/{}",
                     format_worker_name_match(&worker_name_match),
@@ -379,7 +379,7 @@ impl WorkerCommandHandler {
                 &function_name,
                 arguments,
                 idempotency_key.clone(),
-                enqueue,
+                trigger,
                 stream.then_some(stream_args),
             )
             .await?;
@@ -397,10 +397,10 @@ impl WorkerCommandHandler {
                     ));
             }
             None => {
-                log_action("Enqueued", "invocation");
+                log_action("Triggered", "invocation");
                 self.ctx
                     .log_handler()
-                    .log_view(&InvokeResultView::new_enqueue(idempotency_key));
+                    .log_view(&InvokeResultView::new_trigger(idempotency_key));
             }
         }
 
