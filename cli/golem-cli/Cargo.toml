@@ -124,8 +124,12 @@ wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
 
+# --- added for MCP HTTP server mode ---
+axum = { workspace = true }     # move from dev-dependencies → dependencies
+globwalk = "0.9"                # for manifest discovery
+
+
 [dev-dependencies]
-axum = { workspace = true }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
