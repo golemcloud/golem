@@ -43,11 +43,11 @@ import { UnstructuredBinary } from './newTypes/binaryInput';
 type TsType = Type.Type;
 
 /**
- * Marks a class as an Agent and registers it in the global agent registry.
- * Note that the method generates a `local` and `remote` client for the agent.
- * The details of these clients are explained further below.
  *
- * The `@agent()` decorator: Registers the agent type for discovery by other agents.
+ * The `@agent()` decorator: Marks a class as an Agent, and registers itself internally for discovery by other agents.
+ * It also adds a static `get()` method to the class, which can be used to create a remote client for the agent.
+ *
+ * Only a class that extends `BaseAgent` can be decorated with `@agent()`.
  *
  * ### Naming
  * By default, the agent name is the kebab-case of the class name.
@@ -69,12 +69,10 @@ type TsType = Type.Type;
  *
  * ### Agent parameter types
  *
- * Please note that there are a few limitations in what can be types of these parameters.
- * Please read through the documentation that list the types that are currently supported.
- *
  * - Constructor and method parameters can be any valid TypeScript type.
  * - **Enums are not supported**.
  * - Use **type aliases** for clarity and reusability.
+ *
  * ```ts
  * type Coordinates = { lat: number; lon: number };
  * type WeatherReport = { temperature: number; description: string };
@@ -103,10 +101,17 @@ type TsType = Type.Type;
  *
  * The purpose of a remote client is that it allows you to invoke the agent constructor
  * and methods of an agent (even if it's defined with in the same code) in a different container.
+ *
  * By passing the constructor parameters to `get()`, the SDK will ensure that an instance of the agent,
  * is created in a different container, and the method calls are proxied to that container.
  *
+ * `get` takes the same parameters as the constructor.
  *
+ * The main difference between `CalculatorAgent.get(10)` and `new CalculatorAgent(10)` is that
+ * the former creates or fetches a remote instance of the agent in a different container, while the latter creates a local instance.
+ * If the remote agent was already created with the same constructor parameter value, `get` will return a reference to the existing agent instead of creating a new one.
+
+ * ```ts
  * const calcRemote = CalculatorAgent.get(10);
  * calcRemote.add(5);
  * ```
@@ -180,8 +185,8 @@ export function agent() {
         initiate: (agentName: string, constructorParams: DataValue) => {
           const constructorInfo = classMetadata.constructorArgs;
 
-          const constructorParamTypes: TsType[] = constructorInfo.map(
-            (p) => p.type,
+          const constructorParamTypes: [string, TsType][] = constructorInfo.map(
+            (p) => [p.name, p.type],
           );
 
           const deserializedConstructorArgs = deserializeDataValue(
@@ -274,7 +279,7 @@ export function agent() {
 
               const returnType: TsType = methodInfo.returnType;
 
-              const paramTypeArray = Array.from(paramTypes.values());
+              const paramTypeArray = Array.from(paramTypes);
 
               const convertedArgs = deserializeDataValue(
                 methodArgs,
@@ -339,7 +344,7 @@ export function agent() {
  * @multimodal()
  * class ImageTextAgent {
  *   @multimodal()
- *   classify(input: { text: string; image: string }): string {
+ *   process(query: [string], image: [string]): string {
  *     // ...
  *   }
  * }
@@ -384,14 +389,17 @@ export function multimodal() {
  * Associates a list of **language codes** with a parameter in either constructor or method.
  * languageCodes is valid only when the type is `UnstructuredText`.
  *
- * Example:
+ *
+ * To specify the languageCodes as restrictions to `UnstructuredText` parameters,
+ * use the decorator as follows:
  *
  * ```ts
  * class TextAgent extends BaseAgent {
- *   constructor(@languageCodes(["en", "fr"]) text: UnstructuredText) {}
- *  ..
- * }
+ *  constructor(@languageCodes(["en", "fr"]) text: UnstructuredText) {}
  * ```
+ *
+ * The same can be applied to method parameters too.
+
  *
  * @param codes A list of BCP-47 language codes (e.g., "en", "fr", "es").
  */
@@ -454,7 +462,10 @@ export function languageCodes(codes: string[]) {
 
 /*
  * Associates a list of **MIME types** with a parameter in either constructor or method.
- * mimeTypes is valid only when the type is `UnstructuredBinary` or `UnstructuredText`.
+ * mimeTypes is valid only when the type is `UnstructuredBinary`.
+ *
+ * To specify the languageCodes as restrictions to `UnstructuredText` parameters,
+ * use the decorator as follows:
  *
  * Example:
  *
@@ -465,6 +476,8 @@ export function languageCodes(codes: string[]) {
  * }
  *
  * ```
+ *
+ * The same can be applied to method parameters too.
  *
  * @param mimeTypes A list of MIME types (e.g., "text/plain", "application/json").
  */
@@ -575,7 +588,7 @@ export function description(description: string) {
 
 export function deserializeDataValue(
   dataValue: DataValue,
-  paramTypes: TsType[],
+  paramTypes: [string, TsType][],
 ): any[] {
   switch (dataValue.tag) {
     case 'tuple':
@@ -593,12 +606,40 @@ export function deserializeDataValue(
 
           case 'component-model':
             const witValue = elem.val;
-            return WitValue.toTsValue(witValue, paramTypes[idx]);
+            return WitValue.toTsValue(witValue, paramTypes[idx][1]);
         }
       });
 
     case 'multimodal':
-      return [];
+      const multiModalElements = dataValue.val;
+
+
+      return multiModalElements.map(([name, elem], idx) => {
+        switch (elem.tag) {
+          case 'unstructured-text':
+            const textRef = elem.val;
+            return UnstructuredText.fromDataValue(textRef);
+
+          case 'unstructured-binary':
+            const binaryRef = elem.val;
+            return UnstructuredBinary.fromDataValue(binaryRef);
+
+          case 'component-model':
+            const witValue = elem.val;
+
+            const param =
+              paramTypes.find(([paramName]) => paramName === name);
+
+            if (!param) {
+              throw new Error(
+                `Unable to process multimodal input of elem ${elem.val}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(", ")}`,
+              );
+            }
+
+            return WitValue.toTsValue(witValue, param[1]);
+        }
+      });
+
   }
 }
 
