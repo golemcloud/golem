@@ -412,8 +412,9 @@ function testInvoke(
             throw new Error(util.format(invokeResult.val));
           })();
 
-    const result =
-      deserializeDataValue(resultDataValue, [["return-value", returnTypeInfo]])[0];
+    const result = deserializeDataValue(resultDataValue, [
+      ['return-value', returnTypeInfo],
+    ])[0];
 
     expect(result).toEqual(expectedOutput);
   });

@@ -20,6 +20,8 @@ const agentConstructorRegistry = new Map<
   AgentClassNameString,
   {
     multimodal?: boolean;
+    prompt?: string;
+    description?: string;
   }
 >();
 
@@ -38,5 +40,17 @@ export const AgentConstructorRegistry = {
     AgentConstructorRegistry.ensureMeta(agentClassName);
     const classMeta = agentConstructorRegistry.get(agentClassName.value)!;
     classMeta.multimodal = true;
+  },
+
+  setPrompt(agentClassName: AgentClassName, prompt: string) {
+    AgentConstructorRegistry.ensureMeta(agentClassName);
+    const classMeta = agentConstructorRegistry.get(agentClassName.value)!;
+    classMeta.prompt = prompt;
+  },
+
+  setDescription(agentClassName: AgentClassName, description: string) {
+    AgentConstructorRegistry.ensureMeta(agentClassName);
+    const classMeta = agentConstructorRegistry.get(agentClassName.value)!;
+    classMeta.description = description;
   },
 };

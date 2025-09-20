@@ -44,11 +44,7 @@ export const AgentMethodRegistry = {
     return agentMethodRegistry.get(agentClassName.value);
   },
 
-  setPromptName(
-    agentClassName: AgentClassName,
-    method: string,
-    prompt: string,
-  ) {
+  setPrompt(agentClassName: AgentClassName, method: string, prompt: string) {
     AgentMethodRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.prompt = prompt;

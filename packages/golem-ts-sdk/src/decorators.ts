@@ -167,7 +167,7 @@ export function agent() {
       description: agentClassName.value,
       constructor: {
         name: agentClassName.value,
-        description: `Constructs ${agentClassName}`,
+        description: `Constructs ${agentClassName.value}`,
         promptHint: 'Enter something...',
         inputSchema: constructorDataSchema,
       },
@@ -537,52 +537,114 @@ export function mimeTypes(mimeTypes: string[]) {
 }
 
 /**
- * Associates a **prompt** with a method of an agent.
+ * Associates a **prompt** with a method or constructor of an agent
  *
  * A prompt is valid only for classes that are decorated with `@agent()`.
+ * A prompt can be specified either at the class level or method level, or both.
  *
- * Example:
+ * Example of prompt at constructor (class) level and method level
+ *
  * ```ts
  * @agent()
+ * @prompt("Provide an API key for the weather service")
  * class WeatherAgent {
  *   @prompt("Provide a city name")
  *   getWeather(city: string): WeatherReport { ... }
  * }
  * ```
  *
+ *
  * @param prompt  A hint that describes what kind of input the agentic method expects.
  * They are especially useful for guiding other agents when deciding how to call this method.
  */
 export function prompt(prompt: string) {
-  return function (target: Object, propertyKey: string) {
-    const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodRegistry.setPromptName(agentClassName, propertyKey, prompt);
+  return function (
+    target: Object | Function,
+    propertyKey?: string | symbol,
+    descriptor?: PropertyDescriptor,
+  ) {
+    if (propertyKey === undefined) {
+      const className = (target as Function).name;
+      const agentClassName = new AgentClassName(className);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      AgentConstructorRegistry.setPrompt(agentClassName, prompt);
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      const methodName = String(propertyKey);
+
+      AgentMethodRegistry.setPrompt(agentClassName, methodName, prompt);
+    }
   };
 }
 
 /**
- * Associates a **description** with a method of an agent.
+ * Associates a **description** with a method or constructor of an agent.
 
- * `@description` is valid only for classes that are decorated with `@agent()`.
+ * A `description` is valid only for classes that are decorated with `@agent()`.
+ * A `description` can be specified either at the class level or method level, or both.
  *
  * Example:
  * ```ts
  * @agent()
+ * @description("An agent that provides weather information")
  * class WeatherAgent {
  *   @description("Get the current weather for a location")
  *   getWeather(city: string): WeatherReport { ... }
  * }
  * ```
- * @param description  A human-readable description of what the method does.
+ * @param description The details of what exactly the method does.
  */
 export function description(description: string) {
-  return function (target: Object, propertyKey: string) {
-    const agentClassName = new AgentClassName(target.constructor.name);
-    AgentMethodRegistry.setDescription(
-      agentClassName,
-      propertyKey,
-      description,
-    );
+  return function (
+    target: Object | Function,
+    propertyKey?: string | symbol,
+    descriptor?: PropertyDescriptor,
+  ) {
+    if (propertyKey === undefined) {
+      const className = (target as Function).name;
+      const agentClassName = new AgentClassName(className);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      AgentConstructorRegistry.setDescription(agentClassName, description);
+    } else {
+      const agentClassName = new AgentClassName(target.constructor.name);
+
+      const classMetadata = TypeMetadata.get(agentClassName.value);
+      if (!classMetadata) {
+        throw new Error(
+          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
+        );
+      }
+
+      const methodName = String(propertyKey);
+
+      AgentMethodRegistry.setDescription(
+        agentClassName,
+        methodName,
+        description,
+      );
+    }
   };
 }
 
@@ -613,7 +675,6 @@ export function deserializeDataValue(
     case 'multimodal':
       const multiModalElements = dataValue.val;
 
-
       return multiModalElements.map(([name, elem], idx) => {
         switch (elem.tag) {
           case 'unstructured-text':
@@ -627,19 +688,17 @@ export function deserializeDataValue(
           case 'component-model':
             const witValue = elem.val;
 
-            const param =
-              paramTypes.find(([paramName]) => paramName === name);
+            const param = paramTypes.find(([paramName]) => paramName === name);
 
             if (!param) {
               throw new Error(
-                `Unable to process multimodal input of elem ${elem.val}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(", ")}`,
+                `Unable to process multimodal input of elem ${elem.val}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
               );
             }
 
             return WitValue.toTsValue(witValue, param[1]);
         }
       });
-
   }
 }
 
