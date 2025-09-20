@@ -8,45 +8,22 @@ import {
     description,
 } from '@golemcloud/golem-ts-sdk';
 
-type CustomData = {
-    data: string;
-    value: number;
-}
-
 @agent()
-class AssistantAgent extends BaseAgent {
-    @prompt("Ask your question")
-    @description("This method allows the agent to answer your question")
-    async ask(name: string): Promise<string> {
-        const customData = { data: "Sample data", value: 42 };
+class CounterAgent extends BaseAgent {
+    private readonly name: string;
+    private value: number = 0;
 
-        const remoteWeatherClient = WeatherAgent.get("Jon");
-        const remoteWeather = await remoteWeatherClient.fun1(name, customData);
-
-        return (
-            `${this.getId().value} reporting on the weather in ${name}: ` +
-            remoteWeather
-        );
-    }
-}
-
-@agent()
-class WeatherAgent extends BaseAgent {
-    private readonly userName: string;
-
-    constructor(username: string) {
+    constructor(name: string) {
         super()
-        this.userName = username;
+        this.name = name;
     }
 
-    @prompt("Get weather")
-    @description("Weather forecast weather for you")
-    async getWeather(name: string, param2: CustomData): Promise<string> {
-        return Promise.resolve(
-            `Weather in ${name} is sunny.`
-        );
+    @prompt("Increase the count by one")
+    @description("Increases the count by one and returns the new value")
+    async increment(): Promise<number> {
+        this.value += 1;
+        return this.value;
     }
 }
-
 
 ```
