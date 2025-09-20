@@ -17,10 +17,6 @@ import { AgentClassName } from './agentClassName';
 export class AgentTypeName {
   readonly value: string;
 
-  // Do NOT call this constructor casually.
-  // It exists solely for converting raw wire values into an AgentTypeName which
-  // can be passed down to lookup functions that takes `AgentTypeName`.
-  // For all normal usage, prefer factory methods like `fromAgentClassName`.
   constructor(externalValue: string) {
     this.value = externalValue;
   }
@@ -29,6 +25,10 @@ export class AgentTypeName {
     return new AgentTypeName(
       convertAgentClassNameToKebab(agentClassName.value),
     );
+  }
+
+  static fromString(str: string): AgentTypeName {
+    return new AgentTypeName(convertAgentClassNameToKebab(str));
   }
 }
 

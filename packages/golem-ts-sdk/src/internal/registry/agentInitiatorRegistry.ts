@@ -41,4 +41,12 @@ export const AgentInitiatorRegistry = {
       )
       [Symbol.iterator]();
   },
+
+  agentTypes(): Array<string> {
+    return Array.from(agentInitiators.keys());
+  },
+
+  exists(agentTypeName: AgentTypeName): boolean {
+    return agentInitiators.has(agentTypeName.value);
+  },
 };

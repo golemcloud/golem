@@ -166,8 +166,14 @@ export function agent(customName?: string) {
     const methods = methodSchemaEither.val;
 
     const agentTypeName = customName
-      ? AgentTypeName.fromAgentClassName(agentClassName).value
-      : convertAgentClassNameToKebab(agentClassName.value);
+      ? AgentTypeName.fromString(customName)
+      : AgentTypeName.fromAgentClassName(agentClassName);
+
+    if (AgentInitiatorRegistry.exists(agentTypeName)) {
+      throw new Error(
+        `Agent name conflict: Another agent with the name "${agentTypeName.value}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
+      );
+    }
 
     const agentTypeDescription =
       AgentConstructorRegistry.lookup(agentClassName)?.description ??
@@ -184,7 +190,7 @@ export function agent(customName?: string) {
       defaultPromptHint;
 
     const agentType: AgentType = {
-      typeName: agentTypeName,
+      typeName: agentTypeName.value,
       description: agentTypeDescription,
       constructor: {
         name: agentClassName.value,
@@ -200,159 +206,156 @@ export function agent(customName?: string) {
 
     (ctor as any).get = getRemoteClient(ctor);
 
-    AgentInitiatorRegistry.register(
-      AgentTypeName.fromAgentClassName(agentClassName),
-      {
-        initiate: (agentName: string, constructorParams: DataValue) => {
-          const constructorInfo = classMetadata.constructorArgs;
+    AgentInitiatorRegistry.register(agentTypeName, {
+      initiate: (agentName: string, constructorParams: DataValue) => {
+        const constructorInfo = classMetadata.constructorArgs;
 
-          const constructorParamTypes: [string, TsType][] = constructorInfo.map(
-            (p) => [p.name, p.type],
+        const constructorParamTypes: [string, TsType][] = constructorInfo.map(
+          (p) => [p.name, p.type],
+        );
+
+        const deserializedConstructorArgs = deserializeDataValue(
+          constructorParams,
+          constructorParamTypes,
+        );
+
+        const instance = new ctor(...deserializedConstructorArgs);
+
+        const containerName = getSelfMetadata().workerId.workerName;
+
+        if (!containerName.startsWith(agentName)) {
+          const error = createCustomError(
+            `Expected the container name in which the agent is initiated to start with "${agentName}", but got "${containerName}"`,
           );
-
-          const deserializedConstructorArgs = deserializeDataValue(
-            constructorParams,
-            constructorParamTypes,
-          );
-
-          const instance = new ctor(...deserializedConstructorArgs);
-
-          const containerName = getSelfMetadata().workerId.workerName;
-
-          if (!containerName.startsWith(agentName)) {
-            const error = createCustomError(
-              `Expected the container name in which the agent is initiated to start with "${agentName}", but got "${containerName}"`,
-            );
-
-            return {
-              tag: 'err',
-              val: error,
-            };
-          }
-
-          // When an agent is initiated using an initializer,
-          // it runs in a worker, and the name of the worker is in-fact the agent-id
-          // Example: weather-agent-{"US", celsius}
-          const uniqueAgentId = new AgentId(containerName);
-
-          (instance as BaseAgent).getId = () => uniqueAgentId;
-
-          const agentInternal: AgentInternal = {
-            getId: () => {
-              return uniqueAgentId;
-            },
-            getParameters(): DataValue {
-              return constructorParams;
-            },
-            getAgentType: () => {
-              const agentType = AgentTypeRegistry.lookup(agentClassName);
-
-              if (Option.isNone(agentType)) {
-                throw new Error(
-                  `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
-                );
-              }
-
-              return agentType.val;
-            },
-            loadSnapshot(bytes: Uint8Array): Promise<void> {
-              return (instance as BaseAgent).loadSnapshot(bytes);
-            },
-            saveSnapshot(): Promise<Uint8Array> {
-              return (instance as BaseAgent).saveSnapshot();
-            },
-            invoke: async (methodName, methodArgs) => {
-              const fn = instance[methodName];
-              if (!fn)
-                throw new Error(
-                  `Method ${methodName} not found on agent ${agentClassName}`,
-                );
-
-              const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
-
-              if (Option.isNone(agentTypeOpt)) {
-                const error: AgentError = {
-                  tag: 'invalid-method',
-                  val: `Agent type ${agentClassName} not found in registry.`,
-                };
-                return {
-                  tag: 'err',
-                  val: error,
-                };
-              }
-
-              const agentType = agentTypeOpt.val;
-
-              const methodInfo = classMetadata.methods.get(methodName);
-
-              if (!methodInfo) {
-                const error: AgentError = {
-                  tag: 'invalid-method',
-                  val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
-                };
-                return {
-                  tag: 'err',
-                  val: error,
-                };
-              }
-
-              const paramTypes: MethodParams = methodInfo.methodParams;
-
-              const returnType: TsType = methodInfo.returnType;
-
-              const paramTypeArray = Array.from(paramTypes);
-
-              const convertedArgs = deserializeDataValue(
-                methodArgs,
-                paramTypeArray,
-              );
-
-              const result = await fn.apply(instance, convertedArgs);
-
-              const methodDef = agentType.methods.find(
-                (m) => m.name === methodName,
-              );
-
-              if (!methodDef) {
-                const error: AgentError = {
-                  tag: 'invalid-method',
-                  val: `Method ${methodName} not found in agent type ${agentClassName}`,
-                };
-
-                return {
-                  tag: 'err',
-                  val: error,
-                };
-              }
-
-              const returnValue = WitValue.fromTsValue(result, returnType);
-
-              if (Either.isLeft(returnValue)) {
-                const agentError: AgentError = {
-                  tag: 'invalid-type',
-                  val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
-                };
-
-                return {
-                  tag: 'err',
-                  val: agentError,
-                };
-              }
-
-              return {
-                tag: 'ok',
-                val: getDataValueFromReturnValueWit(returnValue.val),
-              };
-            },
-          };
 
           return {
-            tag: 'ok',
-            val: new ResolvedAgent(agentClassName, agentInternal, instance),
+            tag: 'err',
+            val: error,
           };
-        },
+        }
+
+        // When an agent is initiated using an initializer,
+        // it runs in a worker, and the name of the worker is in-fact the agent-id
+        // Example: weather-agent-{"US", celsius}
+        const uniqueAgentId = new AgentId(containerName);
+
+        (instance as BaseAgent).getId = () => uniqueAgentId;
+
+        const agentInternal: AgentInternal = {
+          getId: () => {
+            return uniqueAgentId;
+          },
+          getParameters(): DataValue {
+            return constructorParams;
+          },
+          getAgentType: () => {
+            const agentType = AgentTypeRegistry.lookup(agentClassName);
+
+            if (Option.isNone(agentType)) {
+              throw new Error(
+                `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
+              );
+            }
+
+            return agentType.val;
+          },
+          loadSnapshot(bytes: Uint8Array): Promise<void> {
+            return (instance as BaseAgent).loadSnapshot(bytes);
+          },
+          saveSnapshot(): Promise<Uint8Array> {
+            return (instance as BaseAgent).saveSnapshot();
+          },
+          invoke: async (methodName, methodArgs) => {
+            const fn = instance[methodName];
+            if (!fn)
+              throw new Error(
+                `Method ${methodName} not found on agent ${agentClassName}`,
+              );
+
+            const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
+
+            if (Option.isNone(agentTypeOpt)) {
+              const error: AgentError = {
+                tag: 'invalid-method',
+                val: `Agent type ${agentClassName} not found in registry.`,
+              };
+              return {
+                tag: 'err',
+                val: error,
+              };
+            }
+
+            const agentType = agentTypeOpt.val;
+
+            const methodInfo = classMetadata.methods.get(methodName);
+
+            if (!methodInfo) {
+              const error: AgentError = {
+                tag: 'invalid-method',
+                val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
+              };
+              return {
+                tag: 'err',
+                val: error,
+              };
+            }
+
+            const paramTypes: MethodParams = methodInfo.methodParams;
+
+            const returnType: TsType = methodInfo.returnType;
+
+            const paramTypeArray = Array.from(paramTypes);
+
+            const convertedArgs = deserializeDataValue(
+              methodArgs,
+              paramTypeArray,
+            );
+
+            const result = await fn.apply(instance, convertedArgs);
+
+            const methodDef = agentType.methods.find(
+              (m) => m.name === methodName,
+            );
+
+            if (!methodDef) {
+              const error: AgentError = {
+                tag: 'invalid-method',
+                val: `Method ${methodName} not found in agent type ${agentClassName}`,
+              };
+
+              return {
+                tag: 'err',
+                val: error,
+              };
+            }
+
+            const returnValue = WitValue.fromTsValue(result, returnType);
+
+            if (Either.isLeft(returnValue)) {
+              const agentError: AgentError = {
+                tag: 'invalid-type',
+                val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
+              };
+
+              return {
+                tag: 'err',
+                val: agentError,
+              };
+            }
+
+            return {
+              tag: 'ok',
+              val: getDataValueFromReturnValueWit(returnValue.val),
+            };
+          },
+        };
+
+        return {
+          tag: 'ok',
+          val: new ResolvedAgent(agentClassName, agentInternal, instance),
+        };
       },
-    );
+    });
   };
 }
 
@@ -468,8 +471,6 @@ export function languageCodes(codes: string[]) {
       const paramName = Array.from(methodInfo.methodParams).map(
         (paramType) => paramType[0],
       )[parameterIndex];
-
-      // console.log(`applying method param decorator to ${agentClassName.value}, ${methodName}, ${paramName} and ${codes}`)
 
       AgentMethodParamRegistry.setLanguageCodes(
         agentClassName,

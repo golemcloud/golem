@@ -160,7 +160,7 @@ export interface CustomData {
   value: number;
 }
 
-@agent()
+@agent('my-complex-agent')
 class ComplexAgent extends BaseAgent {
   constructor(
     readonly testInterfaceType: Types.TestInterfaceType,

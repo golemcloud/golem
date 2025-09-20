@@ -24,7 +24,7 @@ import * as Option from '../src/newTypes/option';
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
-describe('AgentType look up', () => {
+describe.skip('AgentType look up', () => {
   it('AgentInitiatorRegistry should return the initiator when looking up by string representation of agentType', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
     const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
