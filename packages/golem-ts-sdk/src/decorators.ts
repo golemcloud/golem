@@ -33,18 +33,24 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getSelfMetadata } from 'golem:api/host@1.1.7';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
-import { AgentTypeName } from './newTypes/agentTypeName';
+import {
+  AgentTypeName,
+  convertAgentClassNameToKebab,
+} from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
 import { UnstructuredText } from './newTypes/textInput';
 import { UnstructuredBinary } from './newTypes/binaryInput';
+import { convertTypeNameToKebab } from './internal/mapping/types/string-format';
 
 type TsType = Type.Type;
 
 /**
  *
  * The `@agent()` decorator: Marks a class as an Agent, and registers itself internally for discovery by other agents.
+ * The agent-anem is derived from the class name in kebab-case by default, but can be overridden by passing a custom name to the decorator.
+ *
  * It also adds a static `get()` method to the class, which can be used to create a remote client for the agent.
  *
  * Only a class that extends `BaseAgent` can be decorated with `@agent()`.
@@ -116,7 +122,7 @@ type TsType = Type.Type;
  * calcRemote.add(5);
  * ```
  */
-export function agent() {
+export function agent(customName?: string) {
   return function <T extends new (...args: any[]) => any>(ctor: T) {
     const agentClassName = new AgentClassName(ctor.name);
 
@@ -157,18 +163,33 @@ export function agent() {
         `Schema generation failed for agent class ${agentClassName.value}. ${methodSchemaEither.val}`,
       );
     }
-
     const methods = methodSchemaEither.val;
 
-    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
+    const agentTypeName = customName
+      ? AgentTypeName.fromAgentClassName(agentClassName).value
+      : convertAgentClassNameToKebab(agentClassName.value);
+
+    const agentTypeDescription =
+      AgentConstructorRegistry.lookup(agentClassName)?.description ??
+      `Constructs the agent ${agentTypeName}`;
+
+    const constructorParameterNames = classMetadata.constructorArgs
+      .map((arg) => arg.name)
+      .join(', ');
+
+    const defaultPromptHint = `Enter the following parameters: ${constructorParameterNames}`;
+
+    const agentTypePromptHint =
+      AgentConstructorRegistry.lookup(agentClassName)?.prompt ??
+      defaultPromptHint;
 
     const agentType: AgentType = {
-      typeName: agentTypeName.value,
-      description: agentClassName.value,
+      typeName: agentTypeName,
+      description: agentTypeDescription,
       constructor: {
         name: agentClassName.value,
-        description: `Constructs ${agentClassName.value}`,
-        promptHint: 'Enter something...',
+        description: agentTypeDescription,
+        promptHint: agentTypePromptHint,
         inputSchema: constructorDataSchema,
       },
       methods,

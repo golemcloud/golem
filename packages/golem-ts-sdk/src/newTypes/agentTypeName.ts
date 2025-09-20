@@ -32,7 +32,7 @@ export class AgentTypeName {
   }
 }
 
-function convertAgentClassNameToKebab(str: string): string {
+export function convertAgentClassNameToKebab(str: string): string {
   return (
     str
       // ts classes can have _, $ and digits - therefore
