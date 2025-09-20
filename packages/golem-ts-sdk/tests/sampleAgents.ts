@@ -136,7 +136,7 @@ class SimpleAgent extends BaseAgent {
       unstructuredBinaryWithMimeType,
     );
 
-    await remoteClient.fun2("foo")
+    await remoteClient.fun2('foo');
 
     await remoteClient.fun2.trigger('foo');
 
@@ -327,7 +327,6 @@ class ComplexAgent extends BaseAgent {
   async fun22(text: [string]): Promise<string> {
     return this.getId().value;
   }
-
 }
 
 // If this class is decorated with agent, it will fail
