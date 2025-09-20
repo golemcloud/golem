@@ -229,7 +229,7 @@ pub fn logln_internal(message: &str) {
             }
             Output::BufferedUntilErr => {
                 let mut buffer = LOG_STATE_BUFFER.write().unwrap();
-                buffer.push(format!("{}{}", state.calculated_indent, line.to_string()));
+                buffer.push(format!("{}{}", state.calculated_indent, line));
             }
         }
     }

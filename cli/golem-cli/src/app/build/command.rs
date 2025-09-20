@@ -502,7 +502,7 @@ pub async fn execute_external_command(
     );
 
     task_result_marker.result(
-        (|| async {
+        async {
             if !command.rmdirs.is_empty() {
                 let _ident = LogIndent::new();
                 for dir in &command.rmdirs {
@@ -539,7 +539,7 @@ pub async fn execute_external_command(
                 .current_dir(build_dir)
                 .stream_and_run(&command_tokens[0])
                 .await
-        })()
+        }
         .await,
     )
 }
