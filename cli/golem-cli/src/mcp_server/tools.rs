@@ -61,41 +61,47 @@ rmcp::tool_box!(GolemTools, [
 
 pub struct GolemToolHandler {
     ctx: Arc<Context>,
+    command_handler: Arc<CommandHandler<NoHooks>>,
 }
 
 impl GolemToolHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
-        Self { ctx }
+        let global_flags = GolemCliGlobalFlags::default();
+        let hooks = Arc::new(NoHooks {});
+        let command_handler = Arc::new(
+            CommandHandler::new(global_flags, None, hooks)
+                .await
+                .expect("Failed to create CommandHandler")
+        );
+        
+        Self { ctx, command_handler }
     }
 
-    async fn execute_command(&self, command_parts: Vec<&str>) -> Result<String, CallToolError> {
+    async fn execute_command(&self, command_parts: Vec<&str>) -> Result<CallToolResult, CallToolError> {
         let mut cli_args: Vec<OsString> = vec!["golem-cli".into()];
         for part in command_parts {
             cli_args.push(part.into());
         }
 
-        let global_flags = GolemCliGlobalFlags::default();
-        let hooks = Arc::new(NoHooks {});
-        let handler = CommandHandler::new(global_flags, None, hooks)
-            .await
-            .context("Failed to create CommandHandler")
-            .map_err(|e| CallToolError::internal_error(format!("CommandHandler creation failed: {}", e)))?;
-
         match GolemCliCommand::try_parse_from_lenient(cli_args, true) {
             crate::command::GolemCliCommandParseResult::FullMatch(command) => {
-                match handler.handle_command(command).await {
-                    Ok(()) => Ok("Command executed successfully".to_string()),
-                    Err(e) => Ok(format!("Command failed: {}", e)),
+                match self.command_handler.handle_command(command).await {
+                    Ok(()) => {
+                        Ok(CallToolResult::text_content(vec!["Command executed successfully".into()]))
+                    }
+                    Err(e) => {
+                        Ok(CallToolResult::text_content(vec![format!("Command failed: {}", e).into()]))
+                    }
                 }
             }
             crate::command::GolemCliCommandParseResult::Error(error) => {
-                Ok(format!("Command parsing failed: {}", error))
+                Ok(CallToolResult::text_content(vec![format!("Command parsing failed: {}", error).into()]))
             }
             crate::command::GolemCliCommandParseResult::ErrorWithPartialMatch { error, .. } => {
-                Ok(format!("Command parsing failed: {}", error))
+                Ok(CallToolResult::text_content(vec![format!("Command parsing failed: {}", error).into()]))
             }
             crate::command::GolemCliCommandParseResult::NoMatch => {
-                Ok("No matching command found".to_string())
+                Ok(CallToolResult::text_content(vec!["No matching command found".into()]))
             }
         }
     }
@@ -211,17 +217,9 @@ impl GolemToolHandler {
             cli_args.push(arg.into());
         }
 
-        let global_flags = GolemCliGlobalFlags::default();
-        
-        let hooks = Arc::new(NoHooks {});
-        let handler = CommandHandler::new(global_flags, None, hooks)
-            .await
-            .context("Failed to create CommandHandler")
-            .map_err(|e| CallToolError::internal_error(format!("CommandHandler creation failed: {}", e)))?;
-
         let result = match GolemCliCommand::try_parse_from_lenient(cli_args, true) {
             crate::command::GolemCliCommandParseResult::FullMatch(command) => {
-                match handler.handle_command(command).await {
+                match self.command_handler.handle_command(command).await {
                     Ok(()) => {
                         Ok(CallToolResult::text_content(vec!["Command executed successfully".into()]))
                     }
@@ -260,7 +258,6 @@ impl GolemToolHandler {
             full_command_parts.push(arg);
         }
 
-        let result = self.execute_command(full_command_parts).await?;
-        Ok(CallToolResult::text_content(vec![result.into()]))
+        self.execute_command(full_command_parts).await
     }
 }
