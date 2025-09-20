@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use crate::context::Context;
+use crate::app::context::{find_main_source, collect_sources_and_switch_to_app_root};
+use crate::model::app::DEFAULT_CONFIG_FILE_NAME;
+use crate::validation::ValidatedResult;
 use anyhow::{Context, Result};
 use rmcp::{ReadResourceError, ReadResourceResult, Resource, RpcError};
 use serde::{Deserialize, Serialize};
@@ -32,19 +35,9 @@ impl GolemResources {
     pub async fn list_resources(&self) -> Vec<Resource> {
         let mut resources = Vec::new();
 
-        // Add current directory manifest
-        if let Ok(current_manifest) = self.get_current_manifest_resource().await {
-            resources.push(current_manifest);
-        }
-
-        // Add ancestor directory manifests
-        if let Ok(ancestor_manifests) = self.get_ancestor_manifest_resources().await {
-            resources.extend(ancestor_manifests);
-        }
-
-        // Add child directory manifests
-        if let Ok(child_manifests) = self.get_child_manifest_resources().await {
-            resources.extend(child_manifests);
+        // Use existing app::context logic to discover manifests
+        if let Ok(sources_result) = self.discover_manifests() {
+            resources.extend(sources_result);
         }
 
         resources
@@ -81,100 +74,63 @@ impl GolemResources {
         }
     }
 
-    async fn get_current_manifest_resource(&self) -> Result<Resource> {
-        let current_dir = std::env::current_dir()
-            .context("Failed to get current directory")?;
+    /// Discover manifests using the existing app::context logic
+    fn discover_manifests(&self) -> Result<Vec<Resource>> {
+        let mut resources = Vec::new();
         
-        let manifest_path = current_dir.join("golem.yaml");
-        
-        if manifest_path.exists() {
-            Ok(Resource {
-                uri: format!("file://{}", manifest_path.display()),
-                name: Some("Current Directory Manifest".to_string()),
-                description: Some("Golem manifest in the current directory".to_string()),
+        // Use the existing find_main_source function to discover the main manifest
+        if let Some(main_source) = find_main_source() {
+            resources.push(Resource {
+                uri: format!("file://{}", main_source.display()),
+                name: Some("Main Manifest".to_string()),
+                description: Some("Main Golem manifest discovered from app context".to_string()),
                 mime_type: Some("text/yaml".to_string()),
-            })
-        } else {
-            // Return a placeholder resource that indicates no manifest exists
-            Ok(Resource {
-                uri: "golem://current-manifest".to_string(),
-                name: Some("Current Directory Manifest".to_string()),
-                description: Some("No Golem manifest found in current directory".to_string()),
-                mime_type: Some("text/plain".to_string()),
-            })
-        }
-    }
-
-    async fn get_ancestor_manifest_resources(&self) -> Result<Vec<Resource>> {
-        let mut resources = Vec::new();
-        let mut current_dir = std::env::current_dir()
-            .context("Failed to get current directory")?;
-
-        // Walk up the directory tree
-        while let Some(parent) = current_dir.parent() {
-            let manifest_path = parent.join("golem.yaml");
+            });
             
-            if manifest_path.exists() {
-                let relative_path = pathdiff::diff_paths(&manifest_path, &current_dir)
-                    .unwrap_or_else(|| manifest_path.clone());
-                
-                resources.push(Resource {
-                    uri: format!("file://{}", manifest_path.display()),
-                    name: Some(format!("Ancestor Manifest: {}", relative_path.display())),
-                    description: Some(format!("Golem manifest in ancestor directory: {}", parent.display())),
-                    mime_type: Some("text/yaml".to_string()),
-                });
-            }
-            
-            current_dir = parent.to_path_buf();
-        }
-
-        Ok(resources)
-    }
-
-    async fn get_child_manifest_resources(&self) -> Result<Vec<Resource>> {
-        let mut resources = Vec::new();
-        let current_dir = std::env::current_dir()
-            .context("Failed to get current directory")?;
-
-        let mut entries = match fs::read_dir(&current_dir).await {
-            Ok(entries) => entries,
-            Err(e) => {
-                error!("Failed to read current directory: {}", e);
-                return Ok(resources);
-            }
-        };
-
-        while let Some(entry) = entries.next_entry().await.transpose()? {
-            let path = entry.path();
-            
-            if path.is_dir() {
-                let manifest_path = path.join("golem.yaml");
-                
-                if manifest_path.exists() {
-                    let relative_path = pathdiff::diff_paths(&manifest_path, &current_dir)
-                        .unwrap_or_else(|| manifest_path.clone());
-                    
-                    resources.push(Resource {
-                        uri: format!("file://{}", manifest_path.display()),
-                        name: Some(format!("Child Manifest: {}", relative_path.display())),
-                        description: Some(format!("Golem manifest in child directory: {}", path.display())),
-                        mime_type: Some("text/yaml".to_string()),
-                    });
+            // Try to collect additional sources using the existing logic
+            if let Ok(sources_result) = collect_sources_and_switch_to_app_root(Some(&main_source)) {
+                match sources_result {
+                    Ok((sources, _calling_working_dir)) => {
+                        for source in sources {
+                            if source != main_source { // Avoid duplicating the main source
+                                resources.push(Resource {
+                                    uri: format!("file://{}", source.display()),
+                                    name: Some(format!("Included Manifest: {}", source.display())),
+                                    description: Some("Included Golem manifest".to_string()),
+                                    mime_type: Some("text/yaml".to_string()),
+                                });
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Log validation errors but continue with what we have
+                        debug!("Validation errors while collecting manifest sources");
+                    }
                 }
             }
+        } else {
+            // No main manifest found, create a placeholder
+            resources.push(Resource {
+                uri: "golem://no-manifest".to_string(),
+                name: Some("No Manifest Found".to_string()),
+                description: Some("No Golem manifest found in current directory or ancestors".to_string()),
+                mime_type: Some("text/plain".to_string()),
+            });
         }
-
+        
         Ok(resources)
     }
 
     fn extract_path_from_uri(&self, uri: &str) -> Option<std::path::PathBuf> {
         if uri.starts_with("file://") {
             Some(std::path::PathBuf::from(uri.strip_prefix("file://").unwrap()))
+        } else if uri == "golem://no-manifest" {
+            // Handle the special case for no manifest found
+            None
         } else if uri == "golem://current-manifest" {
-            // Handle the special case for current directory manifest
+            // Handle the special case for current directory manifest (legacy)
             match std::env::current_dir() {
-                Ok(dir) => Some(dir.join("golem.yaml")),
+                Ok(dir) => Some(dir.join(DEFAULT_CONFIG_FILE_NAME)),
                 Err(_) => None,
             }
         } else {

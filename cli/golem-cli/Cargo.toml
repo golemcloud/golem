@@ -13,7 +13,7 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
-mcp = ["dep:rmcp", "dep:tokio-util", "dep:pathdiff"]
+mcp = ["dep:rmcp", "dep:tokio-util"]
 
 [lib]
 harness = false
@@ -126,7 +126,6 @@ webbrowser = { workspace = true }
 warp = { workspace = true }
 rmcp = { version = "0.1.5", features = ["server"], optional = true }
 tokio-util = { workspace = true, optional = true }
-pathdiff = { workspace = true, optional = true }
 
 [dev-dependencies]
 axum = { workspace = true }

@@ -20,10 +20,14 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::process::Command;
+use std::ffi::OsString;
+use crate::command::{GolemCliCommand, GolemCliGlobalFlags};
+use crate::command_handler::{CommandHandler, CommandHandlerHooks};
+use crate::hooks::NoHooks;
 use tracing::{debug, error, info};
 
-// Tool definitions using #[mcp_tool] macro
+// Dynamic tool discovery from Clap metadata
+// We'll keep execute_golem_command as a special tool for generic command execution
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_golem_command",
@@ -38,74 +42,25 @@ pub struct ExecuteGolemCommandTool {
     pub args: Vec<String>,
 }
 
+// Dynamic tool for specific Golem commands
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[mcp_tool(
-    name = "list_components",
-    title = "List Components",
-    description = "List all Golem components"
+    name = "execute_golem_cli_command",
+    title = "Execute Golem CLI Command",
+    description = "Execute a specific Golem CLI command with structured arguments"
 )]
-pub struct ListComponentsTool {}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[mcp_tool(
-    name = "get_component_info",
-    title = "Get Component Info",
-    description = "Get detailed information about a Golem component"
-)]
-pub struct GetComponentInfoTool {
-    /// The name of the component
-    pub component_name: String,
-    /// Optional component version
-    pub version: Option<u64>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[mcp_tool(
-    name = "list_agents",
-    title = "List Agents",
-    description = "List all Golem agents"
-)]
-pub struct ListAgentsTool {}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[mcp_tool(
-    name = "get_agent_info",
-    title = "Get Agent Info",
-    description = "Get detailed information about a Golem agent"
-)]
-pub struct GetAgentInfoTool {
-    /// The name of the agent
-    pub agent_name: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[mcp_tool(
-    name = "list_apps",
-    title = "List Apps",
-    description = "List all Golem apps"
-)]
-pub struct ListAppsTool {}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[mcp_tool(
-    name = "get_app_info",
-    title = "Get App Info",
-    description = "Get detailed information about a Golem app"
-)]
-pub struct GetAppInfoTool {
-    /// The name of the app
-    pub app_name: String,
+pub struct ExecuteGolemCliCommandTool {
+    /// The command path (e.g., "component list", "agent info")
+    pub command_path: String,
+    /// Arguments for the command
+    #[serde(default)]
+    pub arguments: Vec<String>,
 }
 
 // Generate tool box enum for automatic tool dispatch
 rmcp::tool_box!(GolemTools, [
     ExecuteGolemCommandTool,
-    ListComponentsTool,
-    GetComponentInfoTool,
-    ListAgentsTool,
-    GetAgentInfoTool,
-    ListAppsTool,
-    GetAppInfoTool
+    ExecuteGolemCliCommandTool
 ]);
 
 pub struct GolemToolHandler {
@@ -117,39 +72,141 @@ impl GolemToolHandler {
         Self { ctx }
     }
 
+    /// Helper method to execute Golem commands using the real CommandHandler
+    async fn execute_command(&self, command_parts: Vec<&str>) -> Result<String, CallToolError> {
+        let mut cli_args: Vec<OsString> = vec!["golem-cli".into()];
+        for part in command_parts {
+            cli_args.push(part.into());
+        }
+
+        let global_flags = GolemCliGlobalFlags::default();
+        let hooks = Arc::new(NoHooks {});
+        let handler = CommandHandler::new(global_flags, None, hooks)
+            .await
+            .context("Failed to create CommandHandler")
+            .map_err(|e| CallToolError::internal_error(format!("CommandHandler creation failed: {}", e)))?;
+
+        match GolemCliCommand::try_parse_from_lenient(cli_args, true) {
+            crate::command::GolemCliCommandParseResult::FullMatch(command) => {
+                match handler.handle_command(command).await {
+                    Ok(()) => Ok("Command executed successfully".to_string()),
+                    Err(e) => Ok(format!("Command failed: {}", e)),
+                }
+            }
+            crate::command::GolemCliCommandParseResult::Error(error) => {
+                Ok(format!("Command parsing failed: {}", error))
+            }
+            crate::command::GolemCliCommandParseResult::ErrorWithPartialMatch { error, .. } => {
+                Ok(format!("Command parsing failed: {}", error))
+            }
+            crate::command::GolemCliCommandParseResult::NoMatch => {
+                Ok("No matching command found".to_string())
+            }
+        }
+    }
+
+    /// Get available commands from Clap metadata
+    fn get_available_commands(&self) -> Vec<String> {
+        let command = GolemCliCommand::command();
+        let mut commands = Vec::new();
+        
+        // Get top-level subcommands
+        for subcommand in command.get_subcommands() {
+            let subcommand_name = subcommand.get_name();
+            commands.push(subcommand_name.to_string());
+            
+            // Get nested subcommands
+            for nested_subcommand in subcommand.get_subcommands() {
+                let nested_name = nested_subcommand.get_name();
+                commands.push(format!("{} {}", subcommand_name, nested_name));
+            }
+        }
+        
+        commands
+    }
+
     pub fn list_tools(&self) -> Vec<Tool> {
-        GolemTools::tools()
+        let mut tools = GolemTools::tools();
+        
+        // Add dynamic tools for each available command
+        let available_commands = self.get_available_commands();
+        for command in available_commands {
+            let tool = Tool {
+                name: format!("golem_{}", command.replace(" ", "_")),
+                description: Some(format!("Execute the Golem CLI command: {}", command)),
+                input_schema: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "arguments": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Arguments for the command"
+                        }
+                    },
+                    "required": []
+                })),
+            };
+            tools.push(tool);
+        }
+        
+        tools
     }
 
     pub async fn handle_call_tool_request(
         &self,
         request: &CallToolRequest,
     ) -> Result<CallToolResult, CallToolError> {
+        // First try to handle with the tool_box generated tools
         match GolemTools::try_from(request.clone()) {
             Ok(tool) => match tool {
                 GolemTools::ExecuteGolemCommandTool(args) => {
                     self.execute_golem_command(&args).await
                 }
-                GolemTools::ListComponentsTool(_args) => {
-                    self.list_components().await
-                }
-                GolemTools::GetComponentInfoTool(args) => {
-                    self.get_component_info(&args).await
-                }
-                GolemTools::ListAgentsTool(_args) => {
-                    self.list_agents().await
-                }
-                GolemTools::GetAgentInfoTool(args) => {
-                    self.get_agent_info(&args).await
-                }
-                GolemTools::ListAppsTool(_args) => {
-                    self.list_apps().await
-                }
-                GolemTools::GetAppInfoTool(args) => {
-                    self.get_app_info(&args).await
+                GolemTools::ExecuteGolemCliCommandTool(args) => {
+                    self.execute_golem_cli_command(&args).await
                 }
             },
-            Err(_) => Err(CallToolError::unknown_tool(request.name.clone())),
+            Err(_) => {
+                // If not a tool_box tool, try to handle as a dynamic tool
+                self.handle_dynamic_tool(request).await
+            }
+        }
+    }
+
+    async fn handle_dynamic_tool(
+        &self,
+        request: &CallToolRequest,
+    ) -> Result<CallToolResult, CallToolError> {
+        let tool_name = &request.name;
+        
+        // Check if this is a dynamic tool (starts with "golem_")
+        if let Some(command_path) = tool_name.strip_prefix("golem_") {
+            // Convert underscores back to spaces
+            let command_path = command_path.replace("_", " ");
+            
+            // Parse arguments from the request
+            let arguments = if let Some(args) = &request.arguments {
+                if let Some(args_array) = args.get("arguments").and_then(|v| v.as_array()) {
+                    args_array
+                        .iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect()
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            };
+            
+            // Create a tool request and execute it
+            let tool_request = ExecuteGolemCliCommandTool {
+                command_path,
+                arguments,
+            };
+            
+            self.execute_golem_cli_command(&tool_request).await
+        } else {
+            Err(CallToolError::unknown_tool(tool_name.clone()))
         }
     }
 
@@ -159,144 +216,73 @@ impl GolemToolHandler {
     ) -> Result<CallToolResult, CallToolError> {
         info!("Executing Golem command: {} with args: {:?}", args.command, args.args);
 
-        // Build the command
-        let mut cmd = Command::new("golem-cli");
-        cmd.arg(&args.command);
-        cmd.args(&args.args);
-
-        // Execute the command
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to execute golem-cli command")
-            .map_err(|e| CallToolError::internal_error(format!("Command execution failed: {}", e)))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        let result_text = if output.status.success() {
-            format!("Command executed successfully:\n{}", stdout)
-        } else {
-            format!("Command failed with exit code {}:\nStdout:\n{}\nStderr:\n{}", 
-                output.status.code().unwrap_or(-1), stdout, stderr)
-        };
-
-        Ok(CallToolResult::text_content(vec![result_text.into()]))
-    }
-
-    async fn list_components(&self) -> Result<CallToolResult, CallToolError> {
-        debug!("Listing components");
-
-        let mut cmd = Command::new("golem-cli");
-        cmd.args(["component", "list"]);
-
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to list components")
-            .map_err(|e| CallToolError::internal_error(format!("Failed to list components: {}", e)))?;
-
-        let result = String::from_utf8_lossy(&output.stdout);
-
-        Ok(CallToolResult::text_content(vec![result.into()]))
-    }
-
-    async fn get_component_info(
-        &self,
-        args: &GetComponentInfoTool,
-    ) -> Result<CallToolResult, CallToolError> {
-        debug!("Getting component info for: {}", args.component_name);
-
-        let mut cmd = Command::new("golem-cli");
-        cmd.args(["component", "info", &args.component_name]);
-
-        if let Some(version) = args.version {
-            cmd.arg("--version");
-            cmd.arg(version.to_string());
+        // Build command arguments for CommandHandler
+        let mut cli_args: Vec<OsString> = vec![
+            "golem-cli".into(),
+            args.command.clone().into(),
+        ];
+        
+        // Add additional arguments
+        for arg in &args.args {
+            cli_args.push(arg.into());
         }
 
-        let output = cmd
-            .output()
+        // Create global flags with default values
+        let global_flags = GolemCliGlobalFlags::default();
+        
+        // Create CommandHandler with the same context
+        let hooks = Arc::new(NoHooks {});
+        let handler = CommandHandler::new(global_flags, None, hooks)
             .await
-            .context("Failed to get component info")
-            .map_err(|e| CallToolError::internal_error(format!("Failed to get component info: {}", e)))?;
+            .context("Failed to create CommandHandler")
+            .map_err(|e| CallToolError::internal_error(format!("CommandHandler creation failed: {}", e)))?;
 
-        let result = String::from_utf8_lossy(&output.stdout);
+        // Parse and execute the command
+        let result = match GolemCliCommand::try_parse_from_lenient(cli_args, true) {
+            crate::command::GolemCliCommandParseResult::FullMatch(command) => {
+                match handler.handle_command(command).await {
+                    Ok(()) => {
+                        Ok(CallToolResult::text_content(vec!["Command executed successfully".into()]))
+                    }
+                    Err(e) => {
+                        Ok(CallToolResult::text_content(vec![format!("Command failed: {}", e).into()]))
+                    }
+                }
+            }
+            crate::command::GolemCliCommandParseResult::Error(error) => {
+                Ok(CallToolResult::text_content(vec![format!("Command parsing failed: {}", error).into()]))
+            }
+            crate::command::GolemCliCommandParseResult::ErrorWithPartialMatch { error, .. } => {
+                Ok(CallToolResult::text_content(vec![format!("Command parsing failed: {}", error).into()]))
+            }
+            crate::command::GolemCliCommandParseResult::NoMatch => {
+                Ok(CallToolResult::text_content(vec!["No matching command found".into()]))
+            }
+        };
 
-        Ok(CallToolResult::text_content(vec![result.into()]))
+        result
     }
 
-    async fn list_agents(&self) -> Result<CallToolResult, CallToolError> {
-        debug!("Listing agents");
-
-        let mut cmd = Command::new("golem-cli");
-        cmd.args(["agent", "list"]);
-
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to list agents")
-            .map_err(|e| CallToolError::internal_error(format!("Failed to list agents: {}", e)))?;
-
-        let result = String::from_utf8_lossy(&output.stdout);
-
-        Ok(CallToolResult::text_content(vec![result.into()]))
-    }
-
-    async fn get_agent_info(
+    async fn execute_golem_cli_command(
         &self,
-        args: &GetAgentInfoTool,
+        args: &ExecuteGolemCliCommandTool,
     ) -> Result<CallToolResult, CallToolError> {
-        debug!("Getting agent info for: {}", args.agent_name);
+        debug!("Executing Golem CLI command: {} with args: {:?}", args.command_path, args.arguments);
 
-        let mut cmd = Command::new("golem-cli");
-        cmd.args(["agent", "info", &args.agent_name]);
+        // Parse command path into parts
+        let command_parts: Vec<&str> = args.command_path.split_whitespace().collect();
+        if command_parts.is_empty() {
+            return Ok(CallToolResult::text_content(vec!["Command path cannot be empty".into()]));
+        }
 
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to get agent info")
-            .map_err(|e| CallToolError::internal_error(format!("Failed to get agent info: {}", e)))?;
+        // Build full command parts including arguments
+        let mut full_command_parts = command_parts;
+        for arg in &args.arguments {
+            full_command_parts.push(arg);
+        }
 
-        let result = String::from_utf8_lossy(&output.stdout);
-
-        Ok(CallToolResult::text_content(vec![result.into()]))
-    }
-
-    async fn list_apps(&self) -> Result<CallToolResult, CallToolError> {
-        debug!("Listing apps");
-
-        let mut cmd = Command::new("golem-cli");
-        cmd.args(["app", "list"]);
-
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to list apps")
-            .map_err(|e| CallToolError::internal_error(format!("Failed to list apps: {}", e)))?;
-
-        let result = String::from_utf8_lossy(&output.stdout);
-
-        Ok(CallToolResult::text_content(vec![result.into()]))
-    }
-
-    async fn get_app_info(
-        &self,
-        args: &GetAppInfoTool,
-    ) -> Result<CallToolResult, CallToolError> {
-        debug!("Getting app info for: {}", args.app_name);
-
-        let mut cmd = Command::new("golem-cli");
-        cmd.args(["app", "info", &args.app_name]);
-
-        let output = cmd
-            .output()
-            .await
-            .context("Failed to get app info")
-            .map_err(|e| CallToolError::internal_error(format!("Failed to get app info: {}", e)))?;
-
-        let result = String::from_utf8_lossy(&output.stdout);
-
+        // Execute the command
+        let result = self.execute_command(full_command_parts).await?;
         Ok(CallToolResult::text_content(vec![result.into()]))
     }
 }
