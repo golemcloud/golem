@@ -38,7 +38,7 @@ impl GolemMcpServer {
         Self { ctx }
     }
 
-    pub async fn start(&self, _port: u16) -> Result<()> {
+    pub async fn start(&self) -> Result<()> {
         info!("Starting Golem MCP Server");
         
         let server_details = InitializeResult {

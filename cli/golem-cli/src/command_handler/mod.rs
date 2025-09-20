@@ -314,9 +314,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
         // Check if MCP server mode is enabled
         #[cfg(feature = "mcp")]
         if command.global_flags.serve {
-            let port = command.global_flags.serve_port.unwrap_or(1232);
             let mcp_server = crate::mcp_server::GolemMcpServer::new(self.ctx.clone());
-            return mcp_server.start(port).await;
+            return mcp_server.start().await;
         }
 
         match command.subcommand {
