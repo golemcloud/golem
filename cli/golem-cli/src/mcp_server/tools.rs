@@ -26,8 +26,6 @@ use crate::command_handler::{CommandHandler, CommandHandlerHooks};
 use crate::hooks::NoHooks;
 use tracing::{debug, error, info};
 
-// Dynamic tool discovery from Clap metadata
-// We'll keep execute_golem_command as a special tool for generic command execution
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_golem_command",
@@ -42,7 +40,6 @@ pub struct ExecuteGolemCommandTool {
     pub args: Vec<String>,
 }
 
-// Dynamic tool for specific Golem commands
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[mcp_tool(
     name = "execute_golem_cli_command",
@@ -57,7 +54,6 @@ pub struct ExecuteGolemCliCommandTool {
     pub arguments: Vec<String>,
 }
 
-// Generate tool box enum for automatic tool dispatch
 rmcp::tool_box!(GolemTools, [
     ExecuteGolemCommandTool,
     ExecuteGolemCliCommandTool
@@ -72,7 +68,6 @@ impl GolemToolHandler {
         Self { ctx }
     }
 
-    /// Helper method to execute Golem commands using the real CommandHandler
     async fn execute_command(&self, command_parts: Vec<&str>) -> Result<String, CallToolError> {
         let mut cli_args: Vec<OsString> = vec!["golem-cli".into()];
         for part in command_parts {
@@ -110,12 +105,10 @@ impl GolemToolHandler {
         let command = GolemCliCommand::command();
         let mut commands = Vec::new();
         
-        // Get top-level subcommands
         for subcommand in command.get_subcommands() {
             let subcommand_name = subcommand.get_name();
             commands.push(subcommand_name.to_string());
             
-            // Get nested subcommands
             for nested_subcommand in subcommand.get_subcommands() {
                 let nested_name = nested_subcommand.get_name();
                 commands.push(format!("{} {}", subcommand_name, nested_name));
@@ -128,7 +121,6 @@ impl GolemToolHandler {
     pub fn list_tools(&self) -> Vec<Tool> {
         let mut tools = GolemTools::tools();
         
-        // Add dynamic tools for each available command
         let available_commands = self.get_available_commands();
         for command in available_commands {
             let tool = Tool {
@@ -156,7 +148,6 @@ impl GolemToolHandler {
         &self,
         request: &CallToolRequest,
     ) -> Result<CallToolResult, CallToolError> {
-        // First try to handle with the tool_box generated tools
         match GolemTools::try_from(request.clone()) {
             Ok(tool) => match tool {
                 GolemTools::ExecuteGolemCommandTool(args) => {
@@ -167,7 +158,6 @@ impl GolemToolHandler {
                 }
             },
             Err(_) => {
-                // If not a tool_box tool, try to handle as a dynamic tool
                 self.handle_dynamic_tool(request).await
             }
         }
@@ -179,12 +169,9 @@ impl GolemToolHandler {
     ) -> Result<CallToolResult, CallToolError> {
         let tool_name = &request.name;
         
-        // Check if this is a dynamic tool (starts with "golem_")
         if let Some(command_path) = tool_name.strip_prefix("golem_") {
-            // Convert underscores back to spaces
             let command_path = command_path.replace("_", " ");
             
-            // Parse arguments from the request
             let arguments = if let Some(args) = &request.arguments {
                 if let Some(args_array) = args.get("arguments").and_then(|v| v.as_array()) {
                     args_array
@@ -198,7 +185,6 @@ impl GolemToolHandler {
                 Vec::new()
             };
             
-            // Create a tool request and execute it
             let tool_request = ExecuteGolemCliCommandTool {
                 command_path,
                 arguments,
@@ -216,28 +202,23 @@ impl GolemToolHandler {
     ) -> Result<CallToolResult, CallToolError> {
         info!("Executing Golem command: {} with args: {:?}", args.command, args.args);
 
-        // Build command arguments for CommandHandler
         let mut cli_args: Vec<OsString> = vec![
             "golem-cli".into(),
             args.command.clone().into(),
         ];
         
-        // Add additional arguments
         for arg in &args.args {
             cli_args.push(arg.into());
         }
 
-        // Create global flags with default values
         let global_flags = GolemCliGlobalFlags::default();
         
-        // Create CommandHandler with the same context
         let hooks = Arc::new(NoHooks {});
         let handler = CommandHandler::new(global_flags, None, hooks)
             .await
             .context("Failed to create CommandHandler")
             .map_err(|e| CallToolError::internal_error(format!("CommandHandler creation failed: {}", e)))?;
 
-        // Parse and execute the command
         let result = match GolemCliCommand::try_parse_from_lenient(cli_args, true) {
             crate::command::GolemCliCommandParseResult::FullMatch(command) => {
                 match handler.handle_command(command).await {
@@ -269,19 +250,16 @@ impl GolemToolHandler {
     ) -> Result<CallToolResult, CallToolError> {
         debug!("Executing Golem CLI command: {} with args: {:?}", args.command_path, args.arguments);
 
-        // Parse command path into parts
         let command_parts: Vec<&str> = args.command_path.split_whitespace().collect();
         if command_parts.is_empty() {
             return Ok(CallToolResult::text_content(vec!["Command path cannot be empty".into()]));
         }
 
-        // Build full command parts including arguments
         let mut full_command_parts = command_parts;
         for arg in &args.arguments {
             full_command_parts.push(arg);
         }
 
-        // Execute the command
         let result = self.execute_command(full_command_parts).await?;
         Ok(CallToolResult::text_content(vec![result.into()]))
     }

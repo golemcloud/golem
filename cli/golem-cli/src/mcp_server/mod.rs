@@ -41,7 +41,6 @@ impl GolemMcpServer {
     pub async fn start(&self, _port: u16) -> Result<()> {
         info!("Starting Golem MCP Server");
         
-        // STEP 1: Define server details and capabilities
         let server_details = InitializeResult {
             server_info: Implementation {
                 name: "Golem CLI MCP Server".to_string(),
@@ -59,16 +58,12 @@ impl GolemMcpServer {
             protocol_version: rmcp::LATEST_PROTOCOL_VERSION.to_string(),
         };
         
-        // STEP 2: Create a std transport with default options
         let transport = StdioTransport::new(TransportOptions::default())?;
         
-        // STEP 3: Instantiate our custom handler for handling MCP messages
         let handler = GolemMcpHandler::new(self.ctx.clone());
         
-        // STEP 4: Create a MCP server
         let server = rmcp::server_runtime::create_server(server_details, transport, handler);
         
-        // STEP 5: Start the server
         server.start().await
     }
 }

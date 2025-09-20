@@ -35,7 +35,6 @@ impl GolemResources {
     pub async fn list_resources(&self) -> Vec<Resource> {
         let mut resources = Vec::new();
 
-        // Use existing app::context logic to discover manifests
         if let Ok(sources_result) = self.discover_manifests() {
             resources.extend(sources_result);
         }
@@ -74,11 +73,9 @@ impl GolemResources {
         }
     }
 
-    /// Discover manifests using the existing app::context logic
     fn discover_manifests(&self) -> Result<Vec<Resource>> {
         let mut resources = Vec::new();
         
-        // Use the existing find_main_source function to discover the main manifest
         if let Some(main_source) = find_main_source() {
             resources.push(Resource {
                 uri: format!("file://{}", main_source.display()),
@@ -87,12 +84,11 @@ impl GolemResources {
                 mime_type: Some("text/yaml".to_string()),
             });
             
-            // Try to collect additional sources using the existing logic
             if let Ok(sources_result) = collect_sources_and_switch_to_app_root(Some(&main_source)) {
                 match sources_result {
                     Ok((sources, _calling_working_dir)) => {
                         for source in sources {
-                            if source != main_source { // Avoid duplicating the main source
+                            if source != main_source {
                                 resources.push(Resource {
                                     uri: format!("file://{}", source.display()),
                                     name: Some(format!("Included Manifest: {}", source.display())),
@@ -103,13 +99,11 @@ impl GolemResources {
                         }
                     }
                     Err(_) => {
-                        // Log validation errors but continue with what we have
                         debug!("Validation errors while collecting manifest sources");
                     }
                 }
             }
         } else {
-            // No main manifest found, create a placeholder
             resources.push(Resource {
                 uri: "golem://no-manifest".to_string(),
                 name: Some("No Manifest Found".to_string()),
@@ -125,10 +119,8 @@ impl GolemResources {
         if uri.starts_with("file://") {
             Some(std::path::PathBuf::from(uri.strip_prefix("file://").unwrap()))
         } else if uri == "golem://no-manifest" {
-            // Handle the special case for no manifest found
             None
         } else if uri == "golem://current-manifest" {
-            // Handle the special case for current directory manifest (legacy)
             match std::env::current_dir() {
                 Ok(dir) => Some(dir.join(DEFAULT_CONFIG_FILE_NAME)),
                 Err(_) => None,
