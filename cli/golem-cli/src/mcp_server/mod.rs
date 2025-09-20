@@ -16,18 +16,17 @@ use crate::context::Context;
 use anyhow::Result;
 use rmcp::{
     schemars::JsonSchema,
-    ServiceExt,
-    transport::{TokioChildProcess, ConfigureCommandExt},
+    InitializeResult, Implementation, ServerCapabilities, ServerCapabilitiesTools,
+    ServiceExt, transport::StdioTransport, TransportOptions,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::process::Command;
 use tracing::{debug, info};
 
 mod tools;
 mod resources;
 
-use tools::GolemTools;
+use tools::GolemToolHandler;
 use resources::GolemResources;
 
 pub struct GolemMcpServer {
@@ -39,67 +38,44 @@ impl GolemMcpServer {
         Self { ctx }
     }
 
-    pub async fn start(&self, port: u16) -> Result<()> {
-        info!("Starting Golem MCP Server on port {}", port);
+    pub async fn start(&self, _port: u16) -> Result<()> {
+        info!("Starting Golem MCP Server");
         
-        // Create the server handler
+        // STEP 1: Define server details and capabilities
+        let server_details = InitializeResult {
+            server_info: Implementation {
+                name: "Golem CLI MCP Server".to_string(),
+                version: "0.1.0".to_string(),
+                title: Some("Golem CLI MCP Server".to_string()),
+            },
+            capabilities: ServerCapabilities {
+                tools: Some(ServerCapabilitiesTools {
+                    list_changed: None,
+                }),
+                ..Default::default()
+            },
+            meta: None,
+            instructions: Some("Golem CLI MCP Server provides access to Golem CLI commands and manifest files".to_string()),
+            protocol_version: rmcp::LATEST_PROTOCOL_VERSION.to_string(),
+        };
+        
+        // STEP 2: Create a std transport with default options
+        let transport = StdioTransport::new(TransportOptions::default())?;
+        
+        // STEP 3: Instantiate our custom handler for handling MCP messages
         let handler = GolemMcpHandler::new(self.ctx.clone());
         
-        // For now, we'll use stdio transport as it's simpler to implement
-        // In the future, we can add HTTP transport support
-        let transport = (tokio::io::stdin(), tokio::io::stdout());
+        // STEP 4: Create a MCP server
+        let server = rmcp::server_runtime::create_server(server_details, transport, handler);
         
-        let server = handler.serve(transport).await?;
-        
-        info!("Golem MCP Server running");
-        
-        // Wait for the server to finish
-        let quit_reason = server.waiting().await?;
-        info!("MCP Server stopped: {:?}", quit_reason);
-        
-        Ok(())
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GolemCommandTool {
-    /// The Golem CLI command to execute
-    pub command: String,
-    /// Arguments for the command
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
-#[rmcp::tool]
-impl GolemCommandTool {
-    pub fn tool() -> rmcp::Tool {
-        rmcp::Tool {
-            name: "execute_golem_command".to_string(),
-            description: "Execute a Golem CLI command".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "The Golem CLI command to execute (e.g., 'component', 'app', 'agent')"
-                    },
-                    "args": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Arguments for the command"
-                    }
-                },
-                "required": ["command"]
-            }),
-        }
+        // STEP 5: Start the server
+        server.start().await
     }
 }
 
 pub struct GolemMcpHandler {
     ctx: Arc<Context>,
-    tools: GolemTools,
+    tools: GolemToolHandler,
     resources: GolemResources,
 }
 
@@ -107,7 +83,7 @@ impl GolemMcpHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self {
             ctx,
-            tools: GolemTools::new(ctx.clone()),
+            tools: GolemToolHandler::new(ctx.clone()),
             resources: GolemResources::new(ctx.clone()),
         }
     }
@@ -122,12 +98,7 @@ impl rmcp::ServerHandler for GolemMcpHandler {
     ) -> Result<rmcp::ListToolsResult, rmcp::RpcError> {
         debug!("Handling list tools request");
         
-        let mut tools = vec![
-            GolemCommandTool::tool(),
-        ];
-        
-        // Add all tools from the tools module
-        tools.extend(self.tools.list_tools());
+        let tools = self.tools.list_tools();
         
         Ok(rmcp::ListToolsResult {
             tools,
@@ -139,19 +110,11 @@ impl rmcp::ServerHandler for GolemMcpHandler {
     async fn handle_call_tool_request(
         &self,
         request: rmcp::CallToolRequest,
-        runtime: Arc<dyn rmcp::McpServer>,
+        _runtime: Arc<dyn rmcp::McpServer>,
     ) -> Result<rmcp::CallToolResult, rmcp::CallToolError> {
         debug!("Handling call tool request: {}", request.name);
         
-        match request.name.as_str() {
-            "execute_golem_command" => {
-                self.tools.execute_golem_command(&request).await
-            }
-            _ => {
-                // Try to handle with tools module
-                self.tools.handle_call_tool_request(&request, runtime).await
-            }
-        }
+        self.tools.handle_call_tool_request(&request).await
     }
 
     async fn handle_list_resources_request(

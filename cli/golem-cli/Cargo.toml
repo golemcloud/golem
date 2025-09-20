@@ -124,7 +124,7 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
-rmcp = { version = "0.2.0", features = ["server"], optional = true }
+rmcp = { version = "0.1.5", features = ["server"], optional = true }
 tokio-util = { workspace = true, optional = true }
 pathdiff = { workspace = true, optional = true }
 

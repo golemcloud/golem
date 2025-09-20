@@ -23,33 +23,140 @@ use std::sync::Arc;
 use tokio::process::Command;
 use tracing::{debug, error, info};
 
-pub struct GolemTools {
+// Tool definitions using #[mcp_tool] macro
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "execute_golem_command",
+    title = "Execute Golem Command",
+    description = "Execute a Golem CLI command with specified arguments"
+)]
+pub struct ExecuteGolemCommandTool {
+    /// The Golem CLI command to execute
+    pub command: String,
+    /// Arguments for the command
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "list_components",
+    title = "List Components",
+    description = "List all Golem components"
+)]
+pub struct ListComponentsTool {}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "get_component_info",
+    title = "Get Component Info",
+    description = "Get detailed information about a Golem component"
+)]
+pub struct GetComponentInfoTool {
+    /// The name of the component
+    pub component_name: String,
+    /// Optional component version
+    pub version: Option<u64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "list_agents",
+    title = "List Agents",
+    description = "List all Golem agents"
+)]
+pub struct ListAgentsTool {}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "get_agent_info",
+    title = "Get Agent Info",
+    description = "Get detailed information about a Golem agent"
+)]
+pub struct GetAgentInfoTool {
+    /// The name of the agent
+    pub agent_name: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "list_apps",
+    title = "List Apps",
+    description = "List all Golem apps"
+)]
+pub struct ListAppsTool {}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[mcp_tool(
+    name = "get_app_info",
+    title = "Get App Info",
+    description = "Get detailed information about a Golem app"
+)]
+pub struct GetAppInfoTool {
+    /// The name of the app
+    pub app_name: String,
+}
+
+// Generate tool box enum for automatic tool dispatch
+rmcp::tool_box!(GolemTools, [
+    ExecuteGolemCommandTool,
+    ListComponentsTool,
+    GetComponentInfoTool,
+    ListAgentsTool,
+    GetAgentInfoTool,
+    ListAppsTool,
+    GetAppInfoTool
+]);
+
+pub struct GolemToolHandler {
     ctx: Arc<Context>,
 }
 
-impl GolemTools {
+impl GolemToolHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
         Self { ctx }
     }
 
     pub fn list_tools(&self) -> Vec<Tool> {
-        vec![
-            ComponentListTool::tool(),
-            ComponentInfoTool::tool(),
-            AgentListTool::tool(),
-            AgentInfoTool::tool(),
-            AppListTool::tool(),
-            AppInfoTool::tool(),
-        ]
+        GolemTools::tools()
     }
 
-    pub async fn execute_golem_command(
+    pub async fn handle_call_tool_request(
         &self,
         request: &CallToolRequest,
     ) -> Result<CallToolResult, CallToolError> {
-        let args: GolemCommandTool = serde_json::from_value(request.arguments.clone())
-            .map_err(|e| CallToolError::invalid_params(format!("Invalid arguments: {}", e)))?;
+        match GolemTools::try_from(request.clone()) {
+            Ok(tool) => match tool {
+                GolemTools::ExecuteGolemCommandTool(args) => {
+                    self.execute_golem_command(&args).await
+                }
+                GolemTools::ListComponentsTool(_args) => {
+                    self.list_components().await
+                }
+                GolemTools::GetComponentInfoTool(args) => {
+                    self.get_component_info(&args).await
+                }
+                GolemTools::ListAgentsTool(_args) => {
+                    self.list_agents().await
+                }
+                GolemTools::GetAgentInfoTool(args) => {
+                    self.get_agent_info(&args).await
+                }
+                GolemTools::ListAppsTool(_args) => {
+                    self.list_apps().await
+                }
+                GolemTools::GetAppInfoTool(args) => {
+                    self.get_app_info(&args).await
+                }
+            },
+            Err(_) => Err(CallToolError::unknown_tool(request.name.clone())),
+        }
+    }
 
+    async fn execute_golem_command(
+        &self,
+        args: &ExecuteGolemCommandTool,
+    ) -> Result<CallToolResult, CallToolError> {
         info!("Executing Golem command: {} with args: {:?}", args.command, args.args);
 
         // Build the command
@@ -77,23 +184,7 @@ impl GolemTools {
         Ok(CallToolResult::text_content(vec![result_text.into()]))
     }
 
-    pub async fn handle_call_tool_request(
-        &self,
-        request: &CallToolRequest,
-        _runtime: Arc<dyn rmcp::McpServer>,
-    ) -> Result<CallToolResult, CallToolError> {
-        match request.name.as_str() {
-            "list_components" => self.list_components(request).await,
-            "get_component_info" => self.get_component_info(request).await,
-            "list_agents" => self.list_agents(request).await,
-            "get_agent_info" => self.get_agent_info(request).await,
-            "list_apps" => self.list_apps(request).await,
-            "get_app_info" => self.get_app_info(request).await,
-            _ => Err(CallToolError::unknown_tool(request.name.clone())),
-        }
-    }
-
-    async fn list_components(&self, _request: &CallToolRequest) -> Result<CallToolResult, CallToolError> {
+    async fn list_components(&self) -> Result<CallToolResult, CallToolError> {
         debug!("Listing components");
 
         let mut cmd = Command::new("golem-cli");
@@ -110,10 +201,10 @@ impl GolemTools {
         Ok(CallToolResult::text_content(vec![result.into()]))
     }
 
-    async fn get_component_info(&self, request: &CallToolRequest) -> Result<CallToolResult, CallToolError> {
-        let args: GetComponentInfoArgs = serde_json::from_value(request.arguments.clone())
-            .map_err(|e| CallToolError::invalid_params(format!("Invalid arguments: {}", e)))?;
-
+    async fn get_component_info(
+        &self,
+        args: &GetComponentInfoTool,
+    ) -> Result<CallToolResult, CallToolError> {
         debug!("Getting component info for: {}", args.component_name);
 
         let mut cmd = Command::new("golem-cli");
@@ -135,7 +226,7 @@ impl GolemTools {
         Ok(CallToolResult::text_content(vec![result.into()]))
     }
 
-    async fn list_agents(&self, _request: &CallToolRequest) -> Result<CallToolResult, CallToolError> {
+    async fn list_agents(&self) -> Result<CallToolResult, CallToolError> {
         debug!("Listing agents");
 
         let mut cmd = Command::new("golem-cli");
@@ -152,10 +243,10 @@ impl GolemTools {
         Ok(CallToolResult::text_content(vec![result.into()]))
     }
 
-    async fn get_agent_info(&self, request: &CallToolRequest) -> Result<CallToolResult, CallToolError> {
-        let args: GetAgentInfoArgs = serde_json::from_value(request.arguments.clone())
-            .map_err(|e| CallToolError::invalid_params(format!("Invalid arguments: {}", e)))?;
-
+    async fn get_agent_info(
+        &self,
+        args: &GetAgentInfoTool,
+    ) -> Result<CallToolResult, CallToolError> {
         debug!("Getting agent info for: {}", args.agent_name);
 
         let mut cmd = Command::new("golem-cli");
@@ -172,7 +263,7 @@ impl GolemTools {
         Ok(CallToolResult::text_content(vec![result.into()]))
     }
 
-    async fn list_apps(&self, _request: &CallToolRequest) -> Result<CallToolResult, CallToolError> {
+    async fn list_apps(&self) -> Result<CallToolResult, CallToolError> {
         debug!("Listing apps");
 
         let mut cmd = Command::new("golem-cli");
@@ -189,10 +280,10 @@ impl GolemTools {
         Ok(CallToolResult::text_content(vec![result.into()]))
     }
 
-    async fn get_app_info(&self, request: &CallToolRequest) -> Result<CallToolResult, CallToolError> {
-        let args: GetAppInfoArgs = serde_json::from_value(request.arguments.clone())
-            .map_err(|e| CallToolError::invalid_params(format!("Invalid arguments: {}", e)))?;
-
+    async fn get_app_info(
+        &self,
+        args: &GetAppInfoTool,
+    ) -> Result<CallToolResult, CallToolError> {
         debug!("Getting app info for: {}", args.app_name);
 
         let mut cmd = Command::new("golem-cli");
@@ -207,143 +298,5 @@ impl GolemTools {
         let result = String::from_utf8_lossy(&output.stdout);
 
         Ok(CallToolResult::text_content(vec![result.into()]))
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GetComponentInfoArgs {
-    /// The name of the component
-    pub component_name: String,
-    /// Optional component version
-    pub version: Option<u64>,
-}
-
-#[rmcp::tool]
-impl GetComponentInfoArgs {
-    pub fn tool() -> Tool {
-        Tool {
-            name: "get_component_info".to_string(),
-            description: "Get detailed information about a Golem component".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "component_name": {
-                        "type": "string",
-                        "description": "The name of the component"
-                    },
-                    "version": {
-                        "type": "integer",
-                        "description": "Optional component version"
-                    }
-                },
-                "required": ["component_name"]
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GetAgentInfoArgs {
-    /// The name of the agent
-    pub agent_name: String,
-}
-
-#[rmcp::tool]
-impl GetAgentInfoArgs {
-    pub fn tool() -> Tool {
-        Tool {
-            name: "get_agent_info".to_string(),
-            description: "Get detailed information about a Golem agent".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "agent_name": {
-                        "type": "string",
-                        "description": "The name of the agent"
-                    }
-                },
-                "required": ["agent_name"]
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GetAppInfoArgs {
-    /// The name of the app
-    pub app_name: String,
-}
-
-#[rmcp::tool]
-impl GetAppInfoArgs {
-    pub fn tool() -> Tool {
-        Tool {
-            name: "get_app_info".to_string(),
-            description: "Get detailed information about a Golem app".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "app_name": {
-                        "type": "string",
-                        "description": "The name of the app"
-                    }
-                },
-                "required": ["app_name"]
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ListComponentsTool {}
-
-#[rmcp::tool]
-impl ListComponentsTool {
-    pub fn tool() -> Tool {
-        Tool {
-            name: "list_components".to_string(),
-            description: "List all Golem components".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ListAgentsTool {}
-
-#[rmcp::tool]
-impl ListAgentsTool {
-    pub fn tool() -> Tool {
-        Tool {
-            name: "list_agents".to_string(),
-            description: "List all Golem agents".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ListAppsTool {}
-
-#[rmcp::tool]
-impl ListAppsTool {
-    pub fn tool() -> Tool {
-        Tool {
-            name: "list_apps".to_string(),
-            description: "List all Golem apps".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {},
-                "required": []
-            }),
-        }
     }
 }
