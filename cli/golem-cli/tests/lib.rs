@@ -19,8 +19,13 @@ test_r::enable!();
 
 mod app;
 mod stubgen;
+#[cfg(feature = "mcp")]
+mod mcp_server;
 
 tag_suite!(app, app);
+
+#[cfg(feature = "mcp")]
+tag_suite!(mcp_server, mcp_server);
 
 #[derive(Debug)]
 pub struct Tracing;
