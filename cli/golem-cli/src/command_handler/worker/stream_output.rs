@@ -12,10 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::text::fmt::to_colored_yaml;
+use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
 use crate::model::{Format, WorkerConnectOptions};
 use colored::Colorize;
-use colored_json::ColorMode;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;
 use std::collections::HashSet;
@@ -324,19 +323,12 @@ impl WorkerStreamOutput {
     }
 
     fn pretty_json(&self, level_or_source: &str, context: &str, message: &str) {
-        let json = self.json_value(level_or_source, context, message);
-        println!(
-            "{}",
-            colored_json::to_colored_json(
-                &json,
-                if self.options.colors {
-                    ColorMode::On
-                } else {
-                    ColorMode::Off
-                }
-            )
-            .unwrap()
-        );
+        if self.options.colors {
+            let json = self.json_value(level_or_source, context, message);
+            println!("{}", to_colored_json(&json).unwrap());
+        } else {
+            self.json(level_or_source, context, message);
+        }
     }
 
     fn yaml(&self, level_or_source: &str, context: &str, message: &str) {
@@ -345,8 +337,12 @@ impl WorkerStreamOutput {
     }
 
     fn pretty_yaml(&self, level_or_source: &str, context: &str, message: &str) {
-        let json = self.json_value(level_or_source, context, message);
-        println!("{}", to_colored_yaml(&json).unwrap());
+        if self.options.colors {
+            let json = self.json_value(level_or_source, context, message);
+            println!("{}", to_colored_yaml(&json).unwrap());
+        } else {
+            self.yaml(level_or_source, context, message);
+        }
     }
 
     fn json_value(&self, level_or_source: &str, context: &str, message: &str) -> serde_json::Value {

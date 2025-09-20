@@ -82,7 +82,7 @@ pub struct Context {
     show_sensitive: bool,
     dev_mode: bool,
     server_no_limit_change: bool,
-    colored_json_color_mode: colored_json::ColorMode,
+    should_colorize: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -238,13 +238,7 @@ impl Context {
             dev_mode,
             show_sensitive,
             server_no_limit_change,
-            colored_json_color_mode: {
-                if SHOULD_COLORIZE.should_colorize() {
-                    colored_json::ColorMode::On
-                } else {
-                    colored_json::ColorMode::Off
-                }
-            },
+            should_colorize: SHOULD_COLORIZE.should_colorize(),
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -299,8 +293,8 @@ impl Context {
         self.server_no_limit_change
     }
 
-    pub fn colored_json_color_mode(&self) -> colored_json::ColorMode {
-        self.colored_json_color_mode
+    pub fn should_colorize(&self) -> bool {
+        self.should_colorize
     }
 
     pub async fn silence_app_context_init(&self) {

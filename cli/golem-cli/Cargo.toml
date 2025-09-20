@@ -58,7 +58,6 @@ clap-verbosity-flag = { workspace = true }
 clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
-colored_json = { workspace = true }
 dirs = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
@@ -96,6 +95,7 @@ spdx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
+synoptic = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
