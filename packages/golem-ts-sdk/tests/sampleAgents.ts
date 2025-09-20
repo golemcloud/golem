@@ -110,6 +110,42 @@ class SimpleAgent extends BaseAgent {
     return param;
   }
 
+  // Ensuring remote call variants compiles
+  async fun14(
+    testInterfaceType: Types.TestInterfaceType,
+    optionalStringType: string | null,
+    optionalUnionType: UnionType | null,
+
+    unstructuredText: UnstructuredText,
+
+    @languageCodes(['en'])
+    unstructuredTextWithLanguageCode: UnstructuredText,
+
+    unstructuredBinary: UnstructuredBinary,
+
+    @mimeTypes(['application/json'])
+    unstructuredBinaryWithMimeType: UnstructuredBinary,
+  ): Promise<void> {
+    const remoteClient = ComplexAgent.get(
+      testInterfaceType,
+      optionalStringType,
+      optionalUnionType,
+      unstructuredText,
+      unstructuredTextWithLanguageCode,
+      unstructuredBinary,
+      unstructuredBinaryWithMimeType,
+    );
+
+    await remoteClient.fun2("foo")
+
+    await remoteClient.fun2.trigger('foo');
+
+    await remoteClient.fun2.schedule(
+      { seconds: 50000n, nanoseconds: 0 },
+      'foo',
+    );
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
@@ -291,6 +327,7 @@ class ComplexAgent extends BaseAgent {
   async fun22(text: [string]): Promise<string> {
     return this.getId().value;
   }
+
 }
 
 // If this class is decorated with agent, it will fail
