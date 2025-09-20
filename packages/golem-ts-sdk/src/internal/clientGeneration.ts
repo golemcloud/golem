@@ -17,7 +17,7 @@ import {
   Type,
   TypeMetadata,
 } from '@golemcloud/golem-ts-types-core';
-import { WasmRpc, WorkerId } from 'golem:rpc/types@0.2.2';
+import { Datetime, WasmRpc, WorkerId } from 'golem:rpc/types@0.2.2';
 import * as Either from '../newTypes/either';
 import * as WitValue from './mapping/values/WitValue';
 import * as Option from '../newTypes/option';
@@ -31,6 +31,7 @@ import { AgentClassName } from '../newTypes/agentClassName';
 import { DataValue, ElementValue } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
 import * as util from 'node:util';
+import { RemoteMethod } from '../baseAgent';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -77,7 +78,7 @@ function getMethodProxy(
   prop: string | symbol,
   agentTypeName: AgentTypeName,
   workerId: WorkerId,
-) {
+): RemoteMethod<any[], any> {
   const methodSignature = classMetadata.methods.get(prop.toString());
 
   const methodParams = methodSignature?.methodParams;
@@ -94,10 +95,11 @@ function getMethodProxy(
 
   const returnType = methodSignature?.returnType;
 
-  return async (...fnArgs: any[]) => {
-    const methodNameKebab = convertAgentMethodNameToKebab(prop.toString());
-    const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
+  const methodNameKebab = convertAgentMethodNameToKebab(prop.toString());
 
+  const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
+
+  function encodeArgs(fnArgs: any[]) {
     const parameterWitValuesEither = Either.all(
       fnArgs.map((fnArg, index) => {
         const param = paramInfo[index];
@@ -105,15 +107,14 @@ function getMethodProxy(
         return WitValue.fromTsValue(fnArg, typ);
       }),
     );
+    if (Either.isLeft(parameterWitValuesEither)) {
+      throw new Error('Failed to encode args: ' + parameterWitValuesEither.val);
+    }
+    return parameterWitValuesEither.val;
+  }
 
-    const parameterWitValues = Either.isLeft(parameterWitValuesEither)
-      ? (() => {
-          throw new Error(
-            'Failed to create remote agent: ' + parameterWitValuesEither.val,
-          );
-        })()
-      : parameterWitValuesEither.val;
-
+  async function invokeAndAwait(...fnArgs: any[]) {
+    const parameterWitValues = encodeArgs(fnArgs);
     const wasmRpc = new WasmRpc(workerId);
 
     const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(
@@ -122,14 +123,12 @@ function getMethodProxy(
     );
 
     const rpcResultPollable = rpcResultFuture.subscribe();
-
     await rpcResultPollable.promise();
 
     const rpcResult = rpcResultFuture.get();
-
     if (!rpcResult) {
       throw new Error(
-        `Failed to invoke ${functionName} in agent ${workerId.workerName}. RPC result is not available after polling`,
+        `Failed to invoke ${functionName} in agent ${workerId.workerName}`,
       );
     }
 
@@ -137,13 +136,33 @@ function getMethodProxy(
       rpcResult.tag === 'err'
         ? (() => {
             throw new Error(
-              'Failed to invoke function: ' + JSON.stringify(rpcResult.val),
+              'Failed to invoke: ' + JSON.stringify(rpcResult.val),
             );
           })()
         : rpcResult.val;
 
     return Value.toTsValue(unwrapResult(rpcWitValue), returnType);
-  };
+  }
+
+  async function invokeFireAndForget(...fnArgs: any[]) {
+    const parameterWitValues = encodeArgs(fnArgs);
+    const wasmRpc = new WasmRpc(workerId);
+    wasmRpc.invoke(functionName, parameterWitValues);
+  }
+
+  async function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
+    const parameterWitValues = encodeArgs(fnArgs);
+    const wasmRpc = new WasmRpc(workerId);
+    wasmRpc.scheduleInvocation(ts, functionName, parameterWitValues);
+  }
+
+  const methodFn: any = (...args: any[]) => invokeAndAwait(...args);
+
+  methodFn.trigger = (...args: any[]) => invokeFireAndForget(...args);
+  methodFn.schedule = (ts: Datetime, ...args: any[]) =>
+    invokeSchedule(ts, ...args);
+
+  return methodFn as RemoteMethod<any[], any>;
 }
 
 // constructorArgs is an array of any, we can have more control depending on its types

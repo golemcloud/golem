@@ -12,13 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  agent,
-  AgentId,
-  BaseAgent,
-  UnstructuredBinary,
-  UnstructuredText,
-} from '../src';
+import { agent, BaseAgent, UnstructuredBinary, UnstructuredText } from '../src';
 import * as Types from './testTypes';
 import {
   EitherX,

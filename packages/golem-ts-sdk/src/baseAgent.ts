@@ -104,7 +104,19 @@ export class BaseAgent {
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
-  ): InstanceType<T> {
+  ): WithRemoteMethods<InstanceType<T>> {
     throw new Error('A remote client will be created at runtime');
   }
 }
+
+export type WithRemoteMethods<T> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? RemoteMethod<A, Awaited<R>>
+    : T[K];
+};
+
+export type RemoteMethod<Args extends any[], R> = {
+  (...args: Args): Promise<R>;
+  trigger: (...args: Args) => Promise<R>;
+  schedule: (ts: number, ...args: Args) => Promise<R>;
+};
