@@ -17,7 +17,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Plug } from "lucide-react";
-import { Update, Worker } from "@/types/worker.ts";
+import { Update, Agent } from "@/types/agent.ts";
 import { useParams } from "react-router-dom";
 import { API } from "@/service";
 
@@ -93,7 +93,7 @@ export const PluginStatus: React.FC<PluginStatusProps> = ({
     <>
       <Card className="w-full max-w-4xl mx-auto mb-6 shadow-md">
         <CardHeader>
-          <CardTitle className="text-lg">Worker Information</CardTitle>
+          <CardTitle className="text-lg">Agent Information</CardTitle>
           <CardDescription>
             Current Version:{" "}
             <span className="font-semibold">v{componentVersion}</span> | Status:{" "}
@@ -143,7 +143,7 @@ export const PluginStatus: React.FC<PluginStatusProps> = ({
       </Card>
       <Card className="w-full max-w-4xl mx-auto shadow-md">
         <CardHeader>
-          <CardTitle className="text-lg">Worker Updates</CardTitle>
+          <CardTitle className="text-lg">Agent Updates</CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
           {updates.length > 0 ? (
@@ -161,31 +161,31 @@ export const PluginStatus: React.FC<PluginStatusProps> = ({
   );
 };
 
-export default function WorkerInfo() {
+export default function AgentInfo() {
   const {
     appId,
     componentId = "",
-    workerName = "",
-  } = useParams<{ appId: string; componentId: string; workerName: string }>();
-  const [workerDetails, setWorkerDetails] = useState({} as Worker);
+    agentName = "",
+  } = useParams<{ appId: string; componentId: string; agentName: string }>();
+  const [agentDetails, setAgentDetails] = useState({} as Agent);
 
   useEffect(() => {
-    if (componentId && workerName) {
-      API.workerService
-        .getParticularWorker(appId!, componentId, workerName)
+    if (componentId && agentName) {
+      API.agentService
+        .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          setWorkerDetails(response as Worker);
+          setAgentDetails(response as Agent);
         });
     }
-  }, [appId, componentId, workerName]);
+  }, [appId, componentId, agentName]);
 
   return (
     <div className="container mx-auto py-10 px-6">
       <PluginStatus
-        activePlugins={workerDetails.activePlugins || []}
-        componentVersion={workerDetails.componentVersion || 0}
-        status={workerDetails.status || "Unknown"}
-        updates={(workerDetails.updates || []).reverse()}
+        activePlugins={agentDetails.activePlugins || []}
+        componentVersion={agentDetails.componentVersion || 0}
+        status={agentDetails.status || "Unknown"}
+        updates={(agentDetails.updates || []).reverse()}
       />
     </div>
   );

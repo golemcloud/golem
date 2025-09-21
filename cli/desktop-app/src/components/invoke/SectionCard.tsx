@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useTheme } from "@/components/theme-provider.tsx";
 import { ComponentExportFunction } from "@/types/component.ts";
 import { sanitizeInput } from "@/lib/utils";
-import { parseTooltipTypesData, RawTypesInput } from "@/lib/worker";
+import { parseTooltipTypesData, RawTypesInput } from "@/lib/agent";
 import {
   isHttpHandlerFunction,
   canInvokeHttpHandler,
@@ -42,8 +42,8 @@ export function SectionCard({
   copyToClipboard,
   functionDetails,
   readOnly = false,
-  onInvoke = () => {},
-  onReset = () => {},
+  onInvoke = () => { },
+  onReset = () => { },
   exportName = "",
 }: SectionCardProps) {
   const { theme } = useTheme();
@@ -179,9 +179,8 @@ export function SectionCard({
                 setErrors({});
                 onValueChange?.(e.target.value);
               }}
-              className={`min-h-[400px] font-mono text-sm mt-2 ${
-                Object.keys(errors).length > 0 ? "border-red-500" : ""
-              }`}
+              className={`min-h-[400px] font-mono text-sm mt-2 ${Object.keys(errors).length > 0 ? "border-red-500" : ""
+                }`}
               placeholder="Enter JSON data..."
             />
           )}

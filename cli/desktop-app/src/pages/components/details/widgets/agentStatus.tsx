@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CircleSlash, Clock } from "lucide-react";
-import { WorkerStatus as IWorkerStatus } from "@/types/worker.ts";
+import { AgentStatus as IAgentStatus } from "@/types/agent.ts";
 import * as React from "react";
 import { Label, Pie, PieChart } from "recharts";
 import {
@@ -15,7 +15,7 @@ import ErrorBoundary from "@/components/errorBoundary";
 // Chart configuration with type safety via `satisfies`
 const chartConfig = {
   value: {
-    label: "Worker Count",
+    label: "Agent Count",
   },
   Idle: {
     label: "Idle",
@@ -35,24 +35,24 @@ const chartConfig = {
   },
 } satisfies ChartConfig;
 
-export function WorkerStatus({
-  workerStatus,
+export function AgentStatus({
+  agentStatus,
 }: {
-  workerStatus: IWorkerStatus;
+  agentStatus: IAgentStatus;
 }) {
-  // Calculate total workers and memoize the result
+  // Calculate total agents and memoize the result
   const total = React.useMemo(() => {
-    return Object.values(workerStatus).reduce((acc, val) => acc + val, 0);
-  }, [workerStatus]);
+    return Object.values(agentStatus).reduce((acc, val) => acc + val, 0);
+  }, [agentStatus]);
 
-  // Prepare data for the pie chart from workerStatus
+  // Prepare data for the pie chart from agentStatus
   const pieData = React.useMemo(
     () =>
-      Object.entries(workerStatus).map(([key, value]) => ({
+      Object.entries(agentStatus).map(([key, value]) => ({
         key,
         value,
       })),
-    [workerStatus],
+    [agentStatus],
   );
 
   // Extracted render function for the chart label for clarity
@@ -81,7 +81,7 @@ export function WorkerStatus({
             y={(viewBox.cy || 0) + 24}
             className="fill-muted-foreground"
           >
-            Total Workers
+            Total Agents
           </tspan>
         </text>
       );
@@ -94,7 +94,7 @@ export function WorkerStatus({
     <ErrorBoundary>
       <Card className="flex flex-col">
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-          <CardTitle className="text-base font-medium">Worker Status</CardTitle>
+          <CardTitle className="text-base font-medium">Agent Status</CardTitle>
           <Clock className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <Separator className="m-4 mx-auto" />
@@ -102,7 +102,7 @@ export function WorkerStatus({
           <CardContent className="flex-1 pb-0 flex items-center justify-center">
             <div className="flex flex-col items-center text-muted-foreground">
               <CircleSlash className="w-10 h-10" />
-              <p className="mt-2 text-sm">No worker data available</p>
+              <p className="mt-2 text-sm">No agent data available</p>
             </div>
           </CardContent>
         ) : (

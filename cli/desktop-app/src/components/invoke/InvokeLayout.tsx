@@ -2,9 +2,9 @@ import { Button } from "@/components/ui/button";
 import { ComponentExportFunction, Export, Typ } from "@/types/component.ts";
 import { cn } from "@/lib/utils";
 import { ClipboardCopy, Presentation, TableIcon } from "lucide-react";
-import { DynamicForm } from "@/pages/workers/details/dynamic-form.tsx";
+import { DynamicForm } from "@/pages/agents/details/dynamic-form.tsx";
 import { SectionCard } from "./SectionCard";
-import { parseToJsonEditor, parseTypesData, RawTypesInput } from "@/lib/worker";
+import { parseToJsonEditor, parseTypesData, RawTypesInput } from "@/lib/agent";
 
 export interface InvokeParams {
   params: Array<{
@@ -115,11 +115,10 @@ export function InvokeLayout({
                         setResultValue("");
                         setViewMode("form");
                       }}
-                      className={`text-primary hover:bg-primary/10 hover:text-primary ${
-                        viewMode === "form"
+                      className={`text-primary hover:bg-primary/10 hover:text-primary ${viewMode === "form"
                           ? "bg-primary/20 hover:text-primary "
                           : ""
-                      }`}
+                        }`}
                     >
                       <ClipboardCopy className="h-4 w-4 mr-1" />
                       Form Layout
@@ -130,11 +129,10 @@ export function InvokeLayout({
                         setResultValue("");
                         setViewMode("preview");
                       }}
-                      className={`text-primary hover:bg-primary/10 hover:text-primary ${
-                        viewMode === "preview"
+                      className={`text-primary hover:bg-primary/10 hover:text-primary ${viewMode === "preview"
                           ? "bg-primary/20 hover:text-primary "
                           : ""
-                      }`}
+                        }`}
                     >
                       <Presentation className="h-4 w-4 mr-1" />
                       Json Layout
@@ -144,11 +142,10 @@ export function InvokeLayout({
                     <Button
                       variant="outline"
                       onClick={() => setViewMode("types")}
-                      className={`text-primary hover:bg-primary/10 hover:text-primary ${
-                        viewMode === "types"
+                      className={`text-primary hover:bg-primary/10 hover:text-primary ${viewMode === "types"
                           ? "bg-primary/20 hover:text-primary "
                           : ""
-                      }`}
+                        }`}
                     >
                       <TableIcon className="h-4 w-4 mr-1" />
                       Types

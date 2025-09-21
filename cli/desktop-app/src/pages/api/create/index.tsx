@@ -76,7 +76,7 @@ const CreateAPI = () => {
       <div className="container mx-auto px-4 py-16 max-w-2xl">
         <h1 className="text-2xl font-semibold mb-2">Create a new API</h1>
         <p className="text-muted-foreground mb-8">
-          Export worker functions as a REST API
+          Export agent functions as a REST API
         </p>
 
         <Form {...form}>

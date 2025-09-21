@@ -1,5 +1,5 @@
 import { API } from "@/service";
-import { Worker } from "@/types/worker.ts";
+import { Agent } from "@/types/agent.ts";
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
@@ -13,21 +13,21 @@ import {
 } from "@/components/ui/tooltip";
 import { Check, Copy, Eye, EyeOff } from "lucide-react";
 
-export default function WorkerEnvironments() {
-  const { componentId, workerName, appId } = useParams();
-  const [workerDetails, setWorkerDetails] = useState({} as Worker);
+export default function AgentEnvironments() {
+  const { componentId, agentName, appId } = useParams();
+  const [agentDetails, setAgentDetails] = useState({} as Agent);
   const [visible, setVisible] = useState(false);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   useEffect(() => {
-    if (componentId && workerName) {
-      API.workerService
-        .getParticularWorker(appId!, componentId, workerName)
+    if (componentId && agentName) {
+      API.agentService
+        .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          setWorkerDetails(response as Worker);
+          setAgentDetails(response as Agent);
         });
     }
-  }, [componentId, workerName]);
+  }, [componentId, agentName]);
 
   const handleCopy = async (key: string, value: string) => {
     await navigator.clipboard.writeText(value);
@@ -44,9 +44,9 @@ export default function WorkerEnvironments() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          {workerDetails.env && Object.entries(workerDetails.env).length > 0 ? (
+          {agentDetails.env && Object.entries(agentDetails.env).length > 0 ? (
             <div className="space-y-4">
-              {Object.entries(workerDetails.env).map(([key, value]) => (
+              {Object.entries(agentDetails.env).map(([key, value]) => (
                 <div
                   className="flex items-center justify-between border-b pb-2"
                   key={key}

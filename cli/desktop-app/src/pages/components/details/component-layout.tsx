@@ -49,55 +49,55 @@ const createMenuItems = (
   componentId: string,
   componentType: string,
 ): SidebarMenuProps[] => [
-  {
-    title: "Overview",
-    url: `/app/${appId}/components/${componentId}`,
-    icon: Home,
-  },
-  {
-    title: "Workers",
-    url: `/app/${appId}/components/${componentId}/workers`,
-    icon: Pickaxe,
-    isHidden: componentType === "Ephemeral",
-  },
-  {
-    title: "Invoke",
-    url: `/app/${appId}/components/${componentId}/invoke`,
-    icon: Workflow,
-    isHidden: componentType === "Durable",
-  },
-  {
-    title: "Exports",
-    url: `/app/${appId}/components/${componentId}/exports`,
-    icon: ArrowRightFromLine,
-  },
-  // {
-  //   title: "Update",
-  //   url: `/app/${appId}/components/${componentId}/update`,
-  //   icon: Pencil,
-  // },
-  {
-    title: "Files",
-    url: `/app/${appId}/components/${componentId}/files`,
-    icon: Folder,
-  },
-  {
-    title: "Plugins",
-    url: `/app/${appId}/components/${componentId}/plugins`,
-    icon: ToyBrick,
-  },
-  {
-    title: "Info",
-    url: `/app/${appId}/components/${componentId}/info`,
-    icon: Info,
-  },
-  {
-    title: "Settings",
-    url: `/app/${appId}/components/${componentId}/settings`,
-    icon: Settings,
-    isHidden: componentType === "Ephemeral",
-  },
-];
+    {
+      title: "Overview",
+      url: `/app/${appId}/components/${componentId}`,
+      icon: Home,
+    },
+    {
+      title: "Agents",
+      url: `/app/${appId}/components/${componentId}/agents`,
+      icon: Pickaxe,
+      isHidden: componentType === "Ephemeral",
+    },
+    {
+      title: "Invoke",
+      url: `/app/${appId}/components/${componentId}/invoke`,
+      icon: Workflow,
+      isHidden: componentType === "Durable",
+    },
+    {
+      title: "Exports",
+      url: `/app/${appId}/components/${componentId}/exports`,
+      icon: ArrowRightFromLine,
+    },
+    // {
+    //   title: "Update",
+    //   url: `/app/${appId}/components/${componentId}/update`,
+    //   icon: Pencil,
+    // },
+    {
+      title: "Files",
+      url: `/app/${appId}/components/${componentId}/files`,
+      icon: Folder,
+    },
+    {
+      title: "Plugins",
+      url: `/app/${appId}/components/${componentId}/plugins`,
+      icon: ToyBrick,
+    },
+    {
+      title: "Info",
+      url: `/app/${appId}/components/${componentId}/info`,
+      icon: Info,
+    },
+    {
+      title: "Settings",
+      url: `/app/${appId}/components/${componentId}/settings`,
+      icon: Settings,
+      isHidden: componentType === "Ephemeral",
+    },
+  ];
 
 /**
  * Layout component for the component details page
@@ -112,8 +112,8 @@ export const ComponentLayout = () => {
   const [currentMenu, setCurrentMenu] = useState("Overview");
   const [loadingStates, setLoadingStates] = useState({
     build: false,
-    updateWorkers: false,
-    deployWorkers: false,
+    updateAgents: false,
+    deployAgents: false,
     deployComponent: false,
     clean: false,
   });
@@ -156,60 +156,60 @@ export const ComponentLayout = () => {
       });
   };
 
-  const handleUpdateWorkers = () => {
+  const handleUpdateAgents = () => {
     if (!appId || !currentComponent?.componentName) return;
-    setLoadingStates(prev => ({ ...prev, updateWorkers: true }));
+    setLoadingStates(prev => ({ ...prev, updateAgents: true }));
 
     // Run async operation without blocking using .then()
     API.appService
-      .updateWorkers(appId, [currentComponent.componentName])
+      .updateAgents(appId, [currentComponent.componentName])
       .then(result => {
         if (result.success) {
           toast({
-            title: "Workers Update Completed",
-            description: `Workers for ${currentComponent.componentName} updated successfully.`,
+            title: "Agents Update Completed",
+            description: `Agents for ${currentComponent.componentName} updated successfully.`,
           });
         } else {
           showLog({
-            title: "Workers Update Failed",
+            title: "Agents Update Failed",
             logs: result.logs,
             status: "error",
-            operation: `Update Workers for ${currentComponent.componentName}`,
+            operation: `Update Agents for ${currentComponent.componentName}`,
           });
         }
       })
       .catch(error => {
         showLog({
-          title: "Workers Update Failed",
+          title: "Agents Update Failed",
           logs: String(error),
           status: "error",
-          operation: `Update Workers for ${currentComponent.componentName}`,
+          operation: `Update Agents for ${currentComponent.componentName}`,
         });
       })
       .finally(() => {
-        setLoadingStates(prev => ({ ...prev, updateWorkers: false }));
+        setLoadingStates(prev => ({ ...prev, updateAgents: false }));
       });
   };
 
-  const handleDeployWorkers = () => {
+  const handleDeployAgents = () => {
     if (!appId || !currentComponent?.componentName) return;
-    setLoadingStates(prev => ({ ...prev, deployWorkers: true }));
+    setLoadingStates(prev => ({ ...prev, deployAgents: true }));
 
     // Run async operation without blocking using .then()
     API.appService
-      .deployWorkers(appId, [currentComponent.componentName])
+      .deployAgents(appId, [currentComponent.componentName])
       .then(result => {
         if (result.success) {
           toast({
             title: "Deployment Completed",
-            description: `Workers for ${currentComponent.componentName} deployed successfully.`,
+            description: `Agents for ${currentComponent.componentName} deployed successfully.`,
           });
         } else {
           showLog({
             title: "Deployment Failed",
             logs: result.logs,
             status: "error",
-            operation: `Deploy Workers for ${currentComponent.componentName}`,
+            operation: `Deploy Agents for ${currentComponent.componentName}`,
           });
         }
       })
@@ -218,11 +218,11 @@ export const ComponentLayout = () => {
           title: "Deployment Failed",
           logs: String(error),
           status: "error",
-          operation: `Deploy Workers for ${currentComponent.componentName}`,
+          operation: `Deploy Agents for ${currentComponent.componentName}`,
         });
       })
       .finally(() => {
-        setLoadingStates(prev => ({ ...prev, deployWorkers: false }));
+        setLoadingStates(prev => ({ ...prev, deployAgents: false }));
       });
   };
 
@@ -285,7 +285,7 @@ export const ComponentLayout = () => {
 
     // Run async operation without blocking using .then()
     API.appService
-      .deployWorkers(appId, [currentComponent.componentName])
+      .deployAgents(appId, [currentComponent.componentName])
       .then(result => {
         if (result.success) {
           toast({
@@ -334,7 +334,7 @@ export const ComponentLayout = () => {
 
   // Update current menu based on location
   useEffect(() => {
-    if (location.pathname.includes("workers")) setCurrentMenu("Workers");
+    if (location.pathname.includes("agents")) setCurrentMenu("Agents");
     else if (location.pathname.includes("invoke")) setCurrentMenu("Invoke");
     else if (location.pathname.includes("exports")) setCurrentMenu("Exports");
     else if (location.pathname.includes("update")) setCurrentMenu("Update");
@@ -406,11 +406,11 @@ export const ComponentLayout = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleUpdateWorkers}
-                disabled={loadingStates.updateWorkers}
+                onClick={handleUpdateAgents}
+                disabled={loadingStates.updateAgents}
                 className="text-xs h-7"
               >
-                {loadingStates.updateWorkers ? (
+                {loadingStates.updateAgents ? (
                   <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                 ) : (
                   <RefreshCw className="h-3 w-3 mr-1" />
@@ -420,11 +420,11 @@ export const ComponentLayout = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={handleDeployWorkers}
-                disabled={loadingStates.deployWorkers}
+                onClick={handleDeployAgents}
+                disabled={loadingStates.deployAgents}
                 className="text-xs h-7"
               >
-                {loadingStates.deployWorkers ? (
+                {loadingStates.deployAgents ? (
                   <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                 ) : (
                   <Upload className="h-3 w-3 mr-1" />

@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { API } from "@/service";
-import { Worker } from "@/types/worker";
+import { Agent } from "@/types/agent";
 
 export default function ComponentSettings() {
   const { toast } = useToast();
@@ -31,7 +31,7 @@ export default function ComponentSettings() {
   const handleDeleteAll = async () => {
     setIsDeleting(true);
     try {
-      const response = await API.workerService.findWorker(
+      const response = await API.agentService.findAgent(
         appId!,
         componentId!,
         {
@@ -41,18 +41,18 @@ export default function ComponentSettings() {
       );
 
       await Promise.allSettled(
-        response?.workers.map((worker: Worker) =>
-          API.workerService.deleteWorker(
+        response?.agents.map((agent: Agent) =>
+          API.agentService.deleteAgent(
             appId!,
             componentId!,
-            worker.workerName,
+            agent.agentName,
           ),
         ),
       );
 
       toast({
-        title: "All workers deleted",
-        description: `All workers for component ${componentId} have been deleted`,
+        title: "All agents deleted",
+        description: `All agents for component ${componentId} have been deleted`,
         duration: 3000,
       });
 
@@ -61,7 +61,7 @@ export default function ComponentSettings() {
       console.error(error);
       toast({
         title: "Error",
-        description: "Failed to delete some or all workers.",
+        description: "Failed to delete some or all agents.",
         variant: "destructive",
       });
     } finally {
@@ -92,9 +92,9 @@ export default function ComponentSettings() {
             <CardContent className="px-0 py-2">
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                 <div>
-                  <h3 className="text-lg font-medium">Delete All Workers</h3>
+                  <h3 className="text-lg font-medium">Delete All Agents</h3>
                   <p className="text-sm text-muted-foreground">
-                    This will permanently delete all workers associated with
+                    This will permanently delete all agents associated with
                     this component. This action cannot be undone.
                   </p>
                 </div>
@@ -104,7 +104,7 @@ export default function ComponentSettings() {
                   onOpenChange={setShowConfirmAllDialog}
                 >
                   <DialogTrigger asChild>
-                    <Button variant="destructive">Delete All Workers</Button>
+                    <Button variant="destructive">Delete All Agents</Button>
                   </DialogTrigger>
                   <DialogContent>
                     <DialogHeader className="text-center">
@@ -112,7 +112,7 @@ export default function ComponentSettings() {
                         Are you sure?
                       </DialogTitle>
                       <DialogDescription className="text-gray-700">
-                        This action cannot be undone. All associated workers
+                        This action cannot be undone. All associated agents
                         will be permanently removed.
                       </DialogDescription>
                     </DialogHeader>

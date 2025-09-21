@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card.tsx";
 import { useNavigate, useParams } from "react-router-dom";
-import { Worker } from "@/types/worker.ts";
+import { Agent } from "@/types/agent.ts";
 import { API } from "@/service";
 
 const WORKER_COLOR_MAPPER = {
@@ -20,34 +20,34 @@ const WORKER_COLOR_MAPPER = {
   Failed: "text-rose-400 dark:text-rose-200",
 };
 
-export default function WorkerList() {
-  const [workerList, setWorkerList] = useState<Worker[]>([]);
-  const [filteredWorkers, setFilteredWorkers] = useState<Worker[]>([]);
+export default function AgentList() {
+  const [agentList, setAgentList] = useState<Agent[]>([]);
+  const [filteredAgents, setFilteredAgents] = useState<Agent[]>([]);
   const [searchQuery, setSearchQuery] = useState("");
 
   const navigate = useNavigate();
   const { appId, componentId } = useParams();
 
   useEffect(() => {
-    API.workerService.findWorker(appId!, componentId!).then(res => {
+    API.agentService.findAgent(appId!, componentId!).then(res => {
       const sortedData = res.workers.sort(
-        (a: Worker, b: Worker) =>
+        (a: Agent, b: Agent) =>
           new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
       );
-      setWorkerList(sortedData);
-      setFilteredWorkers(sortedData);
+      setAgentList(sortedData);
+      setFilteredAgents(sortedData);
     });
   }, [componentId]);
 
   useEffect(() => {
     const lowerCaseQuery = searchQuery.toLowerCase();
-    const filtered = workerList.filter(
-      (worker: Worker) =>
-        worker.workerName?.toLowerCase().includes(lowerCaseQuery) ||
-        worker.status?.toLowerCase().includes(lowerCaseQuery),
+    const filtered = agentList.filter(
+      (agent: Agent) =>
+        agent.agentName?.toLowerCase().includes(lowerCaseQuery) ||
+        agent.status?.toLowerCase().includes(lowerCaseQuery),
     );
-    setFilteredWorkers(filtered);
-  }, [searchQuery, workerList]);
+    setFilteredAgents(filtered);
+  }, [searchQuery, agentList]);
 
   return (
     <div className="flex">
@@ -58,7 +58,7 @@ export default function WorkerList() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-muted-foreground h-4 w-4" />
               <Input
                 className="w-full pl-10 bg-muted rounded-md"
-                placeholder="Search workers..."
+                placeholder="Search agents..."
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
               />
@@ -67,42 +67,42 @@ export default function WorkerList() {
               variant="default"
               onClick={() =>
                 navigate(
-                  `/app/${appId}/components/${componentId}/workers/create`,
+                  `/app/${appId}/components/${componentId}/agents/create`,
                 )
               }
             >
               <Plus className="h-4 w-4" />
-              New Worker
+              New Agent
             </Button>
           </div>
 
-          {filteredWorkers.length === 0 ? (
+          {filteredAgents.length === 0 ? (
             <div className="border-2 border-dashed border-gray-300 dark:border-gray-700 rounded-lg p-12 flex flex-col items-center justify-center">
               <div className="h-16 w-16 bg-gray-100 dark:bg-gray-800 rounded-lg flex items-center justify-center mb-4">
                 <LayoutGrid className="h-8 w-8 text-gray-400" />
               </div>
               <h2 className="text-xl font-semibold text-foreground">
-                No Workers Found
+                No Agents Found
               </h2>
               <p className="text-muted-foreground">
-                Create a new worker to get started.
+                Create a new agent to get started.
               </p>
             </div>
           ) : (
             <div className="overflow-auto max-h-[70vh] space-y-4">
-              {filteredWorkers.map((worker: Worker, index) => (
+              {filteredAgents.map((agent: Agent, index) => (
                 <Card
                   key={index}
                   className="rounded-lg border border-border bg-muted hover:bg-muted/80 hover:shadow-lg transition cursor-pointer"
                   onClick={() =>
                     navigate(
-                      `/app/${appId}/components/${componentId}/workers/${worker.workerName}`,
+                      `/app/${appId}/components/${componentId}/agents/${agent.agentName}`,
                     )
                   }
                 >
                   <CardHeader>
                     <CardTitle className="text-foreground font-mono">
-                      {worker.workerName}
+                      {agent.agentName}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="py-2">
@@ -112,9 +112,9 @@ export default function WorkerList() {
                           Status
                         </div>
                         <div
-                          className={`text-lg font-semibold ${WORKER_COLOR_MAPPER[worker.status as keyof typeof WORKER_COLOR_MAPPER]}`}
+                          className={`text-lg font-semibold ${WORKER_COLOR_MAPPER[agent.status as keyof typeof WORKER_COLOR_MAPPER]}`}
                         >
-                          {worker.status}
+                          {agent.status}
                         </div>
                       </div>
                       <div>
@@ -122,7 +122,7 @@ export default function WorkerList() {
                           Memory
                         </div>
                         <div className="text-lg font-semibold">
-                          {worker.totalLinearMemorySize / 1024} KB
+                          {agent.totalLinearMemorySize / 1024} KB
                         </div>
                       </div>
                       <div>
@@ -130,7 +130,7 @@ export default function WorkerList() {
                           Pending Invocations
                         </div>
                         <div className="text-lg font-semibold">
-                          {worker.pendingInvocationCount}
+                          {agent.pendingInvocationCount}
                         </div>
                       </div>
                       <div>
@@ -138,19 +138,19 @@ export default function WorkerList() {
                           Version
                         </div>
                         <div className="text-lg font-semibold">
-                          v{worker.componentVersion}
+                          v{agent.componentVersion}
                         </div>
                       </div>
                     </div>
                     <div className="py-2 flex gap-2 text-sm">
                       <Badge variant="outline" className="rounded-sm">
-                        Args: {worker.args.length}
+                        Args: {agent.args.length}
                       </Badge>
                       <Badge variant="outline" className="rounded-sm">
-                        Env: {Object.keys(worker.env).length}
+                        Env: {Object.keys(agent.env).length}
                       </Badge>
                       <span className="text-muted-foreground ml-auto">
-                        {new Date(worker.createdAt).toLocaleString()}
+                        {new Date(agent.createdAt).toLocaleString()}
                       </span>
                     </div>
                   </CardContent>

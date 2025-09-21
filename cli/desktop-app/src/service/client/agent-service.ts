@@ -1,11 +1,11 @@
-import { Worker } from "./../../types/worker";
-import { InvokeResponse } from "./../../hooks/useInvoke";
+import { Agent } from "../../types/agent";
+import { InvokeResponse } from "../../hooks/useInvoke";
 import { convertValuesToWaveArgs, convertPayloadToWaveArgs } from "@/lib/wave";
 import { Typ } from "@/types/component";
 import { CLIService } from "./cli-service";
 import { ComponentService } from "./component-service";
 
-export class WorkerService {
+export class AgentService {
   private cliService: CLIService;
   private componentService: ComponentService;
 
@@ -14,22 +14,22 @@ export class WorkerService {
     this.componentService = componentService;
   }
 
-  public upgradeWorker = async (
+  public upgradeAgent = async (
     appId: string,
     componentName: string,
-    workerName: string,
+    agentName: string,
     version: number,
     upgradeType: string,
   ) => {
     return await this.cliService.callCLI(appId, "agent", [
       "update",
-      `${componentName}/${workerName}`,
+      `${componentName}/${agentName}`,
       upgradeType,
       `${version}`,
     ]);
   };
 
-  public findWorker = async (
+  public findAgent = async (
     appId: string,
     componentId: string,
     param = { count: 100, precise: true },
@@ -47,14 +47,14 @@ export class WorkerService {
       params.push(`--precise`);
     }
     return (await this.cliService.callCLI(appId, "agent", params)) as Promise<{
-      workers: Worker[];
+      agents: Agent[];
     }>;
   };
 
-  public deleteWorker = async (
+  public deleteAgent = async (
     appId: string,
     componentId: string,
-    workerName: string,
+    agentName: string,
   ) => {
     let component = await this.componentService.getComponentById(
       appId,
@@ -62,11 +62,11 @@ export class WorkerService {
     );
     return await this.cliService.callCLI(appId, "agent", [
       "delete",
-      `${component?.componentName}/${workerName}`,
+      `${component?.componentName}/${agentName}`,
     ]);
   };
 
-  public createWorker = async (
+  public createAgent = async (
     appId: string,
     componentID: string,
     name: string,
@@ -82,10 +82,10 @@ export class WorkerService {
     ]);
   };
 
-  public getParticularWorker = async (
+  public getParticularAgent = async (
     appId: string,
     componentId: string,
-    workerName: string,
+    agentName: string,
   ) => {
     const component = await this.componentService.getComponentById(
       appId,
@@ -93,55 +93,55 @@ export class WorkerService {
     );
     return await this.cliService.callCLI(appId, "agent", [
       "get",
-      `${component?.componentName}/${workerName}`,
+      `${component?.componentName}/${agentName}`,
     ]);
   };
 
-  public interruptWorker = async (
+  public interruptAgent = async (
     appId: string,
     componentId: string,
-    workerName: string,
+    agentName: string,
   ) => {
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const fullWorkerName = `${component?.componentName}/${workerName}`;
+    const fullAgentName = `${component?.componentName}/${agentName}`;
     return await this.cliService.callCLI(appId, "agent", [
       "interrupt",
-      fullWorkerName,
+      fullAgentName,
     ]);
   };
 
-  public resumeWorker = async (
+  public resumeAgent = async (
     appId: string,
     componentId: string,
-    workerName: string,
+    agentName: string,
   ) => {
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const fullWorkerName = `${component?.componentName}/${workerName}`;
+    const fullAgentName = `${component?.componentName}/${agentName}`;
     return await this.cliService.callCLI(appId, "agent", [
       "resume",
-      fullWorkerName,
+      fullAgentName,
     ]);
   };
 
-  public invokeWorkerAwait = async (
+  public invokeAgentAwait = async (
     appId: string,
     componentId: string,
-    workerName: string,
+    agentName: string,
     functionName: string,
     payload: { params?: unknown[] } | unknown[] | undefined,
   ): Promise<InvokeResponse> => {
-    // Get component name for proper worker identification
+    // Get component name for proper agent identification
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const fullWorkerName = `${component?.componentName}/${workerName}`;
+    const fullAgentName = `${component?.componentName}/${agentName}`;
 
     // Convert payload to individual WAVE-formatted arguments using enhanced converter
     let waveArgs: string[];
@@ -166,7 +166,7 @@ export class WorkerService {
 
     return (await this.cliService.callCLI(appId, "agent", [
       "invoke",
-      fullWorkerName,
+      fullAgentName,
       functionName,
       ...waveArgs,
     ])) as InvokeResponse;
@@ -178,12 +178,12 @@ export class WorkerService {
     functionName: string,
     payload: { params?: unknown[] } | unknown[] | undefined,
   ): Promise<InvokeResponse> => {
-    // Get component name for ephemeral worker identification
+    // Get component name for ephemeral agent identification
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const ephemeralWorkerName = `${component?.componentName}/-`;
+    const ephemeralAgentName = `${component?.componentName}/-`;
 
     // Convert payload to individual WAVE-formatted arguments using enhanced converter
     let waveArgs: string[];
@@ -208,7 +208,7 @@ export class WorkerService {
 
     return (await this.cliService.callCLI(appId, "agent", [
       "invoke",
-      ephemeralWorkerName,
+      ephemeralAgentName,
       functionName,
       ...waveArgs,
     ])) as InvokeResponse;
@@ -217,19 +217,19 @@ export class WorkerService {
   public getOplog = async (
     appId: string,
     componentId: string,
-    workerName: string,
+    agentName: string,
     searchQuery: string,
   ) => {
-    // Get component name for proper worker identification
+    // Get component name for proper agent identification
     const component = await this.componentService.getComponentById(
       appId,
       componentId,
     );
-    const fullWorkerName = `${component?.componentName}/${workerName}`;
+    const fullAgentName = `${component?.componentName}/${agentName}`;
 
     const r = await this.cliService.callCLI(appId, "agent", [
       "oplog",
-      fullWorkerName,
+      fullAgentName,
       `--query=${searchQuery}`,
     ]);
     return r;

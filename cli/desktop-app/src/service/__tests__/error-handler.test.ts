@@ -77,49 +77,49 @@ describe("parseErrorResponse", () => {
   });
 
   describe("Golem specific errors", () => {
-    it("should handle WorkerAlreadyExists error", () => {
+    it("should handle AgentAlreadyExists error", () => {
       const errorObj = {
         golemError: {
-          type: "WorkerAlreadyExists",
-          worker_id: "test-worker-123",
-          reason: "Worker already exists",
+          type: "AgentAlreadyExists",
+          agent_id: "test-agent-123",
+          reason: "Agent already exists",
         },
       };
 
       const result = parseErrorResponse(errorObj);
 
       expect(result).toEqual({
-        code: "WorkerAlreadyExists",
-        title: "Worker Conflict",
-        description: "Worker 'test-worker-123' already exists.",
+        code: "AgentAlreadyExists",
+        title: "Agent Conflict",
+        description: "Agent 'test-agent-123' already exists.",
         payload: errorObj,
       });
     });
 
-    it("should handle WorkerNotFound error", () => {
+    it("should handle AgentNotFound error", () => {
       const errorObj = {
         golemError: {
-          type: "WorkerNotFound",
-          worker_id: "missing-worker-456",
-          reason: "Worker not found",
+          type: "AgentNotFound",
+          agent_id: "missing-agent-456",
+          reason: "Agent not found",
         },
       };
 
       const result = parseErrorResponse(errorObj);
 
       expect(result).toEqual({
-        code: "WorkerNotFound",
-        title: "Worker Not Found",
-        description: "Worker 'missing-worker-456' not found.",
+        code: "AgentNotFound",
+        title: "Agent Not Found",
+        description: "Agent 'missing-agent-456' not found.",
         payload: errorObj,
       });
     });
 
-    it("should handle WorkerCreationFailed error", () => {
+    it("should handle AgentCreationFailed error", () => {
       const errorObj = {
         golemError: {
-          type: "WorkerCreationFailed",
-          worker_id: "failed-worker-789",
+          type: "AgentCreationFailed",
+          agent_id: "failed-agent-789",
           details: "Insufficient resources",
         },
       };
@@ -127,10 +127,10 @@ describe("parseErrorResponse", () => {
       const result = parseErrorResponse(errorObj);
 
       expect(result).toEqual({
-        code: "WorkerCreationFailed",
-        title: "Worker Creation Failed",
+        code: "AgentCreationFailed",
+        title: "Agent Creation Failed",
         description:
-          "Failed to create worker 'failed-worker-789': Insufficient resources",
+          "Failed to create agent 'failed-agent-789': Insufficient resources",
         payload: errorObj,
       });
     });
@@ -235,8 +235,8 @@ describe("parseErrorResponse", () => {
       const errorObj = {
         golemError: {
           type: "UnexpectedOplogEntry",
-          expected: "CreateWorker",
-          got: "DeleteWorker",
+          expected: "CreateAgent",
+          got: "DeleteAgent",
         },
       };
 
@@ -246,7 +246,7 @@ describe("parseErrorResponse", () => {
         code: "UnexpectedOplogEntry",
         title: "Unexpected Oplog Entry",
         description:
-          "Unexpected oplog entry: Expected 'CreateWorker', got 'DeleteWorker'.",
+          "Unexpected oplog entry: Expected 'CreateAgent', got 'DeleteAgent'.",
         payload: errorObj,
       });
     });
@@ -312,14 +312,14 @@ describe("parseErrorResponse", () => {
         golemError: {
           type: "RuntimeError",
           reason: "Execution failed",
-          path: "/api/v1/workers",
+          path: "/api/v1/agents",
         },
       };
 
       const result = parseErrorResponse(errorObj);
 
       expect(result.description).toBe(
-        "Runtime error occurred: Execution failed (Path: /api/v1/workers)",
+        "Runtime error occurred: Execution failed (Path: /api/v1/agents)",
       );
     });
 

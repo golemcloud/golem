@@ -7,19 +7,19 @@ import {
   parseExportString,
   Typ,
 } from "@/types/component.ts";
-import { parseToJsonEditor, safeFormatJSON } from "@/lib/worker";
+import { parseToJsonEditor, safeFormatJSON } from "@/lib/agent";
 import { toast } from "@/hooks/use-toast";
 
 interface UseInvokeProps {
-  isWorkerInvoke?: boolean;
+  isAgentInvoke?: boolean;
 }
 
 export interface InvokeResponse {
   result_json: Record<string, unknown>;
 }
 
-export function useInvoke({ isWorkerInvoke = false }: UseInvokeProps = {}) {
-  const { componentId = "", appId, workerName } = useParams();
+export function useInvoke({ isAgentInvoke = false }: UseInvokeProps = {}) {
+  const { componentId = "", appId, agentName } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -57,8 +57,8 @@ export function useInvoke({ isWorkerInvoke = false }: UseInvokeProps = {}) {
         let exportItem;
         let fnDetails;
 
-        if (isWorkerInvoke && matchingComponent.parsedExports) {
-          // Workers version - use parsed exports
+        if (isAgentInvoke && matchingComponent.parsedExports) {
+          // Agents version - use parsed exports
           exportItem = matchingComponent.parsedExports.find(
             e => e.name === name && e.functions.some(f => f.name === urlFn),
           );
@@ -97,8 +97,8 @@ export function useInvoke({ isWorkerInvoke = false }: UseInvokeProps = {}) {
       ) {
         // Navigate to first available function
         const firstExport = matchingComponent.parsedExports[0];
-        const path = isWorkerInvoke
-          ? `/app/${appId}/components/${componentId}/workers/${workerName}/invoke?name=${firstExport.name}&&fn=${firstExport.functions[0]?.name}`
+        const path = isAgentInvoke
+          ? `/app/${appId}/components/${componentId}/agents/${agentName}/invoke?name=${firstExport.name}&&fn=${firstExport.functions[0]?.name}`
           : `/app/${appId}/components/${componentId}/invoke?name=${firstExport.name}&&fn=${firstExport.functions[0]?.name}`;
         navigate(path);
       }
@@ -117,7 +117,7 @@ export function useInvoke({ isWorkerInvoke = false }: UseInvokeProps = {}) {
         });
       }
     }
-  }, [componentId, urlFn, name, workerName, appId, isWorkerInvoke, navigate]);
+  }, [componentId, urlFn, name, agentName, appId, isAgentInvoke, navigate]);
 
   useEffect(() => {
     if (componentId) {
@@ -160,16 +160,16 @@ export function useInvoke({ isWorkerInvoke = false }: UseInvokeProps = {}) {
       const functionName = `${name}.{${urlFn}}`;
       let response: InvokeResponse;
 
-      if (isWorkerInvoke) {
-        response = await API.workerService.invokeWorkerAwait(
+      if (isAgentInvoke) {
+        response = await API.agentService.invokeAgentAwait(
           appId!,
           componentId,
-          workerName!,
+          agentName!,
           functionName,
           { params },
         );
       } else {
-        response = await API.workerService.invokeEphemeralAwait(
+        response = await API.agentService.invokeEphemeralAwait(
           appId!,
           componentId,
           functionName,
@@ -231,7 +231,7 @@ export function useInvoke({ isWorkerInvoke = false }: UseInvokeProps = {}) {
     urlFn,
     appId,
     componentId,
-    workerName,
+    agentName,
 
     // Functions
     handleValueChange,

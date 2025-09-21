@@ -6,30 +6,30 @@ import {
   Invocation,
   OplogWithIndex,
   Terminal,
-  Worker,
+  Agent,
   WsMessage,
-} from "@/types/worker.ts";
+} from "@/types/agent.ts";
 import { Activity, ActivityIcon, Clock, Cog, LayoutGrid } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { InvocationsChart } from "./widgets/invocationCharts";
 
-export default function WorkerDetails() {
-  const { componentId = "", workerName = "", appId } = useParams();
-  const [workerDetails, setWorkerDetails] = useState({} as Worker);
+export default function AgentDetails() {
+  const { componentId = "", agentName = "", appId } = useParams();
+  const [agentDetails, setAgentDetails] = useState({} as Agent);
   const wsRef = useRef<WSS | null>(null);
   const [invocationData, setInvocationData] = useState<Invocation[]>([]);
   const [terminal, setTerminal] = useState<Terminal[]>([]);
 
   useEffect(() => {
-    if (componentId && workerName) {
-      API.workerService
-        .getParticularWorker(appId!, componentId, workerName)
+    if (componentId && agentName) {
+      API.agentService
+        .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          setWorkerDetails(response as Worker);
+          setAgentDetails(response as Agent);
         });
     }
-  }, [componentId, workerName]);
+  }, [componentId, agentName]);
 
   useEffect(() => {
     async function fetchData() {
@@ -38,7 +38,7 @@ export default function WorkerDetails() {
       await getOpLog();
       const initWebSocket = async () => {
         try {
-          const url = `/v1/components/${componentId}/workers/${workerName}/connect`;
+          const url = `/v1/components/${componentId}/agents/${agentName}/connect`;
           const ws = await WSS.getConnection(url);
           wsRef.current = ws;
 
@@ -81,8 +81,8 @@ export default function WorkerDetails() {
   }, []);
 
   const getOpLog = async () => {
-    API.workerService
-      .getOplog(appId!, componentId, workerName, "")
+    API.agentService
+      .getOplog(appId!, componentId, agentName, "")
       .then(response => {
         const terminalData = [] as Terminal[];
         const invocationList = [] as Invocation[];
@@ -115,7 +115,7 @@ export default function WorkerDetails() {
               <Activity className="h-4 w-4 text-muted-foreground" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">{workerDetails.status}</div>
+              <div className="text-2xl font-bold">{agentDetails.status}</div>
             </CardContent>
           </Card>
 
@@ -128,7 +128,7 @@ export default function WorkerDetails() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {(workerDetails.totalLinearMemorySize / (1024 * 1024)).toFixed(
+                {(agentDetails.totalLinearMemorySize / (1024 * 1024)).toFixed(
                   2,
                 )}{" "}
                 MB
@@ -145,8 +145,8 @@ export default function WorkerDetails() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {workerDetails.ownedResources &&
-                  Object.keys(workerDetails.ownedResources).length}
+                {agentDetails.ownedResources &&
+                  Object.keys(agentDetails.ownedResources).length}
               </div>
             </CardContent>
           </Card>
@@ -158,7 +158,7 @@ export default function WorkerDetails() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {formatRelativeTime(workerDetails.createdAt || new Date())}{" "}
+                {formatRelativeTime(agentDetails.createdAt || new Date())}{" "}
               </div>
             </CardContent>
           </Card>

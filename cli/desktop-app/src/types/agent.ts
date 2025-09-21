@@ -1,4 +1,4 @@
-export interface Worker {
+export interface Agent {
   accountId: string;
   args: string[];
   componentSize: number;
@@ -12,7 +12,7 @@ export interface Worker {
   status: string;
   totalLinearMemorySize: number;
 
-  workerName: string;
+  agentName: string;
   componentName: string;
   activePlugins: string[];
   updates: Update[];
@@ -25,7 +25,7 @@ export interface Update {
   type: "failedUpdate" | "successfulUpdate";
 }
 
-export interface WorkerStatus {
+export interface AgentStatus {
   Idle?: number;
   Running?: number;
   Suspended?: number;
@@ -53,9 +53,9 @@ interface BaseLogEntry {
   timestamp: string;
 }
 
-interface WorkerId {
+interface AgentId {
   componentId: string;
-  workerName: string;
+  agentName: string;
 }
 
 interface AttributeValue {
@@ -80,7 +80,7 @@ interface LocalSpan {
 
 interface CreateEntry extends BaseLogEntry {
   type: "Create";
-  workerId: WorkerId;
+  agentId: AgentId;
   componentVersion: number;
   args: unknown[];
   env: Record<string, unknown>;

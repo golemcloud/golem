@@ -108,7 +108,7 @@ export const ApiLayout = () => {
           menus={MenuItems(appId!, apiName!, version!)}
           activeItem={currentMenu}
           setActiveItem={setCurrentMenu}
-          title={"Worker"}
+          title={"Agent"}
         >
           {(currentApiDetails?.routes?.length || 0) > 0 && (
             <NavRoutes

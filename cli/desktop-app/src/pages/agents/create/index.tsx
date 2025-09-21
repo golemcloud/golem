@@ -27,7 +27,7 @@ import { useEffect, useState } from "react";
 const formSchema = z.object({
   componentID: z.string(),
   name: z.string().min(4, {
-    message: "Worker name must be at least 4 characters",
+    message: "Agent name must be at least 4 characters",
   }),
   env: z.array(
     z.object({
@@ -38,7 +38,7 @@ const formSchema = z.object({
   args: z.array(z.string()),
 });
 
-export default function CreateWorker() {
+export default function CreateAgent() {
   const navigate = useNavigate();
   const { componentId, appId } = useParams();
 
@@ -93,11 +93,11 @@ export default function CreateWorker() {
     }, {});
     rest.args = rest.args.filter(x => x.trim().length > 0);
 
-    API.workerService
-      .createWorker(appId, componentID, values.name)
-      .then((response: { component_name: string; worker_name: string }) => {
+    API.agentService
+      .createAgent(appId, componentID, values.name)
+      .then((response: { component_name: string; agent_name: string }) => {
         navigate(
-          `/app/${appId}/components/${componentId}/workers/${response.worker_name}`,
+          `/app/${appId}/components/${componentId}/agents/${response.agent_name}`,
         );
       });
   }
@@ -105,9 +105,9 @@ export default function CreateWorker() {
   return (
     <div className="flex justify-center p-10">
       <Card className="w-full max-w-2xl border shadow-md p-6">
-        <CardTitle className="text-xl font-bold">Create a New Worker</CardTitle>
+        <CardTitle className="text-xl font-bold">Create a New Agent</CardTitle>
         <CardDescription className="text-gray-500 mb-6">
-          Launch a new worker with the required settings.
+          Launch a new agent with the required settings.
         </CardDescription>
         <CardContent>
           <Form {...form}>
@@ -117,7 +117,7 @@ export default function CreateWorker() {
                 name="name"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Worker Name</FormLabel>
+                    <FormLabel>Agent Name</FormLabel>
                     <FormControl>
                       <div className="flex gap-2">
                         <Input {...field} />

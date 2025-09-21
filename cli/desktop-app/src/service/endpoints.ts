@@ -14,11 +14,11 @@ export const ENDPOINT = {
   deletePluginToComponent: (id: string, installation_id: string) => {
     return `/v1/components/${id}/latest/plugins/installs/${installation_id}`;
   },
-  deleteWorker: (id: string, workName: string) => {
-    return `/v1/components/${id}/workers/${workName}`;
+  deleteAgent: (id: string, workName: string) => {
+    return `/v1/components/${id}/agents/${workName}`;
   },
-  findWorker: (componentId: string) => {
-    return `/v1/components/${componentId}/workers/find`;
+  findAgent: (componentId: string) => {
+    return `/v1/components/${componentId}/agents/find`;
   },
   updateComponent: (id: string) => {
     return `/v1/components/${id}`;
@@ -44,32 +44,32 @@ export const ENDPOINT = {
   putApi: (id: string, version: string) => {
     return `/v1/api/definitions/${id}/${version}`;
   },
-  getWorkers: () => {
-    return "/v1/components/workers/find";
+  getAgents: () => {
+    return "/v1/components/agents/find";
   },
-  createWorker: (component_id: string) => {
-    return `/v1/components/${component_id}/workers`;
+  createAgent: (component_id: string) => {
+    return `/v1/components/${component_id}/agents`;
   },
-  getParticularWorker: (componentId: string, workerName: string) => {
-    return `/v1/components/${componentId}/workers/${workerName}`;
+  getParticularAgent: (componentId: string, agentName: string) => {
+    return `/v1/components/${componentId}/agents/${agentName}`;
   },
-  interruptWorker: (componentId: string, workerName: string) => {
-    return `/v1/components/${componentId}/workers/${workerName}/interrupt`;
+  interruptAgent: (componentId: string, agentName: string) => {
+    return `/v1/components/${componentId}/agents/${agentName}/interrupt`;
   },
-  resumeWorker: (componentId: string, workerName: string) => {
-    return `/v1/components/${componentId}/workers/${workerName}/resume`;
+  resumeAgent: (componentId: string, agentName: string) => {
+    return `/v1/components/${componentId}/agents/${agentName}/resume`;
   },
-  updateWorker: (componentId: string, workerName: string) => {
-    return `/v1/components/${componentId}/workers/${workerName}/update`;
+  updateAgent: (componentId: string, agentName: string) => {
+    return `/v1/components/${componentId}/agents/${agentName}/update`;
   },
-  invokeWorker: (
+  invokeAgent: (
     componentId: string,
-    workerName: string,
+    agentName: string,
     functionName: string,
   ) => {
-    return `/v1/components/${componentId}/workers/${workerName}/invoke-and-await?function=${functionName}`;
+    return `/v1/components/${componentId}/agents/${agentName}/invoke-and-await?function=${functionName}`;
   },
-  invokeEphemeralWorker: (componentId: string, functionName: string) => {
+  invokeEphemeralAgent: (componentId: string, functionName: string) => {
     return `/v1/components/${componentId}/invoke-and-await?function=${functionName}`;
   },
   getPlugins: () => {
@@ -95,10 +95,10 @@ export const ENDPOINT = {
   },
   getOplog: (
     componentId: string,
-    workerName: string,
+    agentName: string,
     count: number,
     searchQuery: string,
   ) => {
-    return `/v1/components/${componentId}/workers/${workerName}/oplog?count=${count}&query=${searchQuery}`;
+    return `/v1/components/${componentId}/agents/${agentName}/oplog?count=${count}&query=${searchQuery}`;
   },
 };

@@ -20,7 +20,7 @@ vi.mock("lucide-react", () => ({
 }));
 
 // Mock DynamicForm component
-vi.mock("@/pages/workers/details/dynamic-form.tsx", () => ({
+vi.mock("@/pages/agents/details/dynamic-form.tsx", () => ({
   DynamicForm: ({
     functionDetails,
     onInvoke,
@@ -90,8 +90,8 @@ vi.mock("../SectionCard", () => ({
   ),
 }));
 
-// Mock worker utilities
-vi.mock("@/lib/worker", () => ({
+// Mock agent utilities
+vi.mock("@/lib/agent", () => ({
   parseToJsonEditor: (functionDetails: ComponentExportFunction) => ({
     [functionDetails.parameters[0]?.name || "param"]: "default-value",
   }),

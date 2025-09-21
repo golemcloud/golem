@@ -49,8 +49,8 @@ vi.mock("@/service", () => ({
   API: {
     appService: {
       buildApp: vi.fn(),
-      updateWorkers: vi.fn(),
-      deployWorkers: vi.fn(),
+      updateAgents: vi.fn(),
+      deployAgents: vi.fn(),
       cleanApp: vi.fn(),
     },
     componentService: {
@@ -237,14 +237,14 @@ describe("Dashboard", () => {
       logs: "Build completed",
       result: {},
     });
-    vi.mocked(mockAPI.appService.updateWorkers).mockResolvedValue({
+    vi.mocked(mockAPI.appService.updateAgents).mockResolvedValue({
       success: true,
-      logs: "Workers updated",
+      logs: "Agents updated",
       result: {},
     });
-    vi.mocked(mockAPI.appService.deployWorkers).mockResolvedValue({
+    vi.mocked(mockAPI.appService.deployAgents).mockResolvedValue({
       success: true,
-      logs: "Workers deployed",
+      logs: "Agents deployed",
       result: {},
     });
     vi.mocked(mockAPI.appService.cleanApp).mockResolvedValue({
@@ -276,8 +276,8 @@ describe("Dashboard", () => {
 
     // Check all action buttons are present
     expect(screen.getByText("Build App")).toBeInTheDocument();
-    expect(screen.getByText("Update Workers")).toBeInTheDocument();
-    expect(screen.getByText("Deploy Workers")).toBeInTheDocument();
+    expect(screen.getByText("Update Agents")).toBeInTheDocument();
+    expect(screen.getByText("Deploy Agents")).toBeInTheDocument();
     expect(screen.getByText("Deploy App")).toBeInTheDocument();
     expect(screen.getByText("Clean App")).toBeInTheDocument();
     expect(screen.getByText("View YAML")).toBeInTheDocument();
@@ -350,40 +350,40 @@ describe("Dashboard", () => {
     });
   });
 
-  it("handles update workers action successfully", async () => {
+  it("handles update agents action successfully", async () => {
     render(
       <TestWrapper>
         <Dashboard />
       </TestWrapper>,
     );
 
-    const updateButton = screen.getByText("Update Workers");
+    const updateButton = screen.getByText("Update Agents");
     fireEvent.click(updateButton);
 
     await waitFor(() => {
-      expect(mockAPI.appService.updateWorkers).toHaveBeenCalledWith(mockAppId);
+      expect(mockAPI.appService.updateAgents).toHaveBeenCalledWith(mockAppId);
       expect(mockToast).toHaveBeenCalledWith({
-        title: "Workers Update Completed",
-        description: "Worker update process completed successfully.",
+        title: "Agents Update Completed",
+        description: "Agent update process completed successfully.",
       });
     });
   });
 
-  it("handles deploy workers action successfully", async () => {
+  it("handles deploy agents action successfully", async () => {
     render(
       <TestWrapper>
         <Dashboard />
       </TestWrapper>,
     );
 
-    const deployButton = screen.getByText("Deploy Workers");
+    const deployButton = screen.getByText("Deploy Agents");
     fireEvent.click(deployButton);
 
     await waitFor(() => {
-      expect(mockAPI.appService.deployWorkers).toHaveBeenCalledWith(mockAppId);
+      expect(mockAPI.appService.deployAgents).toHaveBeenCalledWith(mockAppId);
       expect(mockToast).toHaveBeenCalledWith({
         title: "Deployment Completed",
-        description: "Worker deployment completed successfully.",
+        description: "Agent deployment completed successfully.",
       });
     });
   });
@@ -510,8 +510,8 @@ describe("Dashboard", () => {
 
     // Check that icons are present for each button
     expect(screen.getByTestId("play-icon")).toBeInTheDocument(); // Build App
-    expect(screen.getByTestId("refresh-icon")).toBeInTheDocument(); // Update Workers
-    expect(screen.getByTestId("upload-icon")).toBeInTheDocument(); // Deploy Workers
+    expect(screen.getByTestId("refresh-icon")).toBeInTheDocument(); // Update Agents
+    expect(screen.getByTestId("upload-icon")).toBeInTheDocument(); // Deploy Agents
     expect(screen.getByTestId("send-icon")).toBeInTheDocument(); // Deploy App
     expect(screen.getByTestId("trash-icon")).toBeInTheDocument(); // Clean App
     expect(screen.getByTestId("file-text-icon")).toBeInTheDocument(); // View YAML
