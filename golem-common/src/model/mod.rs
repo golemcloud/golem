@@ -49,10 +49,8 @@ pub mod worker;
 
 pub use crate::base_model::*;
 
-use self::component::{
-    ComponentFilePermissions, ComponentRevision, PluginInstallationId
-};
 use self::component::ComponentId;
+use self::component::{ComponentFilePermissions, ComponentRevision, PluginInstallationId};
 use self::environment::EnvironmentId;
 use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;

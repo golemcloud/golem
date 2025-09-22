@@ -299,28 +299,6 @@ impl SafeDisplay for PluginServiceLocalConfig {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
-pub enum CompiledComponentServiceConfig {
-    Enabled(CompiledComponentServiceEnabledConfig),
-    Disabled(CompiledComponentServiceDisabledConfig),
-}
-
-impl SafeDisplay for CompiledComponentServiceConfig {
-    fn to_safe_string(&self) -> String {
-        match self {
-            CompiledComponentServiceConfig::Enabled(_) => "enabled".to_string(),
-            CompiledComponentServiceConfig::Disabled(_) => "disabled".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompiledComponentServiceEnabledConfig {}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompiledComponentServiceDisabledConfig {}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
 pub enum ShardManagerServiceConfig {
     Grpc(ShardManagerServiceGrpcConfig),
     SingleShard(ShardManagerServiceSingleShardConfig),

@@ -34,8 +34,8 @@ pub mod bindings {
     });
 }
 
-use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component::ComponentId;
+use crate::model::component_metadata::ComponentMetadata;
 use async_trait::async_trait;
 use base64::Engine;
 use bincode::{Decode, Encode};

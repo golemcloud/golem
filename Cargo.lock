@@ -4240,6 +4240,7 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "wasmtime",
  "wasmtime-wasi",
 ]
 

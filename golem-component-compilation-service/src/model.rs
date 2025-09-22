@@ -16,9 +16,9 @@ use std::fmt::Display;
 
 use crate::config::StaticComponentServiceConfig;
 use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use tokio::sync::mpsc;
 use wasmtime::component::Component;
-use golem_common::model::environment::EnvironmentId;
 
 #[derive(Debug, Clone)]
 pub struct ComponentWithVersion {
