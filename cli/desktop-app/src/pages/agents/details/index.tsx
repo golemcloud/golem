@@ -26,7 +26,6 @@ export default function AgentDetails() {
       API.agentService
         .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          console.log(response);
           setAgentDetails(response.metadata as Agent);
         });
     }

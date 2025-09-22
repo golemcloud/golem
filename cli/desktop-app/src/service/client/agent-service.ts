@@ -70,16 +70,29 @@ export class AgentService {
     appId: string,
     componentID: string,
     name: string,
+    args?: string[],
+    env?: Record<string, string>,
   ) => {
     const component = await this.componentService.getComponentById(
       appId,
       componentID,
     );
-    return await this.cliService.callCLI(appId, "agent", [
-      "new",
-      `${component?.componentName!}/${name}`,
-      // JSON.stringify(params),
-    ]);
+
+    const commandArgs = ["new", `${component?.componentName!}/${name}`];
+
+    // Add environment variables as -e flags
+    if (env) {
+      Object.entries(env).forEach(([key, value]) => {
+        commandArgs.push("-e", `${key}=${value}`);
+      });
+    }
+
+    // Add positional arguments
+    if (args && args.length > 0) {
+      commandArgs.push(...args);
+    }
+
+    return await this.cliService.callCLI(appId, "agent", commandArgs);
   };
 
   public getParticularAgent = async (

@@ -86,15 +86,21 @@ export default function CreateAgent() {
   });
 
   function onSubmit(values) {
-    const { componentID, ...rest } = values;
-    rest.env = rest.env.reduce((acc, arg) => {
-      if (arg.key) acc[arg.key] = arg.value;
+    const { componentID, name, env: envArray, args: argsArray } = values;
+
+    // Convert env array to object, filtering out empty entries
+    const envObject = envArray.reduce((acc, item) => {
+      if (item.key && item.key.trim()) {
+        acc[item.key] = item.value || "";
+      }
       return acc;
     }, {});
-    rest.args = rest.args.filter(x => x.trim().length > 0);
+
+    // Filter out empty arguments
+    const filteredArgs = argsArray.filter(arg => arg && arg.trim().length > 0);
 
     API.agentService
-      .createAgent(appId, componentID, values.name)
+      .createAgent(appId, componentID, name, filteredArgs, envObject)
       .then((response: { component_name: string; worker_name: string }) => {
         navigate(
           `/app/${appId}/components/${componentId}/agents/${response.worker_name}`,
