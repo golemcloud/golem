@@ -7,6 +7,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { z } from "zod";
 import { useFieldArray, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -20,15 +28,16 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { API } from "@/service";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
+import { AgentTypeForComponent } from "@/types/agent-types";
+import { RecursiveParameterInput } from "@/components/invoke/RecursiveParameterInput";
 
 const formSchema = z.object({
   componentID: z.string(),
-  name: z.string().min(4, {
-    message: "Agent name must be at least 4 characters",
-  }),
+  agentTypeIndex: z.number().min(0, "Please select an agent type"),
+  constructorParams: z.record(z.unknown()).optional(),
   env: z.array(
     z.object({
       key: z.string(),
@@ -38,30 +47,79 @@ const formSchema = z.object({
   args: z.array(z.string()),
 });
 
+const createEmptyValue = (type: any): unknown => {
+  const typeStr = type.type?.toLowerCase();
+
+  switch (typeStr) {
+    case "str":
+    case "chr":
+      return "";
+    case "bool":
+      return false;
+    case "record":
+      const record: Record<string, unknown> = {};
+      type.fields?.forEach(field => {
+        record[field.name] = createEmptyValue(field.typ);
+      });
+      return record;
+    case "list":
+      return [];
+    case "option":
+      return null;
+    case "variant":
+      if (type.cases && type.cases.length > 0) {
+        const firstCase = type.cases[0];
+        if (typeof firstCase === "string") {
+          return firstCase;
+        } else {
+          return { [firstCase.name]: createEmptyValue(firstCase.typ) };
+        }
+      }
+      return null;
+    case "enum":
+      if (type.cases && type.cases.length > 0) {
+        return type.cases[0];
+      }
+      return "";
+    case "flags":
+      return [];
+    case "tuple":
+      if (type.fields && type.fields.length > 0) {
+        return type.fields.map(field => createEmptyValue(field.typ));
+      }
+      return [];
+    case "f64":
+    case "f32":
+    case "u64":
+    case "s64":
+    case "u32":
+    case "s32":
+    case "u16":
+    case "s16":
+    case "u8":
+    case "s8":
+      return 0;
+    default:
+      return null;
+  }
+};
+
 export default function CreateAgent() {
   const navigate = useNavigate();
   const { componentId, appId } = useParams();
 
-  const [agentConstructorDetails, setAgentConstructorDetails] = useState<
-    string[]
-  >([]);
-  useEffect(() => {
-    API.componentService.getComponentById(appId!, componentId!).then(res => {
-      const agentSuffix = " agent constructor";
-      console.log(res);
-      const constructors = res.exports
-        ?.filter(e => e.endsWith(agentSuffix))
-        .map(e => e.slice(0, -agentSuffix.length));
-      console.log(constructors);
-      setAgentConstructorDetails(constructors);
-    });
-  }, [componentId]);
+  const [agentTypes, setAgentTypes] = useState<AgentTypeForComponent[]>([]);
+  const [selectedAgentType, setSelectedAgentType] = useState<AgentTypeForComponent | null>(null);
+  const [constructorValues, setConstructorValues] = useState<Record<string, unknown>>({});
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm({
     resolver: zodResolver(formSchema),
     defaultValues: {
       componentID: componentId,
-      name: "",
+      agentTypeIndex: -1,
+      constructorParams: {},
       env: [{ key: "", value: "" }],
       args: [""],
     },
@@ -85,65 +143,190 @@ export default function CreateAgent() {
     name: "args",
   });
 
-  function onSubmit(values) {
-    const { componentID, name, env: envArray, args: argsArray } = values;
-
-    // Convert env array to object, filtering out empty entries
-    const envObject = envArray.reduce((acc, item) => {
-      if (item.key && item.key.trim()) {
-        acc[item.key] = item.value || "";
+  useEffect(() => {
+    const fetchAgentTypes = async () => {
+      try {
+        setIsLoading(true);
+        const types = await API.agentService.getAgentTypesForComponent(appId!, componentId!);
+        setAgentTypes(types);
+      } catch (error) {
+        console.error("Failed to fetch agent types:", error);
+      } finally {
+        setIsLoading(false);
       }
-      return acc;
-    }, {});
+    };
 
-    // Filter out empty arguments
-    const filteredArgs = argsArray.filter(arg => arg && arg.trim().length > 0);
+    fetchAgentTypes();
+  }, [appId, componentId]);
 
-    API.agentService
-      .createAgent(appId, componentID, name, filteredArgs, envObject)
-      .then((response: { component_name: string; worker_name: string }) => {
-        navigate(
-          `/app/${appId}/components/${componentId}/agents/${response.worker_name}`,
-        );
+  const handleAgentTypeChange = (index: string) => {
+    const agentTypeIndex = parseInt(index);
+    const agentType = agentTypes[agentTypeIndex];
+    setSelectedAgentType(agentType || null);
+
+    if (agentType) {
+      // Initialize constructor parameter values
+      const initialValues: Record<string, unknown> = {};
+      agentType.constructor.parameters.forEach(param => {
+        initialValues[param.name] = createEmptyValue(param.type);
       });
+      setConstructorValues(initialValues);
+      form.setValue("constructorParams", initialValues);
+    } else {
+      setConstructorValues({});
+      form.setValue("constructorParams", {});
+    }
+  };
+
+  const handleConstructorParamChange = (paramName: string, value: unknown) => {
+    const newValues = { ...constructorValues, [paramName]: value };
+    setConstructorValues(newValues);
+    form.setValue("constructorParams", newValues);
+  };
+
+  async function onSubmit(values) {
+    try {
+      setIsSubmitting(true);
+      const { componentID, agentTypeIndex, constructorParams, env: envArray, args: argsArray } = values;
+
+      if (!selectedAgentType) {
+        throw new Error("No agent type selected");
+      }
+
+      // Convert constructor params to array in the correct order
+      const constructorParamsArray = selectedAgentType.constructor.parameters.map(param =>
+        constructorParams?.[param.name]
+      );
+
+      // Convert env array to object, filtering out empty entries
+      const envObject = envArray.reduce((acc, item) => {
+        if (item.key && item.key.trim()) {
+          acc[item.key] = item.value || "";
+        }
+        return acc;
+      }, {});
+
+      // Filter out empty arguments
+      const filteredArgs = argsArray.filter(arg => arg && arg.trim().length > 0);
+
+      const response = await API.agentService.createAgent(
+        appId,
+        componentID,
+        selectedAgentType.typeName,
+        constructorParamsArray,
+        filteredArgs,
+        envObject
+      );
+
+      navigate(
+        `/app/${appId}/components/${componentId}/agents/${response.worker_name}`,
+      );
+    } catch (error) {
+      console.error("Failed to create agent:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex justify-center p-10">
+        <Card className="w-full max-w-2xl border shadow-md p-6">
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="h-8 w-8 animate-spin" />
+            <span className="ml-2">Loading agent types...</span>
+          </div>
+        </Card>
+      </div>
+    );
   }
 
   return (
     <div className="flex justify-center p-10">
-      <Card className="w-full max-w-2xl border shadow-md p-6">
+      <Card className="w-full max-w-4xl border shadow-md p-6">
         <CardTitle className="text-xl font-bold">Create a New Agent</CardTitle>
         <CardDescription className="text-gray-500 mb-6">
-          Launch a new agent with the required settings.
+          Select an agent type and configure its constructor parameters. The agent will be created with the specified type and parameters.
         </CardDescription>
         <CardContent>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+              {/* Agent Type Selection */}
               <FormField
                 control={form.control}
-                name="name"
+                name="agentTypeIndex"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Agent Name</FormLabel>
+                    <FormLabel>Agent Type</FormLabel>
                     <FormControl>
-                      <div className="flex gap-2">
-                        <Input {...field} />
-                      </div>
+                      <Select
+                        value={field.value >= 0 ? field.value.toString() : ""}
+                        onValueChange={(value) => {
+                          const index = parseInt(value);
+                          field.onChange(index);
+                          handleAgentTypeChange(value);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select an agent type..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {agentTypes.map((agentType, index) => {
+                            // Count how many times this typeName appears in the array
+                            const typeNameCount = agentTypes.filter(t => t.typeName === agentType.typeName).length;
+                            // Find the position of this item among items with the same typeName
+                            const typeNameIndex = agentTypes.slice(0, index + 1).filter(t => t.typeName === agentType.typeName).length;
+
+                            return (
+                              <SelectItem key={index} value={index.toString()}>
+                                <div className="flex flex-col">
+                                  <span className="font-medium">
+                                    {agentType.typeName} {typeNameCount > 1 && `(${typeNameIndex})`}
+                                  </span>
+                                  <span className="text-sm text-muted-foreground">
+                                    {agentType.description}
+                                  </span>
+                                </div>
+                              </SelectItem>
+                            );
+                          })}
+                        </SelectContent>
+                      </Select>
                     </FormControl>
                     <FormDescription>
-                      The agent to construct. The format needs to be agent
-                      constructor name with all constructor params. Available
-                      constructors are:
-                      <ul className="list-disc list-inside mt-2 space-y-1 text-gray-600">
-                        {agentConstructorDetails.map((acd, i) => (
-                          <li key={i}>{acd}</li>
-                        ))}
-                      </ul>
+                      Choose the type of agent to create. This determines the available constructor parameters.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
               />
 
+              {/* Constructor Parameters */}
+              {selectedAgentType && selectedAgentType.constructor.parameters.length > 0 && (
+                <div className="space-y-4">
+                  <div>
+                    <Label className="text-base font-semibold">Constructor Parameters</Label>
+                    <p className="text-sm text-muted-foreground mt-1">
+                      {selectedAgentType.constructor.description}
+                    </p>
+                  </div>
+                  <Card className="bg-muted/30">
+                    <CardContent className="p-4 space-y-4">
+                      {selectedAgentType.constructor.parameters.map((param) => (
+                        <RecursiveParameterInput
+                          key={param.name}
+                          name={param.name}
+                          typeDef={param.type}
+                          value={constructorValues[param.name]}
+                          onChange={(_, value) => handleConstructorParamChange(param.name, value)}
+                        />
+                      ))}
+                    </CardContent>
+                  </Card>
+                </div>
+              )}
+
+              {/* Environment Variables */}
               <div>
                 <FormLabel>Environment Variables</FormLabel>
                 <div className="space-y-2 pt-2">
@@ -182,6 +365,7 @@ export default function CreateAgent() {
                 </div>
               </div>
 
+              {/* Arguments */}
               <div>
                 <FormLabel>Arguments</FormLabel>
                 <div className="space-y-2 pt-2">
@@ -209,15 +393,26 @@ export default function CreateAgent() {
                 </div>
               </div>
 
+              {/* Submit Buttons */}
               <div className="flex justify-between">
                 <Button
                   type="button"
                   variant="secondary"
                   onClick={() => navigate(-1)}
+                  disabled={isSubmitting}
                 >
                   <ArrowLeft className="mr-2 h-5 w-5" /> Back
                 </Button>
-                <Button type="submit">Submit</Button>
+                <Button type="submit" disabled={isSubmitting}>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Creating...
+                    </>
+                  ) : (
+                    "Create Agent"
+                  )}
+                </Button>
               </div>
             </form>
           </Form>
