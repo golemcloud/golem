@@ -55,9 +55,7 @@ use golem_common::model::public_oplog::{
     SetSpanAttributeParameters, SnapshotBasedUpdateParameters, StartSpanParameters,
     SuccessfulUpdateParameters, TimestampParameter,
 };
-use golem_common::model::{
-    ComponentId, ComponentVersion, Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation,
-};
+use golem_common::model::{Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation};
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
@@ -70,11 +68,12 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 
 pub struct PublicOplogChunk {
     pub entries: Vec<PublicOplogEntry>,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub first_index_in_chunk: OplogIndex,
     pub last_index: OplogIndex,
 }
@@ -85,7 +84,7 @@ pub async fn get_public_oplog_chunk(
     plugins: Arc<dyn Plugins>,
     projects: Arc<dyn ProjectService>,
     owned_worker_id: &OwnedWorkerId,
-    initial_component_version: ComponentVersion,
+    initial_component_version: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
 ) -> Result<PublicOplogChunk, String> {
@@ -134,7 +133,7 @@ pub async fn get_public_oplog_chunk(
 pub struct PublicOplogSearchResult {
     pub entries: Vec<(OplogIndex, PublicOplogEntry)>,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub last_index: OplogIndex,
 }
 
@@ -144,7 +143,7 @@ pub async fn search_public_oplog(
     plugin_service: Arc<dyn Plugins>,
     project_service: Arc<dyn ProjectService>,
     owned_worker_id: &OwnedWorkerId,
-    initial_component_version: ComponentVersion,
+    initial_component_version: ComponentRevision,
     initial_oplog_index: OplogIndex,
     count: usize,
     query: &str,
@@ -199,8 +198,8 @@ pub async fn find_component_version_at(
     oplog_service: Arc<dyn OplogService>,
     owned_worker_id: &OwnedWorkerId,
     start: OplogIndex,
-) -> Result<ComponentVersion, WorkerExecutorError> {
-    let mut initial_component_version = 0;
+) -> Result<ComponentRevision, WorkerExecutorError> {
+    let mut initial_component_version = ComponentRevision::INITIAL;
     let last_oplog_index = oplog_service.get_last_index(owned_worker_id).await;
     let mut current = OplogIndex::INITIAL;
     while current < start && current <= last_oplog_index {
@@ -231,7 +230,7 @@ pub trait PublicOplogEntryOps: Sized {
         plugins: Arc<dyn Plugins>,
         projects: Arc<dyn ProjectService>,
         owned_worker_id: &OwnedWorkerId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
     ) -> Result<Self, String>;
 }
 
@@ -244,7 +243,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         plugins: Arc<dyn Plugins>,
         projects: Arc<dyn ProjectService>,
         owned_worker_id: &OwnedWorkerId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
     ) -> Result<Self, String> {
         match value {
             OplogEntry::Create {
@@ -947,7 +946,7 @@ async fn encode_host_function_request_as_value(
             Ok(payload.into_value_and_type())
         }
         "golem::api::update-worker" => {
-            let payload: (WorkerId, ComponentVersion, UpdateMode) = try_deserialize(bytes)?;
+            let payload: (WorkerId, ComponentRevision, UpdateMode) = try_deserialize(bytes)?;
             let agent_id = try_resolve_agent_id(components, &payload.0).await;
 
             Ok(ValueAndType::new(

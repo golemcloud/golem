@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_wasm_ast::analysis::analysed_type::str;
 use golem_wasm_ast::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
@@ -37,6 +37,7 @@ use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
 use wasmtime_wasi::IoView;
+use golem_common::model::component::{ComponentId, ComponentType};
 
 pub fn dynamic_wasm_rpc_link<
     Ctx: WorkerCtx
@@ -952,7 +953,7 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
             worker_name,
         };
         let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().project_id,
+            &store.data().owned_worker_id().environment_id,
             &remote_worker_id,
         );
         Ok(remote_worker_id)
@@ -1003,7 +1004,7 @@ fn resolve_worker_id<Ctx: WorkerCtx>(
     let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get a worker-id value as a custom constructor parameter, got {worker_id:?}"))?;
 
     let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().project_id,
+        &store.data().owned_worker_id().environment_id,
         &remote_worker_id,
     );
     Ok(remote_worker_id)

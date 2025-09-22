@@ -25,13 +25,15 @@ use crate::worker::status::calculate_last_known_status;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    AccountId, ComponentType, OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
+    OwnedWorkerId, ShardId, Timestamp, WorkerId, WorkerMetadata,
     WorkerStatus, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use tracing::{debug, warn};
+use golem_common::model::component::ComponentType;
+use golem_common::model::account::AccountId;
 
 /// Service for persisting the current set of Golem workers represented by their metadata
 #[async_trait]
@@ -123,7 +125,7 @@ impl WorkerService for DefaultWorkerService {
         record_worker_call("add");
 
         let worker_id = &worker_metadata.worker_id;
-        let owned_worker_id = OwnedWorkerId::new(&worker_metadata.project_id, worker_id);
+        let owned_worker_id = OwnedWorkerId::new(&worker_metadata.environment_id, worker_id);
 
         let initial_oplog_entry = OplogEntry::create(
             worker_metadata.worker_id.clone(),
@@ -131,7 +133,7 @@ impl WorkerService for DefaultWorkerService {
             worker_metadata.args.clone(),
             worker_metadata.env.clone(),
             worker_metadata.wasi_config_vars.clone(),
-            worker_metadata.project_id.clone(),
+            worker_metadata.environment_id.clone(),
             worker_metadata.created_by.clone(),
             worker_metadata.parent.clone(),
             worker_metadata.last_known_status.component_size,
@@ -209,7 +211,7 @@ impl WorkerService for DefaultWorkerService {
                     component_version,
                     args,
                     env,
-                    project_id,
+                    environment_id,
                     created_by,
                     timestamp,
                     parent,
@@ -224,7 +226,7 @@ impl WorkerService for DefaultWorkerService {
                     args,
                     env,
                     wasi_config_vars,
-                    project_id,
+                    environment_id,
                     created_by,
                     created_at: timestamp,
                     parent,
@@ -293,10 +295,8 @@ impl WorkerService for DefaultWorkerService {
                     args: vec![],
                     env: vec![],
                     wasi_config_vars: BTreeMap::new(),
-                    project_id: owned_worker_id.project_id(),
-                    created_by: AccountId {
-                        value: "system".to_string(),
-                    },
+                    environment_id: owned_worker_id.environment_id(),
+                    created_by: AccountId::SYSTEM.clone(),
                     created_at: Timestamp::now_utc(),
                     parent: None,
                     last_known_status: WorkerStatusRecord {

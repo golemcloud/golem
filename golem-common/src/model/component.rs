@@ -31,6 +31,7 @@ use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use strum_macros::FromRepr;
 use typed_path::Utf8UnixPathBuf;
+use uuid::Uuid;
 
 newtype_uuid!(
     ComponentId,
@@ -50,7 +51,7 @@ declare_transparent_newtypes! {
 
     /// Key that can be used to identify a component file.
     /// All files with the same content will have the same key.
-    #[derive(Display)]
+    #[derive(Display, Eq, Hash)]
     pub struct InitialComponentFileKey(pub String);
 }
 
@@ -314,6 +315,28 @@ impl FromStr for ComponentFilePath {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::from_either_str(s)
+    }
+}
+
+impl From<golem_wasm_rpc::ComponentId> for ComponentId {
+    fn from(host: golem_wasm_rpc::ComponentId) -> Self {
+        let high_bits = host.uuid.high_bits;
+        let low_bits = host.uuid.low_bits;
+
+        Self(Uuid::from_u64_pair(high_bits, low_bits))
+    }
+}
+
+impl From<ComponentId> for golem_wasm_rpc::ComponentId {
+    fn from(component_id: ComponentId) -> Self {
+        let (high_bits, low_bits) = component_id.0.as_u64_pair();
+
+        golem_wasm_rpc::ComponentId {
+            uuid: golem_wasm_rpc::Uuid {
+                high_bits,
+                low_bits,
+            },
+        }
     }
 }
 

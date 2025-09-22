@@ -229,7 +229,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     ) -> Result<(), WorkerExecutorError> {
         let running_plugin = self
             .resolve_plugin_worker(
-                &worker_metadata.project_id,
+                &worker_metadata.environment_id,
                 &worker_metadata.worker_id.component_id,
                 worker_metadata.last_known_status.component_version,
                 plugin_installation_id,

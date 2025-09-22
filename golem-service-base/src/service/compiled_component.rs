@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::CompiledComponentServiceConfig;
-use crate::Engine;
+use crate::error::worker_executor::WorkerExecutorError;
+use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use async_trait::async_trait;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use golem_common::SafeDisplay;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::Instant;
 use tracing::debug;
+use wasmtime::Engine;
 use wasmtime::component::Component;
-use golem_common::model::component::ComponentId;
-use golem_common::model::environment::EnvironmentId;
 
 /// Service for storing compiled native binaries of WebAssembly components
 #[async_trait]
@@ -44,12 +45,64 @@ pub trait CompiledComponentService: Send + Sync {
     ) -> Result<(), WorkerExecutorError>;
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(tag = "type", content = "config")]
+pub enum CompiledComponentServiceConfig {
+    Enabled(CompiledComponentServiceEnabledConfig),
+    Disabled(CompiledComponentServiceDisabledConfig),
+}
+
+impl CompiledComponentServiceConfig {
+    pub fn enabled() -> Self {
+        Self::Enabled(CompiledComponentServiceEnabledConfig {})
+    }
+
+    pub fn disabled() -> Self {
+        Self::Disabled(CompiledComponentServiceDisabledConfig {})
+    }
+}
+
+impl SafeDisplay for CompiledComponentServiceConfig {
+    fn to_safe_string(&self) -> String {
+        match self {
+            CompiledComponentServiceConfig::Enabled(_) => "enabled".to_string(),
+            CompiledComponentServiceConfig::Disabled(_) => "disabled".to_string(),
+        }
+    }
+}
+
+impl Default for CompiledComponentServiceConfig {
+    fn default() -> Self {
+        Self::enabled()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompiledComponentServiceEnabledConfig {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompiledComponentServiceDisabledConfig {}
+
+pub fn configured(
+    config: &CompiledComponentServiceConfig,
+    blob_storage: Arc<dyn BlobStorage>,
+) -> Arc<dyn CompiledComponentService> {
+    match config {
+        CompiledComponentServiceConfig::Enabled(_) => {
+            Arc::new(DefaultCompiledComponentService::new(blob_storage))
+        }
+        CompiledComponentServiceConfig::Disabled(_) => {
+            Arc::new(CompiledComponentServiceDisabled::new())
+        }
+    }
+}
+
 pub struct DefaultCompiledComponentService {
-    blob_storage: Arc<dyn BlobStorage + Send + Sync>,
+    blob_storage: Arc<dyn BlobStorage>,
 }
 
 impl DefaultCompiledComponentService {
-    pub fn new(blob_storage: Arc<dyn BlobStorage + Send + Sync>) -> Self {
+    pub fn new(blob_storage: Arc<dyn BlobStorage>) -> Self {
         Self { blob_storage }
     }
 
@@ -138,20 +191,6 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                     format!("Could not store compiled component: {err}"),
                 )
             })
-    }
-}
-
-pub fn configured(
-    config: &CompiledComponentServiceConfig,
-    blob_storage: Arc<dyn BlobStorage>,
-) -> Arc<dyn CompiledComponentService> {
-    match config {
-        CompiledComponentServiceConfig::Enabled(_) => {
-            Arc::new(DefaultCompiledComponentService::new(blob_storage))
-        }
-        CompiledComponentServiceConfig::Disabled(_) => {
-            Arc::new(CompiledComponentServiceDisabled::new())
-        }
     }
 }
 

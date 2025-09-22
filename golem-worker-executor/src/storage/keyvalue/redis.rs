@@ -36,8 +36,8 @@ impl RedisKeyValueStorage {
             KeyValueStorageNamespace::Worker => None,
             KeyValueStorageNamespace::Promise => Some("promises".to_string()),
             KeyValueStorageNamespace::Schedule => None,
-            KeyValueStorageNamespace::UserDefined { project_id, bucket } => {
-                Some(format!("user-defined:{project_id}:{bucket}"))
+            KeyValueStorageNamespace::UserDefined { environment_id, bucket } => {
+                Some(format!("user-defined:{environment_id}:{bucket}"))
             }
         }
     }

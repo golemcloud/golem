@@ -328,6 +328,27 @@ pub mod api {
             }
         }
 
+        pub fn succeed<T>(self, result: T) -> T {
+            self.handle_success();
+            result
+        }
+
+        pub fn fail<T, E: Debug + ApiErrorDetails>(self, result: T, error: &mut E) -> T {
+            self.handle_failure(error);
+            result
+        }
+
+        pub fn result<T, E: ApiErrorDetails + Debug>(
+            self,
+            mut result: Result<T, E>,
+        ) -> Result<T, E> {
+            match &mut result {
+                Ok(_) => self.handle_success(),
+                Err(error) => self.handle_failure(error),
+            }
+            result
+        }
+
         fn handle_success(mut self) {
             if let Some(start) = self.start_time.take() {
                 self.span.in_scope(|| {
@@ -367,17 +388,6 @@ pub mod api {
                     elapsed,
                 );
             }
-        }
-
-        pub fn result<T, E: ApiErrorDetails + Debug>(
-            self,
-            mut result: Result<T, E>,
-        ) -> Result<T, E> {
-            match &mut result {
-                Ok(_) => self.handle_success(),
-                Err(error) => self.handle_failure(error),
-            }
-            result
         }
     }
 

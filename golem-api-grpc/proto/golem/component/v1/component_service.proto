@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.component.v1;
 
 import public "golem/common/plugin_installation_id.proto";
-import public "golem/common/project_id.proto";
+import public "golem/common/environment.proto";
 import public "golem/common/empty.proto";
 import public "golem/component/agent.proto";
 import public "golem/component/component.proto";
@@ -63,8 +63,8 @@ message DeleteComponentConstraintsSuccessResponse {
 }
 
 message GetComponentsRequest {
-  golem.common.ProjectId projectId = 1;
-  optional string componentName = 2;
+  golem.common.EnvironmentId environment_id = 1;
+  optional string component_name = 2;
 }
 
 message GetComponentsResponse {
@@ -86,9 +86,9 @@ message CreateComponentRequest {
 }
 
 message CreateComponentRequestHeader {
-  golem.common.ProjectId projectId = 1;
-  string componentName = 2;
-  optional ComponentType componentType = 3;
+  golem.common.EnvironmentId environment_id = 1;
+  string component_name = 2;
+  optional ComponentType component_type = 3;
   // All files need to be uploaded to the blob storage before providing them here
   repeated InitialComponentFile files = 4;
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;

@@ -15,36 +15,23 @@
 use super::*;
 use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
 use crate::model::*;
-use async_trait::async_trait;
-use golem_common::model::{ComponentId, ProjectId};
-use golem_worker_executor::services::compiled_component::CompiledComponentService;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use wasmtime::Engine;
 
-#[async_trait]
-pub trait CompilationService {
-    async fn enqueue_compilation(
-        &self,
-        component_id: ComponentId,
-        component_version: u64,
-        project_id: ProjectId,
-        sender: Option<StaticComponentServiceConfig>,
-    ) -> Result<(), CompilationError>;
-}
-
 #[derive(Clone)]
-pub struct ComponentCompilationServiceImpl {
+pub struct ComponentCompilationService {
     queue: mpsc::Sender<CompilationRequest>,
 }
 
-impl ComponentCompilationServiceImpl {
+impl ComponentCompilationService {
     pub async fn new(
         compile_worker: CompileWorkerConfig,
         component_service: ComponentServiceConfig,
-
         engine: Engine,
-
         compiled_component_service: Arc<dyn CompiledComponentService>,
     ) -> Self {
         let (compile_tx, compile_rx) = mpsc::channel(100);
@@ -64,15 +51,12 @@ impl ComponentCompilationServiceImpl {
 
         Self { queue: compile_tx }
     }
-}
 
-#[async_trait]
-impl CompilationService for ComponentCompilationServiceImpl {
-    async fn enqueue_compilation(
+    pub async fn enqueue_compilation(
         &self,
         component_id: ComponentId,
         component_version: u64,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
@@ -85,7 +69,7 @@ impl CompilationService for ComponentCompilationServiceImpl {
                 id: component_id,
                 version: component_version,
             },
-            project_id,
+            environment_id,
             sender,
         };
         self.queue.send(request).await?;

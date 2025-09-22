@@ -650,7 +650,7 @@ mod tests {
         SerializableStreamError,
     };
     use golem_common::model::oplog::{OplogIndex, WorkerError};
-    use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+    use golem_common::model::{ PromiseId, ShardId, WorkerId};
     use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use proptest::collection::vec;
     use proptest::prelude::*;
@@ -662,6 +662,7 @@ mod tests {
     use wasmtime_wasi::p2::bindings::{filesystem, sockets};
     use wasmtime_wasi::p2::{FsError, SocketError};
     use wasmtime_wasi::StreamError;
+    use golem_common::model::component::ComponentId;
 
     fn datetime_strat(
     ) -> impl Strategy<Value = wasmtime_wasi::p2::bindings::clocks::wall_clock::Datetime> {

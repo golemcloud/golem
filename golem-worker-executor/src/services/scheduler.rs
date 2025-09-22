@@ -28,7 +28,8 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
+use golem_common::model::account::AccountId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::Value;
 use std::ops::{Add, Deref};
@@ -243,9 +244,9 @@ impl SchedulerServiceDefault {
                 ScheduledAction::CompletePromise {
                     account_id,
                     promise_id,
-                    project_id,
+                    environment_id,
                 } => {
-                    let owned_worker_id = OwnedWorkerId::new(&project_id, &promise_id.worker_id);
+                    let owned_worker_id = OwnedWorkerId::new(&environment_id, &promise_id.worker_id);
 
                     let result = self
                         .promise_service
@@ -464,10 +465,11 @@ mod tests {
     use chrono::DateTime;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{
-        AccountId, ComponentId, IdempotencyKey, OwnedWorkerId, ProjectId, PromiseId,
+    use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId,
         ScheduledAction, ShardId, WorkerId,
     };
+    use golem_common::model::account::AccountId;
+    use golem_common::model::component::ComponentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_wasm_rpc::Value;
@@ -477,6 +479,7 @@ mod tests {
     use std::time::Duration;
     use test_r::test;
     use uuid::Uuid;
+    use golem_common::model::environment::EnvironmentId;
 
     struct SchedulerWorkerAccessMock;
 
@@ -563,7 +566,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -602,16 +605,14 @@ mod tests {
             Duration::from_secs(1000), // not testing process() here
         );
 
-        let account_id = AccountId {
-            value: "test_account".to_string(),
-        };
+        let account_id = AccountId::new_v4();
 
         let _s1 = svc
             .schedule(
                 DateTime::from_str("2023-07-17T10:05:00Z").unwrap(),
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                     promise_id: p1.clone(),
                 },
             )
@@ -622,7 +623,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p2.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -632,7 +633,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p3.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -652,7 +653,7 @@ mod tests {
                         serialized_bytes(&ScheduledAction::CompletePromise {
                             account_id: account_id.clone(),
                             promise_id: p2,
-                            project_id: project_id.clone()
+                            environment_id: environment_id.clone()
                         })
                     )]
                 ),
@@ -664,7 +665,7 @@ mod tests {
                             serialized_bytes(&ScheduledAction::CompletePromise {
                                 account_id: account_id.clone(),
                                 promise_id: p1,
-                                project_id: project_id.clone()
+                                environment_id: environment_id.clone()
                             })
                         ),
                         (
@@ -672,7 +673,7 @@ mod tests {
                             serialized_bytes(&ScheduledAction::CompletePromise {
                                 account_id: account_id.clone(),
                                 promise_id: p3,
-                                project_id: project_id.clone()
+                                environment_id: environment_id.clone()
                             })
                         )
                     ]
@@ -733,9 +734,7 @@ mod tests {
             Duration::from_secs(1000), // not testing process() here
         );
 
-        let account_id = AccountId {
-            value: "test_account".to_string(),
-        };
+        let account_id = AccountId::new_v4();
 
         let _s1 = svc
             .schedule(
@@ -743,7 +742,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p1.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -753,7 +752,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p2.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -763,7 +762,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p3.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -787,7 +786,7 @@ mod tests {
                         serialized_bytes(&ScheduledAction::CompletePromise {
                             account_id: account_id.clone(),
                             promise_id: p1,
-                            project_id: project_id.clone()
+                            environment_id: environment_id.clone()
                         })
                     )]
                 )
@@ -807,7 +806,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -846,9 +845,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId {
-            value: "test_account".to_string(),
-        };
+        let account_id = AccountId::new_v4();
 
         let _s1 = svc
             .schedule(
@@ -856,7 +853,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p1.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -866,7 +863,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p2.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -876,7 +873,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p3.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -900,7 +897,7 @@ mod tests {
                     serialized_bytes(&ScheduledAction::CompletePromise {
                         account_id: account_id.clone(),
                         promise_id: p2.clone(),
-                        project_id: project_id.clone()
+                        environment_id: environment_id.clone()
                     })
                 )]
             )])
@@ -925,7 +922,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -964,9 +961,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId {
-            value: "test_account".to_string(),
-        };
+        let account_id = AccountId::new_v4();
 
         let _s1 = svc
             .schedule(
@@ -974,7 +969,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p1.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -984,7 +979,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p2.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -994,7 +989,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p3.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1079,9 +1074,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId {
-            value: "test_account".to_string(),
-        };
+        let account_id = AccountId::new_v4();
 
         let _s1 = svc
             .schedule(
@@ -1089,7 +1082,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p1.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1099,7 +1092,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p2.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1109,7 +1102,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p3.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1119,7 +1112,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p4.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1162,7 +1155,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1201,9 +1194,7 @@ mod tests {
             Duration::from_secs(1000), // explicitly calling process for testing
         );
 
-        let account_id = AccountId {
-            value: "test_account".to_string(),
-        };
+        let account_id = AccountId::new_v4();
 
         let _s1 = svc
             .schedule(
@@ -1211,7 +1202,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p1.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1221,7 +1212,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p2.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
@@ -1231,7 +1222,7 @@ mod tests {
                 ScheduledAction::CompletePromise {
                     account_id: account_id.clone(),
                     promise_id: p3.clone(),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 },
             )
             .await;
