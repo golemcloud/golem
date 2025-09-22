@@ -37,10 +37,10 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
     let stdout = pipe::MemoryOutputPipe::new(usize::MAX);
     let stderr = pipe::MemoryOutputPipe::new(usize::MAX);
 
-    golem_common::model::agent::extraction::extract_agent_types(
+    golem_common::model::agent::extraction::extract_agent_types_with_streams(
         wasm_path,
-        stdout.clone(),
-        stderr.clone(),
+        Some(stdout.clone()),
+        Some(stderr.clone()),
     )
     .await
     .map_err(|err| {
