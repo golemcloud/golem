@@ -188,10 +188,10 @@ impl WorkerCommandHandler {
                 self.cmd_cancel_invocation(worker_name, idempotency_key)
                     .await
             }
-            WorkerSubcommand::Files { worker_name, path } => {
+            AgentSubcommand::Files { worker_name, path } => {
                 self.cmd_files(worker_name, path).await
             }
-            WorkerSubcommand::FileContents {
+            AgentSubcommand::FileContents {
                 worker_name,
                 path,
                 output,
@@ -908,9 +908,9 @@ impl WorkerCommandHandler {
         Ok(())
     }
 
-    async fn cmd_files(&self, worker_name: WorkerNameArg, path: String) -> anyhow::Result<()> {
+    async fn cmd_files(&self, worker_name: AgentIdArgs, path: String) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;
@@ -983,12 +983,12 @@ impl WorkerCommandHandler {
 
     async fn cmd_file_contents(
         &self,
-        worker_name: WorkerNameArg,
+        worker_name: AgentIdArgs,
         path: String,
         output: Option<String>,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
-        let worker_name_match = self.match_worker_name(worker_name.worker_name).await?;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
         let (component, worker_name) = self
             .component_by_worker_name_match(&worker_name_match)
             .await?;

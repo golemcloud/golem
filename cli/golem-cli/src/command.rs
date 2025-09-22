@@ -1191,7 +1191,7 @@ pub mod worker {
         /// List files in a worker's directory
         Files {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            worker_name: AgentIdArgs,
             /// Path to the directory to list files from
             #[arg(default_value = "/")]
             path: String,
@@ -1199,7 +1199,7 @@ pub mod worker {
         /// Get contents of a file in a worker
         FileContents {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            worker_name: AgentIdArgs,
             /// Path to the file to get contents from
             path: String,
             /// Local path (including filename) to save the file contents. Optional.
