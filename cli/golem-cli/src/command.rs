@@ -1080,10 +1080,10 @@ pub mod worker {
             function_name: WorkerFunctionName,
             /// Agent function arguments in WAVE format
             arguments: Vec<WorkerFunctionArgument>,
-            /// Enqueue invocation, and do not wait for it
+            /// Only trigger invocation and do not wait for it
             #[clap(long, short)]
-            enqueue: bool,
-            /// Set idempotency key for the call, use "-" for auto generated key
+            trigger: bool,
+            /// Set idempotency key for the call, use "-" for an auto generated key
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]

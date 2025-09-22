@@ -66,8 +66,12 @@ use uuid::Uuid;
 pub enum Format {
     #[serde(alias = "json")]
     Json,
+    #[serde(alias = "pretty-json", alias = "pretty")]
+    PrettyJson,
     #[serde(alias = "yaml")]
     Yaml,
+    #[serde(alias = "pretty-yaml")]
+    PrettyYaml,
     #[default]
     #[serde(alias = "text")]
     Text,
@@ -77,7 +81,9 @@ impl Display for Format {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Json => "json",
+            Self::PrettyJson => "pretty-json",
             Self::Yaml => "yaml",
+            Self::PrettyYaml => "pretty-yaml",
             Self::Text => "text",
         };
         Display::fmt(&s, f)
@@ -90,7 +96,9 @@ impl FromStr for Format {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "json" => Ok(Format::Json),
+            "pretty" | "pretty-json" => Ok(Format::PrettyJson),
             "yaml" => Ok(Format::Yaml),
+            "pretty-yaml" => Ok(Format::PrettyYaml),
             "text" => Ok(Format::Text),
             _ => {
                 let all = Format::iter()
