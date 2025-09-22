@@ -22,7 +22,6 @@ use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
 use golem_common::model::RetryConfig;
-use golem_common::model::{ComponentId, ProjectId};
 use golem_common::retries::with_retries;
 use golem_worker_executor::grpc::authorised_grpc_request;
 use golem_worker_executor::grpc::is_grpc_retriable;
@@ -39,6 +38,7 @@ use tracing::{info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use golem_common::model::component::ComponentId;
 
 // Single worker that compiles WASM components.
 #[derive(Clone)]

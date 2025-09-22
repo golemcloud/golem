@@ -465,7 +465,7 @@ mod tests {
     use chrono::DateTime;
     use golem_common::model::invocation_context::InvocationContextStack;
     use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{IdempotencyKey, OwnedWorkerId, ProjectId, PromiseId,
+    use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId,
         ScheduledAction, ShardId, WorkerId,
     };
     use golem_common::model::account::AccountId;
@@ -479,6 +479,7 @@ mod tests {
     use std::time::Duration;
     use test_r::test;
     use uuid::Uuid;
+    use golem_common::model::environment::EnvironmentId;
 
     struct SchedulerWorkerAccessMock;
 
@@ -565,7 +566,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -805,7 +806,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -921,7 +922,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1154,7 +1155,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),

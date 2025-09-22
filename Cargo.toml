@@ -9,7 +9,7 @@ members = [
     # "golem-debugging-service",
     "golem-service-base",
     # "golem-component-service",
-    # "golem-component-compilation-service",
+    "golem-component-compilation-service",
     "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",

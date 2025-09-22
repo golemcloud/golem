@@ -28,8 +28,8 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
     ComponentCompilationRequest, ComponentCompilationResponse,
 };
 use golem_common::grpc::proto_component_id_string;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::ComponentId;
+use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::component::ComponentId;
 use golem_common::recorded_grpc_api_request;
 use tonic::{Request, Response, Status};
 
@@ -174,7 +174,7 @@ impl Debug for ComponentCompilationTraceErrorKind<'_> {
     }
 }
 
-impl TraceErrorKind for ComponentCompilationTraceErrorKind<'_> {
+impl ApiErrorDetails for ComponentCompilationTraceErrorKind<'_> {
     fn trace_error_kind(&self) -> &'static str {
         match &self.0.error {
             None => "None",
@@ -195,5 +195,9 @@ impl TraceErrorKind for ComponentCompilationTraceErrorKind<'_> {
                 component_compilation_error::Error::InternalError(_) => false,
             },
         }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        None
     }
 }

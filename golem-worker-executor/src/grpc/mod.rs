@@ -2761,7 +2761,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(DeactivatePluginResponse {
                     result: Some(
                         golem::workerexecutor::v1::deactivate_plugin_response::Result::Failure(

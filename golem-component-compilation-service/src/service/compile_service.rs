@@ -16,7 +16,7 @@ use super::*;
 use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
 use crate::model::*;
 use async_trait::async_trait;
-use golem_common::model::{ComponentId, ProjectId};
+use golem_common::model::component::ComponentId;
 use golem_worker_executor::services::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use tokio::sync::mpsc;

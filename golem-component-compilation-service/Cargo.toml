@@ -21,6 +21,7 @@ golem-common = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
 # golem-worker-executor = { workspace = true }
 
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }

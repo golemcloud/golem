@@ -35,7 +35,8 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::Decode;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::time::Duration;
@@ -43,7 +44,6 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
-use golem_common::model::component::ComponentRevision;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -510,7 +510,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn update_worker(
         &mut self,
         worker_id: golem_api_1_x::host::WorkerId,
-        target_version: ComponentVersion,
+        target_version: u64,
         mode: golem_api_1_x::host::UpdateMode,
     ) -> anyhow::Result<()> {
         let durability = Durability::<(), SerializableError>::new(
@@ -537,7 +537,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .worker_proxy
-                .update(&owned_worker_id, target_version, mode)
+                .update(&owned_worker_id, ComponentRevision(target_version), mode)
                 .await;
             durability
                 .persist(self, (worker_id, target_version, mode), result)
@@ -665,7 +665,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .component_service
                 .resolve_component(
                     component_slug.clone(),
-                    self.state.component_metadata.owner.clone(),
+                    self.state.component_metadata.id.clone(),
                 )
                 .await;
             durability.persist(self, component_slug, result).await
@@ -710,7 +710,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .component_service
                     .resolve_component(
                         component_slug.clone(),
-                        self.state.component_metadata.owner.clone(),
+                        self.state.component_metadata.id.clone(),
                     )
                     .await?;
                 let worker_id = component_id.map(|component_id| WorkerId {
@@ -860,7 +860,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
 pub struct GetOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub page_size: usize,
 }
 
@@ -868,7 +868,7 @@ impl GetOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentVersion,
+        initial_component_version: ComponentRevision,
         page_size: usize,
     ) -> Self {
         Self {
@@ -882,7 +882,7 @@ impl GetOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentVersion,
+        current_component_version: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_version = current_component_version;
@@ -977,7 +977,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
 pub struct SearchOplogEntry {
     pub owned_worker_id: OwnedWorkerId,
     pub next_oplog_index: OplogIndex,
-    pub current_component_version: ComponentVersion,
+    pub current_component_version: ComponentRevision,
     pub page_size: usize,
     pub query: String,
 }
@@ -986,7 +986,7 @@ impl SearchOplogEntry {
     pub fn new(
         owned_worker_id: OwnedWorkerId,
         initial_oplog_index: OplogIndex,
-        initial_component_version: ComponentVersion,
+        initial_component_version: ComponentRevision,
         page_size: usize,
         query: String,
     ) -> Self {
@@ -1002,7 +1002,7 @@ impl SearchOplogEntry {
     pub fn update(
         &mut self,
         next_oplog_index: OplogIndex,
-        current_component_version: ComponentVersion,
+        current_component_version: ComponentRevision,
     ) {
         self.next_oplog_index = next_oplog_index;
         self.current_component_version = current_component_version;

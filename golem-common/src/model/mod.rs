@@ -50,8 +50,9 @@ pub mod worker;
 pub use crate::base_model::*;
 
 use self::component::{
-    ComponentFilePermissions, ComponentId, ComponentRevision, PluginInstallationId,
+    ComponentFilePermissions, ComponentRevision, PluginInstallationId
 };
+use self::component::ComponentId;
 use self::environment::EnvironmentId;
 use crate::model::account::AccountId;
 use crate::model::invocation_context::InvocationContextStack;
@@ -1826,28 +1827,6 @@ impl From<golem_wasm_rpc::WorkerId> for WorkerId {
         Self {
             component_id: host.component_id.into(),
             worker_name: host.worker_name,
-        }
-    }
-}
-
-impl From<golem_wasm_rpc::ComponentId> for ComponentId {
-    fn from(host: golem_wasm_rpc::ComponentId) -> Self {
-        let high_bits = host.uuid.high_bits;
-        let low_bits = host.uuid.low_bits;
-
-        Self(Uuid::from_u64_pair(high_bits, low_bits))
-    }
-}
-
-impl From<ComponentId> for golem_wasm_rpc::ComponentId {
-    fn from(component_id: ComponentId) -> Self {
-        let (high_bits, low_bits) = component_id.0.as_u64_pair();
-
-        golem_wasm_rpc::ComponentId {
-            uuid: golem_wasm_rpc::Uuid {
-                high_bits,
-                low_bits,
-            },
         }
     }
 }
