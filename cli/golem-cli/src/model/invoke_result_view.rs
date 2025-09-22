@@ -52,7 +52,7 @@ impl InvokeResultView {
         }
     }
 
-    pub fn new_enqueue(idempotency_key: IdempotencyKey) -> Self {
+    pub fn new_trigger(idempotency_key: IdempotencyKey) -> Self {
         Self {
             idempotency_key: idempotency_key.0,
             result_json: None,

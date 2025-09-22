@@ -137,7 +137,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(outputs.stderr_contains("Compiling app_rust v0.0.1"));
+    check!(outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     check_component_metadata(
         &ctx.working_dir
@@ -150,25 +150,25 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
+    check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 2
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
+    check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Rebuild - 3 - force, but cargo is smart to skip actual compile
     let outputs = ctx.cli([cmd::APP, cmd::BUILD, flag::FORCE_BUILD]).await;
     assert!(outputs.success());
     check!(outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(outputs.stderr_contains("Finished `dev` profile"));
+    check!(outputs.stdout_contains("Finished `dev` profile"));
 
     // Rebuild - 4
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
+    check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 
     // Clean
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
@@ -178,7 +178,7 @@ async fn app_build_with_rust_component(_tracing: &Tracing) {
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
     check!(!outputs.stdout_contains("Executing external command 'cargo component build'"));
-    check!(!outputs.stderr_contains("Compiling app_rust v0.0.1"));
+    check!(!outputs.stdout_contains("Compiling app_rust v0.0.1"));
 }
 
 #[test]
