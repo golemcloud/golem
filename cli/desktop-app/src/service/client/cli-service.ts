@@ -23,12 +23,12 @@ export class CLIService {
       });
     } catch (_e) {
       toast({
-        title: "Error in calling golem CLI",
+        title: "Error from golem CLI",
         description: String(_e),
         variant: "destructive",
         duration: 5000,
       });
-      throw new Error("Error in calling golem CLI: " + String(_e));
+      throw new Error("Error from golem CLI: " + String(_e));
     }
 
     let parsedResult;

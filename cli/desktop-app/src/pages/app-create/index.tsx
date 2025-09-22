@@ -29,9 +29,7 @@ import {
 } from "@/components/ui/tooltip";
 import { FolderOpen, Info, ArrowLeft, Sparkles } from "lucide-react";
 
-const LANGUAGE_OPTIONS = [
-  { value: "ts", label: "TypeScript" }
-];
+const LANGUAGE_OPTIONS = [{ value: "ts", label: "TypeScript" }];
 
 export const CreateApplication = () => {
   const navigate = useNavigate();

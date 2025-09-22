@@ -174,7 +174,7 @@ export default function AgentInfo() {
       API.agentService
         .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          setAgentDetails(response as Agent);
+          setAgentDetails(response.metadata);
         });
     }
   }, [appId, componentId, agentName]);

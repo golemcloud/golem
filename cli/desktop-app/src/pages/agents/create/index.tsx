@@ -95,9 +95,9 @@ export default function CreateAgent() {
 
     API.agentService
       .createAgent(appId, componentID, values.name)
-      .then((response: { component_name: string; agent_name: string }) => {
+      .then((response: { component_name: string; worker_name: string }) => {
         navigate(
-          `/app/${appId}/components/${componentId}/agents/${response.agent_name}`,
+          `/app/${appId}/components/${componentId}/agents/${response.worker_name}`,
         );
       });
   }

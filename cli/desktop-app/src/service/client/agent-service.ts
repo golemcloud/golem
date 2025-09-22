@@ -47,7 +47,7 @@ export class AgentService {
       params.push(`--precise`);
     }
     return (await this.cliService.callCLI(appId, "agent", params)) as Promise<{
-      agents: Agent[];
+      workers: Agent[];
     }>;
   };
 
@@ -91,10 +91,10 @@ export class AgentService {
       appId,
       componentId,
     );
-    return await this.cliService.callCLI(appId, "agent", [
+    return (await this.cliService.callCLI(appId, "agent", [
       "get",
       `${component?.componentName}/${agentName}`,
-    ]);
+    ])) as Promise<{ metadata: Agent }>;
   };
 
   public interruptAgent = async (

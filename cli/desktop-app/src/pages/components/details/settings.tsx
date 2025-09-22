@@ -31,22 +31,14 @@ export default function ComponentSettings() {
   const handleDeleteAll = async () => {
     setIsDeleting(true);
     try {
-      const response = await API.agentService.findAgent(
-        appId!,
-        componentId!,
-        {
-          count: 100,
-          precise: true,
-        },
-      );
+      const response = await API.agentService.findAgent(appId!, componentId!, {
+        count: 100,
+        precise: true,
+      });
 
       await Promise.allSettled(
-        response?.agents.map((agent: Agent) =>
-          API.agentService.deleteAgent(
-            appId!,
-            componentId!,
-            agent.agentName,
-          ),
+        response?.workers.map((agent: Agent) =>
+          API.agentService.deleteAgent(appId!, componentId!, agent.workerName),
         ),
       );
 
@@ -94,8 +86,8 @@ export default function ComponentSettings() {
                 <div>
                   <h3 className="text-lg font-medium">Delete All Agents</h3>
                   <p className="text-sm text-muted-foreground">
-                    This will permanently delete all agents associated with
-                    this component. This action cannot be undone.
+                    This will permanently delete all agents associated with this
+                    component. This action cannot be undone.
                   </p>
                 </div>
 
@@ -112,8 +104,8 @@ export default function ComponentSettings() {
                         Are you sure?
                       </DialogTitle>
                       <DialogDescription className="text-gray-700">
-                        This action cannot be undone. All associated agents
-                        will be permanently removed.
+                        This action cannot be undone. All associated agents will
+                        be permanently removed.
                       </DialogDescription>
                     </DialogHeader>
                     <DialogFooter className="flex justify-center gap-4">

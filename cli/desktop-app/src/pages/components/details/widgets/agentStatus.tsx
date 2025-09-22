@@ -35,11 +35,7 @@ const chartConfig = {
   },
 } satisfies ChartConfig;
 
-export function AgentStatus({
-  agentStatus,
-}: {
-  agentStatus: IAgentStatus;
-}) {
+export function AgentStatus({ agentStatus }: { agentStatus: IAgentStatus }) {
   // Calculate total agents and memoize the result
   const total = React.useMemo(() => {
     return Object.values(agentStatus).reduce((acc, val) => acc + val, 0);

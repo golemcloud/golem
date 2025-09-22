@@ -6,13 +6,13 @@ export interface Agent {
   createdAt: string;
   env: { [key: string]: string };
   lastError: string | null;
-  ownedResources: { [key: string]: string };
+  exportedResourceInstances: { [key: string]: string };
   pendingInvocationCount: number;
   retryCount: number;
   status: string;
   totalLinearMemorySize: number;
 
-  agentName: string;
+  workerName: string;
   componentName: string;
   activePlugins: string[];
   updates: Update[];

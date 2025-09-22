@@ -43,7 +43,7 @@ export default function AgentList() {
     const lowerCaseQuery = searchQuery.toLowerCase();
     const filtered = agentList.filter(
       (agent: Agent) =>
-        agent.agentName?.toLowerCase().includes(lowerCaseQuery) ||
+        agent.workerName?.toLowerCase().includes(lowerCaseQuery) ||
         agent.status?.toLowerCase().includes(lowerCaseQuery),
     );
     setFilteredAgents(filtered);
@@ -96,13 +96,13 @@ export default function AgentList() {
                   className="rounded-lg border border-border bg-muted hover:bg-muted/80 hover:shadow-lg transition cursor-pointer"
                   onClick={() =>
                     navigate(
-                      `/app/${appId}/components/${componentId}/agents/${agent.agentName}`,
+                      `/app/${appId}/components/${componentId}/agents/${agent.workerName}`,
                     )
                   }
                 >
                   <CardHeader>
                     <CardTitle className="text-foreground font-mono">
-                      {agent.agentName}
+                      {agent.workerName}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="py-2">

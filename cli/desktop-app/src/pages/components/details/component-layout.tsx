@@ -49,55 +49,55 @@ const createMenuItems = (
   componentId: string,
   componentType: string,
 ): SidebarMenuProps[] => [
-    {
-      title: "Overview",
-      url: `/app/${appId}/components/${componentId}`,
-      icon: Home,
-    },
-    {
-      title: "Agents",
-      url: `/app/${appId}/components/${componentId}/agents`,
-      icon: Pickaxe,
-      isHidden: componentType === "Ephemeral",
-    },
-    {
-      title: "Invoke",
-      url: `/app/${appId}/components/${componentId}/invoke`,
-      icon: Workflow,
-      isHidden: componentType === "Durable",
-    },
-    {
-      title: "Exports",
-      url: `/app/${appId}/components/${componentId}/exports`,
-      icon: ArrowRightFromLine,
-    },
-    // {
-    //   title: "Update",
-    //   url: `/app/${appId}/components/${componentId}/update`,
-    //   icon: Pencil,
-    // },
-    {
-      title: "Files",
-      url: `/app/${appId}/components/${componentId}/files`,
-      icon: Folder,
-    },
-    {
-      title: "Plugins",
-      url: `/app/${appId}/components/${componentId}/plugins`,
-      icon: ToyBrick,
-    },
-    {
-      title: "Info",
-      url: `/app/${appId}/components/${componentId}/info`,
-      icon: Info,
-    },
-    {
-      title: "Settings",
-      url: `/app/${appId}/components/${componentId}/settings`,
-      icon: Settings,
-      isHidden: componentType === "Ephemeral",
-    },
-  ];
+  {
+    title: "Overview",
+    url: `/app/${appId}/components/${componentId}`,
+    icon: Home,
+  },
+  {
+    title: "Agents",
+    url: `/app/${appId}/components/${componentId}/agents`,
+    icon: Pickaxe,
+    isHidden: componentType === "Ephemeral",
+  },
+  {
+    title: "Invoke",
+    url: `/app/${appId}/components/${componentId}/invoke`,
+    icon: Workflow,
+    isHidden: componentType === "Durable",
+  },
+  {
+    title: "Exports",
+    url: `/app/${appId}/components/${componentId}/exports`,
+    icon: ArrowRightFromLine,
+  },
+  // {
+  //   title: "Update",
+  //   url: `/app/${appId}/components/${componentId}/update`,
+  //   icon: Pencil,
+  // },
+  {
+    title: "Files",
+    url: `/app/${appId}/components/${componentId}/files`,
+    icon: Folder,
+  },
+  {
+    title: "Plugins",
+    url: `/app/${appId}/components/${componentId}/plugins`,
+    icon: ToyBrick,
+  },
+  {
+    title: "Info",
+    url: `/app/${appId}/components/${componentId}/info`,
+    icon: Info,
+  },
+  {
+    title: "Settings",
+    url: `/app/${appId}/components/${componentId}/settings`,
+    icon: Settings,
+    isHidden: componentType === "Ephemeral",
+  },
+];
 
 /**
  * Layout component for the component details page

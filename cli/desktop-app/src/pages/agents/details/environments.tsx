@@ -24,7 +24,7 @@ export default function AgentEnvironments() {
       API.agentService
         .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          setAgentDetails(response as Agent);
+          setAgentDetails(response.metadata);
         });
     }
   }, [componentId, agentName]);

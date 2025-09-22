@@ -107,8 +107,9 @@ export const ComponentDetails = () => {
 
             {/* Exports & Agent Status */}
             <div
-              className={`grid gap-4 ${component.componentType === "Durable" ? "md:grid-cols-2" : ""
-                }`}
+              className={`grid gap-4 ${
+                component.componentType === "Durable" ? "md:grid-cols-2" : ""
+              }`}
             >
               <ExportsList
                 exports={

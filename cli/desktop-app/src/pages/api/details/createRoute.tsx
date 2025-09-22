@@ -39,7 +39,6 @@ import {
   type Component,
   type ComponentList,
 } from "@/types/component";
-import type { Agent } from "@/types/agent";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
@@ -362,11 +361,9 @@ const CreateRoute = () => {
 
   const loadAgentSuggestions = async (appId: string, componentId: string) => {
     try {
-      const agentsData = (
-        await API.agentService.findAgent(appId, componentId)
-      ).agents as Agent[];
-      const agentNames =
-        (agentsData || []).map(w => `"${w.agentName}"`) || [];
+      const agentsData = (await API.agentService.findAgent(appId, componentId))
+        .workers;
+      const agentNames = (agentsData || []).map(w => `"${w.workerName}"`) || [];
       setAgentSuggestions(agentNames);
       return agentNames;
     } catch (error) {
@@ -744,10 +741,11 @@ const CreateRoute = () => {
                                 </button>
                               </PopoverTrigger>
                               <PopoverContent
-                                className={`${responseSuggestions.length === 0
-                                  ? "max-w-[450px]"
-                                  : "w-[450px]"
-                                  }  p-4`}
+                                className={`${
+                                  responseSuggestions.length === 0
+                                    ? "max-w-[450px]"
+                                    : "w-[450px]"
+                                }  p-4`}
                                 align="start"
                                 sideOffset={5}
                               >

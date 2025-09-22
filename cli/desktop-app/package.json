@@ -10,6 +10,7 @@
     "tauri": "tauri",
     "test": "vitest --run",
     "test:ui": "vitest --ui",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
     "lint:fix": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0 --fix",
     "format": "prettier --write .",

@@ -26,7 +26,8 @@ export default function AgentDetails() {
       API.agentService
         .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          setAgentDetails(response as Agent);
+          console.log(response);
+          setAgentDetails(response.metadata as Agent);
         });
     }
   }, [componentId, agentName]);
@@ -145,8 +146,8 @@ export default function AgentDetails() {
             </CardHeader>
             <CardContent>
               <div className="text-2xl font-bold">
-                {agentDetails.ownedResources &&
-                  Object.keys(agentDetails.ownedResources).length}
+                {agentDetails.exportedResourceInstances &&
+                  Object.keys(agentDetails.exportedResourceInstances).length}
               </div>
             </CardContent>
           </Card>

@@ -59,7 +59,7 @@ export default function AgentManage() {
       API.agentService
         .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          const agent = response as Agent;
+          const agent = response.metadata;
           setAgentDetails(agent);
           setUpgradeTo(`${agent?.componentVersion}`);
         });
@@ -71,7 +71,7 @@ export default function AgentManage() {
       .upgradeAgent(
         appId!,
         componentList.componentName!,
-        agentDetails?.agentName,
+        agentDetails?.workerName!,
         Number(upgradeTo),
         upgradeType,
       )
@@ -104,14 +104,12 @@ export default function AgentManage() {
   };
 
   const onInterruptAgent = () => {
-    API.agentService
-      .interruptAgent(appId!, componentId, agentName)
-      .then(() => {
-        toast({
-          title: "Agent interrupted",
-          duration: 3000,
-        });
+    API.agentService.interruptAgent(appId!, componentId, agentName).then(() => {
+      toast({
+        title: "Agent interrupted",
+        duration: 3000,
       });
+    });
   };
 
   const versionListGreaterThan =
@@ -124,9 +122,7 @@ export default function AgentManage() {
       <Card className="w-full shadow-lg rounded-xl border border-border/30">
         <CardHeader>
           <CardTitle>Agent Execution</CardTitle>
-          <CardDescription>
-            Manage the agent and its execution.
-          </CardDescription>
+          <CardDescription>Manage the agent and its execution.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between p-3 bg-muted/10 rounded-lg">

@@ -93,7 +93,8 @@ export default function AgentLive() {
         appId!,
         componentId,
         agentName,
-        `${debouncedActiveTab === "log" ? "" : "ExportedFunctionInvoked"
+        `${
+          debouncedActiveTab === "log" ? "" : "ExportedFunctionInvoked"
         } ${search}`,
       )
       .then(response => {
