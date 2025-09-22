@@ -54,7 +54,6 @@ class WaveParser {
       return this.parseTuple();
     }
     if (char === "{") {
-      const nextChar = this.peekAhead(1);
       // Distinguish between records and flags
       if (this.isFlags()) {
         return this.parseFlags();
@@ -478,11 +477,12 @@ class WaveParser {
     return isFlags;
   }
 
-  private isVariantContext(): boolean {
-    // Simple heuristic: if we're not in a record context, treat as variant
-    // This is a simplified approach - in practice, you'd need type information
-    return false;
-  }
+  // Commented out - may be needed for future variant parsing improvements
+  // private isVariantContext(): boolean {
+  //   // Simple heuristic: if we're not in a record context, treat as variant
+  //   // This is a simplified approach - in practice, you'd need type information
+  //   return false;
+  // }
 
   private peek(): string {
     return this.pos < this.input.length ? this.input[this.pos]! : "";
