@@ -188,9 +188,7 @@ impl WorkerCommandHandler {
                 self.cmd_cancel_invocation(worker_name, idempotency_key)
                     .await
             }
-            AgentSubcommand::Files { worker_name, path } => {
-                self.cmd_files(worker_name, path).await
-            }
+            AgentSubcommand::Files { worker_name, path } => self.cmd_files(worker_name, path).await,
             AgentSubcommand::FileContents {
                 worker_name,
                 path,
