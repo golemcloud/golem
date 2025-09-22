@@ -501,9 +501,7 @@ mod grpc {
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::client::{GrpcClient, GrpcClientConfig};
     use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-    use golem_common::model::component::ComponentOwner;
-    use golem_common::model::{AccountId, ComponentId, ComponentVersion};
-    use golem_common::model::{ProjectId, RetryConfig};
+    use golem_common::model::{RetryConfig};
     use golem_common::retries::with_retries;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
 
@@ -520,13 +518,16 @@ mod grpc {
     use uuid::Uuid;
     use wasmtime::component::Component;
     use wasmtime::Engine;
+    use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::account::AccountId;
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
         component_metadata_cache:
-            Cache<ComponentKey, (), golem_service_base::model::Component, WorkerExecutorError>,
+            Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
         resolved_component_cache:
-            Cache<(ProjectId, String), (), Option<ComponentId>, WorkerExecutorError>,
+            Cache<(EnvironmentId, String), (), Option<ComponentId>, WorkerExecutorError>,
         access_token: Uuid,
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService>,
@@ -584,7 +585,7 @@ mod grpc {
 
         fn resolve_component_remotely(
             &self,
-            project_id: &ProjectId,
+            environment_id: &EnvironmentId,
             component_name: &str,
         ) -> impl Future<Output = Result<Option<ComponentId>, WorkerExecutorError>> + 'static
         {
@@ -596,23 +597,23 @@ mod grpc {
             let retry_config = self.retry_config.clone();
             let access_token = self.access_token;
 
-            let project_id = project_id.clone();
+            let environment_id = environment_id.clone();
             let component_name = component_name.to_string();
 
             async move {
                 with_retries(
                     "component",
                     "resolve_component_remotely",
-                    Some(format!("{project_id}/{component_name}").to_string()),
+                    Some(format!("{environment_id}/{component_name}").to_string()),
                     &retry_config,
-                    &(client, project_id, component_name, access_token),
-                    |(client, project_id, component_name, access_token)| {
+                    &(client, environment_id, component_name, access_token),
+                    |(client, environment_id, component_name, access_token)| {
                         Box::pin(async move {
                             let response = client
                                 .call("lookup_component_by_name", move |client| {
                                     let request = authorised_grpc_request(
                                         GetComponentsRequest {
-                                            project_id: Some(project_id.clone().into()),
+                                            environment_id: Some(environment_id.clone().into()),
                                             component_name: Some(component_name.clone()),
                                         },
                                         access_token,
@@ -662,8 +663,8 @@ mod grpc {
             &self,
             engine: &Engine,
             component_id: &ComponentId,
-            component_version: ComponentVersion,
-        ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>
+            component_version: ComponentRevision,
+        ) -> Result<(Component, ComponentDto), WorkerExecutorError>
         {
             let key = ComponentKey {
                 component_id: component_id.clone(),
@@ -769,8 +770,8 @@ mod grpc {
         async fn get_metadata(
             &self,
             component_id: &ComponentId,
-            forced_version: Option<ComponentVersion>,
-        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
+            forced_version: Option<ComponentRevision>,
+        ) -> Result<ComponentDto, WorkerExecutorError> {
             match forced_version {
                 Some(version) => {
                     let client = self.component_client.clone();
@@ -796,14 +797,14 @@ mod grpc {
                                     .await?;
                                     let account_id = self
                                         .project_service
-                                        .get_project_owner(&metadata.owner.project_id)
+                                        .get_project_owner(&metadata.environment_id)
                                         .await?;
                                     for installation in &metadata.installed_plugins {
                                         plugin_observations
                                             .observe_plugin_installation(
                                                 &account_id,
                                                 &component_id,
-                                                metadata.versioned_component_id.version,
+                                                metadata.revision,
                                                 installation,
                                             )
                                             .await?;
@@ -874,7 +875,7 @@ mod grpc {
                 .await
         }
 
-        async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
+        async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
             self.component_metadata_cache
                 .iter()
                 .map(|(_, v)| v)
@@ -887,7 +888,7 @@ mod grpc {
         access_token: &Uuid,
         retry_config: &RetryConfig,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
     ) -> Result<Vec<u8>, WorkerExecutorError> {
         with_retries(
             "components",
@@ -947,8 +948,8 @@ mod grpc {
         access_token: &Uuid,
         retry_config: &RetryConfig,
         component_id: &ComponentId,
-        component_version: Option<ComponentVersion>,
-    ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
+        component_version: Option<ComponentRevision>,
+    ) -> Result<ComponentDto, WorkerExecutorError> {
         let desc = format!("Getting component metadata of {component_id}");
         debug!("{}", &desc);
         with_retries(
@@ -1018,7 +1019,7 @@ mod grpc {
     fn grpc_component_download_error(
         error: GrpcError<ComponentError>,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
     ) -> WorkerExecutorError {
         WorkerExecutorError::ComponentDownloadFailed {
             component_id: component_id.clone(),
@@ -1040,7 +1041,7 @@ mod grpc {
     fn create_component_metadata_cache(
         max_capacity: usize,
         time_to_idle: Duration,
-    ) -> Cache<ComponentKey, (), golem_service_base::model::Component, WorkerExecutorError> {
+    ) -> Cache<ComponentKey, (), ComponentDto, WorkerExecutorError> {
         Cache::new(
             Some(max_capacity),
             FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -1055,7 +1056,7 @@ mod grpc {
     fn create_resolved_component_cache(
         max_capacity: usize,
         time_to_idle: Duration,
-    ) -> Cache<(ProjectId, String), (), Option<ComponentId>, WorkerExecutorError> {
+    ) -> Cache<(EnvironmentId, String), (), Option<ComponentId>, WorkerExecutorError> {
         Cache::new(
             Some(max_capacity),
             FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -1094,9 +1095,7 @@ mod grpc {
             parts.reverse();
 
             Ok(ComponentSlug {
-                account_id: parts.get(2).map(|s| AccountId {
-                    value: s.to_string(),
-                }),
+                account_id: parts.get(2).map(|s| Uuid::parse_str(s).map_err(|e| format!("Failed parsing uuid portion: {e}"))).transpose()?.map(AccountId),
                 project_name: parts.get(1).map(|s| s.to_string()),
                 component_name: parts[0].to_string(), // safe due to the check above
             })
@@ -1105,8 +1104,9 @@ mod grpc {
 
     #[cfg(test)]
     mod tests {
+        use uuid::uuid;
         use super::ComponentSlug;
-        use golem_common::model::AccountId;
+        use golem_common::model::account::AccountId;
         use test_r::test;
 
         #[test]
@@ -1137,13 +1137,11 @@ mod grpc {
 
         #[test]
         fn parse_account_project_component() {
-            let res = ComponentSlug::parse("baz/bar/foobar");
+            let res = ComponentSlug::parse("e4a2fd79-6fc2-436b-9b4a-ed322150e334/bar/foobar");
             assert_eq!(
                 res,
                 Ok(ComponentSlug {
-                    account_id: Some(AccountId {
-                        value: "baz".to_string()
-                    }),
+                    account_id: Some(AccountId(uuid!("e4a2fd79-6fc2-436b-9b4a-ed322150e334"))),
                     project_name: Some("bar".to_string()),
                     component_name: "foobar".to_string()
                 })

@@ -4021,6 +4021,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "golem-component-compilation-service"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "futures",
+ "golem-api-grpc",
+ "golem-common",
+ "golem-service-base",
+ "http 1.3.1",
+ "lazy_static 1.5.0",
+ "prometheus 0.13.4",
+ "serde",
+ "test-r",
+ "thiserror 2.0.14",
+ "tokio",
+ "tokio-stream",
+ "tonic 0.14.1",
+ "tonic-health",
+ "tracing",
+ "uuid",
+ "wasmtime",
+]
+
+[[package]]
 name = "golem-openapi-client-generator"
 version = "0.0.0"
 source = "git+https://github.com/golemcloud/golem-openapi-client-generator.git?branch=atomic-deployment-fixes#64018ca64c798839b6018c6bf4923c0277301826"
@@ -4215,6 +4240,7 @@ dependencies = [
  "tryhard",
  "url",
  "uuid",
+ "wasmtime",
  "wasmtime-wasi",
 ]
 

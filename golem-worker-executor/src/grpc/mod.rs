@@ -86,64 +86,6 @@ use uuid::Uuid;
 use wasmtime::Error;
 use golem_common::model::component::ComponentRevision;
 
-pub enum GrpcError<E> {
-    Transport(tonic::transport::Error),
-    Status(Status),
-    Domain(E),
-    Unexpected(String),
-}
-
-impl<E: Debug> Debug for GrpcError<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GrpcError::Transport(err) => write!(f, "Transport({err:?})"),
-            GrpcError::Status(err) => write!(f, "Status({err:?})"),
-            GrpcError::Domain(err) => write!(f, "Domain({err:?})"),
-            GrpcError::Unexpected(err) => write!(f, "Unexpected({err:?})"),
-        }
-    }
-}
-
-impl<E: Debug> Display for GrpcError<E> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GrpcError::Transport(err) => write!(f, "gRPC transport error: {err})"),
-            GrpcError::Status(err) => write!(f, "Failed gRPC request: {err})"),
-            GrpcError::Domain(err) => write!(f, "gRPC request failed with {err:?}"),
-            GrpcError::Unexpected(err) => write!(f, "Unexpected error {err}"),
-        }
-    }
-}
-
-impl<E: Debug> std::error::Error for GrpcError<E> {}
-
-impl<E> From<tonic::transport::Error> for GrpcError<E> {
-    fn from(value: tonic::transport::Error) -> Self {
-        Self::Transport(value)
-    }
-}
-
-impl<E> From<Status> for GrpcError<E> {
-    fn from(value: Status) -> Self {
-        Self::Status(value)
-    }
-}
-
-impl<E> From<String> for GrpcError<E> {
-    fn from(value: String) -> Self {
-        Self::Unexpected(value)
-    }
-}
-
-pub fn is_grpc_retriable<E>(error: &GrpcError<E>) -> bool {
-    match error {
-        GrpcError::Transport(_) => true,
-        GrpcError::Status(status) => status.code() == tonic::Code::Unavailable,
-        GrpcError::Domain(_) => false,
-        GrpcError::Unexpected(_) => false,
-    }
-}
-
 /// This is the implementation of the Worker Executor gRPC API
 pub struct WorkerExecutorImpl<
     Ctx: WorkerCtx,
@@ -2761,7 +2703,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 ),
             }))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(DeactivatePluginResponse {
                     result: Some(
                         golem::workerexecutor::v1::deactivate_plugin_response::Result::Failure(
@@ -2773,15 +2715,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ),
         }
     }
-}
-
-pub fn authorised_grpc_request<T>(request: T, access_token: &Uuid) -> Request<T> {
-    let mut req = Request::new(request);
-    req.metadata_mut().insert(
-        "authorization",
-        format!("Bearer {access_token}").parse().unwrap(),
-    );
-    req
 }
 
 pub struct WorkerEventStream {

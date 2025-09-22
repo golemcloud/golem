@@ -473,7 +473,7 @@ mod grpc {
     fn convert_grpc_plugin_definition(
         value: golem_api_grpc::proto::golem::component::PluginDefinition,
     ) -> Result<PluginDefinition, String> {
-        let account_id: AccountId = value.account_id.ok_or("Missing account id")?.into();
+        let account_id: AccountId = value.account_id.ok_or("Missing account id")?.try_into()?;
 
         Ok(PluginDefinition {
             id: value.id.ok_or("Missing plugin id")?.try_into()?,
