@@ -23,7 +23,7 @@ use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
 };
 use wasmtime::{AsContextMut, Engine, Store};
-use wasmtime_wasi::p2::{WasiCtx, WasiView};
+use wasmtime_wasi::p2::{StdoutStream, WasiCtx, WasiView};
 use wasmtime_wasi::{IoCtx, IoView};
 use wit_parser::{PackageId, Resolve, WorldItem};
 
@@ -32,7 +32,11 @@ const FUNCTION_NAME: &str = "discover-agent-types";
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
 /// If it does not, it fails.
-pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+pub async fn extract_agent_types(
+    wasm_path: &Path,
+    stdout: impl StdoutStream + 'static,
+    stderr: impl StdoutStream + 'static,
+) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
     config.async_support(true);
     config.wasm_component_model(true);
@@ -47,10 +51,11 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
     )?;
 
     let (wasi, io) = WasiCtx::builder()
-        .inherit_stdout()
-        .inherit_stderr()
+        .stdout(stdout)
+        .stderr(stderr)
         .env("RUST_BACKTRACE", "1")
         .build();
+
     let host = Host {
         table: Arc::new(Mutex::new(ResourceTable::new())),
         wasi: Arc::new(Mutex::new(wasi)),
