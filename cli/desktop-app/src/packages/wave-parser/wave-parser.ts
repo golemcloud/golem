@@ -27,7 +27,9 @@ class WaveParser {
     this.skipWhitespace();
 
     if (this.pos < this.input.length) {
-      throw new Error(`Unexpected characters at position ${this.pos}: ${this.input.slice(this.pos)}`);
+      throw new Error(
+        `Unexpected characters at position ${this.pos}: ${this.input.slice(this.pos)}`,
+      );
     }
 
     return result;
@@ -290,7 +292,9 @@ class WaveParser {
     // Parse identifier
     while (
       this.pos < this.input.length &&
-      (this.isAlphaNum(this.peek()) || this.peek() === "-" || this.peek() === "_")
+      (this.isAlphaNum(this.peek()) ||
+        this.peek() === "-" ||
+        this.peek() === "_")
     ) {
       this.advance();
     }
@@ -405,7 +409,9 @@ class WaveParser {
 
     // Check for invalid characters immediately following the number
     if (this.pos < this.input.length && this.isAlpha(this.peek())) {
-      throw new Error(`Invalid number format: numbers cannot be followed by letters at position ${this.pos}`);
+      throw new Error(
+        `Invalid number format: numbers cannot be followed by letters at position ${this.pos}`,
+      );
     }
 
     const numberStr = this.input.slice(start, this.pos);
@@ -427,7 +433,9 @@ class WaveParser {
 
     while (
       this.pos < this.input.length &&
-      (this.isAlphaNum(this.peek()) || this.peek() === "_" || this.peek() === "-")
+      (this.isAlphaNum(this.peek()) ||
+        this.peek() === "_" ||
+        this.peek() === "-")
     ) {
       this.advance();
     }
@@ -452,7 +460,9 @@ class WaveParser {
     const start = this.pos;
     while (
       this.pos < this.input.length &&
-      (this.isAlphaNum(this.peek()) || this.peek() === "_" || this.peek() === "-")
+      (this.isAlphaNum(this.peek()) ||
+        this.peek() === "_" ||
+        this.peek() === "-")
     ) {
       this.advance();
     }
@@ -499,8 +509,8 @@ class WaveParser {
       throw new Error(
         `Expected '${expected}' at position ${this.pos}, got '${this.input.slice(
           this.pos,
-          this.pos + expected.length
-        )}'`
+          this.pos + expected.length,
+        )}'`,
       );
     }
 
