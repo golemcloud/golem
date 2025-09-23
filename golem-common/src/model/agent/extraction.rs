@@ -23,7 +23,7 @@ use wasmtime::component::{
     Component, Func, Instance, Linker, LinkerInstance, ResourceTable, ResourceType, Type,
 };
 use wasmtime::{AsContextMut, Engine, Store};
-use wasmtime_wasi::p2::{WasiCtx, WasiView};
+use wasmtime_wasi::p2::{pipe, StdoutStream, WasiCtx, WasiView};
 use wasmtime_wasi::{IoCtx, IoView};
 use wit_parser::{PackageId, Resolve, WorldItem};
 
@@ -32,7 +32,11 @@ const FUNCTION_NAME: &str = "discover-agent-types";
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
 /// If it does not, it fails.
-pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+pub async fn extract_agent_types_with_streams(
+    wasm_path: &Path,
+    stdout: Option<impl StdoutStream + 'static>,
+    stderr: Option<impl StdoutStream + 'static>,
+) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
     config.async_support(true);
     config.wasm_component_model(true);
@@ -46,7 +50,22 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         &wasmtime_wasi::p2::bindings::LinkOptions::default(),
     )?;
 
-    let (wasi, io) = WasiCtx::builder().inherit_stdout().inherit_stderr().build();
+    let mut builder = WasiCtx::builder();
+
+    if let Some(stdout) = stdout {
+        builder.stdout(stdout);
+    } else {
+        builder.inherit_stdout();
+    }
+
+    if let Some(stderr) = stderr {
+        builder.stderr(stderr);
+    } else {
+        builder.inherit_stderr();
+    }
+
+    let (wasi, io) = builder.env("RUST_BACKTRACE", "1").build();
+
     let host = Host {
         table: Arc::new(Mutex::new(ResourceTable::new())),
         wasi: Arc::new(Mutex::new(wasi)),
@@ -98,6 +117,16 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
             Err(anyhow!(agent_error.to_string()))
         }
     }
+}
+
+/// Same as extract_agent_types_with_streams, but inherits stdout and stderr from the current process
+pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+    extract_agent_types_with_streams(
+        wasm_path,
+        None::<pipe::MemoryOutputPipe>,
+        None::<pipe::MemoryOutputPipe>,
+    )
+    .await
 }
 
 /// Checks if the given resolved component implements the `golem:agent/guest` interface.

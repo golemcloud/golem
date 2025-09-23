@@ -21,7 +21,9 @@ use crate::app::build::{delete_path_logged, is_up_to_date, new_task_up_to_date_c
 use crate::app::context::ApplicationContext;
 use crate::app::error::CustomCommandError;
 use crate::fs::compile_and_collect_globs;
-use crate::log::{log_action, log_skipping_up_to_date, log_warn_action, LogColorize, LogIndent};
+use crate::log::{
+    log_action, log_skipping_up_to_date, log_warn_action, logln, LogColorize, LogIndent,
+};
 use crate::model::app::AppComponentName;
 use crate::model::app_raw;
 use crate::model::app_raw::{
@@ -30,13 +32,16 @@ use crate::model::app_raw::{
 };
 use crate::wasm_rpc_stubgen::commands;
 use crate::wasm_rpc_stubgen::commands::composition::Plug;
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, Context as AnyhowContext};
 use camino::Utf8Path;
+use colored::Colorize;
 use gag::BufferRedirect;
 use std::io::{Read, Write};
 use std::path::Path;
-use std::process::{Command, ExitStatus};
-use tracing::debug;
+use std::process::{ExitStatus, Stdio};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::{Child, Command};
+use tracing::{debug, enabled, Level};
 use wasm_rquickjs::{EmbeddingMode, JsModuleSpec};
 
 pub async fn execute_build_command(
@@ -50,7 +55,7 @@ pub async fn execute_build_command(
         .to_path_buf();
     match command {
         app_raw::BuildCommand::External(external_command) => {
-            execute_external_command(ctx, &base_build_dir, external_command)
+            execute_external_command(ctx, &base_build_dir, external_command).await
         }
         app_raw::BuildCommand::QuickJSCrate(command) => {
             execute_quickjs_create(ctx, &base_build_dir, command)
@@ -118,8 +123,6 @@ async fn execute_agent_wrapper(
         .get_extracted_agent_types(component_name, compiled_wasm_path.as_std_path())
         .await;
 
-    let dev_mode = ctx.config.dev_mode;
-
     task_result_marker.result((|| {
         let agent_types = agent_types?;
 
@@ -142,8 +145,9 @@ async fn execute_agent_wrapper(
             ),
         );
 
-        let redirect = (!dev_mode).then(|| BufferRedirect::stderr().ok()).flatten();
-        // let redirect = BufferRedirect::stderr().ok();
+        let redirect = (!enabled!(Level::WARN))
+            .then(|| BufferRedirect::stderr().ok())
+            .flatten();
 
         let result = crate::model::agent::moonbit::generate_moonbit_wrapper(
             wrapper_context,
@@ -275,7 +279,7 @@ async fn execute_inject_to_prebuilt_quick_js(
         .await
 }
 
-pub fn execute_custom_command(
+pub async fn execute_custom_command(
     ctx: &ApplicationContext,
     command_name: &str,
 ) -> Result<(), CustomCommandError> {
@@ -302,7 +306,7 @@ pub fn execute_custom_command(
         let _indent = LogIndent::new();
 
         for step in &command.value {
-            if let Err(error) = execute_external_command(ctx, &command.source, step) {
+            if let Err(error) = execute_external_command(ctx, &command.source, step).await {
                 return Err(CustomCommandError::CommandError { error });
             }
         }
@@ -328,7 +332,9 @@ pub fn execute_custom_command(
                     ctx,
                     ctx.application.component_source_dir(component_name),
                     step,
-                ) {
+                )
+                .await
+                {
                     return Err(CustomCommandError::CommandError { error });
                 }
             }
@@ -437,7 +443,7 @@ fn execute_quickjs_d_ts(
         )
 }
 
-pub fn execute_external_command(
+pub async fn execute_external_command(
     ctx: &ApplicationContext,
     base_command_dir: &Path,
     command: &app_raw::ExternalCommand,
@@ -495,68 +501,73 @@ pub fn execute_external_command(
         ),
     );
 
-    task_result_marker.result((|| {
-        if !command.rmdirs.is_empty() {
-            let _ident = LogIndent::new();
-            for dir in &command.rmdirs {
-                let dir = build_dir.join(dir);
-                delete_path_logged("directory", &dir)?;
-            }
-        }
-
-        if !command.mkdirs.is_empty() {
-            let _ident = LogIndent::new();
-            for dir in &command.mkdirs {
-                let dir = build_dir.join(dir);
-                if !std::fs::exists(&dir)? {
-                    log_action(
-                        "Creating",
-                        format!("directory {}", dir.log_color_highlight()),
-                    );
-                    std::fs::create_dir_all(dir)?
+    task_result_marker.result(
+        async {
+            if !command.rmdirs.is_empty() {
+                let _ident = LogIndent::new();
+                for dir in &command.rmdirs {
+                    let dir = build_dir.join(dir);
+                    delete_path_logged("directory", &dir)?;
                 }
             }
-        }
 
-        let command_tokens = shlex::split(&command.command).ok_or_else(|| {
-            anyhow::anyhow!("Failed to parse external command: {}", command.command)
-        })?;
-        if command_tokens.is_empty() {
-            return Err(anyhow!("Empty command!"));
-        }
-
-        ensure_common_deps_for_tool(ctx, command_tokens[0].as_str())?;
-
-        Command::new(command_tokens[0].clone())
-            .args(command_tokens.iter().skip(1))
-            .current_dir(build_dir)
-            .status()
-            .with_context(|| "Failed to execute command".to_string())?
-            .check_exit_status()
-    })())
-}
-
-fn ensure_common_deps_for_tool(ctx: &ApplicationContext, tool: &str) -> anyhow::Result<()> {
-    match tool {
-        "node" | "npx" => ctx.ensure_common_deps_for_tool_once("node", || {
-            if std::fs::exists("node_modules")? {
-                return Ok(());
+            if !command.mkdirs.is_empty() {
+                let _ident = LogIndent::new();
+                for dir in &command.mkdirs {
+                    let dir = build_dir.join(dir);
+                    if !std::fs::exists(&dir)? {
+                        log_action(
+                            "Creating",
+                            format!("directory {}", dir.log_color_highlight()),
+                        );
+                        std::fs::create_dir_all(dir)?
+                    }
+                }
             }
 
-            log_warn_action(
-                "Detected",
-                format!(
-                    "missing {}, executing {}",
-                    "node_modules".log_color_highlight(),
-                    "npm install".log_color_highlight()
-                ),
-            );
-            Command::new("npm")
-                .args(["install"])
-                .status()
-                .context("Failed to execute npm install")?
-                .check_exit_status()
-        }),
+            let command_tokens = shlex::split(&command.command).ok_or_else(|| {
+                anyhow::anyhow!("Failed to parse external command: {}", command.command)
+            })?;
+            if command_tokens.is_empty() {
+                return Err(anyhow!("Empty command!"));
+            }
+
+            ensure_common_deps_for_tool(ctx, command_tokens[0].as_str()).await?;
+
+            Command::new(command_tokens[0].clone())
+                .args(command_tokens.iter().skip(1))
+                .current_dir(build_dir)
+                .stream_and_run(&command_tokens[0])
+                .await
+        }
+        .await,
+    )
+}
+
+async fn ensure_common_deps_for_tool(ctx: &ApplicationContext, tool: &str) -> anyhow::Result<()> {
+    match tool {
+        "node" | "npx" => {
+            ctx.ensure_common_deps_for_tool_once("node", || async {
+                if std::fs::exists("node_modules")? {
+                    return Ok(());
+                }
+
+                log_warn_action(
+                    "Detected",
+                    format!(
+                        "missing {}, executing {}",
+                        "node_modules".log_color_highlight(),
+                        "npm install".log_color_highlight()
+                    ),
+                );
+
+                Command::new("npm")
+                    .args(["install"])
+                    .stream_and_run("npm")
+                    .await
+            })
+            .await
+        }
         _ => Ok(()),
     }
 }
@@ -577,5 +588,74 @@ impl ExitStatusExt for ExitStatus {
                     .unwrap_or_else(|| "?".to_string())
             )))
         }
+    }
+}
+
+trait CommandExt {
+    async fn stream_and_wait_for_status(
+        &mut self,
+        command_name: &str,
+    ) -> anyhow::Result<ExitStatus>;
+
+    async fn stream_and_run(&mut self, command_name: &str) -> anyhow::Result<()> {
+        self.stream_and_wait_for_status(command_name)
+            .await?
+            .check_exit_status()
+    }
+
+    fn stream_output(command_name: &str, child: &mut Child) -> anyhow::Result<()> {
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture stdout for {command_name}"))?;
+
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("Failed to capture stderr for {command_name}"))?;
+
+        tokio::spawn({
+            let prefix = format!("{} | ", command_name).green().bold();
+            async move {
+                let mut lines = BufReader::new(stdout).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    logln(format!("{prefix} {line}"));
+                }
+            }
+        });
+
+        tokio::spawn({
+            let prefix = format!("{} | ", command_name).red().bold();
+            async move {
+                let mut lines = BufReader::new(stderr).lines();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    logln(format!("{prefix} {line}"));
+                }
+            }
+        });
+
+        Ok(())
+    }
+}
+
+impl CommandExt for Command {
+    async fn stream_and_wait_for_status(
+        &mut self,
+        command_name: &str,
+    ) -> anyhow::Result<ExitStatus> {
+        let _indent = LogIndent::stash();
+
+        let mut child = self
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .with_context(|| format!("Failed to spawn {command_name}"))?;
+
+        Self::stream_output(command_name, &mut child)?;
+
+        child
+            .wait()
+            .await
+            .with_context(|| format!("Failed to execute {command_name}"))
     }
 }

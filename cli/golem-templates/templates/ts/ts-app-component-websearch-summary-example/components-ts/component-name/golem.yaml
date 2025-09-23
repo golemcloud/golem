@@ -1,0 +1,175 @@
+# golem-app-manifest-header
+
+components:
+  componentname:
+    template: ts
+    env:
+      # Local ollama llm model to use
+      LLM_MODEL: hf.co/unsloth/gpt-oss-20b-GGUF:Q8_0
+      # Google api key to use: https://console.cloud.google.com/apis/credentials
+      GOOGLE_API_KEY: "changeme"
+      # Google search engine id: https://programmablesearchengine.google.com/controlpanel/create
+      GOOGLE_SEARCH_ENGINE_ID: "changeme"
+
+# The following block contains commented-out dependencies for various Golem AI libraries.
+# For each area (such as LLM, Search, etc) only one of the providers can be commented out.
+# If no provider dependency is commented out, then using that AI API will be a runtime failure.
+dependencies:
+  componentname:
+    # LLM providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## Anthropic
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_llm_anthropic-dev.wasm
+
+    ## OpenAI
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_llm_openai-dev.wasm
+
+    ## OpenRouter
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_llm_openrouter-dev.wasm
+
+    ## Amazon Bedrock
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_llm_bedrock-dev.wasm
+
+    ## Grok
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_llm_grok-dev.wasm
+
+    # Ollama
+    - type: wasm
+      url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_llm_ollama-dev.wasm
+
+    # Code execution providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## Python and JavaScript
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_exec-dev.wasm
+
+    ## Python only
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_exec_python-dev.wasm
+
+    ## JavaScript only
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_exec_javascript-dev.wasm
+
+    # Graph database providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## ArangoDB
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_graph_arangodb-dev.wasm
+
+    ## JanusGraph
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_graph_janusgraph-dev.wasm
+
+    ## Neo4j
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_graph_neo4j-dev.wasm
+
+    # Search providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## Algolia
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_search_algolia-dev.wasm
+
+    ## ElasticSearch
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_search_elasticsearch-dev.wasm
+
+    ## Meilisearch
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_search_meilisearch-dev.wasm
+
+    ## OpenSearch
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_search_opensearch-dev.wasm
+
+    ## Typesense
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_search_typesense-dev.wasm
+
+    # Speech-to-text providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## AWS
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_stt_aws-dev.wasm
+
+    ## Azure
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_stt_azure-dev.wasm
+
+    ## Deepgram
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_stt_deepgram-dev.wasm
+
+    ## Google
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_stt_google-dev.wasm
+
+    ## Whisper
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_stt_whisper-dev.wasm
+
+    # Video generation providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## Kling
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_video_kling-dev.wasm
+
+    ## Runway
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_video_runway-dev.wasm
+
+    ## Stability
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_video_stability-dev.wasm
+
+    ## Veo
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_video_veo-dev.wasm
+
+    # WebSearch providers
+    # ------------------------------------------------------------------------------------------------------------
+    ## Brave
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_brave-dev.wasm
+
+    # Google
+    - type: wasm
+      url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_google-dev.wasm
+
+    ## Serper
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_serper-dev.wasm
+
+    ## Tavily
+    # - type: wasm
+    #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.3/golem_web_search_tavily-dev.wasm
+
+httpApi:
+  definitions:
+    componentname-api:
+      version: '1'
+      routes:
+      - method: GET
+        path: /v1/research?{topic}
+        binding:
+          type: default
+          __cn__: componentname
+          response: |
+            let agent = research-agent();
+            let result = agent.research(request.query.topic);
+            {status: 200, body: result, headers: {ContentType: "text/plain"}}
+
+  ## Uncomment this to enable deployment of the http api
+  # deployments:
+  #   local:
+  #   - host: localhost:9006
+  #     definitions:
+  #     - componentname-api
+
+# golem-app-manifest-component-hints
