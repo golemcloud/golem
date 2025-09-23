@@ -34,12 +34,32 @@ import {
 
 import * as fs from "node:fs";
 import path from "path";
+import { option } from "fast-check";
 
 export function getTypeFromTsMorph(
   tsMorphType: TsMorphType,
   isOptional: boolean,
 ): Type.Type {
-  return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+  try {
+    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+  } catch (e) {
+    if (e instanceof Error) {
+      let error = e.message;
+      if (e.stack) {
+        error = error + "\n\n" + e.stack;
+      }
+
+      return {
+        kind: "unresolved-type",
+        name: undefined,
+        optional: isOptional,
+        text: tsMorphType.getText(),
+        error: error,
+      };
+    } else {
+      throw e;
+    }
+  }
 }
 
 function getTypeFromTsMorphInternal(
@@ -551,11 +571,7 @@ export function updateMetadataFromSourceFiles(
           }),
         );
 
-        const returnType = getTypeFromTsMorphInternal(
-          method.getReturnType(),
-          false,
-          new Set(),
-        );
+        const returnType = getTypeFromTsMorph(method.getReturnType(), false);
         methods.set(method.getName(), { methodParams, returnType });
       }
 

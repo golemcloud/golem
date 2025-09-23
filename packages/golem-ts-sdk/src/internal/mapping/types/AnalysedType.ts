@@ -234,7 +234,6 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
 
 
 export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
-
   if (Option.isSome(scope) && (scope.val.scope === "constructor" || scope.val.scope === "method")) {
     if (tsType.optional) {
       return Either.left(`Optional parameters are not supported in ${scope.val.scope}. Parameter \`${scope.val.parameterName}\` is optional. Remove \`?\` and change the type to a union with \`undefined\``);
@@ -601,6 +600,9 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       } else {
         return Either.left(`Unsupported type \`${customTypeName}\``);
       }
+
+    case "unresolved-type":
+      return Either.left(`Failed to resolve type for \`${type.text}\`: ${type.error}`);
 
     case 'array':
       const name = type.name;

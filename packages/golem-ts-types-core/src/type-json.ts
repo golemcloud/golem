@@ -77,4 +77,11 @@ export type LiteTypeJSON =
       typeArgs?: LiteTypeJSON[];
       optional: boolean;
     }
-  | { kind: 'others'; name?: string; optional: boolean; recursive: boolean };
+  | { kind: 'others'; name?: string; optional: boolean; recursive: boolean }
+  | {
+      kind: 'unresolved-type';
+      name?: string;
+      optional: boolean;
+      text: string;
+      error: string;
+    };

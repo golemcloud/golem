@@ -176,5 +176,14 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
 
     case 'boolean':
       return { kind: 'boolean', name: type.name, optional: type.optional };
+
+    case 'unresolved-type':
+      return {
+        kind: 'unresolved-type',
+        name: type.name,
+        optional: type.optional,
+        text: type.text,
+        error: type.error,
+      };
   }
 }

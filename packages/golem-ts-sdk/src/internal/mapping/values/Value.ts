@@ -791,6 +791,11 @@ function fromTsValueInternal(
           Option.none(),
         ),
       );
+
+    case 'unresolved-type':
+      return Either.left(
+        `Failed to resolve type for \`${type.text}\`: ${type.error}`,
+      );
   }
 }
 
@@ -1296,6 +1301,9 @@ function matchesType(value: any, type: Type.Type): boolean {
       return false;
 
     case 'others':
+      return false;
+
+    case 'unresolved-type':
       return false;
   }
 }
@@ -1831,6 +1839,11 @@ export function toTsValue(value: Value, type: Type.Type): any {
           Option.some(name ?? 'anonymous'),
           Option.none(),
         ),
+      );
+
+    case 'unresolved-type':
+      throw new Error(
+        `Failed to resolve type for \`${type.text}\`: ${type.error}`,
       );
   }
 }
