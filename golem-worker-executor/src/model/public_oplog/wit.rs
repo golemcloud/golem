@@ -41,7 +41,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 args,
                 env,
                 created_by,
-                project_id,
+                environment_id,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,

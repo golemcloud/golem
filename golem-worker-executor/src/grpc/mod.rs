@@ -781,7 +781,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: &Req,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
         let worker_id = request.worker_id()?;
-        let project_id = request.project_id()?;
+        let project_id = request.environment_id()?;
 
         let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
@@ -1645,7 +1645,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 updates.push(golem::worker::UpdateRecord {
                     timestamp: Some((*timestamp).into()),
-                    target_version: *target_version,
+                    target_version: target_version.0,
                     update: Some(golem::worker::update_record::Update::Pending(
                         golem::worker::PendingUpdate {},
                     )),

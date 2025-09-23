@@ -11,6 +11,7 @@ import "golem/worker/worker_status.proto";
 import "golem/worker/wasi_config_vars.proto";
 import "google/protobuf/timestamp.proto";
 import "wasm/rpc/value_and_type.proto";
+import "golem/common/environment.proto";
 
 message WorkerMetadata {
   WorkerId worker_id = 1;
@@ -30,7 +31,7 @@ message WorkerMetadata {
   repeated golem.common.PluginInstallationId active_plugins = 15;
   repeated OplogRegion skipped_regions = 16;
   repeated OplogRegion deleted_regions = 17;
-  golem.common.ProjectId project_id = 18;
+  golem.common.EnvironmentId environment_id = 18;
   WasiConfigVars wasi_config_vars = 19;
 }
 

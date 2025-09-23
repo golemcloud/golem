@@ -49,7 +49,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
 use golem_common::model::{
     GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
+    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -61,6 +61,7 @@ use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
+use golem_common::model::environment::EnvironmentId;
 
 /// WorkerCtx is the primary customization and extension point of worker executor. It is the context
 /// associated with each running worker, and it is responsible for initializing the WASM linker as
@@ -383,7 +384,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError>;
 

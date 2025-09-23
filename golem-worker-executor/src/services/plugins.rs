@@ -283,7 +283,7 @@ impl Plugins for PluginsUnavailable {
 }
 
 mod grpc {
-    use crate::grpc::authorised_grpc_request;
+    use golem_service_base::grpc::authorised_grpc_request;
     use crate::services::plugins::{Plugins, PluginsObservations};
     use applying::Apply;
     use async_trait::async_trait;
@@ -383,7 +383,7 @@ mod grpc {
                     let request = authorised_grpc_request(
                         GetInstalledPluginsRequest {
                             component_id: Some(component_id.clone().into()),
-                            version: Some(component_version),
+                            version: Some(component_version.0),
                         },
                         &self.access_token,
                     );
