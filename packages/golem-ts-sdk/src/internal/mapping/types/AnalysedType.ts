@@ -295,7 +295,8 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
       const analysedType = unionTypeMapRegistry.get(hash);
 
-      if (analysedType) {
+      // We reuse the analysed only for anoymous types
+      if (analysedType && !type.name) {
         if (includesUndefined(type.unionTypes) && !(Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
           return Either.right(option(undefined, analysedType));
         }
@@ -315,7 +316,9 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       if (Option.isSome(unionOfOnlyLiterals.val)) {
         const analysedType = enum_(type.name, unionOfOnlyLiterals.val.val.literals);
 
-        unionTypeMapRegistry.set(hash, analysedType);
+        if (!type.name) {
+          unionTypeMapRegistry.set(hash, analysedType);
+        }
 
         return Either.right(analysedType);
       }
@@ -335,7 +338,10 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           case "custom":
             const analysedTypeEither = convertTaggedTypesToVariant(type.name, unionType.val);
             return Either.map(analysedTypeEither, (result) => {
-              unionTypeMapRegistry.set(hash, result);
+
+              if (!type.name) {
+                unionTypeMapRegistry.set(hash, result);
+              }
               return result;
             })
 
@@ -343,7 +349,9 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
             const userDefinedEither = convertUserDefinedResultToWitResult(type.name, unionType.val);
 
             return Either.map(userDefinedEither, (result) => {
-              unionTypeMapRegistry.set(hash, result);
+              if (!type.name) {
+                unionTypeMapRegistry.set(hash, result);
+              }
               return result;
             })
         }
@@ -373,11 +381,16 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         // Type is already optional and further loop will solve it
         if ((Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
           const innerType = innerTypeEither.val;
-          unionTypeMapRegistry.set(hash, innerType);
+
+          if (!type.name){
+            unionTypeMapRegistry.set(hash, innerType);
+          }
           return Either.right(innerType);
         }
 
-        unionTypeMapRegistry.set(hash, innerTypeEither.val);
+        if (!type.name) {
+          unionTypeMapRegistry.set(hash, innerTypeEither.val);
+        }
 
         const result = option(undefined, innerTypeEither.val);
 
@@ -434,7 +447,9 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
       const result = variant(type.name, possibleTypes);
 
-      unionTypeMapRegistry.set(hash, result);
+      if (!type.name) {
+        unionTypeMapRegistry.set(hash, result);
+      }
 
       return Either.right(result);
     }
