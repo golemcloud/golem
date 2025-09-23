@@ -12,20 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::worker_activator::WorkerActivator;
-use std::sync::Arc;
-
-use crate::services::agent_types::AgentTypesService;
-use crate::services::events::Events;
-use crate::services::plugins::Plugins;
-use crate::workerctx::WorkerCtx;
-use file_loader::FileLoader;
-use tokio::runtime::Handle;
-
 pub mod active_workers;
 pub mod agent_types;
 pub mod blob_store;
-pub mod compiled_component;
 pub mod component;
 pub mod events;
 pub mod file_loader;
@@ -47,6 +36,15 @@ pub mod worker_enumeration;
 pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
+
+use crate::services::worker_activator::WorkerActivator;
+use std::sync::Arc;
+use crate::services::agent_types::AgentTypesService;
+use crate::services::events::Events;
+use crate::services::plugins::Plugins;
+use crate::workerctx::WorkerCtx;
+use file_loader::FileLoader;
+use tokio::runtime::Handle;
 
 #[derive(Clone)]
 pub struct NoAdditionalDeps {}

@@ -31,6 +31,7 @@ use std::time::Duration;
 use url::Url;
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1150,22 +1151,6 @@ impl Default for PluginServiceGrpcConfig {
             plugin_cache_size: 1024,
             connect_timeout: Duration::from_secs(10),
         }
-    }
-}
-
-impl Default for CompiledComponentServiceConfig {
-    fn default() -> Self {
-        Self::enabled()
-    }
-}
-
-impl CompiledComponentServiceConfig {
-    pub fn enabled() -> Self {
-        Self::Enabled(CompiledComponentServiceEnabledConfig {})
-    }
-
-    pub fn disabled() -> Self {
-        Self::Disabled(CompiledComponentServiceDisabledConfig {})
     }
 }
 

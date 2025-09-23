@@ -35,7 +35,7 @@ use golem_common::model::plugin::{
 };
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
-    AccountId, ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, PluginInstallationId,
+    IdempotencyKey, OwnedWorkerId, PluginInstallationId,
     ProjectId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -49,6 +49,8 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -82,7 +84,7 @@ struct RunningPlugin {
     pub account_id: AccountId,
     pub owned_worker_id: OwnedWorkerId,
     pub configuration: HashMap<String, String>,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
 }
 
 impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
@@ -107,7 +109,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         &self,
         project_id: &ProjectId,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         plugin_installation_id: &PluginInstallationId,
     ) -> Result<RunningPlugin, WorkerExecutorError> {
         let project_owner = self.project_service.get_project_owner(project_id).await?;
@@ -171,7 +173,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
     fn get_oplog_processor_component_id(
         definition: &PluginDefinition,
-    ) -> Result<(ComponentId, ComponentVersion), WorkerExecutorError> {
+    ) -> Result<(ComponentId, ComponentRevision), WorkerExecutorError> {
         match &definition.specs {
             PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
                 component_id,

@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::golem_config::{
-    CompiledComponentServiceConfig, ComponentCacheConfig, ComponentServiceConfig,
+    ComponentCacheConfig, ComponentServiceConfig,
 };
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use super::plugins::PluginsObservations;
 use crate::metrics::component::record_compilation_time;
 use crate::services::projects::ProjectService;
@@ -67,8 +68,7 @@ pub fn configured(
     plugin_observations: Arc<dyn PluginsObservations>,
     project_service: Arc<dyn ProjectService>,
 ) -> Arc<dyn ComponentService> {
-    let compiled_component_service =
-        super::compiled_component::configured(compiled_config, blob_storage);
+    let compiled_component_service = golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
     match config {
         ComponentServiceConfig::Grpc(config) => {
             info!("Using component API at {}", config.url());
@@ -128,13 +128,13 @@ mod filesystem {
     use super::record_compilation_time;
     use super::ComponentKey;
     use super::ComponentService;
-    use crate::services::compiled_component::CompiledComponentService;
+    use golem_service_base::service::compiled_component::CompiledComponentService;
     use async_lock::{RwLock, Semaphore};
     use async_trait::async_trait;
     use golem_common::cache::Cache;
     use golem_common::cache::SimpleCache;
-    use golem_common::model::component::ComponentOwner;
-    use golem_common::model::{ComponentId, ComponentVersion, ProjectId};
+    use golem_common::model::component::{ComponentDto, ComponentOwner};
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::testing::LocalFileSystemComponentMetadata;
     use std::collections::{HashMap, HashSet};
@@ -252,7 +252,7 @@ mod filesystem {
             engine: &Engine,
             project_id: &ProjectId,
             component_id: &ComponentId,
-            component_version: ComponentVersion,
+            component_version: ComponentRevision,
         ) -> Result<Component, WorkerExecutorError> {
             let key = ComponentKey {
                 component_id: component_id.clone(),
@@ -335,8 +335,8 @@ mod filesystem {
         async fn get_metadata_for_version(
             &self,
             component_id: &ComponentId,
-            component_version: ComponentVersion,
-        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
+            component_version: ComponentRevision,
+        ) -> Result<ComponentDto, WorkerExecutorError> {
             let key = ComponentKey {
                 component_id: component_id.clone(),
                 component_version,
@@ -359,7 +359,7 @@ mod filesystem {
         async fn get_latest_metadata(
             &self,
             component_id: &ComponentId,
-        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
+        ) -> Result<ComponentDto, WorkerExecutorError> {
             self.refresh_index().await?;
 
             let index = self.index.read().await;
@@ -392,8 +392,8 @@ mod filesystem {
             &self,
             engine: &Engine,
             component_id: &ComponentId,
-            component_version: ComponentVersion,
-        ) -> Result<(Component, golem_service_base::model::Component), WorkerExecutorError>
+            component_version: ComponentRevision,
+        ) -> Result<(Component, ComponentDto), WorkerExecutorError>
         {
             let key = ComponentKey {
                 component_id: component_id.clone(),
@@ -429,8 +429,8 @@ mod filesystem {
         async fn get_metadata(
             &self,
             component_id: &ComponentId,
-            forced_version: Option<ComponentVersion>,
-        ) -> Result<golem_service_base::model::Component, WorkerExecutorError> {
+            forced_version: Option<ComponentRevision>,
+        ) -> Result<ComponentDto, WorkerExecutorError> {
             match forced_version {
                 Some(version) => self.get_metadata_for_version(component_id, version).await,
                 None => self.get_latest_metadata(component_id).await,
@@ -485,9 +485,9 @@ mod filesystem {
 
 mod grpc {
     use super::{create_component_cache, ComponentKey, ComponentService};
-    use crate::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
+    use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
     use crate::metrics::component::record_compilation_time;
-    use crate::services::compiled_component::CompiledComponentService;
+    use golem_service_base::service::compiled_component::CompiledComponentService;
     use crate::services::plugins::PluginsObservations;
     use crate::services::projects::ProjectService;
     use async_trait::async_trait;
@@ -504,10 +504,8 @@ mod grpc {
     use golem_common::model::{RetryConfig};
     use golem_common::retries::with_retries;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-
     use http::Uri;
     use prost::Message;
-
     use std::future::Future;
     use std::sync::Arc;
     use std::time::{Duration, Instant};
@@ -830,7 +828,7 @@ mod grpc {
                         .get_or_insert_simple(
                             &ComponentKey {
                                 component_id: component_id.clone(),
-                                component_version: metadata.versioned_component_id.version,
+                                component_version: metadata.revision,
                             },
                             || Box::pin(async move { Ok(metadata) }),
                         )

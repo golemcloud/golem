@@ -114,7 +114,7 @@ pub struct CachedPlugins<Inner: Plugins> {
         (
             AccountId,
             ComponentId,
-            ComponentVersion,
+            ComponentRevision,
             PluginInstallationId,
         ),
         (),
@@ -252,7 +252,7 @@ impl PluginsObservations for PluginsUnavailable {
         &self,
         _account_id: &AccountId,
         _component_id: &ComponentId,
-        _component_version: ComponentVersion,
+        _component_version: ComponentRevision,
         _plugin_installation: &PluginInstallation,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
@@ -361,7 +361,7 @@ mod grpc {
             &self,
             _account_id: &AccountId,
             _component_id: &ComponentId,
-            _component_version: ComponentVersion,
+            _component_version: ComponentRevision,
             _plugin_installation: &PluginInstallation,
         ) -> Result<(), WorkerExecutorError> {
             Ok(())
@@ -374,7 +374,7 @@ mod grpc {
             &self,
             account_id: &AccountId,
             component_id: &ComponentId,
-            component_version: ComponentVersion,
+            component_version: ComponentRevision,
             installation_id: &PluginInstallationId,
         ) -> Result<PluginInstallation, WorkerExecutorError> {
             let response = self
@@ -433,7 +433,7 @@ mod grpc {
             &self,
             _account_id: &AccountId,
             _component_id: &ComponentId,
-            _component_version: ComponentVersion,
+            _component_version: ComponentRevision,
             plugin_installation: &PluginInstallation,
         ) -> Result<PluginDefinition, WorkerExecutorError> {
             let response = self
