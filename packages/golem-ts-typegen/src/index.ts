@@ -658,7 +658,9 @@ function propertiesAsSymbols(
     const firstDeclaration = prop.getDeclarations()[0];
     // NOTE: falling back to firstDeclaration if no value declaration found,
     //       to support runtime generated or manipulated types
-    const type = prop.getTypeAtLocation(getValueDeclaration(prop) ?? firstDeclaration);
+    const type = prop.getTypeAtLocation(
+      getValueDeclaration(prop) ?? firstDeclaration,
+    );
     const tsType = getTypeFromTsMorphInternal(
       type,
       false,
