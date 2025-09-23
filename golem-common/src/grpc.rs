@@ -17,6 +17,15 @@ use crate::model::{IdempotencyKey, PromiseId, WorkerId};
 use golem_api_grpc::proto::golem::common;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
+use golem_api_grpc::proto::golem::common::{AccountId as ProtoAccountId};
+use crate::model::account::AccountId;
+
+pub fn proto_account_id_string(account_id: &Option<ProtoAccountId>) -> Option<String> {
+    account_id
+        .clone()
+        .and_then(|v| TryInto::<AccountId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
 
 pub fn proto_component_id_string(component_id: &Option<component::ComponentId>) -> Option<String> {
     (*component_id)

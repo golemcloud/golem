@@ -50,8 +50,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
-    proto_component_id_string, proto_idempotency_key_string,
-    proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string,
+    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string, proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -85,6 +84,7 @@ use tracing::{debug, info, warn, Instrument};
 use uuid::Uuid;
 use wasmtime::Error;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 
 /// This is the implementation of the Worker Executor gRPC API
 pub struct WorkerExecutorImpl<
@@ -1127,7 +1127,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
             UpdateMode::Manual => {
                 if metadata.last_known_status.pending_invocations.iter().any(|invocation|
-                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if *target_version == request.target_version)
+                    matches!(invocation, TimestampedWorkerInvocation { invocation: WorkerInvocation::ManualUpdate { target_version, .. }, ..} if target_version.0 == request.target_version)
                 ) {
                     return Err(WorkerExecutorError::invalid_request(
                         "The same update is already in progress",
@@ -1770,7 +1770,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::CreateWorkerResponse {
                         result: Some(
@@ -1809,7 +1809,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     },
                 )))
             }
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeAndAwaitWorkerResponse {
                         result: Some(
@@ -1850,7 +1850,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     },
                 )))
             }
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result: Some(
@@ -1892,7 +1892,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeWorkerResponse {
                         result: Some(
@@ -1933,7 +1933,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     },
                 )))
             }
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeAndAwaitWorkerResponseTyped {
                         result: Some(
@@ -1975,7 +1975,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     ),
                 },
             ))),
-            Err(err) => record.fail(
+            Err(mut err) => record.fail(
                 Ok(Response::new(
                     golem::workerexecutor::v1::InvokeWorkerResponse {
                         result: Some(
@@ -2761,7 +2761,7 @@ impl Stream for WorkerEventStream {
 fn extract_owned_worker_id<T>(
     request: &T,
     get_worker_id: impl FnOnce(&T) -> &Option<golem::worker::WorkerId>,
-    get_project_id: impl FnOnce(&T) -> &Option<golem::common::ProjectId>,
+    get_environment_id: impl FnOnce(&T) -> &Option<golem::common::EnvironmentId>,
 ) -> Result<OwnedWorkerId, WorkerExecutorError> {
     let worker_id = get_worker_id(request)
         .as_ref()
@@ -2771,14 +2771,14 @@ fn extract_owned_worker_id<T>(
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
-    let project_id = get_project_id(request)
+    let environment_id = get_environment_id(request)
         .as_ref()
-        .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?;
-    let project_id: ProjectId = (*project_id)
+        .ok_or(WorkerExecutorError::invalid_request("environment_id not found"))?;
+    let environment_id: EnvironmentId = (*environment_id)
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
-    Ok(OwnedWorkerId::new(&project_id, &worker_id))
+    Ok(OwnedWorkerId::new(&environment_id, &worker_id))
 }
 
 fn extract_account_id<T>(
