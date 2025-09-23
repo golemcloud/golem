@@ -25,71 +25,15 @@ use std::fmt::{Display, Formatter};
 // Currently, it talks about only 1 component.
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct FunctionTypeRegistry {
-    pub types: HashMap<RegistryKey, RegistryValue>,
+    pub types: Vec<(RegistryKey, RegistryValue)>,
 }
 
 impl FunctionTypeRegistry {
-    pub fn get_from_keys(&self, keys: HashSet<RegistryKey>) -> FunctionTypeRegistry {
-        let mut types = HashMap::new();
-        for key in keys {
-            let registry_value = self.lookup(&key);
-            if let Some(registry_value) = registry_value {
-                types.insert(key, registry_value);
-            }
-        }
-
-        FunctionTypeRegistry { types }
-    }
-
-    pub fn get_variants(&self) -> Vec<TypeVariant> {
-        let mut variants = vec![];
-
-        for registry_value in self.types.values() {
-            if let RegistryValue::Variant { variant_type, .. } = registry_value {
-                variants.push(variant_type.clone())
-            }
-        }
-
-        variants
-    }
-
-    pub fn get_enums(&self) -> Vec<TypeEnum> {
-        let mut enums = vec![];
-
-        for registry_value in self.types.values() {
-            if let RegistryValue::Value(AnalysedType::Enum(type_enum)) = registry_value {
-                enums.push(type_enum.clone())
-            }
-        }
-
-        enums
-    }
-
-    pub fn get(&self, key: &CallType) -> Option<&RegistryValue> {
-        match key {
-            CallType::Function { function_name, .. } => self
-                .types
-                .get(&RegistryKey::fqn_registry_key(function_name)),
-            CallType::VariantConstructor(variant_name) => self
-                .types
-                .get(&RegistryKey::FunctionName(variant_name.clone())),
-            CallType::EnumConstructor(enum_name) => self
-                .types
-                .get(&RegistryKey::FunctionName(enum_name.clone())),
-            CallType::InstanceCreation(_) => None,
-        }
-    }
-
-    pub fn empty() -> Self {
-        Self {
-            types: HashMap::new(),
-        }
-    }
 
     pub fn from_export_metadata(exports: &[AnalysedExport]) -> Self {
-        let mut map = HashMap::new();
+        let mut map = vec![];
 
-        let mut types = HashSet::new();
+        let mut types = vec![];
 
         for export in exports {
             match export {
@@ -102,14 +46,14 @@ impl FunctionTypeRegistry {
                             .into_iter()
                             .map(|parameter| {
                                 let analysed_type = parameter.typ;
-                                types.insert(analysed_type.clone());
+                                types.push(analysed_type.clone());
                                 analysed_type
                             })
                             .collect::<Vec<_>>();
 
                         let return_type = fun.result.map(|result| {
                             let analysed_type = result.typ;
-                            types.insert(analysed_type.clone());
+                            types.push(analysed_type.clone());
                             analysed_type
                         });
 
@@ -123,7 +67,7 @@ impl FunctionTypeRegistry {
                             return_type,
                         };
 
-                        map.insert(registry_key, registry_value);
+                        map.push((registry_key, registry_value));
                     }
                 }
                 AnalysedExport::Function(fun0) => {
@@ -134,14 +78,14 @@ impl FunctionTypeRegistry {
                         .into_iter()
                         .map(|parameter| {
                             let analysed_type = parameter.typ;
-                            types.insert(analysed_type.clone());
+                            types.push(analysed_type.clone());
                             analysed_type
                         })
                         .collect::<Vec<_>>();
 
                     let return_type = fun.result.map(|result| {
                         let analysed_type = result.typ;
-                        types.insert(analysed_type.clone());
+                        types.push(analysed_type.clone());
                         analysed_type
                     });
 
@@ -152,7 +96,7 @@ impl FunctionTypeRegistry {
 
                     let registry_key = RegistryKey::FunctionName(function_name.clone());
 
-                    map.insert(registry_key, registry_value);
+                    map.push((registry_key, registry_value));
                 }
             }
         }
@@ -164,9 +108,6 @@ impl FunctionTypeRegistry {
         Self { types: map }
     }
 
-    pub fn lookup(&self, registry_key: &RegistryKey) -> Option<RegistryValue> {
-        self.types.get(registry_key).cloned()
-    }
 }
 
 // A registry key in Rib can in include real functions including the variant constructors.
@@ -301,13 +242,13 @@ mod internal {
 
     pub(crate) fn update_registry(
         ty: &AnalysedType,
-        registry: &mut HashMap<RegistryKey, RegistryValue>,
+        registry: &mut Vec<(RegistryKey, RegistryValue)>,
     ) {
         match ty.clone() {
             AnalysedType::Variant(variant) => {
                 let type_variant = variant.clone();
                 for name_type_pair in &type_variant.cases {
-                    registry.insert(RegistryKey::FunctionName(name_type_pair.name.clone()), {
+                    registry.push((RegistryKey::FunctionName(name_type_pair.name.clone()), {
                         name_type_pair.typ.clone().map_or(
                             RegistryValue::Value(ty.clone()),
                             |variant_parameter_typ| RegistryValue::Variant {
@@ -315,16 +256,16 @@ mod internal {
                                 variant_type: type_variant.clone(),
                             },
                         )
-                    });
+                    }));
                 }
             }
 
             AnalysedType::Enum(type_enum) => {
                 for name_type_pair in type_enum.cases {
-                    registry.insert(
+                    registry.push((
                         RegistryKey::FunctionName(name_type_pair.clone()),
                         RegistryValue::Value(ty.clone()),
-                    );
+                    ));
                 }
             }
 

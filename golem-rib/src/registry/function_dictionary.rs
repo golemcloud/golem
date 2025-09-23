@@ -70,8 +70,8 @@ impl FunctionDictionary {
             _ => None,
         })
     }
-    pub fn get_variant_info(&self, identifier_name: &str) -> Option<TypeVariant> {
-        self.name_and_types.iter().find_map(|(f, ftype)| match f {
+    pub fn get_variant_info(&self, identifier_name: &str) -> Vec<TypeVariant> {
+        self.name_and_types.iter().filter_map(|(f, ftype)| match f {
             FunctionName::Variant(name) => {
                 if name == identifier_name {
                     ftype.as_type_variant()
@@ -80,7 +80,7 @@ impl FunctionDictionary {
                 }
             }
             _ => None,
-        })
+        }).collect::<Vec<_>>()
     }
 
     pub fn function_names(&self) -> Vec<String> {

@@ -105,17 +105,25 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let result = component_dependency
+                        let results = component_dependency
                             .function_dictionary()
                             .iter()
-                            .find_map(|x| x.get_variant_info(variable_id.name().as_str()));
+                            .flat_map(|x| x.get_variant_info(variable_id.name().as_str())).collect::<Vec<_>>();
 
                         // Conflicts of having the same variant names across multiple components is not handled
-                        if let Some(type_variant) = result {
+
+                        if !results.is_empty() {
                             no_arg_variants.push(variable_id.name());
+
+                            let inferred_types =
+                                results.iter().map(|x| InferredType::from_type_variant(x)).collect::<Vec<_>>();
+
+                            let new_inferred_type = InferredType::all_of(inferred_types);
+
                             *inferred_type =
-                                inferred_type.merge(InferredType::from_type_variant(&type_variant));
+                                inferred_type.merge(new_inferred_type);
                         }
+
                     }
                 }
 
@@ -129,13 +137,17 @@ mod internal {
                     let result = component_dependency
                         .function_dictionary()
                         .iter()
-                        .find_map(|x| x.get_variant_info(function_name.to_string().as_str()));
+                        .flat_map(|x| x.get_variant_info(function_name.to_string().as_str())).collect::<Vec<_>>();
 
-                    if let Some(variant_type) = result {
-                        let variant_inferred_type = InferredType::from_type_variant(&variant_type);
-                        *inferred_type = inferred_type.merge(variant_inferred_type);
-
+                    if (!result.is_empty()) {
                         variant_with_args.push(function_name.to_string());
+
+                        let new_inferred_types =
+                            result.iter().map(|x| InferredType::from_type_variant(x)).collect::<Vec<_>>();
+
+                        let variant_inferred_type = InferredType::all_of(new_inferred_types);
+
+                        *inferred_type = inferred_type.merge(variant_inferred_type);
                     }
 
                     for expr in args {
