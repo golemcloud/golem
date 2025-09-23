@@ -1,4 +1,4 @@
-import {BaseAgent, agent, UnstructuredText,} from '@golemcloud/golem-ts-sdk';
+import {BaseAgent, agent, UnstructuredText, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
 
 // TODO: Once the golem-ts-sdk is moved to golem, we could reuse the sample agents in the SDK tests
 import * as Types from './model';
@@ -23,7 +23,7 @@ import {
 
 @agent()
 class FooAgent extends BaseAgent {
-    readonly barAgent: BarAgent;
+    readonly barAgent: WithRemoteMethods<BarAgent>;
 
     constructor(readonly input: string) {
         super();
@@ -74,9 +74,7 @@ class FooAgent extends BaseAgent {
             unionPropInlined: "afsal"
         }
 
-        this.barAgent = BarAgent.get(interfaceType, null, 1);
-
-        this.input = input;
+        this.barAgent = BarAgent.get("foooo", 1);
     }
 
     async funAll(
@@ -178,7 +176,7 @@ class FooAgent extends BaseAgent {
     }
 
 
-    async funText(mapType: MapType): Promise<Types.MapType> {
+    async funMap(mapType: MapType): Promise<Types.MapType> {
         return await this.barAgent.funText(mapType);
     }
 
@@ -222,7 +220,7 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUndefinedReturn(text);
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<void> {
         return await this.barAgent.funUnstructuredText(unstructuredText);
     }
 
@@ -255,12 +253,10 @@ class FooAgent extends BaseAgent {
 @agent()
 class BarAgent extends BaseAgent {
     constructor(
-        readonly interfaceType: Types.InterfaceType,
         readonly optionalStringType: string | null,
         readonly optionalUnionType: UnionType | null,
     ) {
         super();
-        this.interfaceType = interfaceType;
         this.optionalStringType = optionalStringType;
         this.optionalUnionType = optionalUnionType;
     }
@@ -392,8 +388,8 @@ class BarAgent extends BaseAgent {
     }
 
     // no
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
-        return unstructuredText
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<void> {
+        return
     }
 
     //works
