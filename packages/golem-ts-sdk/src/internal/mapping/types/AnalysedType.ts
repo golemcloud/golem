@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { buildJSONFromType, LiteTypeJSON, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
@@ -232,6 +232,9 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
  export const handle =  (name: string | undefined, resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
       ({ kind: 'handle', value: { name: convertTypeNameToKebab(name), owner: undefined, resourceId, mode } });
 
+
+
+const unionTypeMapRegistry = new Map<string, AnalysedType>();
 
 export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
 
