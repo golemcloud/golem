@@ -37,7 +37,7 @@ export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
 
-export { WithRemoteMethods } from './baseAgent'
+export { WithRemoteMethods } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';
 export { TypescriptTypeRegistry } from './typescriptTypeRegistry';
 
