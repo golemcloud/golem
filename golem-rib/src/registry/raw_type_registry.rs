@@ -12,11 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::call_type::CallType;
 use crate::DynamicParsedFunctionName;
 use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
-use golem_wasm_ast::analysis::{AnalysedType, TypeEnum};
-use std::collections::{HashMap, HashSet};
+use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
 use std::fmt::{Display, Formatter};
 
 // A `FunctionTypeRegistry` is a mapping from a function/variant/enum to the `arguments` and `return types` of that function/variant/enum.
@@ -29,7 +27,6 @@ pub struct FunctionTypeRegistry {
 }
 
 impl FunctionTypeRegistry {
-
     pub fn from_export_metadata(exports: &[AnalysedExport]) -> Self {
         let mut map = vec![];
 
@@ -102,12 +99,11 @@ impl FunctionTypeRegistry {
         }
 
         for ty in types {
-            internal::update_registry(&ty, &mut map);
+            update_registry(&ty, &mut map);
         }
 
         Self { types: map }
     }
-
 }
 
 // A registry key in Rib can in include real functions including the variant constructors.
@@ -235,101 +231,92 @@ impl RegistryValue {
     }
 }
 
-mod internal {
-    use crate::{RegistryKey, RegistryValue};
-    use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
-    use std::collections::HashMap;
-
-    pub(crate) fn update_registry(
-        ty: &AnalysedType,
-        registry: &mut Vec<(RegistryKey, RegistryValue)>,
-    ) {
-        match ty.clone() {
-            AnalysedType::Variant(variant) => {
-                let type_variant = variant.clone();
-                for name_type_pair in &type_variant.cases {
-                    registry.push((RegistryKey::FunctionName(name_type_pair.name.clone()), {
-                        name_type_pair.typ.clone().map_or(
-                            RegistryValue::Value(ty.clone()),
-                            |variant_parameter_typ| RegistryValue::Variant {
-                                parameter_types: vec![variant_parameter_typ],
-                                variant_type: type_variant.clone(),
-                            },
-                        )
-                    }));
-                }
-            }
-
-            AnalysedType::Enum(type_enum) => {
-                for name_type_pair in type_enum.cases {
-                    registry.push((
-                        RegistryKey::FunctionName(name_type_pair.clone()),
+fn update_registry(ty: &AnalysedType, registry: &mut Vec<(RegistryKey, RegistryValue)>) {
+    match ty.clone() {
+        AnalysedType::Variant(variant) => {
+            let type_variant = variant.clone();
+            for name_type_pair in &type_variant.cases {
+                registry.push((RegistryKey::FunctionName(name_type_pair.name.clone()), {
+                    name_type_pair.typ.clone().map_or(
                         RegistryValue::Value(ty.clone()),
-                    ));
-                }
+                        |variant_parameter_typ| RegistryValue::Variant {
+                            parameter_types: vec![variant_parameter_typ],
+                            variant_type: type_variant.clone(),
+                        },
+                    )
+                }));
             }
-
-            AnalysedType::Tuple(tuple) => {
-                for element in tuple.items {
-                    update_registry(&element, registry);
-                }
-            }
-
-            AnalysedType::List(list) => {
-                update_registry(list.inner.as_ref(), registry);
-            }
-
-            AnalysedType::Record(record) => {
-                for name_type in record.fields.iter() {
-                    update_registry(&name_type.typ, registry);
-                }
-            }
-
-            AnalysedType::Result(TypeResult {
-                ok: Some(ok_type),
-                err: Some(err_type),
-                ..
-            }) => {
-                update_registry(ok_type.as_ref(), registry);
-                update_registry(err_type.as_ref(), registry);
-            }
-            AnalysedType::Result(TypeResult {
-                ok: None,
-                err: Some(err_type),
-                ..
-            }) => {
-                update_registry(err_type.as_ref(), registry);
-            }
-            AnalysedType::Result(TypeResult {
-                ok: Some(ok_type),
-                err: None,
-                ..
-            }) => {
-                update_registry(ok_type.as_ref(), registry);
-            }
-            AnalysedType::Option(type_option) => {
-                update_registry(type_option.inner.as_ref(), registry);
-            }
-            AnalysedType::Result(TypeResult {
-                ok: None,
-                err: None,
-                ..
-            }) => {}
-            AnalysedType::Flags(_) => {}
-            AnalysedType::Str(_) => {}
-            AnalysedType::Chr(_) => {}
-            AnalysedType::F64(_) => {}
-            AnalysedType::F32(_) => {}
-            AnalysedType::U64(_) => {}
-            AnalysedType::S64(_) => {}
-            AnalysedType::U32(_) => {}
-            AnalysedType::S32(_) => {}
-            AnalysedType::U16(_) => {}
-            AnalysedType::S16(_) => {}
-            AnalysedType::U8(_) => {}
-            AnalysedType::S8(_) => {}
-            AnalysedType::Bool(_) => {}
-            AnalysedType::Handle(_) => {}
         }
+
+        AnalysedType::Enum(type_enum) => {
+            for name_type_pair in type_enum.cases {
+                registry.push((
+                    RegistryKey::FunctionName(name_type_pair.clone()),
+                    RegistryValue::Value(ty.clone()),
+                ));
+            }
+        }
+
+        AnalysedType::Tuple(tuple) => {
+            for element in tuple.items {
+                update_registry(&element, registry);
+            }
+        }
+
+        AnalysedType::List(list) => {
+            update_registry(list.inner.as_ref(), registry);
+        }
+
+        AnalysedType::Record(record) => {
+            for name_type in record.fields.iter() {
+                update_registry(&name_type.typ, registry);
+            }
+        }
+
+        AnalysedType::Result(TypeResult {
+            ok: Some(ok_type),
+            err: Some(err_type),
+            ..
+        }) => {
+            update_registry(ok_type.as_ref(), registry);
+            update_registry(err_type.as_ref(), registry);
+        }
+        AnalysedType::Result(TypeResult {
+            ok: None,
+            err: Some(err_type),
+            ..
+        }) => {
+            update_registry(err_type.as_ref(), registry);
+        }
+        AnalysedType::Result(TypeResult {
+            ok: Some(ok_type),
+            err: None,
+            ..
+        }) => {
+            update_registry(ok_type.as_ref(), registry);
+        }
+        AnalysedType::Option(type_option) => {
+            update_registry(type_option.inner.as_ref(), registry);
+        }
+        AnalysedType::Result(TypeResult {
+            ok: None,
+            err: None,
+            ..
+        }) => {}
+        AnalysedType::Flags(_) => {}
+        AnalysedType::Str(_) => {}
+        AnalysedType::Chr(_) => {}
+        AnalysedType::F64(_) => {}
+        AnalysedType::F32(_) => {}
+        AnalysedType::U64(_) => {}
+        AnalysedType::S64(_) => {}
+        AnalysedType::U32(_) => {}
+        AnalysedType::S32(_) => {}
+        AnalysedType::U16(_) => {}
+        AnalysedType::S16(_) => {}
+        AnalysedType::U8(_) => {}
+        AnalysedType::S8(_) => {}
+        AnalysedType::Bool(_) => {}
+        AnalysedType::Handle(_) => {}
     }
 }

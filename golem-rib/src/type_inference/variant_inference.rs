@@ -105,25 +105,37 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let results = component_dependency
-                            .function_dictionary()
-                            .iter()
-                            .flat_map(|x| x.get_variant_info(variable_id.name().as_str())).collect::<Vec<_>>();
+                        let results =
+                            component_dependency
+                                .function_dictionary()
+                                .iter()
+                                .find_map(|x| {
+                                    let result = x.get_variant_info(variable_id.name().as_str());
 
-                        // Conflicts of having the same variant names across multiple components is not handled
+                                    if result.is_empty() {
+                                        None
+                                    } else {
+                                        Some(result)
+                                    }
+                                });
 
-                        if !results.is_empty() {
+                        if results.is_some() {
                             no_arg_variants.push(variable_id.name());
 
-                            let inferred_types =
-                                results.iter().map(|x| InferredType::from_type_variant(x)).collect::<Vec<_>>();
+                            let inferred_types = results
+                                .unwrap()
+                                .iter()
+                                .map(|x| InferredType::from_type_variant(x))
+                                .collect::<Vec<_>>();
 
-                            let new_inferred_type = InferredType::all_of(inferred_types);
+                            let new_inferred_type = if inferred_types.len() == 1 {
+                                inferred_types[0].clone()
+                            } else {
+                                InferredType::all_of(inferred_types)
+                            };
 
-                            *inferred_type =
-                                inferred_type.merge(new_inferred_type);
+                            *inferred_type = inferred_type.merge(new_inferred_type);
                         }
-
                     }
                 }
 
@@ -137,17 +149,32 @@ mod internal {
                     let result = component_dependency
                         .function_dictionary()
                         .iter()
-                        .flat_map(|x| x.get_variant_info(function_name.to_string().as_str())).collect::<Vec<_>>();
+                        .find_map(|x| {
+                            let type_variants =
+                                x.get_variant_info(function_name.to_string().as_str());
+                            if type_variants.is_empty() {
+                                None
+                            } else {
+                                Some(type_variants)
+                            }
+                        });
 
-                    if (!result.is_empty()) {
+                    if result.is_some() {
                         variant_with_args.push(function_name.to_string());
 
-                        let new_inferred_types =
-                            result.iter().map(|x| InferredType::from_type_variant(x)).collect::<Vec<_>>();
+                        let inferred_types = result
+                            .unwrap()
+                            .iter()
+                            .map(|x| InferredType::from_type_variant(x))
+                            .collect::<Vec<_>>();
 
-                        let variant_inferred_type = InferredType::all_of(new_inferred_types);
+                        let new_inferred_type = if inferred_types.len() == 1 {
+                            inferred_types[0].clone()
+                        } else {
+                            InferredType::all_of(inferred_types)
+                        };
 
-                        *inferred_type = inferred_type.merge(variant_inferred_type);
+                        *inferred_type = inferred_type.merge(new_inferred_type);
                     }
 
                     for expr in args {

@@ -20,7 +20,7 @@ use std::collections::VecDeque;
 // At this point we can even annotate the call_type with the actual component name
 // If component  is ambiguous at this stage, compiler has no other choice than bailing
 // and asking the user to specify the type parameter that may help with drilling down the component explicitly.
-pub fn  infer_function_call_types(
+pub fn infer_function_call_types(
     expr: &mut Expr,
     component_dependency: &ComponentDependencies,
     custom_instance_spec: &[CustomInstanceSpec],
@@ -58,10 +58,13 @@ mod internal {
     use crate::inferred_type::TypeOrigin;
     use crate::rib_source_span::SourceSpan;
     use crate::type_inference::GetTypeHint;
-    use crate::{ActualType, ComponentDependencies, CustomInstanceSpec, DynamicParsedFunctionName, ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError, FunctionName, InferredType, TypeInternal, TypeMismatchError};
+    use crate::{
+        ActualType, ComponentDependencies, CustomInstanceSpec, DynamicParsedFunctionName,
+        ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod,
+        FunctionCallError, FunctionName, InferredType, TypeInternal, TypeMismatchError,
+    };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
-    use golem_wasm_ast::analysis::analysed_type::str;
 
     pub(crate) fn resolve_call_argument_types(
         source_span: &SourceSpan,
@@ -429,21 +432,18 @@ mod internal {
             // This is to get around a variant conflict problem and is not the best solution
             match param_type {
                 AnalysedType::Variant(type_variant) => {
-                    let inferred_type = arg.inferred_type_mut();
-
-                    let internal  = inferred_type.internal_type_mut();
-
-
-                    match internal {
-                        TypeInternal::Variant(collections) => {
-                            *collections = type_variant.cases.iter().map(|x| (x.name.clone(), x.typ.as_ref().map(|x| InferredType::from(x)))).collect()
-                        }
-
-                        _ => {}
+                    if let TypeInternal::Variant(collections) =
+                        arg.inferred_type_mut().internal_type_mut()
+                    {
+                        *collections = type_variant
+                            .cases
+                            .iter()
+                            .map(|case| {
+                                (case.name.clone(), case.typ.as_ref().map(InferredType::from))
+                            })
+                            .collect();
                     }
-
                 }
-
                 _ => {}
             }
 
@@ -451,7 +451,6 @@ mod internal {
             arg.add_infer_type_mut(
                 InferredType::from(param_type).add_origin(TypeOrigin::Declared(arg.source_span())),
             );
-
         }
 
         Ok(())

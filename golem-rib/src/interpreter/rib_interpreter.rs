@@ -4841,18 +4841,16 @@ mod tests {
     async fn test_interpreter_custom_instance_conflicting_variants() {
         let expr = r#"
                 let x = instance("abc");
-                x.func1(foo("abc"));
-                x.func2(foo(["abc"]))
+                let r1 = x.func1(foo("bar"));
+                let r2 = x.func2(foo(["baz", "qux"]));
+                {result1: r1, result2: r2}
             "#;
 
         let expr = Expr::from_text(expr).unwrap();
         let test_deps = RibTestDeps::test_deps_with_variant_conflicts(None);
 
-        let compiler_config = RibCompilerConfig::new(
-            test_deps.component_dependencies.clone(),
-            vec![],
-            vec![],
-        );
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
         let compiler = RibCompiler::new(compiler_config);
         let compiled = compiler
             .compile(expr)
@@ -4863,10 +4861,21 @@ mod tests {
 
         let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
 
-        let expected = Value::String("result".to_string());
+        let expected = Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String("bar".to_string()))),
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::List(vec![
+                    Value::String("baz".to_string()),
+                    Value::String("qux".to_string()),
+                ]))),
+            },
+        ]);
         assert_eq!(result.get_val().unwrap().value, expected);
     }
-
 
     mod test_utils {
         use crate::interpreter::rib_interpreter::internal::NoopRibFunctionInvoke;
@@ -5011,13 +5020,10 @@ mod tests {
                 name: "func1".to_string(),
                 parameters: vec![AnalysedFunctionParameter {
                     name: "arg1".to_string(),
-                    typ: variant(vec![
-                        case("foo", str()),
-                    ])
+                    typ: variant(vec![case("foo", str())]),
                 }],
                 result: Some(AnalysedFunctionResult { typ: str() }),
             };
-
 
             let func2 = AnalysedFunction {
                 name: "func2".to_string(),
@@ -5025,7 +5031,7 @@ mod tests {
                     name: "arg1".to_string(),
                     typ: variant(vec![
                         case("foo", list(str())), // just different types to that of the foo and bar
-                    ])
+                    ]),
                 }],
                 result: Some(AnalysedFunctionResult { typ: str() }),
             };
@@ -5039,7 +5045,10 @@ mod tests {
 
             vec![ComponentDependency::new(
                 component_info,
-                vec![AnalysedExport::Function(func1), AnalysedExport::Function(func2)],
+                vec![
+                    AnalysedExport::Function(func1),
+                    AnalysedExport::Function(func2),
+                ],
             )]
         }
 
@@ -5627,24 +5636,15 @@ mod tests {
                 &self,
                 _component_dependency_key: ComponentDependencyKey,
                 _instruction_id: &InstructionId,
-                worker_name: EvaluatedWorkerName,
+                _worker_name: EvaluatedWorkerName,
                 function_name: EvaluatedFqFn,
                 args: EvaluatedFnArgs,
                 _return_type: Option<AnalysedType>,
             ) -> RibFunctionInvokeResult {
-                let mut arguments_concatenated = String::new();
-
-                for arg in args.0 {
-                    let arg_str = print_value_and_type(&arg)?;
-                    arguments_concatenated.push_str(arg_str.as_str());
-                }
-
-                let result =
-                    ValueAndType::new(Value::String("result".to_string()), str());
-
+                let arg = args.0.first().unwrap();
 
                 match function_name.0.as_str() {
-                    "func1" | "func2" => Ok(Some(result)),
+                    "func1" | "func2" => Ok(Some(arg.clone())),
                     _ => Err(format!("unexpected function name: {}", function_name.0).into()),
                 }
             }
