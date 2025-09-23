@@ -291,6 +291,14 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       return Either.map(tupleElems, (items) => tuple(type.name, items));
 
     case "union": {
+      const hash = JSON.stringify(buildJSONFromType(type));
+
+      const analysedType = unionTypeMapRegistry.get(hash);
+
+      if (analysedType) {
+        return Either.right(analysedType);
+      }
+
       let fieldIdx = 1;
       const possibleTypes: NameOptionTypePair[] = [];
 
@@ -302,7 +310,11 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       }
 
       if (Option.isSome(unionOfOnlyLiterals.val)) {
-        return Either.right(enum_(type.name, unionOfOnlyLiterals.val.val.literals));
+        const analysedType = enum_(type.name, unionOfOnlyLiterals.val.val.literals);
+
+        unionTypeMapRegistry.set(hash, analysedType);
+
+        return Either.right(analysedType);
       }
 
       const taggedUnion =
@@ -318,9 +330,19 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
         switch (unionType.tag) {
           case "custom":
-            return convertTaggedTypesToVariant(type.name, unionType.val);
+            const analysedTypeEither = convertTaggedTypesToVariant(type.name, unionType.val);
+            return Either.map(analysedTypeEither, (result) => {
+              unionTypeMapRegistry.set(hash, result);
+              return result;
+            })
+
           case "result":
-            return convertUserDefinedResultToWitResult(type.name, unionType.val);
+            const userDefinedEither = convertUserDefinedResultToWitResult(type.name, unionType.val);
+
+            return Either.map(userDefinedEither, (result) => {
+              unionTypeMapRegistry.set(hash, result);
+              return result;
+            })
         }
       }
 
@@ -347,10 +369,16 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
         // Type is already optional and further loop will solve it
         if ((Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
+          const innerType = innerTypeEither.val;
+          unionTypeMapRegistry.set(hash, innerType);
           return Either.right(innerTypeEither.val);
         }
 
-        return Either.right(option(undefined, innerTypeEither.val))
+        const result = option(undefined, innerTypeEither.val);
+
+        unionTypeMapRegistry.set(hash, result);
+
+        return Either.right(result)
       }
 
       // If union has both true and false (because ts-morph consider boolean to be a union of literal true and literal false)
@@ -401,7 +429,11 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         });
       }
 
-      return Either.right(variant(type.name, possibleTypes));
+      const result = variant(type.name, possibleTypes);
+
+      unionTypeMapRegistry.set(hash, result);
+
+      return Either.right(result);
     }
 
 
