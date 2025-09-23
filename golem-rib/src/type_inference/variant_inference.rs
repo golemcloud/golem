@@ -105,27 +105,25 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let results =
-                            component_dependency
-                                .function_dictionary()
-                                .iter()
-                                .find_map(|x| {
-                                    let result = x.get_variant_info(variable_id.name().as_str());
+                        let type_variants_opt = component_dependency
+                            .function_dictionary()
+                            .iter()
+                            .find_map(|x| {
+                                let result = x.get_variant_info(variable_id.name().as_str());
 
-                                    if result.is_empty() {
-                                        None
-                                    } else {
-                                        Some(result)
-                                    }
-                                });
+                                if result.is_empty() {
+                                    None
+                                } else {
+                                    Some(result)
+                                }
+                            });
 
-                        if results.is_some() {
+                        if let Some(type_variants) = type_variants_opt {
                             no_arg_variants.push(variable_id.name());
 
-                            let inferred_types = results
-                                .unwrap()
+                            let inferred_types = type_variants
                                 .iter()
-                                .map(|x| InferredType::from_type_variant(x))
+                                .map(InferredType::from_type_variant)
                                 .collect::<Vec<_>>();
 
                             let new_inferred_type = if inferred_types.len() == 1 {
@@ -159,13 +157,12 @@ mod internal {
                             }
                         });
 
-                    if result.is_some() {
+                    if let Some(result) = result {
                         variant_with_args.push(function_name.to_string());
 
                         let inferred_types = result
-                            .unwrap()
                             .iter()
-                            .map(|x| InferredType::from_type_variant(x))
+                            .map(InferredType::from_type_variant)
                             .collect::<Vec<_>>();
 
                         let new_inferred_type = if inferred_types.len() == 1 {

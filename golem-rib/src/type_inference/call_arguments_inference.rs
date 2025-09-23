@@ -430,21 +430,16 @@ mod internal {
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
             // This is to get around a variant conflict problem and is not the best solution
-            match param_type {
-                AnalysedType::Variant(type_variant) => {
-                    if let TypeInternal::Variant(collections) =
-                        arg.inferred_type_mut().internal_type_mut()
-                    {
-                        *collections = type_variant
-                            .cases
-                            .iter()
-                            .map(|case| {
-                                (case.name.clone(), case.typ.as_ref().map(InferredType::from))
-                            })
-                            .collect();
-                    }
+            if let AnalysedType::Variant(type_variant) = param_type {
+                if let TypeInternal::Variant(collections) =
+                    arg.inferred_type_mut().internal_type_mut()
+                {
+                    *collections = type_variant
+                        .cases
+                        .iter()
+                        .map(|case| (case.name.clone(), case.typ.as_ref().map(InferredType::from)))
+                        .collect();
                 }
-                _ => {}
             }
 
             check_function_arguments(function_name, param_type, arg)?;
