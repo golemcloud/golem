@@ -36,7 +36,7 @@ use colored::Colorize;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{OnceLock, RwLock};
+use std::sync::OnceLock;
 
 pub struct ApplicationContext {
     pub loaded_with_warnings: bool,
@@ -49,7 +49,7 @@ pub struct ApplicationContext {
     component_generated_base_wit_deps: HashMap<AppComponentName, WitDepsResolver>,
     selected_component_names: BTreeSet<AppComponentName>,
     remote_components: RemoteComponents,
-    tools_with_ensured_common_deps: RwLock<HashSet<String>>,
+    tools_with_ensured_common_deps: tokio::sync::RwLock<HashSet<String>>,
 }
 
 pub struct ApplicationPreloadResult {
@@ -112,7 +112,7 @@ impl ApplicationContext {
                             temp_dir,
                             offline,
                         ),
-                        tools_with_ensured_common_deps: RwLock::new(HashSet::new()),
+                        tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashSet::new()),
                     }
                 })
             }),
@@ -409,8 +409,8 @@ impl ApplicationContext {
         build_app(self).await
     }
 
-    pub fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
-        execute_custom_command(self, command_name)
+    pub async fn custom_command(&self, command_name: &str) -> Result<(), CustomCommandError> {
+        execute_custom_command(self, command_name).await
     }
 
     pub fn clean(&self) -> anyhow::Result<()> {
@@ -640,23 +640,23 @@ impl ApplicationContext {
         Ok(())
     }
 
-    pub fn ensure_common_deps_for_tool_once(
+    pub async fn ensure_common_deps_for_tool_once(
         &self,
         tool: &str,
-        ensure: impl FnOnce() -> anyhow::Result<()>,
+        ensure: impl AsyncFnOnce() -> anyhow::Result<()>,
     ) -> anyhow::Result<()> {
         if self
             .tools_with_ensured_common_deps
             .read()
-            .unwrap()
+            .await
             .contains(tool)
         {
             return Ok(());
         }
 
-        let mut lock = self.tools_with_ensured_common_deps.write().unwrap();
+        let mut lock = self.tools_with_ensured_common_deps.write().await;
 
-        let result = ensure();
+        let result = ensure().await;
 
         if result.is_ok() {
             lock.insert(tool.to_string());

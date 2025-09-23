@@ -1,4 +1,4 @@
 {
-  "description": "The default agent template for TypeScript",
+  "description": "A simple agent implementing a counter",
   "appComponentGroup": "default"
 }
