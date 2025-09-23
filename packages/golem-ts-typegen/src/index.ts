@@ -22,7 +22,6 @@ import {
   Type as TsMorphType,
   ClassDeclaration,
   PropertyDeclaration,
-  Symbol as TsMorphSymbol,
 } from "ts-morph";
 import {
   buildJSONFromType,
@@ -302,28 +301,118 @@ function getTypeFromTsMorphInternal(
   }
 
   if (type.isClass()) {
+    const result: Symbol[] = type.getProperties().map((prop) => {
+      const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+      const nodes = prop.getDeclarations();
+      const node = nodes[0];
+      const tsType = getTypeFromTsMorphInternal(
+        type,
+        false,
+        new Set(visitedTypes),
+      );
+      const propName = prop.getName();
+
+      if (
+        (TsMorphNode.isPropertySignature(node) ||
+          TsMorphNode.isPropertyDeclaration(node)) &&
+        node.hasQuestionToken()
+      ) {
+        return new Symbol({
+          name: propName,
+          declarations: [new Node("PropertyDeclaration", true)],
+          typeAtLocation: tsType,
+        });
+      } else {
+        return new Symbol({
+          name: propName,
+          declarations: [new Node("PropertyDeclaration", false)],
+          typeAtLocation: tsType,
+        });
+      }
+    });
+
     return {
       kind: "class",
       name: aliasName ?? rawName,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: result,
       optional: isOptional,
     };
   }
 
   if (type.isInterface()) {
+    const result: Symbol[] = type.getProperties().map((prop) => {
+      const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+      const nodes = prop.getDeclarations();
+      const node = nodes[0];
+      const tsType = getTypeFromTsMorphInternal(
+        type,
+        false,
+        new Set(visitedTypes),
+      );
+      const propName = prop.getName();
+
+      if (
+        (TsMorphNode.isPropertySignature(node) ||
+          TsMorphNode.isPropertyDeclaration(node)) &&
+        node.hasQuestionToken()
+      ) {
+        return new Symbol({
+          name: propName,
+          declarations: [new Node("PropertyDeclaration", true)],
+          typeAtLocation: tsType,
+        });
+      } else {
+        return new Symbol({
+          name: propName,
+          declarations: [new Node("PropertyDeclaration", false)],
+          typeAtLocation: tsType,
+        });
+      }
+    });
+
     return {
       kind: "interface",
       name: aliasName ?? rawName,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: result,
       optional: isOptional,
     };
   }
 
   if (type.isObject()) {
+    const result: Symbol[] = type.getProperties().map((prop) => {
+      const type = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+      const nodes = prop.getDeclarations();
+      const node = nodes[0];
+      const tsType = getTypeFromTsMorphInternal(
+        type,
+        false,
+        new Set(visitedTypes),
+      );
+      const propName = prop.getName();
+
+      if (
+        (TsMorphNode.isPropertySignature(node) ||
+          TsMorphNode.isPropertyDeclaration(node)) &&
+        node.hasQuestionToken()
+      ) {
+        return new Symbol({
+          name: propName,
+          declarations: [new Node("PropertyDeclaration", true)],
+          typeAtLocation: tsType,
+        });
+      } else {
+        return new Symbol({
+          name: propName,
+          declarations: [new Node("PropertyDeclaration", false)],
+          typeAtLocation: tsType,
+        });
+      }
+    });
+
     return {
       kind: "object",
       name: aliasName,
-      properties: propertiesAsSymbols(type, visitedTypes),
+      properties: result,
       optional: isOptional,
     };
   }
@@ -648,48 +737,4 @@ export function loadTypeMetadataFromJsonFile() {
   const json = JSON.parse(raw);
 
   TypeMetadata.loadFromJson(json);
-}
-
-function propertiesAsSymbols(
-  type: TsMorphType,
-  visitedTypes: Set<TsMorphType>,
-): Symbol[] {
-  return type.getProperties().map((prop) => {
-    const firstDeclaration = prop.getDeclarations()[0];
-    // NOTE: falling back to firstDeclaration if no value declaration found,
-    //       to support runtime generated or manipulated types
-    const type = prop.getTypeAtLocation(getValueDeclaration(prop) ?? firstDeclaration);
-    const tsType = getTypeFromTsMorphInternal(
-      type,
-      false,
-      new Set(visitedTypes),
-    );
-    const propName = prop.getName();
-
-    if (
-      (TsMorphNode.isPropertySignature(firstDeclaration) ||
-        TsMorphNode.isPropertyDeclaration(firstDeclaration)) &&
-      firstDeclaration.hasQuestionToken()
-    ) {
-      return new Symbol({
-        name: propName,
-        declarations: [new Node("PropertyDeclaration", true)],
-        typeAtLocation: tsType,
-      });
-    } else {
-      return new Symbol({
-        name: propName,
-        declarations: [new Node("PropertyDeclaration", false)],
-        typeAtLocation: tsType,
-      });
-    }
-  });
-}
-
-function getValueDeclaration(symbol: TsMorphSymbol): TsMorphNode | undefined {
-  try {
-    return symbol.getValueDeclarationOrThrow();
-  } catch {
-    return undefined;
-  }
 }
