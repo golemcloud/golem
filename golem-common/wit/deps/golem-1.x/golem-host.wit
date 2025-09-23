@@ -1,4 +1,4 @@
-package golem:api@1.1.7;
+package golem:api@2.0.0;
 
 /// The Golem host API provides low level access to Golem specific features such as promises and control over
 /// the durability and transactional guarantees the executor provides.
@@ -21,11 +21,11 @@ interface host {
 
     /// Represents a Golem Cloud account
     record account-id {
-        value: string
+      uuid: uuid,
     }
 
-    /// Represents a Golem project
-    record project-id {
+    /// Represents a Golem environment
+    record environment-id {
       uuid: uuid,
     }
 
@@ -262,13 +262,10 @@ interface host {
 
     /// Get the component-id for a given component reference.
     /// Returns none when no component with the specified reference exists.
-    /// The syntax of the component reference is implementation dependent.
-    ///
-    /// Golem OSS: "{component_name}"
-    /// Golem Cloud:
+    /// These formats are supported:
     ///     1: "{component_name}" -> will resolve in current account and project
-    ///     2: "{project_name}/{component_name}" -> will resolve in current account
-    ///     3: "{account_id}/{project_name}/{component_name}"
+    ///     2: "{environment_name}/{component_name}" -> will resolve in current account
+    ///     3: "{account_id}/{environment_name}/{component_name}"
     resolve-component-id: func(component-reference: string) -> option<component-id>;
 
     /// Get the worker-id for a given component and worker name.
