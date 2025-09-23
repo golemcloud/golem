@@ -320,10 +320,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case29', 2],
-              ['case30', 3],
-              ['case31', 4],
-              ['case32', 5],
+              ['case3', 2],
+              ['case4', 3],
+              ['case5', 4],
+              ['case6', 5],
             ],
           },
         },
@@ -360,10 +360,10 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case39', 2],
-              ['case40', 3],
-              ['case41', 4],
-              ['case42', 5],
+              ['case3', 2],
+              ['case4', 3],
+              ['case5', 4],
+              ['case6', 5],
             ],
           },
         },
@@ -400,8 +400,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case33', 2],
-              ['case34', 3],
+              ['case1', 2],
+              ['case2', 3],
             ],
           },
         },
@@ -450,8 +450,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case35', 3],
-              ['case36', 4],
+              ['case1', 3],
+              ['case2', 4],
             ],
           },
         },
@@ -480,8 +480,8 @@ describe('Agent decorator should register the agent class and its methods into A
           type: {
             tag: 'variant-type',
             val: [
-              ['case37', 3],
-              ['case38', 4],
+              ['case1', 3],
+              ['case2', 4],
             ],
           },
         },
@@ -493,7 +493,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
-  it('object with \`a?: string | undefined\` works', () => {
+  it('object with abcdedfg works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
       'objectWithUnionWithUndefined4',

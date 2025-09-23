@@ -296,6 +296,9 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       const analysedType = unionTypeMapRegistry.get(hash);
 
       if (analysedType) {
+        if (includesUndefined(type.unionTypes) && !(Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
+          return Either.right(option(undefined, analysedType));
+        }
         return Either.right(analysedType);
       }
 
@@ -371,12 +374,12 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         if ((Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
           const innerType = innerTypeEither.val;
           unionTypeMapRegistry.set(hash, innerType);
-          return Either.right(innerTypeEither.val);
+          return Either.right(innerType);
         }
 
-        const result = option(undefined, innerTypeEither.val);
+        unionTypeMapRegistry.set(hash, innerTypeEither.val);
 
-        unionTypeMapRegistry.set(hash, result);
+        const result = option(undefined, innerTypeEither.val);
 
         return Either.right(result)
       }
@@ -447,14 +450,14 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         const entityName = type.name ?? type.kind;
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.object(
+          const tsType = fromTsType(internalType, Option.some(TypeMappingScope.object(
             entityName,
             prop.getName(),
             true
           )));
 
           return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), option(internalType.name, analysedType))
+            return field(prop.getName(), analysedType)
           });
         }
 
