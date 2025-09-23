@@ -1353,6 +1353,30 @@ function handleObjectMatch(
 export function toTsValue(value: Value, type: Type.Type): any {
   const name = type.name;
 
+  if (
+    value.kind === 'record' &&
+    value.value.length === 0 &&
+    type.kind === 'null'
+  ) {
+    return null;
+  }
+
+  if (
+    value.kind === 'record' &&
+    value.value.length === 0 &&
+    type.kind === 'undefined'
+  ) {
+    return undefined;
+  }
+
+  if (
+    value.kind === 'record' &&
+    value.value.length === 0 &&
+    type.kind === 'void'
+  ) {
+    return undefined;
+  }
+
   if (value.kind === 'option') {
     const caseValue = value.value;
     if (!caseValue) {
