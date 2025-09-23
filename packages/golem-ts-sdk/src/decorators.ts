@@ -177,7 +177,7 @@ export function agent(customName?: string) {
 
     const agentTypeDescription =
       AgentConstructorRegistry.lookup(agentClassName)?.description ??
-      `Constructs the agent ${agentTypeName}`;
+      `Constructs the agent ${agentTypeName.value}`;
 
     const constructorParameterNames = classMetadata.constructorArgs
       .map((arg) => arg.name)
