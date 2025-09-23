@@ -27,6 +27,15 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         recursive: json.recursive,
       };
 
+    case 'unresolved-type':
+      return {
+        kind: 'unresolved-type',
+        name: json.name,
+        optional: json.optional,
+        text: json.text,
+        error: json.error,
+      };
+
     case 'boolean':
       return { kind: 'boolean', name: json.name, optional: json.optional };
 
