@@ -1475,7 +1475,10 @@ fn extract_wit_value(
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
-    use crate::model::agent::test::{reproducer_for_issue_with_enums, reproducer_for_issue_with_result_types, reproducer_for_multiple_types_called_element};
+    use crate::model::agent::test::{
+        reproducer_for_issue_with_enums, reproducer_for_issue_with_result_types,
+        reproducer_for_multiple_types_called_element,
+    };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
     use tempfile::NamedTempFile;
