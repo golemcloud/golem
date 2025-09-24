@@ -950,7 +950,7 @@ fn write_builder(
             writeln!(result, "{indent}{builder}.result({access}.map(inner => {{")?;
             match &result_type.ok {
                 Some(ok) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -968,7 +968,7 @@ fn write_builder(
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             match &result_type.err {
                 Some(err) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -1304,15 +1304,13 @@ fn extract_wit_value(
         AnalysedType::Result(result_type) => {
             writeln!(result, "{indent}{from}.result().unwrap().map(inner => {{")?;
             if let Some(ok) = &result_type.ok {
-                extract_wit_value(result, ctx, ok, "inner", &format!("{indent}  "))?;
+                extract_wit_value(result, ctx, ok, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             if let Some(err) = &result_type.err {
-                writeln!(result, "{indent}  inner.map(inner => {{")?;
-                extract_wit_value(result, ctx, err, "inner", &format!("{indent}    "))?;
-                writeln!(result, "{indent}  }})")?;
+                extract_wit_value(result, ctx, err, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
