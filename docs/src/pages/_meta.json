@@ -14,15 +14,7 @@
     "type": "separator",
     "title": "Develop"
   },
-  "develop-overview": "Language Guides",
-  "rust-language-guide": "Rust Language Guide",
-  "ccpp-language-guide": "C/C++ Language Guide",
-  "python-language-guide": "Python Language Guide",
-  "go-language-guide": "Go Language Guide",
-  "js-language-guide": "JavaScript Language Guide",
-  "ts-language-guide": "TypeScript Language Guide",
-  "experimental-languages": "Experimental Languages",
-  "common-language-guide": "Common Guides",
+  "develop": "Develop",
   "-- Usage": {
     "type": "separator",
     "title": "Usage"
@@ -49,13 +41,9 @@
     "type": "separator",
     "title": "References"
   },
-  "http-api-definitions": "API Definitions",
   "app-manifest": "Application Manifest",
-  "function-names": "Function names",
-  "golem-host-functions": "Golem Host Functions",
-  "installing-webassembly-tooling": "Installing WebAssembly Tooling",
-  "json-wave-mapping": "JSON-WAVE Mapping",
+  "name-mapping": "Name Mapping",
+  "type-mapping": "Type Mapping",
   "rest-api": "REST API",
-  "rib": "Rib",
-  "wasm-rpc": "WASM RPC"
+  "rib": "Rib"
 }

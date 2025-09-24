@@ -1,0 +1,66 @@
+import { Callout } from "nextra/components"
+import { Steps } from "nextra/components"
+import { Tabs } from "nextra/components"
+
+# Agent Filesystem
+
+Each agent runs in a sandboxed filesystem. Both the `/` path and the current working directory of a worker point to the root of this sandboxed filesystem.
+There is no way for an agent to access files outside its own filesystem.
+
+## Accessing the filesystem
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    For TypeScript agents, a limited subset of the `node:fs` package is available to work with files.
+
+    The available functions are:
+
+    - [`readFile`](https://nodejs.org/api/fs.html#fsreadfilepath-options-callback)
+    - [`readFileSync`](https://nodejs.org/api/fs.html#fsreadfilesyncpath-options)
+    - [`writeFile`](https://nodejs.org/api/fs.html#fswritefilefile-data-options-callback)
+    - [`writeFileSync`](https://nodejs.org/api/fs.html#fswritefilesyncfile-data-options)
+    </Tabs.Tab>
+</Tabs>
+
+## Initial File System
+
+The Initial File System (IFS) refers to all files that are present in the agent filesystem _before_ the agent is started.
+These can include configuration files, static assets and other things that you want to include with your agent.
+
+The IFS is configured on the level of a component, meaning that all agents created from a given component + version will always start with the
+same filesystem. To configure the IFS, include a `files` section in your golem.yaml
+
+<Callout type="warning">
+    If you are using profiles in your golem.yaml, you currently have to include the files section in each of your profiles when overriding.
+</Callout>
+
+```yaml
+components:
+  example:filesystem:
+    template: ts
+    files:
+    - sourcePath: ./files/foo.txt
+      targetPath: /foobar.txt
+      permissions: read-write
+    - sourcePath: ./files/bar.txt
+      targetPath: /bar.txt
+      permissions: read-only
+```
+
+After deploying the component, any new agents created will have the file `/foobar.txt` (and `./foobar.txt` as the agent's initial current directory is the root) available to them.
+The file `/bar.txt` on the other hand is only available for reading. Trying to open the file for writing will fail with a language-dependent error.
+
+### Updating a worker
+
+Updating an agent that uses IFS requires some special consideration depending on the update mode you choose:
+
+* **Automatic updates**: When using automatic updates the old worker invocations are replayed on top of the new IFS. This means that the worker
+should produce _exactly_ the same results and side effects as it did with the old IFS. For example, changing the format of a file will work without issues, but changing
+a file that gets read by the worker and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
+* **Manual updates**: When using manual updates, you are responsible for saving and restoring the content of files in the worker filesystem. You can
+use the `golem:api/save-snapshot` function to persist the files and later restore / migrate them using `golem:api/load-snapshot`.
+
+## Externally accessing agent files
+
+You can use [file-server worker bindings](/http-api-definitions/api-definition-bindings) to automatically deploy a REST API that allows accessing the files
+on an agent filesystem.

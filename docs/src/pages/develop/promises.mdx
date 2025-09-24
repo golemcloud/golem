@@ -1,0 +1,110 @@
+import {Callout, Tabs} from "nextra/components"
+
+# Working with Golem Promises
+
+Golem **promises** provide a way for Golem agents to wait for an external condition. The agent creates the promise and somehow sends its identifier to the external system responsible for **completing** the promise. Then the agent can **await** the promise, being suspended until the external system completes the promise using Golem's REST API.
+
+It is also possible to complete a promise from within a Golem agent using the Golem SDK.
+
+When a promise is completed, an arbitrary byte array can be attached to it as a payload; this data is returned to the awaiting worker when it continues execution.
+
+### Creating a promise
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+        To create a promise simply call the `createPromise` function:
+
+        ```typescript
+        import {createPromise, PromiseId} from "@golemcloud/golem-ts-sdk"
+
+        const promiseId: PromiseId = createPromise()
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+The returned value has the type `PromiseId`, and defined as the following (including the nested types):
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+        ```typescript
+        export type OplogIndex = bigint
+
+        export interface Uuid {
+            highBits: bigint
+            lowBits: bigint
+        }
+
+        // Represents a Component
+        export interface ComponentId {
+            uuid: Uuid
+        }
+
+        // Represents a Worker
+        export interface WorkerId {
+            componentId: ComponentId
+            workerName: string
+        }
+
+        // A promise ID is a value that can be passed to an external Golem API to complete that promise
+        // from an arbitrary external source, while Golem workers can await for this completion.
+        export interface PromiseId {
+            workerId: WorkerId
+            oplogIdx: OplogIndex
+        }
+        ```
+    </Tabs.Tab>
+</Tabs>
+
+### Deleting a promise
+
+If a promise is no longer used, it has to be deleted with:
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    ```typescript
+    import { deletePromise, PromiseId } from "@golemcloud/golem-ts-sdk"
+
+    deletePromise(promiseId)
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+### Awaiting a promise
+
+To await a promise, use the `awaitPromise` functions, which returns the promise result as a byte array payload.
+Here's an example that awaits a promise, then decodes the payload from JSON format:
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    ```typescript
+    import { awaitPromise, PromiseId } from "@golemcloud/golem-ts-sdk"
+
+    const byteArrayPayload: Uint8Array = awaitPromise(promiseId)
+    const payload = JSON.parse(new TextDecoder().decode(byteArrayPayload))
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+### Completing a promise from within an agent
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    To complete a promise from within an agent, use the `completePromise` function.
+    The following example completes a promise with a value encoded as JSON:
+
+    ```typescript
+    import { completePromise, PromiseId } from "@golemcloud/golem-ts-sdk"
+
+    const payload = {
+      id: "value",
+      meta: "data",
+    }
+    const byteArrayPayload: Uint8Array = new TextEncoder().encode(JSON.stringify(payload))
+    const success: boolean = completePromise(promiseId, byteArrayPayload)
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+### Completing a promise from an external source
+
+To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](/rest-api).

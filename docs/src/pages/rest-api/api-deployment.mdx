@@ -1,0 +1,169 @@
+# Api Deployment API
+
+## Creates or updates a deployment
+Path|Method|Protected
+---|---|---
+`/v1/api/deployments/deploy`|POST|Yes
+
+Deploys a set of API definitions to a site (specific host and subdomain).
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "apiDefinitions": [
+    {
+      "id": "string",
+      "version": "string"
+    }
+  ],
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "site": {
+    "host": "string",
+    "subdomain": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "apiDefinitions": [
+    {
+      "id": "string",
+      "version": "string"
+    }
+  ],
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "site": {
+    "host": "string",
+    "subdomain": "string"
+  },
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get one or more API deployments
+Path|Method|Protected
+---|---|---
+`/v1/api/deployments`|GET|Yes
+
+If `api-definition-id` is not set, it lists all API deployments.
+If `api-definition-id` is set, returns a single API deployment.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-id|string|Yes|-
+api-definition-id|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "apiDefinitions": [
+      {
+        "id": "string",
+        "version": "string"
+      }
+    ],
+    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+    "site": {
+      "host": "string",
+      "subdomain": "string"
+    },
+    "createdAt": "2019-08-24T14:15:22Z"
+  }
+]
+```
+
+## Get API deployment by site
+Path|Method|Protected
+---|---|---
+`/v1/api/deployments/{site}`|GET|Yes
+
+Gets an API deployment by the host name (optionally with a subdomain) it is deployed to.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-id|string|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "apiDefinitions": [
+    {
+      "id": "string",
+      "version": "string"
+    }
+  ],
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "site": {
+    "host": "string",
+    "subdomain": "string"
+  },
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Delete API deployment by site
+Path|Method|Protected
+---|---|---
+`/v1/api/deployments/{site}`|DELETE|Yes
+
+Deletes an API deployment by the host name (optionally with a subdomain) it is deployed to.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-id|string|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+"string"
+```
+
+## Undeploy a single API definition from a site
+Path|Method|Protected
+---|---|---
+`/v1/api/deployments/{site}/{id}/{version}`|DELETE|Yes
+
+Removes a specific API definition (by id and version) from a site without deleting the entire deployment.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-id|string|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+"string"
+```
+## Api Deployment API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"errors":["string"]}`
+401||`{"error":"string"}`
+403||`{"error":"string"}`
+404||`{"error":"string"}`
+409||`{"error":"string"}`
+500||`{"error":"string","workerError":{"cause":"string","stderr":"string"}}`

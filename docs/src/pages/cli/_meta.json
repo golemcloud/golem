@@ -1,7 +1,7 @@
 {
   "app-manifest": "Application Manifest",
   "components": "Components",
-  "workers": "Workers",
+  "agents": "Agents",
   "profiles": "Profiles",
   "permissions": "Permissions",
   "plugins": "Plugins",

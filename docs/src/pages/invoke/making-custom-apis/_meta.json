@@ -1,14 +1,4 @@
 {
-  "create-simple-component": "Create a simple component",
-  "expose-http-apis": "Expose Http APIs",
-  "try-out-deployed-api": "Invoke the deployed API",
-  "update-api-deployment": "Update API definitions and deployments",
-  "authentication": "Make APIs Secure",
-  "cors": "Setting up CORS",
-  "rib-in-api-definition": "Request Response Transformation using Rib",
-  "import-openapi-spec": "Import OpenAPI Spec as API Definition",
-  "external-api-gateways": "Integrating with external API Gateways",
-  "component-constraints": "Constraints on Component updates after API deployment",
-  "spec-inference": "Automatic API Spec Inference",
-  "trouble-shooting": "Trouble Shooting"
+  "authentication": "Authentication",
+  "trouble-shooting": "Troubleshooting"
 }

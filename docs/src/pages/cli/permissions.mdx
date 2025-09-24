@@ -61,9 +61,13 @@ A new project can be created using `project add`. The command expects a project 
 golem project add --project-name "Golem Demo" --project-description "A new project for demonstrating the project feature"
 ```
 
-When creating components or workers, the project can be specified with the `--project-name` flag. Every user has a **default project** which is used when no explicit project is specified.
+When creating components or agents, the project can be specified with the `--project-name` flag. Every user has a **default project** which is used when no explicit project is specified.
 
 ### Sharing projects with other accounts
+
+<Callout type="warning">
+The share command still uses the old terminology of _workers_ instead of talking about _agents_. This is going to be changed in the next version.
+</Callout>
 
 Projects can be shared among multiple Golem Cloud accounts.
 
@@ -73,7 +77,7 @@ To share a project, use the `share` subcommand:
 golem share --project-name "Golem Demo" --recipient-account-id 08bc0eac-5c51-40a5-8bc6-5c8928efb475 --project-actions ViewWorker --project-actions ViewComponent
 ```
 
-This example shares the "Golem Demo" project with the account identified by `08bc0eac-5c51-40a5-8bc6-5c8928efb475` and grants component and worker **view** permissions for it.
+This example shares the "Golem Demo" project with the account identified by `08bc0eac-5c51-40a5-8bc6-5c8928efb475` and grants component and agent **view** permissions for it.
 
 <Callout>
   Alternatively it is possible to create and manage **project policies** using the `project-policy`

@@ -1,0 +1,45 @@
+## Watch out for errors during deployment
+
+### Route conflict errors during deployment
+
+Please note the following: If you already deployed an API definition before with the same path `/{user-id}/get-cart-contents`,
+then you will receive a conflict error as given below.
+
+```bash filename="Terminal" copy
+API deployment definitions conflict error: /{user-id}/get-cart-contents
+```
+
+This implies, when you update the version, you have to update the path as well, such as `/v5/{user-id}/get-cart-contents`
+under the `path` field in `route`.
+
+### BadRequest errors when invoking the API with inputs
+
+If your API's implementation (Rib script which internally calls agents) gets a wrong input (Example: wrong types in http request),
+it produces a `BadRequest`. This makes Golem Gateway much more type safe than a typical Gateway
+where it always routes to the backend regardless of wrong inputs.
+
+Here is an example:
+
+```rib copy
+let user: u64 = request.path.user-id;
+let agent = user-agent(user);
+agent.add-cart(request.body.product);
+```
+
+Here we expect the request body to have a product field, with all the fields of the record type that `add-cart` function expects.
+If the request body is wrong, we get a bad request error as shown below.
+
+```bash copy
+>
+* Request completely sent off
+< HTTP/1.1 400 Bad Request
+< access-control-allow-origin: *
+< content-length: 392
+< date: Tue, 10 Dec 2024 03:42:54 GMT
+<
+* Connection #1 to host localhost left intact
+Input request details don't match the requirements for rib expression to execute: Invalid value for the key path.
+Error: Invalid value for the key product. Error: Expected function parameter type is u64. But found string.
+Requirements. Record(TypeRecord { fields: [NameTypePair { name: "product-id", typ: U64)%
+
+```

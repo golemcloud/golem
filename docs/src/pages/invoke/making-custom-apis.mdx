@@ -1,22 +1,277 @@
 # Make Custom Http APIs for your Golem App
 
 Golem's [Gateway](/concepts/worker-gateway) service not only exposes the [low-level REST API for invocations](/invoke/http)
-but also provides a way to expose the worker functions as HTTP APIs.
+but also provides a way to expose the agent methods as HTTP APIs.
 
-Future versions will support other protocols as well such as gRPC or GraphQL.
+Future versions will support other protocols such as MCP, gRPC, or GraphQL.
 
-For reference, see the [API Definition Reference](/http-api-definitions) page.
+## HTTP API definition
 
-### API Development Workflow
+The HTTP APIs are defined in the [application manifest](/app-manifest) (`golem.yaml) `httpApi` section. Every template provided by Golem contains a sample API definition that can be used as a starting point.
 
-1. **[Create a component](making-custom-apis/create-simple-component)**: Learn how to create a new API definition.
-2. **[Expose HTTP APIs for your Golem App](making-custom-apis/expose-http-apis)**: Learn how to create a new API definition.
-3. **[Update HTTP APIs](making-custom-apis/update-api-deployment)**: Make changes to existing APIs and redeploy.
-4. **[Authenticated HTTP APIs APIs](making-custom-apis/authentication)**: Configure authentication mechanisms for your API.
-5. **[CORS for HTTP APIs](making-custom-apis/cors)**: Set up Cross-Origin Resource Sharing (CORS) policies.
-6. **[Customise Http Responses with Rib](making-custom-apis/rib-in-api-definition)**: Use Rib for customizing API response mappings.
-7. **[Automatic Documentation for Endpoints](making-custom-apis/spec-inference)**: Learn more on automatic spec generation based on Rib scripts.
-8. **[Constraints on Component Updates](making-custom-apis/component-constraints)**: Learn more on restrictions for updating components after deployment.
-9. **[Import OpenAPI Specifications](making-custom-apis/import-openapi-spec)**: Convert OpenAPI specs into Golem API definitions.
-10. **[Integrate with External API Gateways](making-custom-apis/external-api-gateways)**: Connect your APIs to existing gateways.
-11. **[Troubleshoot Common Issues](making-custom-apis/trouble-shooting)**: Resolve potential problems with your APIs.
+The `httpApi` section consists of two main parts:
+
+- **definitions** contains the versioned API definitions describing routes and their handlers
+- **deployments** specifies which sets of these definitions are exposed on which hosts
+
+### Definitions
+
+Each API definition has a name and a version; multiple versions of the same API can be deployed simultaneously if needed, for example for backward compatibility.
+
+The primary part of an API definition is the list of **routes**. Each route matches an incoming HTTP request and performs a specific action, most commonly invoking an agent method.
+
+The following example defines an API called `counter-api` with version `0.0.1`:
+
+```yaml
+httpApi:
+    definitions:
+        counter-api:
+            version: '0.0.1'
+            routes:
+            # - method: GET
+            #   ...
+```
+
+#### Routes calling agents
+
+The most common type of route is one that invokes an agent method. A route consists of an HTTP method and path, with optional variables in it, and a **Rib script**. The script's job is invoking an agent's method by taking information from the request to assemble the agent ID and the method's parameters, and constructing an HTTP response from the method's response. This allows a lot of flexibility on mapping the agent to a HTTP API.
+
+The `routes` field is a list of routes, each consisting of:
+
+- `method`: one of GET, POST, DELETE, PUT, PATCH, HEAD, CONNECT, OPTIONS, TRACE
+- `path`: the path part of the URL, which may contain variables in `{}` braces
+- `bindings`: describes how to handle the request, for example by invoking an agent method
+
+The `bindings` field has several subfields:
+
+- `type: default`: indicates that this route invokes an agent method; other types are documented below
+- `componentName`: the name of the component containing the agent to invoke
+- `response`: the Rib script that handles the request
+- optionally `idempotencyKey`: a Rib script that computes an _idempotency key_ for the request
+- optionally `invocationContext`: a Rib script that computes an _invocation context_ for the request
+
+To learn more about the **Rib scripting language**, see the [Rib page](/rib).
+
+##### Response script
+The response script has access to the `request` object, which allows access to details of the HTTP request:
+
+- `request.path.xyz` refers to a path variable named `xyz`
+- `request.headers.xyz` refers to a header named `xyz`
+- `request.body` refers to the JSON request body - it can be inspected by accessing it's fields such as `request.body.exampleField` etc.
+- `request.auth` when authentication is configured (see below)
+
+The script can construct an agent reference for any of the agent types defined in the **component** identified by `componentName` by using the agent type name and providing the necessary constructor parameters. For example if there is an agent type `counter-agent` with a single string constructor parameter, the following Rib snippets are constructing an instance of it:
+
+```rib
+let agent = counter-agent("test");
+```
+
+or
+
+```rib
+let agent = counter-agent(request.path.user);
+```
+
+This `agent` variable then can be used to _invoke_ an agent method, for example:
+
+```rib
+let new-value = agent.increment();
+```
+
+The script must return an object with at least a `status` and a `body` field:
+
+```rib
+{ status: 200u64, body: "Hello World" }
+```
+
+Additionally, this response object can also have a `headers` field, which is a map of header names to values:
+
+```rib
+{ status: 200u64, body: "Hello World", headers: { "Content-Type": "text/plain" } }
+```
+
+##### Example
+The following example defines an _increment endpoint_ for the example used on the [Quickstart page](/quickstart):
+
+```yaml
+httpApi:
+  definitions:
+    counter-api:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /{name}/increment
+          binding:
+            type: default
+            componentName: "example:counter"
+            response: |
+              let name: string = request.path.name;
+              let agent = counter-agent(name);
+              let new-value = agent.increment();
+              { status: 200u64, body: { result: "incremented ${name}, new value is ${new-value}" } }
+```
+
+##### Optional idempotency key script
+In Golem every request is associated with an _idempotency key_. If there is no special idempotency key script provided, then this key is either taken from the `Idempotency-Key` HTTP header, if any, or otherwise a random key is generated for each request.
+
+The `idempotencyKey` field of a binding can define a Rib script returning a **string** value. The following example uses a custom header instead of the `Idempotency-Key` one for extracting the idempotency key:
+
+```rib
+request.headers.X-Custom-Idempotency-Key
+```
+
+##### Optional invocation context script
+Every invocation in Golem has access to an _invocation context_. This invocation context has a span ID and a set of key-value pairs associated with it. Golem adds several keys by default to the invocation context, but by providing a Rib script in the binding's `invocationContext` field, additional key-value pairs can be added to the invocation context of the agent method invocation based on the request.
+
+The result of this Rib script must be an object of which each field is going to be added to the invocation context.
+
+#### Authentication
+Golem API gateway has built-in authentication support to identify users using OpenID protocol. See [the API authentication page](/invoke/making-custom-apis/authentication) for details.
+
+When authentication is configured for a route, the `request` object in the Rib script has an additional `auth` field, which contains the claims from the authenticated user's ID token. For example, if the authentication provider provides an `email` claim, it can be accessed as `request.auth.email`.
+
+In the HTTP API route definitions, authentication is enabled by adding a `security` field to the route (next to the `method`, `path` and `binding` fields) referring to the preconfigured security scheme:
+
+```yaml
+httpApi:
+  definitions:
+    counter-api:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /{name}/increment
+          security: my-security
+          binding:
+            type: default
+            componentName: "example:counter"
+            response: |
+              # ...
+```
+
+#### CORS
+Setting up CORS for a route in API Gateway is done by specifying an extra route for the same path with `OPTIONS` method and using the `cors-preflight` binding type.
+
+Optionally a `response` field can be added to the binding, customizing the CORS headers:
+
+```yaml
+httpApi:
+  definitions:
+    counter-api:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /{name}/increment
+          binding:
+            type: default
+            componentName: "example:counter"
+            response: |
+              # ...
+        - method: OPTIONS
+          path: /{name}/increment
+          binding:
+            type: cors-preflight
+            response: | # this field is optional
+             {
+              Access-Control-Allow-Origin: "*",
+              Access-Control-Allow-Methods: "GET, POST, PUT, DELETE, OPTIONS",
+              Access-Control-Allow-Headers: "Content-Type, Authorization",
+              Access-Control-Expose-Headers: "Content-Length, X-Requested-With",
+              Access-Control-Allow-Credentials: true,
+              Access-Control-Max-Age: 86400u64
+             }
+```
+
+#### File server bindings
+The `file-server` binding type can be used to retrieve files from a workers filesystem. For read-write files the file is retrieved between running worker invocation, so users are guaranteed to not see any in-progress changes to files.
+
+For read-only files the files are retrieved from a separate datastore and not directly from the worker. This makes retrieving read-only files very cheap
+and allows it be used for serving static content.
+
+To learn more about the worker filesystem, check out the [dedicated guide](/develop/agent-filesystem).
+
+Example:
+
+```yaml
+routes:
+  - method: Get
+    # {+var} patterns capture all remaining path segments
+    path: /workers/{worker-name}/files/{+file}
+    binding:
+      type: file-server
+      componentName: example-component
+      # retrieve the path /files/${{file}} from the worker and return the content.
+      response: 'let file: string = request.path.file; "/files/${{file}}"'
+```
+
+Parameters:
+
+| Parameter               | Required | Type   | Description                                                                                                                                                         |
+| ----------------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| componentName | true     | string | Name of the component to invoke                                                                                                                                       |
+| workerName              | false    | rib    | Script used to compute the name of the worker that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used.       |
+| idempotencyKey          | false    | rib    | Script used to compute the idempotency key. The script has access to the request input. If not provided an idempotency key will be generated.                       |
+| response                | true     | rib    | Script that is used to compute the file to retrieve and the response to send to users. See the dedicatedc [section](#file-server-response-object) for more details. |
+
+#### File Server Response Object
+
+The object returned from the response rib script warrants some extra mention.
+There are two different structures that are supported by golem:
+
+1. Returning a single string. The returned string is interpreted as an absolute path and looked up in the worker filesystem and returned with an inferred content type and a 200 status code.
+   If the file does not exist, a 404 is returned instead.
+
+2. As an object. This object can have 3 different fields that are explained below:
+   | Field | Required | Rib Type | Description |
+   | --------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
+   | headers | false | record | Headers that should be included in the response. |
+   | status | false | u64 | Status code of the response. If not provided defaults to 200. |
+   | file-path | true | string | Path of the file that should be retrieved from the worker filesystem. If the file does not exist a 404 is returned |
+
+
+### Deployments
+
+A _deployment_ simply associates a set of API definitions with a host, for example to deploy the example API definition when running the local Golem server, the following deployment can be used:
+
+```yaml
+httpApi:
+    definitions:
+      # ...
+    deployments:
+        local:
+          - host: localhost:9006
+            definitions:
+              - counter-api
+```
+
+## Deploying the API
+Once the API definition and deployments are added to the `golem.yaml` file, the API can be deployed using the following command:
+
+```shell
+golem api deploy
+```
+
+The interactive shell will force you to update the version of the API definition to not lose track of the changes,
+and keep a note that you can have advanced management of the APIs using the `golem api definition` and `golem api deploy` commands
+allowing you to switch back to a previous API if needed.
+
+Note that the `api deploy` command also deploys the underlying components if needed.
+
+### Constraints
+
+Once an API is deployed using a specific component-version, the agent methods used in the Rib script of the deployed API definition must be kept backward compatible. This is checked and enforced in the deploy command.
+
+If there are conflicts the `api deploy` command will fail with a conflict report message,
+which details especially the missing functions and conflicting functions, where conflicting functions
+detail about existing parameter types, new parameter types, existing return type, and new return type.
+
+## Exporting as OpenAPI specification
+The API definitions can also be exported as OpenAPI specifications, which can be used for generating client code or as documentation.
+
+Use the `golem api definition export` CLI command to export the OpenAPI specification of a specific API definition:
+
+```shell copy
+golem api definition export --id counter-api --version 0.0.1
+```
+
+## Troubleshooting
+See the [troubleshooting page](/invoke/making-custom-apis/troubleshooting) for some common issues and their solutions.

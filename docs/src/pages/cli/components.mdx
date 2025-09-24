@@ -69,9 +69,9 @@ Exports:
 The returned output contains the following information:
 
 - **Component URN** - URN for the new component. You can use this URN whenever you want to specify the component instead of component name.
-- **Component version** - incremental component version - used for updating the workers.
+- **Component version** - incremental component version - used for updating the agents.
 - **Component size** - size of the `wasm` file - it is important for the storage limit in the hosted Golem Cloud.
-- **Exports** - exported function you can call. You can copy function name (the part before parameters) to call the function. All Golem API expect function names in exactly this format. See the [function name reference page](/function-names) for more details.
+- **Exports** - exported function you can call. You can copy function name (the part before parameters) to call the function. All Golem API expect function names in exactly this format. See the [name mapping page](/name-mapping) for more details.
 
 To deploy **all components** of an application, use:
 
@@ -137,35 +137,35 @@ golem component list
 
 To update a component just run the `component deploy` (or `app deploy`) command again.
 
-If you want to trigger an update all worker to the new latest version right after creating this version you can use `--try-update-workers` option.
+If you want to trigger an update all agents to the new latest version right after creating this version you can use `--try-update-agents` option.
 
 It is possible to change the **component's type** (from durable to ephemeral, or from ephemeral to durable) when
 updating the component by changing the manifest file.
 
-## Updating workers
+## Updating agents
 
-If you want to update all workers you can use `component try-update-workers` command.
+If you want to update all agents you can use `component try-update-agents` command.
 
-This command gets all workers for the component that are not using the latest version and triggers an update for them one by one:
+This command gets all agents for the component that are not using the latest version and triggers an update for them one by one:
 
 ```shell copy
-golem component try-update-workers example:component
+golem component try-update-agents example:component
 ```
 
-The update request is enqueued and processed by the workers asynchronously, `golem` cannot await for the update to finish.
+The update request is enqueued and processed by the agents asynchronously, `golem` cannot await for the update to finish.
 
 <Callout type="warning">
-  Note that automatic worker update is not guaranteed to succeed, if the updated component differs
+  Note that automatic agent update is not guaranteed to succeed, if the updated component differs
   too much from the previous one.
 </Callout>
 
 <Callout>You can use URL or `--component-name` instead.</Callout>
 
-## Redeploying workers
+## Redeploying agents
 
-During the development of a Golem Component, it is often necessary to quickly rebuild the code, update the component and just restart all the test workers from scratch to test the changes.
+During the development of a Golem Component, it is often necessary to quickly rebuild the code, update the component and just restart all the test agents from scratch to test the changes.
 
-This is different from updating the workers as they will loose their state, but it can speed up the feedback loop during development.
+This is different from updating the agents as they will loose their state, but it can speed up the feedback loop during development.
 
 This workflow is supported by the `component redeploy` command:
 
@@ -173,6 +173,6 @@ This workflow is supported by the `component redeploy` command:
 golem component redeploy example:component
 ```
 
-This command deletes all workers that are not using the latest version of component and re-creates them with the same name, parameters and environment variables.
+This command deletes all agents that are not using the latest version of component and re-creates them with the same name, parameters and environment variables.
 
 <Callout>You can use URL or `--component-name` instead.</Callout>

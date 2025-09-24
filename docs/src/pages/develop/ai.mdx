@@ -1,0 +1,395 @@
+import { Tabs } from "nextra/components"
+import { Steps } from "nextra/components"
+
+# Using AI providers
+
+Golem comes with an [extensive set of libraries](https://github.com/golemcloud/golem-ai) for connecting to various AI and AI related third party providers. These libraries are providing abstractions for various areas, and pluggable implementations for them. This way the actual third party provider can be switched any time without modifying the Golem agent's code.
+
+The currently supported areas are:
+
+- Large Language Models (LLM)
+- Graph Databases
+- Search Engines
+- Web Search Engines
+- Speech to Text
+- Video Generation
+- Code Snippet Execution
+
+All these interfaces are ready to use from any Golem agent through the Golem SDK. If one or more of the above interfaces are used in an agent, then an _implementation_ needs to be selected for each by adding them to the `golem.yaml` file of the component.
+
+The `golem.yaml` files coming from the agent templates are coming with commented-out entries for each possible choice of implementations, so just uncomment the desired ones and provide any necessary configuration (usually in form of environment variables).
+
+The rest of the page shows detailed information about these libraries, the available implementations and their basic interface (without a full documentation of every type involved).
+
+## LLMs
+
+The list of supported LLM providers is the following:
+
+- [Amazon Bedrock](https://aws.amazon.com/bedrock/)
+- [Anthropic (Claude)](https://www.anthropic.com)
+- [xAI (Grok)](https://x.ai)
+- [Ollama](https://ollama.com)
+- [OpenAI](https://openai.com)
+- [OpenRouter](https://openrouter.ai)
+
+The core interface for LLMs:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:llm/llm@1.0.0' {
+        export function send(messages: Message[], config: Config): ChatEvent;
+        export function continue_(messages: Message[], toolResults: [ToolCall, ToolResult][], config: Config): ChatEvent;
+        export function stream(messages: Message[], config: Config): ChatStream;
+        // ...
+    }
+     ```
+     </Tabs.Tab>
+</Tabs>
+
+## Graph Databases
+
+The list of supported graph databases is the following:
+
+- [ArangoDb](https://arangodb.com)
+- [JanusGraph](https://janusgraph.org)
+- [Neo4j](https://neo4j.com)
+
+The core interface for graph databases:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:graph/traversal@1.0.0' {
+        /**
+          * Find shortest path between two vertices
+          */
+        export function findShortestPath(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined): Result<Path | undefined, GraphError>;
+        /**
+          * Find all paths between two vertices (up to limit)
+          */
+        export function findAllPaths(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined, limit: number | undefined): Result<Path[], GraphError>;
+        /**
+          * Get k-hop neighborhood around a vertex
+          */
+        export function getNeighborhood(transaction: Transaction, center: ElementId, options: NeighborhoodOptions): Result<Subgraph, GraphError>;
+        /**
+          * Check if path exists between vertices
+          */
+        export function pathExists(transaction: Transaction, fromVertex: ElementId, toVertex: ElementId, options: PathOptions | undefined): Result<boolean, GraphError>;
+        /**
+          * Get vertices at specific distance from source
+          */
+        export function getVerticesAtDistance(transaction: Transaction, source: ElementId, distance: number, direction: Direction, edgeTypes: string[] | undefined): Result<Vertex[], GraphError>;
+        // ...
+     }
+     declare module 'golem:graph/transactions@1.0.0' {
+       export class Transaction {
+         /**
+          * === VERTEX OPERATIONS ===
+          * Create a new vertex
+          */
+         createVertex(vertexType: string, properties: PropertyMap): Result<Vertex, GraphError>;
+         /**
+          * Create vertex with additional labels (for multi-label systems like Neo4j)
+          */
+         createVertexWithLabels(vertexType: string, additionalLabels: string[], properties: PropertyMap): Result<Vertex, GraphError>;
+         /**
+          * Get vertex by ID
+          */
+         getVertex(id: ElementId): Result<Vertex | undefined, GraphError>;
+         /**
+          * Update vertex properties (replaces all properties)
+          */
+         updateVertex(id: ElementId, properties: PropertyMap): Result<Vertex, GraphError>;
+         /**
+          * Update specific vertex properties (partial update)
+          */
+         updateVertexProperties(id: ElementId, updates: PropertyMap): Result<Vertex, GraphError>;
+         /**
+          * Delete vertex (and optionally its edges)
+          */
+         deleteVertex(id: ElementId, deleteEdges: boolean): Result<void, GraphError>;
+         /**
+          * Find vertices by type and optional filters
+          */
+         findVertices(vertexType: string | undefined, filters: FilterCondition[] | undefined, sort: SortSpec[] | undefined, limit: number | undefined, offset: number | undefined): Result<Vertex[], GraphError>;
+         /**
+          * === EDGE OPERATIONS ===
+          * Create a new edge
+          */
+         createEdge(edgeType: string, fromVertex: ElementId, toVertex: ElementId, properties: PropertyMap): Result<Edge, GraphError>;
+         /**
+          * Get edge by ID
+          */
+         getEdge(id: ElementId): Result<Edge | undefined, GraphError>;
+         /**
+          * Update edge properties
+          */
+         updateEdge(id: ElementId, properties: PropertyMap): Result<Edge, GraphError>;
+         /**
+          * Update specific edge properties (partial update)
+          */
+         updateEdgeProperties(id: ElementId, updates: PropertyMap): Result<Edge, GraphError>;
+         /**
+          * Delete edge
+          */
+         deleteEdge(id: ElementId): Result<void, GraphError>;
+         /**
+          * Find edges by type and optional filters
+          */
+         findEdges(edgeTypes: string[] | undefined, filters: FilterCondition[] | undefined, sort: SortSpec[] | undefined, limit: number | undefined, offset: number | undefined): Result<Edge[], GraphError>;
+         /**
+          * === TRAVERSAL OPERATIONS ===
+          * Get adjacent vertices through specified edge types
+          */
+         getAdjacentVertices(vertexId: ElementId, direction: Direction, edgeTypes: string[] | undefined, limit: number | undefined): Result<Vertex[], GraphError>;
+         /**
+          * Get edges connected to a vertex
+          */
+         getConnectedEdges(vertexId: ElementId, direction: Direction, edgeTypes: string[] | undefined, limit: number | undefined): Result<Edge[], GraphError>;
+         /**
+          * === BATCH OPERATIONS ===
+          * Create multiple vertices in a single operation
+          */
+         createVertices(vertices: VertexSpec[]): Result<Vertex[], GraphError>;
+         /**
+          * Create multiple edges in a single operation
+          */
+         createEdges(edges: EdgeSpec[]): Result<Edge[], GraphError>;
+         /**
+          * Upsert vertex (create or update)
+          */
+         upsertVertex(id: ElementId | undefined, vertexType: string, properties: PropertyMap): Result<Vertex, GraphError>;
+         /**
+          * Upsert edge (create or update)
+          */
+         upsertEdge(id: ElementId | undefined, edgeType: string, fromVertex: ElementId, toVertex: ElementId, properties: PropertyMap): Result<Edge, GraphError>;
+         /**
+          * === TRANSACTION CONTROL ===
+          * Commit the transaction
+          */
+         commit(): Result<void, GraphError>;
+         /**
+          * Rollback the transaction
+          */
+         rollback(): Result<void, GraphError>;
+         /**
+          * Check if transaction is still active
+          */
+         isActive(): boolean;
+       }
+       // ...
+     }
+     ```
+     </Tabs.Tab>
+</Tabs>
+
+## Search Engines
+
+The list of supported search engines is the following:
+
+- [Algolia](https://www.algolia.com)
+- [Elasticsearch](https://www.elastic.co/elasticsearch/)
+- [MeiliSearch](https://www.meilisearch.com)
+- [Typesense](https://typesense.org)
+
+The core interface for search engines:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:search/core@1.0.0' {
+       /**
+        * Index lifecycle
+        */
+       export function createIndex(name: IndexName, schema: Schema | undefined): Result<void, SearchError>;
+       export function deleteIndex(name: IndexName): Result<void, SearchError>;
+       export function listIndexes(): Result<IndexName[], SearchError>;
+       /**
+        * Document operations
+        */
+       export function upsert(index: IndexName, doc: Doc): Result<void, SearchError>;
+       export function upsertMany(index: IndexName, docs: Doc[]): Result<void, SearchError>;
+       export function delete_(index: IndexName, id: DocumentId): Result<void, SearchError>;
+       export function deleteMany(index: IndexName, ids: DocumentId[]): Result<void, SearchError>;
+       export function get(index: IndexName, id: DocumentId): Result<Doc | undefined, SearchError>;
+       /**
+        * Query
+        */
+       export function search(index: IndexName, query: SearchQuery): Result<SearchResults, SearchError>;
+       export function streamSearch(index: IndexName, query: SearchQuery): Result<SearchStream, SearchError>;
+       /**
+        * Schema inspection
+        */
+       export function getSchema(index: IndexName): Result<Schema, SearchError>;
+       export function updateSchema(index: IndexName, schema: Schema): Result<void, SearchError>;
+       // ...
+     }
+     ```
+     </Tabs.Tab>
+</Tabs>
+
+## Web Search Engines
+
+The list of supported web search engines is the following:
+
+- [Brave](https://brave.com/search/api/)
+- [Google](https://www.google.com)
+- [Serper](https://serper.dev)
+- [Tavily](https://www.tavily.com)
+
+The core interface for web search engines:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:web-search/web-search@1.0.0' {
+       /**
+        * Start a search session, returning a search context
+        */
+       export function startSearch(params: SearchParams): Result<SearchSession, SearchError>;
+       /**
+        * One-shot search that returns results immediately (limited result count)
+        */
+       export function searchOnce(params: SearchParams): Result<[SearchResult[], SearchMetadata | undefined], SearchError>;
+       export class SearchSession {
+         /**
+          * Get the next page of results
+          */
+         nextPage(): Result<SearchResult[], SearchError>;
+         /**
+          * Retrieve session metadata (after any query)
+          */
+         getMetadata(): SearchMetadata | undefined;
+       }
+       // ...
+     }
+     ```
+     </Tabs.Tab>
+</Tabs>
+
+## Speech to Text
+
+The list of supported speech to text providers is the following:
+
+- [AWS Transcribe](https://aws.amazon.com/transcribe/)
+- [Azure](https://azure.microsoft.com/en-us/)
+- [Deepgram](https://deepgram.com)
+- [Google](https://cloud.google.com/speech-to-text)
+- [OpenAI Whisper](https://openai.com/index/whisper/)
+
+The core interface for speech to text providers:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:stt/transcription@1.0.0' {
+       export function transcribe(request: TranscriptionRequest): Result<TranscriptionResult, SttError>;
+       export function transcribeMany(requests: TranscriptionRequest[]): Result<MultiTranscriptionResult, SttError>;
+       // ...
+     }
+     ```
+     </Tabs.Tab>
+</Tabs>
+
+## Video Generation
+
+The list of supported video generation providers is the following:
+
+- [Kling](https://klingai.com/global/)
+- [Runway](https://runwayml.com/)
+- [Stability](https://stability.ai)
+- [Veo](https://www.veo.co)
+
+The core interface for video generation providers:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:video-generation/video-generation@1.0.0' {
+       export function generate(input: MediaInput, config: GenerationConfig): Result<string, VideoError>;
+       export function poll(jobId: string): Result<VideoResult, VideoError>;
+       export function cancel(jobId: string): Result<string, VideoError>;
+       // ...
+     }
+     declare module 'golem:video-generation/lip-sync@1.0.0' {
+       export function generateLipSync(video: LipSyncVideo, audio: AudioSource): Result<string, VideoError>;
+       export function listVoices(language: string | undefined): Result<VoiceInfo[], VideoError>;
+       // ...
+     }
+     declare module 'golem:video-generation/advanced@1.0.0' {
+       export function extendVideo(videoId: string, prompt: string | undefined, negativePrompt: string | undefined, cfgScale: number | undefined, providerOptions: Kv[] | undefined): Result<string, VideoError>;
+       export function upscaleVideo(input: BaseVideo): Result<string, VideoError>;
+       export function generateVideoEffects(input: InputImage, effect: EffectType, model: string | undefined, duration: number | undefined, mode: string | undefined): Result<string, VideoError>;
+       export function multiImageGeneration(inputImages: InputImage[], prompt: string | undefined, config: GenerationConfig): Result<string, VideoError>;
+       // ...
+     }
+     ```
+     </Tabs.Tab>
+</Tabs>
+
+## Code Snippet Execution
+
+The list of supported languages is the following:
+
+- JavaScript
+- Python
+
+The core interface for code snippet execution:
+
+<Tabs items={["TypeScript"]}>
+     <Tabs.Tab>
+     ```typescript
+     declare module 'golem:exec/executor@1.0.0' {
+       /**
+        * Blocking, non-streaming execution
+        * - `lang` specifies the programming language and version.
+        * - `snippet` is the top level code to execute.
+        * - `modules` are additional code files to include in the execution context. these can be imported in `snippet` in a language-specific way.
+        * - `stdin` is optional input to provide to the program.
+        * - `args` are command line arguments passed to the program.
+        * - `env` is a list of environment variables to set for the execution.
+        * - `constraints` are optional resource limits for the execution.
+        * The returned value captures the stdout and stderr of the executed snippet.
+        */
+       export function run(lang: Language, snippet: string, modules: File[], stdin: string | undefined, args: string[], env: [string, string][], constraints: Limits | undefined): Result<ExecResult, Error>;
+       export class Session {
+         /**
+          * Create a new session for executing code snippets in the specified language, with a set of additional
+          * code files that can be imported in the executed snippets.
+          */
+         constructor(lang: Language, modules: File[]);
+         /**
+          * Upload a data file to the session, which can be accessed in the executed snippets through standard file system APIs.
+          */
+         upload(file: File): Result<void, Error>;
+         /**
+          * Execute a code snippet in the session in a blocking way
+          * - `snippet` is the top level code to execute.
+          * - `args` are command line arguments passed to the program.
+          * - `stdin` is optional input to provide to the program.
+          * - `env` is a list of environment variables to set for the execution.
+          * - `constraints` are optional resource limits for the execution.
+          * The returned value captures the stdout and stderr of the executed snippet.
+          */
+         run(snippet: string, args: string[], stdin: string | undefined, env: [string, string][], constraints: Limits | undefined): Result<ExecResult, Error>;
+         /**
+          * Downloads a data file from the session.
+          */
+         download(path: string): Result<Uint8Array, Error>;
+         /**
+          * Lists all the data files available in the session. These will include the ones that were `upload`ed and also
+          * any other file created by the executed snippets.
+          */
+         listFiles(dir: string): Result<string[], Error>;
+         /**
+          * Sets the current working directory within the session.
+          */
+         setWorkingDir(path: string): Result<void, Error>;
+       }
+       // ...
+     }
+     ```
+     </Tabs.Tab>
+</Tabs>

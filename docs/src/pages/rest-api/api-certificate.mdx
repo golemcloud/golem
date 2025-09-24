@@ -1,0 +1,95 @@
+# Api Certificate API
+
+## Gets one or all certificates for a given project
+Path|Method|Protected
+---|---|---
+`/v1/api/certificates`|GET|Yes
+
+If `certificate-id` is not set, it returns all certificates associated with the project.
+If `certificate-id` is set, it returns a single certificate if it exists.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-id|string|Yes|-
+certificate-id|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+    "domainName": "string",
+    "createdAt": "2019-08-24T14:15:22Z"
+  }
+]
+```
+
+## Creates a new certificate
+Path|Method|Protected
+---|---|---
+`/v1/api/certificates`|POST|Yes
+
+A certificate is associated with a given Golem project and domain, and consists of
+a key pair.
+
+The created certificate will be associated with a certificate ID returned by this endpoint.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "domainName": "string",
+  "certificateBody": "string",
+  "certificatePrivateKey": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "domainName": "string",
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Deletes a certificate
+Path|Method|Protected
+---|---|---
+`/v1/api/certificates`|DELETE|Yes
+
+Deletes the certificate associated with the given certificate ID and project ID.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-id|string|Yes|-
+certificate-id|string|Yes|-
+
+
+
+**Example Response JSON**
+
+```json copy
+"string"
+```
+## Api Certificate API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"errors":["string"]}`
+401||`{"error":"string"}`
+403||`{"error":"string"}`
+404||`{"error":"string"}`
+409||`{"error":"string"}`
+500||`{"error":"string","workerError":{"cause":"string","stderr":"string"}}`

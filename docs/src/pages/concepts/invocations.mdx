@@ -8,7 +8,7 @@ highly reliable distributed systems.
 
 The fundamental building block of every Golem application is the
 [component](/concepts/components), which is instantiated to form
-[workers](/concepts/workers). The only way to create or interact with workers is
+[agents](/concepts/agents). The only way to create or interact with workers is
 through _invocations_.
 
 An _invocation_ is the act of invoking an exported function on a specific
@@ -41,7 +41,7 @@ Understanding the structure of invocations, then, comes down to understanding
 the structure of component model types, as defined by WIT.
 
 In the next section, you will learn the basics of this structure. For a more
-detailed reference, you can see the page on [Function names](/function-names).
+detailed reference, you can see the page on [Name Mappings](/name-mapping).
 
 ## Basic Invocations
 
@@ -89,7 +89,7 @@ function that is exported by the component.
 
 You will learn how to specify parameters later, when the different supported
 protocols are introduced. For more information on the structure of function
-names, see the page on [Function names](/function-names).
+names, see the page on [Name Mappings](/name-mapping).
 
 ## Resource Invocations
 
@@ -218,4 +218,4 @@ suited to different use cases:
 - **Workers**. Workers themselves are able to invoke functions on other
   workers, a feature referred to as _worker-to-worker communication_. For more
   information, see
-  [Worker-to-Worker Communication](/concepts/worker-to-worker-communication).
+  [Agent-to-Agent Communication](/concepts/agent-to-agent-communication).

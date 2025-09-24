@@ -5,27 +5,23 @@ you can spin up a REPL to interact with your functions.
 
 Golem REPL is backed by the language [Rib](/rib)
 
+For example, using the [quickstart example](/quickstart):
 
 ```shell
-cd shopping-cart
 golem repl
 ```
 
 ```shell
->>> let worker = instance("worker")
+>>> let a1 = counter-agent("agent-1")
 ()
-
->>> worker.add-item({product-id: "foo", name: "foo", price: 42, quantity: 42})
+>>> let a2 = counter-agent("another")
 ()
-
->>> worker.add-item({product-id: "foo", name: "foo", price: 42, quantity: 42})
-()
-
->>> worker.get-cart-contents()
-[{product-id: "foo", name: "foo", price: 42, quantity: 42}, {product-id: "foo", name: "foo", price: 42, quantity: 42}]
-
->>> worker.checkout()
-success({order-id: "238738674"})
+>>> a1.increment()
+1
+>>> a1.increment()
+2
+>>> a2.increment()
+1
 ```
 
 REPL is a great way to test the component and its functions,

@@ -1,10 +1,10 @@
 # Invocation Context
 
-Golem associates an **invocation context** with each worker invocation. This invocation context consists of a stack of **spans**, each having a collection of **attributes**. Currently only string attributes are supported.
+Golem associates an **invocation context** with each agent invocation. This invocation context consists of a stack of **spans**, each having a collection of **attributes**. Currently only string attributes are supported.
 
 The invocation context can be queried and manipulated (by adding custom spans with custom attributes) using [Golem specific host functions](/golem-host-functions).
 
-By default the invocation context's spans are not used by Golem for anything - it is just information propagated among workers to be used by either the workers, or **oplog processor plugins** installed to them. It is possible to reconstruct all information about invocation context from the oplog, so oplog processor plugins can be used for example to provide live traces of workers through OpenTelemetry.
+By default the invocation context's spans are not used by Golem for anything - it is just information propagated among agents to be used by either the agents, or **oplog processor plugins** installed to them. It is possible to reconstruct all information about invocation context from the oplog, so oplog processor plugins can be used for example to provide live traces of agents through OpenTelemetry.
 
 ## Automatic invocation context spans
 
@@ -20,12 +20,14 @@ In both cases, when the invocation's trigger is a HTTP request, a spans is added
 - `request.remote_addr`
 
 ### Invocations
-When an invocation reaches a worker, a new span is created containing the following attributes:
+When an invocation reaches an agent, a new span is created containing the following attributes:
 
 - `name`: span's name (`invoke-exported-function`)
 - `idempotency_key`: unique identifier of the invocation
 - `function_name`: the fully qualified function name
-- `worker_id`: worker's id (consists of component ID and worker name)
+- `worker_id`: worker's id (consists of component ID and agent ID)
+- `agent_type`: the agent type of this agent
+- `agent_parameters`: constructor parameter values of the agent
 
 ### Outgoing HTTP requests
 Outgoing HTTP requests are also represented by their own automatic spans with the following attributes:

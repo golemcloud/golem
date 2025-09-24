@@ -1,0 +1,124 @@
+# Project Grant API
+Projects can have grants providing access to other accounts than the project's owner.
+
+The project grant API allows listing, creating and deleting such grants. What the grants allow exactly are defined by policies, covered by the Project policy API.
+## Get a project's grants
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/grants`|GET|Yes
+
+Returns all projects grants associated with the given project.
+
+For each grant:
+- `id`` is the identifier of the grant itself
+- `granteeAccountId` the account that gets access for the project
+- `grantorProjectId` the project ID
+- `projectPolicyId` the associated policy - see the project policy API below
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "data": {
+      "granteeAccountId": "string",
+      "grantorProjectId": "fe216e71-e471-414b-9530-d000f4582d33",
+      "projectPolicyId": "46e8c3fb-5136-4f2a-a8be-e5188bef1348"
+    }
+  }
+]
+```
+
+## Create a project grant
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/grants`|POST|Yes
+
+Creates a new project grant from the following information:
+- `granteeAccountId` the account that gets access for the project
+- `projectPolicyId` the associated policy - see the project policy API below
+
+The response describes the new project grant including its id that can be used to query specifically this grant in the future.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "granteeAccountId": "string",
+  "granteeEmail": "string",
+  "projectPolicyId": "46e8c3fb-5136-4f2a-a8be-e5188bef1348",
+  "projectActions": [
+    "ViewComponent"
+  ],
+  "projectPolicyName": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "data": {
+    "granteeAccountId": "string",
+    "grantorProjectId": "fe216e71-e471-414b-9530-d000f4582d33",
+    "projectPolicyId": "46e8c3fb-5136-4f2a-a8be-e5188bef1348"
+  }
+}
+```
+
+## Get a specific grant of a project
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/grants/{grant_id}`|GET|Yes
+
+Returns a specific grant of a specific project. The returned object is the same as the elements of the grants endpoint's response described above.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "data": {
+    "granteeAccountId": "string",
+    "grantorProjectId": "fe216e71-e471-414b-9530-d000f4582d33",
+    "projectPolicyId": "46e8c3fb-5136-4f2a-a8be-e5188bef1348"
+  }
+}
+```
+
+## Delete a project grant
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/grants/{grant_id}`|DELETE|Yes
+
+Deletes an existing grant of a specific project.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+## Project Grant API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
+409||`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

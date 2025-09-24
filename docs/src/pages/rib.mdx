@@ -414,8 +414,8 @@ result
 This will return "its failed".
 
 Here is the example WIT file and the corresponding rib scripts that shows how to pass
-variants as arguments to worker function. More explanation on how to invoke worker function using
-rib is explained [further down below](#invoke-worker-functions).
+variants as arguments to agent methods. More explanation on how to invoke agent methods using
+rib is explained [further down below](#invoke-agent-methods).
 
 ```
   variant bid-result {
@@ -429,21 +429,21 @@ rib is explained [further down below](#invoke-worker-functions).
 
 
 ```rib copy
-let worker = instance("my_worker");
-worker.handle(failure("it's failed"));
+let agent = my-agent("something");
+agent.handle(failure("it's failed"));
 ```
 
 
 ```rib copy
-let worker = instance("my_worker");
-worker.handle(success);
+let agent = my-agent("something");
+agent.handle(success);
 ```
 
 
 ```rib copy
-let worker = instance("my_worker");
+let agent = my-agent("something");
 let bid-result = worker.bid();
-let result = worker.handle(bid-result);
+let result = agent.handle(bid-result);
 result
 
 ```
@@ -510,8 +510,8 @@ result
 This will return the result "its low".
 
 Here is the example WIT file and the corresponding rib scripts that shows how to pass
-variants as arguments to worker function. More explanation on how to invoke worker function using
-rib is explained [further down below](#invoke-worker-functions).
+variants as arguments to agent method. More explanation on how to invoke worker function using
+rib is explained [further down below](#invoke-agent-methods).
 
 ```
   enum status {
@@ -533,17 +533,17 @@ rib is explained [further down below](#invoke-worker-functions).
 
 ```rib copy
 
-let worker = instance("my_worker");
-let result = worker.process-user(backlog, low, "jon");
+let agent = my-agent("something");
+let result = agent.process-user(backlog, low, "jon");
 result
 
 ```
 
 ```rib copy
-let worker = instance("my_worker");
+let agent = my-agent("something");
 let status = in-progress;
 let priority = medium;
-let result = worker.process-user(status, priority, "jon");
+let result = agent.process-user(status, priority, "jon");
 result
 ```
 
@@ -579,7 +579,7 @@ We can annotate the type of the variable as well.
 let x: u64 = 1;
 ```
 
-If you are passing this variable to a worker function, then you may not need to specify the type of the variable.
+If you are passing this variable to an agent method, then you may not need to specify the type of the variable.
 
 
 ### String Interpolation (concatenation)
@@ -748,11 +748,11 @@ match res {
 ```
 
 This would probably be your go-to construct when you are dealing with complex data structures like `result` or `option` or other custom `variant` (WASM Variant)
-that comes out as the response of a worker function
+that comes out as the response of an agent method
 
 ```rib copy
-  let worker_result = my_worker_function_name(1, "jon");
-  match worker_result {
+  let agent-result = my-agent.my-method(1, "jon");
+  match agent-result {
      ok(x) => "foo",
      err(msg) => "error"
   }
@@ -765,7 +765,7 @@ If the pattern match is not exhaustive, then it will throw compilation errors
 Example: The following pattern matching is invalid
 
 ```rib copy
-  match worker_result {
+  match agent-result {
     some(x) => "found",
   }
 ```
@@ -777,7 +777,7 @@ Error: Non-exhaustive pattern match. The following patterns are not covered: `no
 To ensure a complete match, add these patterns or cover them with a wildcard (`_`) or an identifier.
 ```
 
-Now, let's say your worker responded with a `variant`.
+Now, let's say your agent responded with a `variant`.
 Note on variant: A variant statement defines a new type where instances of the type match exactly one of the variants listed for the type.
 This is similar to a "sum" type in algebraic datatype (or an enum in Rust if you're familiar with it).
 Variants can be thought of as tagged unions as well.
@@ -785,7 +785,7 @@ Variants can be thought of as tagged unions as well.
 #### Pattern Match on Variants
 
 Given you are using Rib through worker bridge, which knows about component metadata,
-then, let's say we have a variant of type as given below responded from the `worker`, when invoking a function called `foo`:
+then, let's say we have a variant of type as given below responded from the agent, when invoking a function called `foo`:
 
 ```rib copy
 variant my_variant {
@@ -813,10 +813,10 @@ Example `x` in `ok(x)` or `msg` in `err(msg)` or `x` in `some(x)` or `x` in `bar
 
 These variables are bound to the value that is being matched.
 
-Example, given the worker response is ok(1), the following match expression will result in `2`.
+Example, given the agent response is ok(1), the following match expression will result in `2`.
 
 ```rib copy
-   let result = my-worker-function("foo");
+   let result = my-agent.my-method("foo");
 
    match result {
     ok(x) => x + 1,
@@ -824,11 +824,11 @@ Example, given the worker response is ok(1), the following match expression will
   }
 ```
 
-The following match expression will result in "c", if the worker response was variant value `foo(["a", "b", "c"])`,
-and will result in "a" if the `worker.response` was variant value `bar({a: 1, b: "a"})`.
+The following match expression will result in "c", if the agent response was variant value `foo(["a", "b", "c"])`,
+and will result in "a" if it was variant value `bar({a: 1, b: "a"})`.
 
 ```rib copy
-  let result = my-worker-function();
+  let result = my-agent.my-method();
 
   match result {
     bar(x) => x.b,
@@ -842,7 +842,7 @@ and will result in "a" if the `worker.response` was variant value `bar({a: 1, b:
 In some of the above examples, the binding variables are unused. We can use `_` as a wildcard pattern to indicate that we don't care about the value.
 
 ```rib copy
-  match worker.response {
+  match response {
     bar(_) => "bar",
     foo(_) => "foo"
   }
@@ -940,8 +940,8 @@ that has a function `my-function` that takes two arguments of type `{foo: string
 let user-id: u8 = request.path.user-id;
 let country: string = request.query.country;
 let input = request.body;
-let worker = instance("my-worker-${user-id}");
-let result = worker.my-function(input, country);
+let agent = my-agent("my-worker-${user-id}");
+let result = agent.my-method(input, country);
 result
 ```
 
@@ -973,204 +973,89 @@ request.body
 ```
 
 In the above case, compiler is not able to infer the type of `request` or `request.body`
-as it is not passed as an argument to a worker function.
+as it is not passed as an argument to a agent method.
 
-### Invoke worker functions
+### Invoke agent methods
 
-Rib is mainly used to write scripts to manipulate the input and call worker functions.
-Refer to the [worker-gateway](/invoke/making-custom-apis) documentation for more on how you use Rib to invoke worker functions.
-This is useful to expose some http APIs on top of these worker functions running in golem platform, and you don't want to keep
+Rib is mainly used to write scripts to manipulate the input and call agent methods.
+Refer to the [worker-gateway](/invoke/making-custom-apis) documentation for more on how you use Rib to invoke agent methods.
+This is useful to expose some http APIs on top of these agents running in golem platform, and you don't want to keep
 updating or change the components and expose additional APIs, as you can write a simple Rib script to do the necessary changes to the input
-and pass it to the worker functions. Invoking functions is similar to any other languages.
+and pass it to the agent methods functions. Invoking functions is similar to any other languages.
 
-#### Durable worker function invocation
+#### Agent method invocation
 
 ```rib copy
-let my_worker = instance("my-worker");
-let result = my_worker.get-cart-contents();
+let agent = my-agent("something");
+let result = agent.get-cart-contents();
 
 result
 ```
 
 Rib is evaluated in the context of a particular component (this is taken care by worker-gateway that it evaluates Rib in the context of a wasm component).
 
-In this script, first you create an instance (instance of a component) using `instance` function. `instance` function takes
-worker name as the argument. Once you created the instance, the functions in the component will be available to call.
+In this script, first you create an instance (instance of an agent) using the agent type (`my-agent`) and specifying values for the constructor parameters. With this instance, the agent methods are available to call.
 
-#### Ephemeral Worker function invocation
-
-The only difference here is that you don't need to pass an argument to the `instance` function.
-
-```rib copy
-let my_worker_instance = instance();
-let result = my_worker.get-cart-contents();
-result
-```
-
-You can avoid an unnecessary let-binding here too.
-
-```rib copy
-let my_worker_instance = instance();
-my_worker.get-cart-contents();
-```
-
-In this case the return value of the script is the last expression in the script, and in this case, it is of the result type of `get-cart-contents`.
-
-
-#### Worker function invocation with arguments
+#### Agent method invocation with arguments
 
 Let's say there exists a  function `add-to-cart` which takes a product as the argument, where product is a wasm record
 
 ```rib copy
-let my_worker_instance = instance("my-worker");
+let agent = my-agent("something");
 
 let product = {product-id: 1, quantity: 2, name: "mac"};
-my_worker.add-to-cart(input);
+agent.add-to-cart(input);
 ```
 
-Similarly you can pass multiple arguments to the worker function and they should be separated by `,`.
+Similarly you can pass multiple arguments to the agent method and they should be separated by `,`.
 
 Say you need to pass the username along with with the product details.
 
 ```rib copy
-let my_worker_instance = instance("my-worker");
+let agent = my-agent("something");
 
 let product = {product-id: 1, quantity: 2, name: "mac"};
 let username = "foo";
 
-my_worker.add-to-cart(username, product);
+agent.add-to-cart(username, product);
 ```
 
 You can inline the arguments as well.
 
 ```rib copy
-let my_worker_instance = instance("my-worker");
+let agent = my-agent("something");
 
 let product = {product-id: 1, quantity: 2, name: "mac"};
-my_worker.add-to-cart("foo", {product-id: 1, quantity: 2, name: "mac"});
-```
-
-#### Invoke functions in a Resource
-
-Here is a relatively complex example where Rib is used to invoke functions in a resource `cart`
-Here the first step is to define the worker by calling instance function. Then you create a resource
-similar to a method invocation which is `worker.cart`. Here the only difference is `cart` is a resource
-rather than a function. Now you have the resource available to call methods on it such as `add-item`, `remove-item` etc.
-
-Please note that, everything prior to a real function call is lazy. i.e, you are not reusing the same resource at runtime
-to call these functions.
-
-```rib copy
-  let worker = instance("my-worker");
-  let cart = worker.cart("bar");
-  cart.add-item({product-id: "mac", name: "apple", quantity: 1, price: 1});
-  cart.remove-item(a);
-  cart.update-item-quantity(a, 2);
-  let result = cart.get-cart-contents();
-  cart.drop();
-  result
-```
-
-#### Handle conflicting function names using type parameters
-
-Let's say a function name `add-to-cart` exists in multiple interfaces (say api1, api2) in the same component.
-In this case, you can specify the interface as a type parameter when invoking method in the instance.
-
-Example:
-
-```rib copy
-let my_worker_instance = instance("my-worker");
-
-let product = {product-id: 1, quantity: 2, name: "mac"};
-
-let result = my_worker.add-to-cart[api1](product);
-
-result
-```
-
-If you are not specifying type parameter that narrows down the context, then compiler will return an error similar to the below one:
-
-```
-error in the following rib found at line 3, column 30
-`my_worker.add-to-cart(product)`
-cause: invalid function call `qux`
-function 'add-to-cart' exists in multiple interfaces. specify an interface name as type parameter from: api1, api2
-```
-
-#### Handle conflicting packages using type parameters
-
-Let's say a function name `add-to-cart` exists in multiple packages. In this case, you can specify the package name too
-as a type parameter. Let's say you care only about the package `amazon:shopping-cart`.
-
-
-```rib copy
-let my_worker_instance = instance("my-worker");
-
-let product = {product-id: 1, quantity: 2, name: "mac"};
-
-let result = my_worker.add-to-cart[amazon:shopping-cart](product);
-
-result
-```
-
-#### Handle conflicts at instance level
-
-You can also include this type parameter at instance level such that every method invocation will be resolved to that package or interface.
-
-```rib copy
-let my_worker_instance = instance[amazon:shopping-cart]("my-worker");
-
-let product = {product-id: 1, quantity: 2, name: "mac"};
-
-let result = my_worker.add-to-cart(product);
-```
-
-#### Conflict resolution using fully qualified type parameter
-
-If there exist a function `add-to-cart` in multiple interfaces within multiple packages, then you can specify
-fully qualified package name and interface as given below. As mentioned above, this can be either at instance level
-(which will get applied to all method calls on that instance) or at method level
-
-```rib copy
-let my_worker_instance = instance[amazon:shopping-cart/api]("my-worker");
-
-let product = {product-id: 1, quantity: 2, name: "mac"};
-
-let result = my_worker.add-to-cart(product);
+agent.add-to-cart("foo", {product-id: 1, quantity: 2, name: "mac"});
 ```
 
 #### Multiple invocations
 
-Rib allows you to invoke a function multiple times, or invoke multiple functions across multiple workers in a single script.
+Rib allows you to invoke a function multiple times, or invoke multiple functions across multiple agents in a single script.
 That said, it is important to note that Rib by itself is not durable and is stateless. The next time you invoke Rib (through worker-gateway for example),
-these functions will get executed against the worker again and doesn't cache any result in anyway.
+these functions will get executed on the agent again and doesn't cache any result in anyway.
 
 Let's say we want to accumulate the contents of a shopping cart from user-id 1 to user-id 5.
 
 ```rib copy
-  let worker = instance("my-worker");
-  let cart = worker.cart[golem:it/api]("bar");
+  let agent = my-agent("something");
 
   let initial = 1: u64;
   let final = 5: u64;
   let range = initial..final;
 
   let result = for i in range {
-     yield cart.get-cart-contents("user-id-${i}");
+     yield agent.get-cart-contents("user-id-${i}");
   };
 
   result
 
 ```
 
-Currently Rib is not durable. Also it hasn't been tested with complex use-cases such as invoking multiple functions,
-or invoke functions against multiple workers. This is because, Rib's primary use-case in golem platform is for users to write reasonably simple
-scripts in the context of [worker-gateway](/invoke/making-custom-apis) to manipulate the http input and call worker functions.
-
 
 ## Type Inference
 
-Rib is mainly used to write script to manipulate the input and call worker functions. In this case, for the most part, most of the types
+Rib is mainly used to write script to manipulate the input and call agent methods. In this case, for the most part, most of the types
 will be automatically inferred. Otherwise, there will be a compilation error, asking the developer to annotate the types and help the compiler.
 
 

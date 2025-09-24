@@ -1,0 +1,59 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Control the retry policy
+
+### Using Golem's retry mechanism
+
+Golem applies a retry mechanism to all agents. In case of a failure, Golem will automatically recover the agent to the point before the failure and retry the operation. An exponential backoff and an upper limit on the number of retries are applied.
+
+If the maximum number of retries is reached, the agent will be marked as failed and no further invocations will be possible on it.
+
+This mechanism is automatic and applied to all kinds of failures. To rely on it, throw an unhandled exception.
+
+<Callout type="warning">
+    Golem will retry from the point the unhandled exception was thrown. It is possible that a previous operation's
+    unwanted result (if it did not end in an exception) has been already persisted, in which case it won't be retried.
+</Callout>
+
+### Customizing the retry policy
+
+The retry policy which controls the maximum number of retries and the exponential backoff is a global configuration of the Golem servers, but it can be customized for each agent.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+        The `golem-ts-sdk` library exports the `withRetryPolicy` function to temporarily change the retry policy:
+
+        ```typescript
+        import {withRetryPolicy} from "@golemcloud/golem-ts"
+
+        // Durations are expected as nanoseconds
+        const result: string = withRetryPolicy(
+        {
+            maxAttempts: 3,
+            minDelay: BigInt(100 * 1000 * 1000), // 100 milliseconds
+            maxDelay: BigInt(2 * 1000 * 1000 * 1000), // 2 seconds
+            multiplier: 1.5,
+            maxJitterFactor: null,
+        },
+        () => {
+            // this closure runs with the custom retry policy
+            return "hello"
+        })
+        ```
+
+        The `RetryPolicy` interface required by `withRetryPolicy` is the following:
+
+        ```typescript
+        /**
+        * Configures how the executor retries failures
+        */
+        export type RetryPolicy = {
+            maxAttempts: number;
+            minDelay: Duration;
+            maxDelay: Duration;
+            multiplier: number;
+            maxJitterFactor?: number;
+        };
+        ```
+    </Tabs.Tab>
+</Tabs>

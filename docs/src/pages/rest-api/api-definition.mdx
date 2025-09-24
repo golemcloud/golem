@@ -1,0 +1,751 @@
+# Api Definition API
+
+## Upload an OpenAPI definition
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}/import`|PUT|Yes
+
+Uploads an OpenAPI JSON document and either creates a new one or updates an existing Golem
+API definition using it.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "security": "string",
+      "binding": {
+        "component": {
+          "name": "string",
+          "version": 0
+        },
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysedType": {
+            "type": "Variant",
+            "name": "string",
+            "owner": "string",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## List API definitions
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}`|GET|Yes
+
+Lists all API definitions associated with the project.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+api-definition-id|string|No|-
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "string",
+    "version": "string",
+    "routes": [
+      {
+        "method": "Get",
+        "path": "string",
+        "security": "string",
+        "binding": {
+          "component": {
+            "name": "string",
+            "version": 0
+          },
+          "workerName": "string",
+          "idempotencyKey": "string",
+          "invocationContext": "string",
+          "response": "string",
+          "bindingType": "default",
+          "responseMappingInput": {
+            "types": {
+              "property1": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              },
+              "property2": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          },
+          "workerNameInput": {
+            "types": {
+              "property1": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              },
+              "property2": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          },
+          "idempotencyKeyInput": {
+            "types": {
+              "property1": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              },
+              "property2": {
+                "type": "Variant",
+                "name": "string",
+                "owner": "string",
+                "cases": [
+                  {
+                    "name": "string",
+                    "typ": {}
+                  }
+                ]
+              }
+            }
+          },
+          "corsPreflight": {
+            "allowOrigin": "string",
+            "allowMethods": "string",
+            "allowHeaders": "string",
+            "exposeHeaders": "string",
+            "allowCredentials": true,
+            "maxAge": 0
+          },
+          "responseMappingOutput": {
+            "analysedType": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        }
+      }
+    ],
+    "draft": true,
+    "createdAt": "2019-08-24T14:15:22Z"
+  }
+]
+```
+
+## Create a new API definition
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}`|POST|Yes
+
+Creates a new API definition described by Golem's API definition JSON document.
+If an API definition of the same version already exists, its an error.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "security": "string",
+      "binding": {
+        "component": {
+          "name": "string",
+          "version": 0
+        },
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysedType": {
+            "type": "Variant",
+            "name": "string",
+            "owner": "string",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Get an API definition
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}/{id}/{version}`|GET|Yes
+
+An API definition is selected by its API definition ID and version.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "security": "string",
+      "binding": {
+        "component": {
+          "name": "string",
+          "version": 0
+        },
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysedType": {
+            "type": "Variant",
+            "name": "string",
+            "owner": "string",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Update an existing API definition.
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}/{id}/{version}`|PUT|Yes
+
+Only draft API definitions can be updated.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "routes": [
+    {
+      "method": "Get",
+      "path": "string",
+      "security": "string",
+      "binding": {
+        "component": {
+          "name": "string",
+          "version": 0
+        },
+        "workerName": "string",
+        "idempotencyKey": "string",
+        "invocationContext": "string",
+        "response": "string",
+        "bindingType": "default",
+        "responseMappingInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "workerNameInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "idempotencyKeyInput": {
+          "types": {
+            "property1": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            },
+            "property2": {
+              "type": "Variant",
+              "name": "string",
+              "owner": "string",
+              "cases": [
+                {
+                  "name": "string",
+                  "typ": {}
+                }
+              ]
+            }
+          }
+        },
+        "corsPreflight": {
+          "allowOrigin": "string",
+          "allowMethods": "string",
+          "allowHeaders": "string",
+          "exposeHeaders": "string",
+          "allowCredentials": true,
+          "maxAge": 0
+        },
+        "responseMappingOutput": {
+          "analysedType": {
+            "type": "Variant",
+            "name": "string",
+            "owner": "string",
+            "cases": [
+              {
+                "name": "string",
+                "typ": {}
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "draft": true,
+  "createdAt": "2019-08-24T14:15:22Z"
+}
+```
+
+## Delete an API definition
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}/{id}/{version}`|DELETE|Yes
+
+Deletes an API definition by its API definition ID and version.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+"string"
+```
+
+## Export an API definition in OpenAPI format
+Path|Method|Protected
+---|---|---
+`/v1/api/definitions/{project_id}/{id}/{version}/export`|GET|Yes
+
+Exports an API definition by its API definition ID and version in OpenAPI format.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "string",
+  "version": "string",
+  "openapi_yaml": "string"
+}
+```
+## Api Definition API Errors
+Status Code|Description|Body
+---|---|---
+400||`{"errors":["string"]}`
+401||`{"error":"string"}`
+403||`{"error":"string"}`
+404||`{"error":"string"}`
+409||`{"error":"string"}`
+500||`{"error":"string","workerError":{"cause":"string","stderr":"string"}}`

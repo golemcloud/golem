@@ -1,66 +1,66 @@
-# Debug workers
+# Debugging agents
 
-There are many scenarios where looking into a worker's state can be useful. It is possible that a worker ran into a **failed state**, for example. Although transient errors are automatically retried, it is possible that a worker gets permantently failed due to a programming error. It is also possible that the worker is running, but not behaving as expected.
+There are many scenarios where looking into an agent's state can be useful. It is possible that an agent ran into a **failed state**, for example. Although transient errors are automatically retried, it is possible that an agent gets permanently failed due to a programming error. It is also possible that the agent is running, but not behaving as expected.
 
 There are several tools available in Golem to help in these situations.
 
-### Querying the worker state
+### Querying the agent state
 
-By querying the worker state you can get some basic information about whether the worker is running, is suspended or failed, how many pending invocations it has, and what was the error message if it failed.
+By querying the agent state you can get some basic information about whether the agent is running, is suspended or failed, how many pending invocations it has, and what was the error message if it failed.
 
-To query the worker state using the `golem` command line tool, you can use the following command:
+To query the agent state using the `golem` command line tool, you can use the following command:
 
 ```shell copy
-golem worker get <worker_id>
+golem agent get <agent_id>
 ```
 
-### Getting the worker's logs
+### Getting the agent's logs
 
-A worker can log messages in various ways:
+An agent can log messages in various ways:
 
 - Writing to the standard output (stdout)
 - Writing to the standard error (stderr)
-- Using the `log` function provided by WASI logging interface
+- Using logging APIs
 
-All of these log sources are preserved and can be examined in live by **connecting** to the worker:
+All of these log sources are preserved and can be streamed live by **connecting** to the agent:
 
 ```shell copy
-golem worker connect <worker_id>
+golem agent stream <agent_id>
 ```
 
-There are also parameters for *invocation* that capture logs of the worker while an invocation is running. For more information see the [CLI worker reference](/cli/workers).
+There are also parameters for *invocation* that capture logs of the agent while an invocation is running. For more information see the [CLI agent reference](/cli/agents).
 
-### Getting a worker's oplog
+### Getting an agent's oplog
 
-The oplog of a worker is a journal of all the operations and events happened during the worker's lifetime. It is possible to retrieve a worker's oplog, as well as to filter it with search expressions.
+The oplog of an agent is a journal of all the operations and events happened during the agent's lifetime. It is possible to retrieve an agent's oplog, as well as to filter it with search expressions.
 
-To get the whole oplog of a worker, you can use the following command:
+To get the whole oplog of an agent, you can use the following command:
 
 ```shell copy
-golem worker oplog <worker_id>
+golem agent oplog <agent_id>
 ```
 
-See the [CLI worker reference](/cli/workers) for more information about how to search the oplog. One debugging scenario can be to look for all oplog entries belonging to a given **idempotency key** that was provided with an invocation that did not behave as expected. Another can be looking for occurrences of external HTTP requests or log entries.
+See the [CLI agent reference](/cli/agents) for more information about how to search the oplog. One debugging scenario can be to look for all oplog entries belonging to a given **idempotency key** that was provided with an invocation that did not behave as expected. Another can be looking for occurrences of external HTTP requests or log entries.
 
-### Applying changes to a worker
+### Applying changes to an agent
 
-If the available information is not enough, it often helps to add more log lines to the worker. Recompiling the worker, updating the component and then updating the faulty worker will always succeed, if the only change was adding or removing log lines.
+If the available information is not enough, it often helps to add more log lines to the agent. Recompiling the agent, updating the component and then updating the faulty agent will always succeed, if the only change was adding or removing log lines.
 
-### Reverting changes to a worker
+### Reverting changes to an agent
 
-The final tool available is **reverting** the worker. This can be done in two different ways:
+The final tool available is **reverting** the agent. This can be done in two different ways:
 
-1. **Undoing a given number of invocations**. In this case we specify a number (N), and the last N invocations will be treated as if they never happened. The worker's state will be restored to the point before these last N invocations.
-2. **Reverting to a specific oplog index**. A more advanced use case is to revert the worker to a specific point in the oplog. This can be used to force rerunning some side effects such as external HTTP requests or database operations.
+1. **Undoing a given number of invocations**. In this case we specify a number (N), and the last N invocations will be treated as if they never happened. The agent's state will be restored to the point before these last N invocations.
+2. **Reverting to a specific oplog index**. A more advanced use case is to revert the agent to a specific point in the oplog. This can be used to force rerunning some side effects such as external HTTP requests or database operations.
 
-To revert a worker using the `golem` command line interface, you can use the following command:
+To revert an agent using the `golem` command line interface, you can use the following command:
 
 ```shell copy
-golem worker revert <worker_id> --number-of-invocations 3
+golem agent revert <agent_id> --number-of-invocations 3
 ```
 
 or
 
 ```shell copy
-golem worker revert <worker_id> --last-oplog-index 12345
+golem agent revert <agent_id> --last-oplog-index 12345
 ```

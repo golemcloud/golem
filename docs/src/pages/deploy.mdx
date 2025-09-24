@@ -7,9 +7,9 @@ Golem Services are distributed as Docker images. They are available in [Golem Se
 - linux/amd64
 - linux/arm64
 
-Services are using following types of storage:
+The services are using the following storage backends:
 
-- Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (mainly for testing purposes)
+- Relational Database (RDB) - [PostgreSQL](https://www.postgresql.org/) or SQLite (for running locally)
 - [Redis](https://redis.io/)
 - Blob storage - Shared File System or S3
 
@@ -17,21 +17,33 @@ Services are using following types of storage:
 
 Following sections provide a description of each service.
 
+### Cloud Service
+
+[cloud-service](https://github.com/golemcloud/golem/tree/main/cloud-service) is responsible for storing entities like projects and accounts in RDB.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/cloud-service/config/cloud-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/cloud-service/config/cloud-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/cloud-service)
+
 ### Component Service
 
-[golem-component-service](https://github.com/golemcloud/golem/tree/main/golem-component-service) is a [component](concepts/components) registry/management service. Service is using RDB and Blob storage as data storage.
+[golem-component-service](https://github.com/golemcloud/golem/tree/main/golem-component-service) is a [component](concepts/components) registry/management service. The service is using RDB and Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-service/config/component-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-service)
 
+### Debugging Service
+
+[golem-debugging-service](https://github.com/golemcloud/golem/tree/main/golem-debugging-service) is a special executor for running debugging sessions, controlling the execution of agents step by step.
+
+See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-debugging-service/config/debug-worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-debugging-service/config/debug-worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-debugging-service)
+
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) providing APIs and [API Gateway](concepts/worker-gateway) functionality for workers and act like routing service for worker executors. Service is using RDB as data storage.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) providing APIs and [API Gateway](concepts/worker-gateway) functionality for agents and act like routing service for worker executors. Service is using RDB as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 
 ### Worker Executor
 
-[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [workers](concepts/workers) which belongs to assigned shards. Service is using Redis and Blob storage as data storage.
+[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](concepts/agents) which belongs to assigned shards. Service is using Redis and Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-executor)
 

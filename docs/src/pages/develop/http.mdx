@@ -1,0 +1,27 @@
+import { Tabs } from "nextra/components"
+
+# HTTP requests
+
+<Tabs items={["TypeScript"]}>
+<Tabs.Tab>
+    HTTP request can be made with the standard `fetch` function.
+
+    For example:
+
+    ```typescript
+    const response = await fetch(`http://localhost:${port}/todos`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            title: "foo",
+            body: "bar",
+            userId: 1
+        })
+    const data = await response.json();
+    console.log("Body: ", data);
+});
+    ```
+</Tabs.Tab>
+</Tabs>

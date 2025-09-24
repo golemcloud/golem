@@ -4,10 +4,8 @@ import { writeFile } from "fs/promises"
 import { OpenAPIV3 } from "openapi-types"
 import OpenAPISampler from "openapi-sampler"
 
-const CLOUD_SPEC_SRC = "./openapi/cloud-spec.yaml"
-const CLOUD_GEN_PATH = "./src/pages/rest-api/cloud-rest-api"
-const OSS_SPEC_SRC = "./openapi/oss-spec.yaml"
-const OSS_GEN_PATH = "./src/pages/rest-api/oss-rest-api"
+const CLOUD_SPEC_SRC = "./openapi/golem-service.yaml"
+const CLOUD_GEN_PATH = "./src/pages/rest-api"
 
 main().catch(e => console.error("Failed to update API Docs", e))
 
@@ -24,12 +22,8 @@ async function main() {
   const [mode] = args
 
   if (mode === "--local") {
-    console.log("Updating REST API docs from local OpenAPI spec at:", [
-      CLOUD_SPEC_SRC,
-      OSS_SPEC_SRC,
-    ])
+    console.log("Updating REST API docs from local OpenAPI spec at:", [CLOUD_SPEC_SRC])
     await writeOpenApiDocs(CLOUD_GEN_PATH, CLOUD_SPEC_SRC)
-    await writeOpenApiDocs(OSS_GEN_PATH, OSS_SPEC_SRC)
   } else {
     let specUrl =
       mode === "--prod"

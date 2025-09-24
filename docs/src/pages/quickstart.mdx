@@ -7,7 +7,7 @@ This guide will get you up and running in Golem in minutes.
 ### Install Golem CLI
 
 Golem CLI is a command-line application that allows you to deploy components,
-create and invoke workers, and otherwise manage your Golem applications.
+create and invoke agents, and otherwise manage your Golem applications.
 
 There are **precompiled binaries** of `golem` (and its other variants) for
 various platforms. Alternatively, you can [build Golem CLI for yourself](/cli/install-from-source).
@@ -19,7 +19,7 @@ You can download the full version of `golem` from the following page:
 <Cards num={1}>
   <Card
     title="Golem CLI Releases"
-    href="https://github.com/golemcloud/golem-cli/releases"
+    href="https://github.com/golemcloud/golem/releases"
   />
 </Cards>
 
@@ -45,89 +45,32 @@ It is also possible to use our _hosted version_ of Golem, available at [https://
 
 ### Building an Example
 
-Golem runs components that are WebAssembly programs. Components are like
+Golem runs components that are WebAssembly programs implementing **agents**. Every component contains defines one or more **agent types**, and golem runs stateful, durable instances of these agent types that we call agents.
 applications, except they may expose functions that can be called externally.
-
-To deploy to Golem, you must first build a [component](concepts/components)
-using any programming language and toolchain that can build WebAssembly
-components.
 
 The `golem` command line interface provides integrates a set of commands to create, build, and deploy components.
 
-To get started, you create an application and a single component using your chosen programming language with the `golem app new` and `golem component new` commands.
+To get started, you create an application and a single component using one of the supported programming languages with the `golem app new` command. If no additional parameters are provided, the command will interactively ask for all required information.
 
-<Tabs items={["Rust", "TypeScript", "Go", "Python", "C", "JavaScript", "Zig", "MoonBit", "Scala.js"]}>
+<Tabs items={["TypeScript"]}>
   <Tabs.Tab>
+  Create TypeScript agent using the default template:
+
   ```shell copy
-  golem app new example rust
-  cd example
-  golem component new rust example:component
+  golem app new
+
+  > Application name: agent-examples
+  > Select language for the new component TypeScript
+  > Select a template for the new component: default: The default agent template for TypeScript
+  > Component Package Name: example:counter
+  > Add another component or create application? Create application
   ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example ts
-  cd example
-  golem component new ts example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example go
-  cd example
-  golem component new go example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example python
-  cd example
-  golem component new python example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example c
-  cd example
-  golem component new c example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example js
-  cd example
-  golem component new js example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example zig
-  cd example
-  golem component new zig example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example moonbit
-  cd example
-  golem component new moonbit example:component
-  ```
-  </Tabs.Tab>
-  <Tabs.Tab>
-  ```shell copy
-  golem app new example scalajs
-  cd example
-  golem component new scalajs example:component
-  ```
+
+  Note: for TypeScript, you need to have `npm` installed on your system.
   </Tabs.Tab>
 </Tabs>
 
-This will generate a new component in the current, ready to be compiled and deployed to Golem. You can also use
-`golem app new` to get interactive shell and follow the prompts.
-
-<Callout type="warning">
-    Each supported programming language may require additional setup before you can build your component. Refer to the [language specific guides](/develop-overview) for more information.
-</Callout>
+This will generate a new component in a new directory of the provided application name, and it is ready to be compiled and deployed to Golem.
 
 To **build** the newly created component, use the following command:
 
@@ -135,65 +78,149 @@ To **build** the newly created component, use the following command:
 golem app build
 ```
 
-This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components and they can depend on each other. New components can be added to the application by using the `golem component new` command.
+This compiles the newly created application, which consists of a _single Golem component_ at the moment. An application can have multiple components, each implementing a different set of agent types. New components can be added to the application by using the `golem component new` command.
+
+### Write the code
+
+<Tabs items={["TypeScript"]}>
+  <Tabs.Tab>
+The default template's source code is located in `components-ts/example-counter/src/main.ts` file, assuming that the `example:counter` name has been used in the `app new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
+
+Let's use the following code snippet for this example:
+
+```typescript
+import {
+    BaseAgent,
+    agent,
+    prompt,
+    description,
+} from '@golemcloud/golem-ts-sdk';
+
+@agent()
+class CounterAgent extends BaseAgent {
+    private readonly name: string;
+    private value: number = 0;
+
+    constructor(name: string) {
+        super()
+        this.name = name;
+    }
+
+    @prompt("Increase the count by one")
+    @description("Increases the count by one and returns the new value")
+    async increment(): Promise<number> {
+        this.value += 1;
+        return this.value;
+    }
+}
+```
+
+  </Tabs.Tab>
+</Tabs>
+
+In this simple example we define a very simple agent that is identified by a `name` string, and exposes a single agent method `increment` that increments the count by one and returns the new value.
+This is a simple example of an agent that does not communicate with other agents or external services, but has state.
 
 ### Uploading Your Component
 
-To upload your component to Golem, you can use the `component deploy` command.
+To upload your component to Golem, you can use the `app deploy` command.
 
 ```shell copy
-golem component deploy
+golem app deploy
 ```
 
-When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the public API of your worker and can be used to call it with the CLI or REST API, as we will see below.
+When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the exported agent types of the component.
 
 Uploading a component to Golem does not actually execute the component. Instead, it only makes it available for execution to Golem.
 
-Every separate execution of your component is referred to as a _worker_ based on that component.
+Every separate running instance of your component is referred to as an _agent_, based on one of the agent types implemented by that component.
 
-### Create Workers
+### Create Agents
 
-In Golem, every worker has a unique id, which is arbitrary text that you define. If you don't need a meaningful id for workers, you can generate a UUID.
+In Golem, every agent has a unique id that has a specific format: it consists of the _agent type_ followed by the values passed to the agent's constructor.
 
-Once you have chosen a worker id, you can launch the worker either explicitly, or by invoking any function on the worker (for example, a “main” function).
+There are individual CLI commands to create agents and invoke agent methods, where this agent name is used to identify the agent.
 
-Here, we creating a new worker `test-1` :
+For testing purposes, it is much easier to use the **Golem REPL** to create agents and interact with them.
 
-```shell copy
-golem worker new test-1
-```
-
-We don't have to specify _which_ component to use, because `golem` detects that the current directory belongs to a Golem application consisting of a single component.
-
-### Invoking Workers
-
-Thanks to the WebAssembly component model, your Golem applications are not just an executable. Rather, they may export functions that can be called from the outside. Exported functions allow your workers to be given instructions or queried for their state.
-
-The default template used by the above commands for each language creates a component that exports a simple _counter_ interface. To use it, we can invoke the `add` and `get` functions, using their fully quialified names:
+First start the REPL using:
 
 ```shell copy
-golem worker invoke test-1 'example:component/api.{add}' 2
-golem worker invoke test-1 'example:component/api.{add}' 3
-golem worker invoke test-1 'example:component/api.{get}'
+golem repl
 ```
 
-If a worker of the specified name has not been created, then when you attempt to invoke a function on the worker, it will first be created.
+The REPL uses a special scripting language called [Rib](rib). We can create some counter agents and interact with them using the following commands:
 
-<Callout type="info">
-The parameters are either listed one by one and are using the [WAVE format](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave)
-</Callout>
+```shell copy
+>>> let a1 = counter-agent("agent-1")
+()
+>>> let a2 = counter-agent("another")
+()
+>>> a1.increment()
+1
+>>> a1.increment()
+2
+>>> a2.increment()
+1
+```
 
-Check the [Invoke section](invoke) to learn about more about where the fully qualified **function names** are coming from and what other ways you have to interact with workers.
+Note that the REPL provides autocompletion on Tab.
+
+Check the [Invoke section](invoke) to learn about more about other ways to invoke agents.
+
+### Expose a HTTP API
+
+Agents can be invoked from other agents, through the REPL or CLI, or Golem's Invocation API, but Golem Applications can also define **HTTP APIs** that map routes to agents and agent methods.
+
+To finish the QuickStart example with a HTTP POST endpoint for tracking counts, let's open the `golem.yaml` file in the component's directory. It's going to contain a a `components` and a `dependencies` section already.
+
+To define the HTTP API, we add its definition and information about how to expose it:
+
+```yaml
+httpApi:
+  definitions:
+    counter-api:
+      version: '0.0.1'
+      routes:
+        - method: POST
+          path: /{name}/increment
+          binding:
+            type: default
+            componentName: "example:counter"
+            response: |
+              let name: string = request.path.name;
+              let agent = counter-agent(name);
+              let new-value = agent.increment();
+              { status: 200, body: { result: "incremented ${name}, new value is ${new-value}" } }
+
+  deployments:
+    local:
+    - host: localhost:9006
+      definitions:
+       - counter-api
+```
+
+Then use the `golem` CLI to deploy this API:
+
+```shell copy
+golem api deploy
+```
+
+After this command, the API is deployed to our locally running Golem instance and can be tried out by sending POST requests to `http://localhost:9006/{name}/increment`:
+
+```shell copy
+curl -X POST http://localhost:9006/agent-1/increment
+```
 
 ### Next Steps
 
-In this guide, you have learned how to build and deploy invincible serverless workers on Golem, and seen how you can interact with them as they execute.
+In this guide, you have learned how to build and deploy invincible serverless agents on Golem, and seen how you can interact with them as they execute.
 
 Take your next steps with Golem by exploring the following resources:
 
 - Read about the [fundamentals of Golem](fundamentals)
 - Learn about the [main concepts](concepts)
-- Read one of the [language-specific guides](develop-overview) to learn how to develop Golem components
+- Read everything [developing Golem applications](develop)
 - Check out how to [deploy](deploy) Golem to your infrastructure
 - Read the details of how to [invoke workers](invoke)
 - Learn more about the [Golem CLI](cli)

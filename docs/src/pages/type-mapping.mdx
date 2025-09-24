@@ -1,0 +1,377 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Type mapping
+
+The types used in the component's code are mapped to the types of Rib (WebAssembly value encoding or WAVE) and to JSON (when used in the invocation REST API). This page lists all the supported types and how they are mapped.
+
+## User types to Rib
+
+This section describes how various types of the used programming language are mapping to types used by the Rib scripting language and the CLI invoke functions. These are WebAssembly component-model types, and their values are described using the [WAVE (WebAssembly Value Encoding)](https://github.com/bytecodealliance/wasm-tools/tree/main/crates/wasm-wave) format.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+        The following TypeScript types are supported:
+
+        | TypeScript type | WIT type               | Example Rib value                                    | Remarks
+        | --------------- | ---------------------- | ---------------------------------------------------- | -------
+        | `string`        | `string`               | `"hello world"`                                      | |
+        | `boolean`       | `bool`                 | `true`, `false`                                   | |
+        | `number`        | `f64`                  | `1234.0` | |
+        | `object`        | `record { ... }`       | `{ a: "hello", b: 1234 }`                            | |
+        | `Map<K, V>`     | `list<tuple<K, V>>`    | `[("key1", 100), ("key2", -2)]`           | |
+        | `Array<T>`      | `list<T>`              | `["one", "two", "three"]`                            | |
+        | Interface with value fields | `record { ... }` | `{ field1: "value", field2: 42 }`                   | |
+        | `{ tag: "x", val: T1 } \| { tag: "y", val: T2 } \| ...` | `variant { x(T1), y(T2), ... }` | `x("hello")` | The `val` is optional, if missing it's a case without value |
+        | `"x" \| "y" \| ...` | `enum { x, y, ... }` | `x` | |
+        | Other union           | `variant { ... }`        | `case1(value)` | The case names are `case1`, `case2`, etc. For example for `string | number | CustomRecord` there will be `case1`, `case2` and `case3` |
+        | tuple           | `tuple<...>`           | `("hello", 1234, true)`                              | |
+        | `T | undefined` | `option<T>`        | `some(value)`, `none`                                | |
+        | `T | null` | `option<T>`        | `some(value)`, `none`                                | |
+        | `field?: T`     | `option<T>`        | `some(value)`, `none`                                | Optional fields in records are mapped to options |
+        | `UInt8Array`  | `list<u8>`             | `[104, 101, 108, 108, 111]`                          | |
+        | `Int8Array`   | `list<s8>`             | `[-1, 0, 1]`                                        | |
+        | `UInt16Array` | `list<u16>`            | `[65535, 0, 1]`                                     | |
+        | `Int16Array`  | `list<s16>`            | `[-32768, 0, 32767]`
+        | `UInt32Array` | `list<u32>`            | `[4294967295, 0, 1]`                                | |
+        | `Int32Array`  | `list<s32>`            | `[-2147483648, 0, 2147483647]`                          | |
+        | `BigUint64Array` | `list<u64>`     | `[18446744073709551615, 0, 1]`                      | | |
+        | `BigInt64Array`  | `list<s64>`      | `[-9223372036854775808, 0, 9223372036854775807]`          | |
+        | `Float32Array` | `list<f32>`            | `[3.4028235e+38, 1.175494e-38, 0, -1.175494e-38, -3.4028235e+38]` | |
+        | `Float64Array` | `list<f64>`            | `[1.7976931348623157e+308, 2.2250738585072014e-308, 0, -2.2250738585072014e-308, -1.7976931348623157e+308]` | |
+    </Tabs.Tab>
+</Tabs>
+
+There are some special, Golem agent specific types that can be used in the agent constructor and methods as well:
+
+### Unstructured text
+Unstructured text is an arbitrary string, optionally annotated with a language code, that is either passed directly to/from the agent, or as an URL reference. The agent can optionally specify the set of supported language codes.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    ```typescript
+    import {
+      UnstructuredText,
+    } from '@golemcloud/golem-ts-sdk';
+
+    async exampleMethod(
+        @languageCodes(['en'])
+        unstructuredTextWithLanguageCode: UnstructuredText,
+    ): Promise<void> {
+        // ...
+    }
+    ```
+
+    The `@languageCodes` decorator is optional; if missing, there will be no restrictions for the language of the text.
+
+    The type itself represents either an inline string or a remote reference:
+
+    ```typescript
+    export type UnstructuredText =
+      | {
+          tag: 'url';
+          val: string;
+        }
+      | {
+          tag: 'inline';
+          val: string;
+          languageCode?: string;
+        };
+    ```
+  </Tabs.Tab>
+</Tabs>
+
+### Unstructured binary
+Unstructured binary data is similar to unstructured text, but it is annotated (and restricted by) MIME types.
+
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    ```typescript
+    import {
+      UnstructuredText,
+    } from '@golemcloud/golem-ts-sdk';
+
+    async exampleMethod(
+      @mimeTypes(['application/json'])
+      unstructuredBinaryWithMimeType: UnstructuredBinary,
+    ): Promise<void> {
+        // ...
+    }
+    ```
+
+    The `@mimeTypes` decorator specifies the set of allowed MIME types for the binary data.
+
+    The type itself represents either an inline byte array or a remote reference:
+
+    ```typescript
+    export type UnstructuredBinary =
+      | {
+          tag: 'url';
+          val: string;
+        }
+      | {
+          tag: 'inline';
+          val: Uint8Array;
+          mimeType?: string;
+        };
+    ```
+  </Tabs.Tab>
+</Tabs>
+
+
+### Multimodal values
+Agents can work with **multimodal values** as input or output. When defining a parameter or return value as multimodal, we define the possible data types that can be used in that position, and the actual values will be an arbitrary number of values of these types, in any combination.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    In TypeScript, methods taking multimodal values are annotated with the `@multimodal()` decorator, and each parameter of the method is going to be a possible type of the multimodal value. As there is no constraint on the number of values for each type, every parameter of the multimodal method is going to be an array of values of the corresponding type:
+
+    ```typescript
+    @multimodal()
+    async exampleMethod(
+      metadata: MyStructuredData[],
+      @languageCodes(['en', 'de'])
+      text: UnstructuredText[],
+      @mimeTypes('image/jpeg', 'image/png')
+      image: UnstructuredBinary[]
+    ): Promise<void> {
+      // ...
+    }
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+## Rib types to JSON
+
+The **invocation API** uses a special JSON format to describe invocation parameters and results.
+
+When using the REST API, the JSON-encoded values must be extended with a JSON-encoded **type information** as well. This is described in details in the [Invoke via HTTP](invoke/http) page.
+
+The following sections define how each WASM type and it's corresponding WAVE value encoding is mapped to Golem's value JSON format.
+
+## Primitive types
+
+| WIT type | JSON type    | Description                  |
+| -------- | ------------ | ---------------------------- |
+| bool     | JSON boolean | Primitive boolean type       |
+| u8       | JSON number  | Unsigned 8-bit integer       |
+| s8       | JSON number  | Signed 8-bit integer         |
+| u16      | JSON number  | Unsigned 16-bit integer      |
+| s16      | JSON number  | Signed 16-bit integer        |
+| u32      | JSON number  | Unsigned 32-bit integer      |
+| s32      | JSON number  | Signed 32-bit integer        |
+| u64      | JSON number  | Unsigned 64-bit integer      |
+| s64      | JSON number  | Signed 64-bit integer        |
+| f32      | JSON number  | 32-bit floating point number |
+| f64      | JSON number  | 64-bit floating point number |
+| char     | JSON number  | UTF-8 character              |
+| string   | JSON string  | String                       |
+
+## Tuples
+
+The following WIT type:
+
+```wit
+tuple<u32, string, char>
+```
+
+is encoded in WAVE as
+
+```wit
+(1234, "hello world", 'g')
+```
+
+and in JSON as an array of the items:
+
+```json
+[1234, "hello world", 103]
+```
+
+## Lists
+
+The following WIT type:
+
+```wit
+list<string>
+```
+
+is encoded in WAVE as
+
+```wit
+["one", "two", "three"]
+```
+
+and in JSON as an array of the items:
+
+```json
+["one", "two", "three"]
+```
+
+## Options
+
+The following WIT type:
+
+```wit
+option<string>
+```
+
+is encoded in WAVE by one of the following:
+
+```wit
+"implicit some", some("explicit some"), none
+```
+
+In the JSON representation we use `null` to reprsent `none` and the inner value if defined:
+
+```json
+"implicit some"
+null
+```
+
+## Results
+
+For the following WIT type:
+
+```wit
+result<string, string>
+```
+
+The WAVE representation is
+
+```wit
+"implicit ok", ok("explicit ok"), err("explicit err")
+```
+
+The result type is represented in JSON by an **object** with either an `ok` or an `err` field:
+
+```json
+{ "ok": "explicit ok" }
+{ "err": "explicit err" }
+```
+
+If the type is _unit_ in the WIT definition, the JSON representation should use `null`:
+
+```wit
+result<_, string>
+```
+
+```json
+{ "ok": null }
+```
+
+## Handles
+
+Handles are identifying **resources** and returned by invoking **resource constructors** through the Golem invocation API. Handles are represented as strings in the JSON format
+and they are not supported by WAVE.
+
+Handles must not be constructed by hand, just forwarded to method invocations as they were returned from the constructors.
+
+Example handle value in JSON representation:
+
+```json
+"urn:worker:component-id/worker-name/resource-id"
+```
+
+## Records
+
+Records are a collection of named fields. The JSON representation uses the same names as they appear in the WIT definition:
+
+```wit
+record {
+    a: string,
+    b: u32
+}
+```
+
+An example WAVE encoding for such a record is:
+
+```wit
+{ a: "hello", b: 1234 }
+```
+
+The JSON representation is just an object with the same field names:
+
+```json
+{ "a": "hello", "b": 1234 }
+```
+
+## Variants
+
+Variants are encoded in JSON by an **object** with a single field, where the field's name matches one of the variant's cases:
+
+```wit
+variant allowed-destinations {
+    none,
+    any,
+    restricted(list<string>),
+}
+```
+
+The WAVE encoding for such a variant is
+
+```wit
+none, any, restricted(["one", "two", "three"])
+```
+
+In JSON the object's single field encodes the case, and the value is `null` if it has no inner value in the type:
+
+```json
+{ "none": null }
+{ "any": null }
+{ "restricted": ["one", "two", "three"] }
+```
+
+## Enums
+
+Enums are simply encoded by the case name as a JSON string.
+
+For example:
+
+```wit
+enum {
+    low,
+    medium,
+    high
+}
+```
+
+The WAVE encoding for such an enum is:
+
+```wit
+low, medium high
+```
+
+and in JSON:
+
+```json
+"low"
+"medium"
+"high"
+```
+
+## Flags
+
+Flags represent a set of selected values.
+
+Take the following example WIT type:
+
+```wit
+flags allowed-methods {
+    get,
+    post,
+    put,
+    delete,
+}
+```
+
+The WAVE encoding lists zero or more elements of the flags within `{}`:
+
+```wit
+{get, put}
+```
+
+The JSON representation is an array of the selected values, each represented by a string:
+
+```json
+["get", "put"]
+```

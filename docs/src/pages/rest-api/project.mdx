@@ -1,0 +1,312 @@
+# Project API
+Projects are groups of components and their workers, providing both a separate namespace for these entities and allows sharing between accounts.
+
+Every account has a default project which is assumed when no specific project ID is passed in some component and worker related APIs.
+## Get the default project
+Path|Method|Protected
+---|---|---
+`/v1/projects/default`|GET|Yes
+
+- name of the project can be used for lookup the project if the ID is now known
+- defaultEnvironmentId is currently always default
+- projectType is either Default
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "projectData": {
+    "name": "string",
+    "ownerAccountId": "string",
+    "description": "string",
+    "defaultEnvironmentId": "string",
+    "projectType": "Default"
+  }
+}
+```
+
+## List all projects
+Path|Method|Protected
+---|---|---
+`/v1/projects`|GET|Yes
+
+Returns all projects of the account if no project-name is specified.
+Otherwise, returns all projects of the account that has the given name.
+As unique names are not enforced on the API level, the response may contain multiple entries.
+
+**Query Parameters**
+
+Name|Type|Required|Description
+---|---|---|---
+project-name|string|No|Filter by project name
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+    "projectData": {
+      "name": "string",
+      "ownerAccountId": "string",
+      "description": "string",
+      "defaultEnvironmentId": "string",
+      "projectType": "Default"
+    }
+  }
+]
+```
+
+## Create project
+Path|Method|Protected
+---|---|---
+`/v1/projects`|POST|Yes
+
+Creates a new project. The ownerAccountId must be the caller's account ID.
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string",
+  "ownerAccountId": "string",
+  "description": "string"
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "projectData": {
+    "name": "string",
+    "ownerAccountId": "string",
+    "description": "string",
+    "defaultEnvironmentId": "string",
+    "projectType": "Default"
+  }
+}
+```
+
+## Get project by ID
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}`|GET|Yes
+
+Gets a project by its identifier. Response is the same as for the default project.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{
+  "projectId": "5a8591dd-4039-49df-9202-96385ba3eff8",
+  "projectData": {
+    "name": "string",
+    "ownerAccountId": "string",
+    "description": "string",
+    "defaultEnvironmentId": "string",
+    "projectType": "Default"
+  }
+}
+```
+
+## Delete project
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}`|DELETE|Yes
+
+Deletes a project given by its identifier.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Get project actions
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/actions`|GET|Yes
+
+Returns a list of actions that can be performed on the project.
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  "ViewComponent"
+]
+```
+
+## Gets the list of plugins installed for the given project
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/plugins/installs`|GET|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+[
+  {
+    "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+    "pluginName": "string",
+    "pluginVersion": "string",
+    "pluginRegistered": true,
+    "priority": 0,
+    "parameters": {
+      "property1": "string",
+      "property2": "string"
+    }
+  }
+]
+```
+
+## Installs a new plugin for this project
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/plugins/installs`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "name": "string",
+  "version": "string",
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{
+  "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+  "pluginName": "string",
+  "pluginVersion": "string",
+  "pluginRegistered": true,
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+## Updates the priority or parameters of a plugin installation
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/plugins/installs/{installation_id}`|PUT|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "priority": 0,
+  "parameters": {
+    "property1": "string",
+    "property2": "string"
+  }
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Uninstalls a plugin from this project
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/latest/plugins/installs/{installation_id}`|DELETE|Yes
+
+
+
+
+
+
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+
+## Applies a batch of changes to the installed plugins of a component
+Path|Method|Protected
+---|---|---
+`/v1/projects/{project_id}/latest/plugins/installs/batch`|POST|Yes
+
+
+
+
+
+**Example Request JSON**
+```json copy
+{
+  "actions": [
+    {
+      "type": "Install",
+      "name": "string",
+      "version": "string",
+      "priority": 0,
+      "parameters": {
+        "property1": "string",
+        "property2": "string"
+      }
+    }
+  ]
+}
+```
+
+**Example Response JSON**
+
+```json copy
+{}
+```
+## Project API Errors
+Status Code|Description|Body
+---|---|---
+400|Invalid request, returning with a list of issues detected in the request|`{"errors":["string"]}`
+401|Unauthorized request|`{"error":"string"}`
+403|Forbidden Request|`{"error":"string"}`
+404|Entity not found|`{"error":"string"}`
+409||`{"error":"string"}`
+500|Internal server error|`{"error":"string"}`

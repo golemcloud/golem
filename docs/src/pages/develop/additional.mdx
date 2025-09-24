@@ -1,0 +1,525 @@
+import { Callout, Tabs } from "nextra/components"
+
+# Additional Runtime APIs
+
+<Callout type="info">
+    Previously Golem called _agents_ as workers, and the new name has not been applied everywhere yet. The APIs described in this section are still using the _worker_ name.
+</Callout>
+
+### Generate an idempotency key
+
+Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
+
+It is guaranteed that this idempotency key will always be the same (per occurrence) even if the agent is restarted due to a crash.
+
+To generate an idempotency key:
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+```typescript
+import { generateIdempotencyKey, Uuid } from "golem:api/host@1.1.7";
+
+const key: Uuid = generateIdempotencyKey();
+```
+    </Tabs.Tab>
+</Tabs>
+
+### Get agent metadata
+
+It is possible to query **metadata** for Golem agents. This metadata is defined by the `WorkerMetadata` interface:
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    ```typescript
+    export type WorkerMetadata = {
+        workerId: WorkerId;
+        args: string[];
+        env: [string, string][];
+        wasiConfigVars: [string, string][];
+        status: WorkerStatus;
+        componentVersion: bigint;
+        retryCount: bigint;
+    };
+    ```
+
+    There are two exported functions to query agent metadata:
+
+    - `getSelfMetadata()` returns the metadata for the current worker
+    - `getWorkerMetadata(workerId: WorkerId)` returns the metadata for a specific agent given by its `WorkerId`
+
+    </Tabs.Tab>
+</Tabs>
+
+### Enumerate agents
+
+Agent enumeration is a feature of Golem available both through the public HTTP API and using the SDK.
+
+<Callout type="warning">
+    Enumerating agents of a component is a slow operation and should not be used as part of the application logic.
+</Callout>
+
+The following example demonstrates how to use the agent enumeration API:
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+```typescript
+import {
+  ComponentId,
+  GetWorkers,
+  WorkerAnyFilter,
+  WorkerMetadata,
+  WorkerStatusFilter,
+} from "golem:api/host@1.1.0"
+
+const filter: WorkerAnyFilter = {
+  filters: [
+    {
+      filters: [
+        {
+          tag: "status",
+          val: {
+            comparator: "equal",
+            value: "idle",
+          } satisfies WorkerStatusFilter,
+        },
+      ],
+    },
+  ],
+}
+
+const componentId: ComponentId = {
+  /* ... */
+}
+const workers: WorkerMetadata[] = []
+const getter = new GetWorkers(componentId, filter, true)
+
+let batch: WorkerMetadata[] | undefined
+while ((batch = getter.getNext()) !== undefined) {
+  workers.push(...batch)
+}
+```
+    </Tabs.Tab>
+</Tabs>
+
+The third parameter of the `GetWorkers` constructor enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned worker; otherwise, it uses only the last cached values.
+
+### Update an agent
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+To trigger an update for a given agent from one component version to another, use the `updateWorker` function:
+
+```typescript
+import { updateWorker, WorkerId, ComponentVersion } from "golem:api/host@0.2.0"
+
+const workerId: WorkerId = {
+  /* ... */
+}
+
+const targetVersion: ComponentVersion = 1n
+
+updateWorker(workerId, targetVersion, "automatic")
+```
+    </Tabs.Tab>
+</Tabs>
+
+To learn more about updating agents, see the Agent Update section of the [agents page](/concepts/agents).
+
+### Oplog search and query
+The `oplog` interface in `golem:api` provides functions to search and query the worker's persisted oplog.
+
+The interface defines a big `variant` data type called `oplog-entry`, and two **resources** for querying a worker's oplog.
+
+- the `get-oplog` resource enumerates through **all entries** of the oplog
+- the `search-oplog` resource accepts a **search expression** and only returns the matching entries
+
+Both resources, once constructed, provide a `get-next` function that returns a chunk of oplog entries. Repeatedly calling this function goes through the whole data set, and eventually returns `none`.
+
+### Durability
+The `golem:durability` package contains an API that libraries can leverage to provide a custom durability implementation for their own API. This is the same interface that Golem uses under the hood to make the WASI interfaces durable. Golem applications are not supposed to use this package directly.
+
+#### Types
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    The durability API can be imported from the `golem:durability/durability@1.2.1` module.
+
+The `DurableFunctionType` type categorizes a durable function in the following way:
+
+```typescript
+export type DurableFunctionType =
+  {
+    tag: 'read-local'
+  } |
+  {
+    tag: 'write-local'
+  } |
+  {
+    tag: 'read-remote'
+  } |
+  {
+    tag: 'write-remote'
+  } |
+  {
+    tag: 'write-remote-batched'
+    val: OplogIndex | undefined
+  } |
+  {
+    tag: 'write-remote-transaction'
+    val: OplogIndex | undefined
+  };
+```
+
+- `read-local` indicates that the side effect reads from the worker's local state (for example local file system, random generator, etc.)
+- `write-local` indicates that the side effect writes to the worker's local state (for example local file system)
+- `read-remote` indicates that the side effect reads from external state (for example a key-value store)
+- `write-remote` indicates that the side effect manipulates external state (for example an RPC call)
+- `write-remote-batched` indicates that the side effect manipulates external state through multiple invoked functions (for example a HTTP request where reading the response involves multiple host function calls)
+- `write-remote-transaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
+
+The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `currentDurableExecutionState` function:
+
+```typescript
+/**
+ * Gets the current durable execution state
+ */
+export function currentDurableExecutionState(): DurableExecutionState;
+
+export type DurableExecutionState = {
+  isLive: boolean;
+  persistenceLevel: PersistenceLevel;
+};
+
+/**
+ * Configurable persistence level for workers
+ */
+export type PersistenceLevel = {
+    tag: 'persist-nothing'
+  } |
+  {
+    tag: 'persist-remote-side-effects'
+  } |
+  {
+    tag: 'smart'
+  };
+```
+
+Here the `isLive` field indicates whether the executor is currently _replaying_ a worker's previously persisted state or side effects should be executed. The `persistenceLevel` is a user-configurable setting that can turn off persistence for certain sections of the code.
+
+The `PersistedTypedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
+
+```typescript
+export type PersistedTypedDurableFunctionInvocation = {
+  timestamp: Datetime;
+  functionName: string;
+  response: ValueAndType;
+  functionType: DurableFunctionType;
+  entryVersion: OplogEntryVersion;
+};
+```
+
+</Tabs.Tab>
+</Tabs>
+
+#### Functions
+
+The durability API consists of a couple of low-level functions that must be called in a correct way to make it work.
+
+The logic to be implemented is the following, in pseudocode:
+
+```ts
+observeFunctionCall("interface", "function")
+state = currentDurableExecutionState()
+if (state.isLive) {
+  result = performSideEffect(input)
+  persistTypedDurableFunctionInvocation("function", encode(input), encode(result), durableFunctionType)
+} else {
+  // Execute the side effect
+  persisted = readPersistedDurableFunctionInvocation()
+  result = decode(persisted.response)
+}
+```
+
+The `input` and `result` values must be encoded into `ValueAndType`, the dynamic value representation from the `golem:rpc` package.
+
+In cases when a durable function's execution interleaves with other calls, the `beginDurableFunction` and `endDurableFunction` calls can be used to mark the beginning and end of the operation.
+
+
+### Invocation context
+
+Golem associates an **invocation context** with each invocation, which contains various information depending on how the exported function was called. This context gets inherited when making further invocations via worker-to-worker communication, and it is also possible to define custom **spans** and associate custom **attributes** to it.
+
+The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+To get the current invocation context, use the `currentContext` host function, imported from `golem:api/context@1.1.7`:
+
+```typescript
+/**
+ * Invocation context support
+ */
+declare module 'golem:api/context@1.1.7' {
+  /**
+   * Gets the current invocation context
+   * The function call captures the current context; if new spans are started, the returned `invocation-context` instance will not
+   * reflect that.
+   */
+  export function currentContext(): InvocationContext;
+}
+```
+
+The `InvocationContext` itself is a **class** with various methods for querying attributes of the invocation context:
+
+| method | description |
+| ------ | ----------- |
+| `traceId` | Returns the trace ID associated with the context, coming from either an external trace header or generated at the edge of Golem |
+| `spanId` | Returns the span ID associated with the context |
+| `parent` | Returns the parent invocation context, if any |
+| `getAttribute` | Gets an attribute from the context by key |
+| `getAttributes` | Gets all attributes from the context |
+| `getAttributeChain` | Gets all values of a given attribute from the current and parent contexts |
+| `getAttributeChains` | Get all attributes and their previous values |
+| `traceContextHeaders` | Gets the W3C Trace Context headers associated with the current invocation context |
+
+Custom attributes can only be set on **custom spans**. First start a new span using `startSpan`
+
+```typescript
+/**
+ * Starts a new `span` with the given name, as a child of the current invocation context
+ */
+export function startSpan(name: string): Span;
+```
+
+and then use the `Span` class's methods:
+
+| method | description |
+| ------ | ----------- |
+| `startedAt` | Returns the timestamp when the span was started |
+| `setAttribute` | Sets an attribute on the span |
+| `setAttributes` | Sets multiple attributes on the span |
+| `finish` | Ends the current span |
+
+If `finish` is not explicitly called on the span, it is going to be finished when the garbage collector deletes the span object.
+
+</Tabs.Tab>
+</Tabs>
+
+The custom spans are pushed onto the invocation context stack, so whenever an RPC call or HTTP call is made, their parent span(s) will include the user-defined custom spans as well as the rest of the invocation context.
+
+### The WASI Key-Value store interface
+
+Although Golem agents can store their state completely in their own memory, it is possible to use the `wasi:keyvalue` interface to store key-value pairs in a Golem managed key value storage.
+
+This can be useful if state needs to be shared between different agents or if the size of this state is too large to be stored in memory. The keys are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+        There are two primary modules for using the key-value store:
+        - `wasi:keyvalue/eventual@0.1.0` defines an API for an eventually consistent key-value store
+        - `wasi:keyvalue/eventual-batch@0.1.0` defines an API with batch operations working on multiple keys
+
+        The primary interface to work with the key-value pairs consists of the four basic operations:
+
+        ```typescript
+        /**
+        * Get the value associated with the key in the bucket.
+        * The value is returned as an option. If the key-value pair exists in the
+        * bucket, it returns `Ok(value)`. If the key does not exist in the
+        * bucket, it returns `Ok(none)`.
+        * If any other error occurs, it returns an `Err(error)`.
+        * @throws Error
+        */
+        export function get(bucket: Bucket, key: Key): IncomingValue | undefined;
+        /**
+        * Set the value associated with the key in the bucket. If the key already
+        * exists in the bucket, it overwrites the value.
+        * If the key does not exist in the bucket, it creates a new key-value pair.
+        * If any other error occurs, it returns an `Err(error)`.
+        * @throws Error
+        */
+        export function set(bucket: Bucket, key: Key, outgoingValue: OutgoingValue): void;
+        /**
+        * Delete the key-value pair associated with the key in the bucket.
+        * If the key does not exist in the bucket, it does nothing.
+        * If any other error occurs, it returns an `Err(error)`.
+        * @throws Error
+        */
+        export function delete_(bucket: Bucket, key: Key): void;
+        /**
+        * Check if the key exists in the bucket.
+        * If the key exists in the bucket, it returns `Ok(true)`. If the key does
+        * not exist in the bucket, it returns `Ok(false)`.
+        * If any other error occurs, it returns an `Err(error)`.
+        * @throws Error
+        */
+        export function exists(bucket: Bucket, key: Key): boolean;
+        ```
+
+        The batch API defines similar functions such as `getMany` and `setMany`, but working on multiple keys at once.
+
+        The `IncomingValue` and `OutgoingValue` types are defined as follows:
+
+        ```typescript
+        export class OutgoingValue {
+            static newOutgoingValue(): OutgoingValue;
+            /**
+             * Writes the value to the output-stream asynchronously.
+             * If any other error occurs, it returns an `Err(error)`.
+             * @throws Error
+             */
+            outgoingValueWriteBodyAsync(): OutgoingValueBodyAsync;
+            /**
+             * Writes the value to the output-stream synchronously.
+             * If any other error occurs, it returns an `Err(error)`.
+             * @throws Error
+             */
+            outgoingValueWriteBodySync(value: OutgoingValueBodySync): void;
+        }
+
+        export class IncomingValue {
+            /**
+             * Consumes the value synchronously and returns the value as a list of bytes.
+             * If any other error occurs, it returns an `Err(error)`.
+             * @throws Error
+             */
+            incomingValueConsumeSync(): IncomingValueSyncBody;
+            /**
+             * Consumes the value asynchronously and returns the value as an `input-stream`.
+             * If any other error occurs, it returns an `Err(error)`.
+             * @throws Error
+             */
+            incomingValueConsumeAsync(): IncomingValueAsyncBody;
+            /**
+             * The size of the value in bytes.
+             * If the size is unknown or unavailable, this function returns an `Err(error)`.
+             * @throws Error
+             */
+            incomingValueSize(): bigint;
+        }
+
+        export type OutgoingValueBodyAsync = OutputStream;
+        export type OutgoingValueBodySync = Uint8Array;
+        export type IncomingValueAsyncBody = InputStream;
+        export type IncomingValueSyncBody = Uint8Array;
+        ```
+
+        The streaming variants of setting and consuming the values may be used by the underlying implementation to directly
+        stream the data to the key-value store. For small values, the sync variants are more convenient, directly taking and returning
+        a `Uint8Array`.
+    </Tabs.Tab>
+</Tabs>
+
+### The WASI Blob Store interface
+
+The `wasi:blobstore` interface provides a way to store and retrieve large binary data. This can be useful for storing large files or other binary data that is too large to be stored in the agent's memory. The blobs are accessible for every agent of an _application_ - no matter which component they are defined in, or which agent type they belong to.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+        The Blob Store API organizes blobs identified by _object names_ into **containers**. The `wasi:blobstore/blobstore` module exports functions to create, get and delete these containers by name:
+
+        ```typescript
+        declare module 'wasi:blobstore/blobstore' {
+            /**
+             * creates a new empty container
+             * @throws Error
+             */
+            export function createContainer(name: ContainerName): Container;
+            /**
+             * retrieves a container by name
+             * @throws Error
+             */
+            export function getContainer(name: ContainerName): Container;
+            /**
+             * deletes a container and all objects within it
+             * @throws Error
+             */
+            export function deleteContainer(name: ContainerName): void;
+            /**
+             * returns true if the container exists
+             * @throws Error
+             */
+            export function containerExists(name: ContainerName): boolean;
+            /**
+             * copies (duplicates) an object, to the same or a different container.
+             * returns an error if the target container does not exist.
+             * overwrites destination object if it already existed.
+             * @throws Error
+             */
+            export function copyObject(src: ObjectId, dest: ObjectId): void;
+            /**
+             * moves or renames an object, to the same or a different container
+             * returns an error if the destination container does not exist.
+             * overwrites destination object if it already existed.
+             * @throws Error
+             */
+            export function moveObject(src: ObjectId, dest: ObjectId): void;
+
+            // ...
+        }
+        ```
+
+        A `Container` is a class providing read-write access for the blobs in it:
+
+        ```typescript
+        export class Container {
+            /**
+             * returns container name
+             * @throws Error
+             */
+            name(): string;
+            /**
+             * returns container metadata
+             * @throws Error
+             */
+            info(): ContainerMetadata;
+            /**
+             * retrieves an object or portion of an object, as a resource.
+             * Start and end offsets are inclusive.
+             * Once a data-blob resource has been created, the underlying bytes are held by the blobstore service for the lifetime
+             * of the data-blob resource, even if the object they came from is later deleted.
+             * @throws Error
+             */
+            getData(name: ObjectName, start: bigint, end: bigint): IncomingValue;
+            /**
+             * creates or replaces an object with the data blob.
+             * @throws Error
+             */
+            writeData(name: ObjectName, data: OutgoingValue): void;
+            /**
+             * returns list of objects in the container. Order is undefined.
+             * @throws Error
+             */
+            listObjects(): StreamObjectNames;
+            /**
+             * deletes object.
+             * does not return error if object did not exist.
+             * @throws Error
+             */
+            deleteObject(name: ObjectName): void;
+            /**
+             * deletes multiple objects in the container
+             * @throws Error
+             */
+            deleteObjects(names: ObjectName[]): void;
+            /**
+             * returns true if the object exists in this container
+             * @throws Error
+             */
+            hasObject(name: ObjectName): boolean;
+            /**
+             * returns metadata for the object
+             * @throws Error
+             */
+            objectInfo(name: ObjectName): ObjectMetadata;
+            /**
+             * removes all objects within the container, leaving the container empty.
+             * @throws Error
+             */
+            clear(): void;
+        }
+        ```
+
+        The `IncomingValue` and `OutgoingValue` classes are, similar to the **key-value store interface**, providing two ways to work with the blobs: synchronously using `UInt8Array`s or using the `InputStream` and `OutputStream` interfaces for saving/loading the data by chunks.
+    </Tabs.Tab>
+</Tabs>

@@ -1,0 +1,92 @@
+import { Tabs } from "nextra/components"
+
+# Agent to Agent communication
+
+See the [Agent to Agent communication page](/concepts/agent-to-agent-communication) for a general overview of how agents can invoke each other in Golem.
+
+## Code-first approach
+
+When defining an _agent_ in code, this automatically defines a client interface for calling remote agents as well. This way an agent of an agent type can create other agents and invoke methods on them. The target agent can be of any agent type available for the caller agent in code.
+
+The simplest way to achieve this is to keep all the agent types that need to call each other in the same _component_. Otherwise the agent definition need to be extracted to some shared place and imported to all components involved.
+
+## Creating a client
+
+The first step of calling a remote agent is creating a _client_ for it by specifying which agent type it is and identifying the agent by providing values for its constructor parameters. If the agent identified by the parameters has not been existing yet, it is going to be created and its constructor is executed remotely. If it has been already created, the client just points to it and no action is taken until an _agent method_ is called using it.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+In the following example, we have two agents defined; a weather agent with a constructor parameter identifying a location, and another example agent creating and calling this weather agent.
+
+        ```typescript
+        @agent()
+        class WeatherAgent extends BaseAgent {
+            constructor(location: string) {
+                super();
+                // ...
+            }
+
+            @description("Gets the current weather")
+            async currentWeather(): Promise<string> {
+                // ...
+            }
+        }
+
+        @agent()
+        class ExampleAgent extends BaseAgent {
+            constructor() {
+                super();
+            }
+
+            async run() {
+                const weatherInLondon = WeatherAgent.get("London")
+                // ...
+            }
+        }
+        ```
+
+        Here `weatherInLondon` is the client for calling a remote `WeatherAgent` - it exposes the agent methods, such as `currentWeather` as its own methods.
+    </Tabs.Tab>
+</Tabs>
+
+## Calling a remote agent method
+
+Once we have a _client_ for a remote agent, it is possible to call its methods just as if it would be a local instance.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    ```typescript
+    const currentWeather = await weatherInLondon.currentWeather();
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+## Triggering execution of an agent method
+It is possible to trigger the remote execution of an agent method without awaiting it. This is useful for spawning background tasks, for example.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    To trigger an agent method and return immediately, use the `trigger` method exposed on each remote method in the client:
+
+    ```typescript
+    const remoteAgent = BackgroundTaskAgent.get(backgroundJobId);
+    remoteAgent.runTask.trigger("hello", 1234);
+    ```
+    </Tabs.Tab>
+</Tabs>
+
+### Scheduling an agent method
+An advanced case of triggering the execution of an agent method is to **schedule it** to be executed at a later time.
+
+<Tabs items={["TypeScript"]}>
+    <Tabs.Tab>
+    Similar to `.trigger`, there is a `.schedule` method as well on each remote agent method in the client:
+
+    ```typescript
+    const remoteAgent = BackgroundTaskAgent.get(backgroundJobId);
+    remoteAgent.runTask.schedule({ seconds: X, nanoseconds: Y }, "hello", 1234);
+    ```
+    </Tabs.Tab>
+
+    Here the first parameter is a `Datetime` object, with seconds and nanoseconds fields representing the UNIX Epoch time when the method should be executed. The rest of the parameters are the same as for the original method.
+</Tabs>

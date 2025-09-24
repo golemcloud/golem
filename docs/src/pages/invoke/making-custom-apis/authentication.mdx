@@ -4,7 +4,7 @@ import { Steps } from "nextra/components"
 
 Golem API gateway has built-in authentication support to identify users using OpenID protocol.
 This allows you to refer to the claims such as `request.auth.email` (as an example) once authenticated in your Rib expression.
-You can choose to pass this information into the worker function that exist in the Rib expression, and do further logic with it.
+You can choose to pass this information into the agent method that exist in the Rib expression, and do further logic with it.
 Currently, this is tested with Google Identity connector.
 
 ## Setup Security for your API routes in Golem
@@ -14,15 +14,11 @@ Currently, this is tested with Google Identity connector.
 Here is the direct link to register your app with [Google Identity Provider](https://console.cloud.google.com/apis/credentials).
 Make sure your app with a redirect URL and get the client-id and client secret.
 
-If you are going with this [example](/invoke/making-custom-apis/create-simple-component), the redirect URI can be
-`http://localhost:9006/auth/callback`
+When using a locally executed Golem instance during development, the redirect URI can be `http://localhost:9006/auth/callback`. Otherwise it should be be `https://mydomain.com/auth/callback`, where `mydomain.com` is the domain in which you will be deploying your API definition in Golem.
 
-If you are not using OSS, then the redirect URI can be `https://mydomain.com/auth/callback`, where `mydomain.com`
-is the domain in which you will be deploying your API definition in Golem.
+The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any other existing routes.
 
-The `/auth/callback` part is just an example and it can be anything, as far as it doesn't collide with any of your other paths.
-
-We call these details "Api Security Scheme" in Golem API Gateway. Next step is to register this detail with Golem
+We call these details "Api Security Scheme" in Golem API Gateway. Next step is to register this scheme in Golem.
 
 ### Register API Security Scheme with your app's client-id and client-secret with Golem
 
@@ -43,107 +39,16 @@ By now, you are having a security scheme registered with `golem` which you can r
 
 ### Reference the security scheme name in API definition
 
-We updated the second route with security configuration created above which is `my-security`
-and updated the Rib script to use `request.auth.email` as an authenticated route have access to the details of the user
+This name (`my-security` in the above example) is the one to be used in the route's `security` field, as described in the [Making Custom APIs](/invoke/making-custom-apis) page.
 
-Here is the golem.yaml that we have been using, and you see the difference in the second route, where we added
-the security field with the name `my-security` and the Rib script to use `request.auth.email` to get the email of the user.
+### New fields available on the Rib `request` object
 
-Our security scheme above has a scope of `openid,email,profile` allowing us to lookup email in `Rib script`.
-
-```yaml
-# Schema for IDEA:
-# $schema: https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
-# Schema for vscode-yaml
-# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.2.2-dev.1/golem.schema.json
-
-# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
-
-components:
-  amazon:shopping-cart:
-    template: rust
-
-httpApi:
-  definitions:
-    shopping-cart:
-      version: '0.0.2'
-      routes:
-        - method: POST
-          path: /v1/{user}/add-to-cart
-          binding:
-            type: default
-            componentName: "amazon:shopping-cart"
-            response: |
-              let user: u32 = request.path.user;
-              let worker = instance("cart-${user}");
-              worker.add-item(request.body);
-              "successfully added item to the cart"
-        - method: GET
-          path: /v1/{user}/contents
-          security: my-security
-          binding:
-            type: default
-            componentName: "amazon:shopping-cart"
-            response: |
-              let user: u32 = request.path.user;
-              let worker = instance("cart-${user}");
-              let user-name: string = request.auth.email;
-              {
-                user: user-name,
-                cart: worker.get-cart-contents()
-              }
-        - method: POST
-          path: /v1/{user}/checkout
-          binding:
-            type: default
-            componentName: "amazon:shopping-cart"
-            response: |
-              let user: u32 = request.path.user;
-              let worker = instance("cart-${user}");
-              worker.checkout()
-
-  # Uncomment if you want to deploy your api
-  deployments:
-    local:
-    - host: localhost:9006
-      definitions:
-       - shopping-cart
-```
-
-##### The new fields in `request` object
+Attaching a security scheme to a route adds an additional `auth` field to the Rib `request` object, which contains the claims from the authenticated user's ID token. For example, to get the authenticated user's email and use it to access an agent (with agent type `example-agent`) associated with this user:
 
 ```rib
-let user: u32 = request.path.user;
-let worker = instance("cart-${user}");
-let user-name: string = request.auth.email;
-{
-   user: user-name,
-   cart: worker.get-cart-contents()
-}
+let email: string = request.auth.email;
+let agent = example-agent(email);
 ```
-
-In the Rib script, we are expecting a field called `auth` with the email of the user, and this is populated.
-Unlike `request.path.*`, `request.query.*`, `request.auth.*` is valid only in a route with security enabled.
-
-### Deploy and test
-
-```sh
-golem app deploy
-
-```
-
-Open browser (preferably chrome as we haven't extensively tested across all browsers) and try http://localhost:9006/v1/100/contents.
-This should redirect you to google login, to authenticate yourself, to finally get the result such as the following
-
-
-```json
-{
-  "cart":[{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.0,"product-id":"foo","quantity":42},{"name":"foo","price":42.0,"product-id":"foo","quantity":42}],
-  "user":"me.anonymous@gmail.com"
-}
-
-```
-
 
 #### Redirects and Cookies
 
@@ -153,16 +58,16 @@ which is exposed on your behalf by Golem API gateway) with all the details of th
 This is followed by another redirect to the original URL that you tried to access, and this time the session-id, tokens/secrets set in a secure Cookie, which your
 browser will resend. Once the browser sends the cookie, Golem API gateway will validate the cookie and allow you to access the protected endpoint.
 
-We will be adding more support for various clients and usecases in future releases based on the user feedback.
+We will be adding more support for various clients and use-cases in future releases based on the user feedback.
 
 #### Unexposed CallBack Endpoint
 
 Note that the callback endpoint is exposed automatically based on the re-direct url specified in the API security scheme. Users cannot customise or add
 these call back endpoints manually. This is to avoid any security issues that may arise due to misconfiguration of the callback endpoint.
 
-#### Troubleshoot
+#### Troubleshooting
 
-Most of the errors in this usecase are originated from a wrong security scheme configuration. For example, a wrong `redirect-url`
+Most of the errors in this use-case are originated from a wrong security scheme configuration. For example, a wrong `redirect-url`
 can result in odd errors that is difficult to spot, as this is originated from the providers and not Golem.
 
 Make sure the scope is correct and includes email. Trying to specify `request.auth.email` while the scope doesn't have it in the security scheme,
@@ -170,8 +75,7 @@ will result in errors such as `email` not found in the request object
 
 #### Known Issues
 
-If you try to update golem with multiple security schemes (with the names foo-security-scheme, and bar-security-scheme ) but with the same redirect-url,
-you will get an internal repository error. This will be fixed in the upcoming releases.
+Using multiple security schemes (with the names foo-security-scheme, and bar-security-scheme ) with the same redirect-url is not supported and leads to an internal error.
 
 ```sh
 Selected profile: local
