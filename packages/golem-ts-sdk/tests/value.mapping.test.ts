@@ -38,6 +38,8 @@ import {
   tupleArb,
   unionArb,
   unionComplexArb,
+  unionWithOnlyLiteralsArb,
+  unionWithLiteralArb,
 } from './arbitraries';
 import * as fc from 'fast-check';
 import { Type } from '@golemcloud/golem-ts-types-core';
@@ -116,13 +118,21 @@ describe('typescript value to wit value round-trip conversions', () => {
   });
 
   it('should correctly perform round-trip conversion for arbitrary values of union types', () => {
-    const unionWithOnlyLiterals = getUnionWithOnlyLiterals();
-    runRoundTripTest('foo', unionWithOnlyLiterals);
+    fc.assert(
+      fc.property(unionWithOnlyLiteralsArb, (unionData) => {
+        const unionWithOnlyLiterals = getUnionWithOnlyLiterals();
+        runRoundTripTest(unionData, unionWithOnlyLiterals);
+      }),
+    );
   });
 
   it('should correctly perform round-trip conversion for arbitrary values of union that contains literals', () => {
-    const unionWithOnlyLiterals = getUnionWithLiterals();
-    runRoundTripTest({ n: 1 }, unionWithOnlyLiterals);
+    fc.assert(
+      fc.property(unionWithLiteralArb, (unionData) => {
+        const unionWithLiterals = getUnionWithLiterals();
+        runRoundTripTest(unionData, unionWithLiterals);
+      }),
+    );
   });
 
   it('should preserve values with only required properties (excluding optional)', () => {

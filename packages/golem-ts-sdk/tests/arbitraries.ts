@@ -74,8 +74,10 @@ export const objectWithUnionWithUndefined3Arb: Arbitrary<ObjectWithUnionWithUnde
 export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUndefined4> =
   fc.oneof(fc.record({}), fc.record({ a: stringOrUndefined }));
 
-export const unionOfLiteralArb: Arbitrary<UnionWithLiterals> =
-  fc.constantFrom<UnionWithLiterals>('a', 'b', 'c');
+export const unionWithLiteralArb: Arbitrary<UnionWithLiterals> = fc.oneof(
+  fc.constantFrom<UnionWithLiterals>('a', 'b', 'c'),
+  fc.record({ n: fc.integer() }),
+);
 
 export const resultTypeExactArb: Arbitrary<ResultTypeExactBoth> = fc.oneof(
   fc.record({ tag: fc.constant('ok'), val: fc.integer() }),

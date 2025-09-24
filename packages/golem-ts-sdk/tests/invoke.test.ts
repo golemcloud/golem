@@ -43,7 +43,7 @@ import {
   stringOrUndefined,
   taggedUnionArb,
   unionArb,
-  unionOfLiteralArb,
+  unionWithLiteralArb,
   unionWithOnlyLiteralsArb,
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
@@ -64,7 +64,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
       objectWithUnionWithUndefined4Arb,
       stringOrUndefined,
       fc.oneof(unionArb, fc.constant(undefined)),
-      unionOfLiteralArb,
+      unionWithLiteralArb,
       taggedUnionArb,
       unionWithOnlyLiteralsArb,
       resultTypeExactArb,
