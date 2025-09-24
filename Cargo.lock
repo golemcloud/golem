@@ -4181,6 +4181,7 @@ dependencies = [
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",
+ "gag",
  "globwalk",
  "golem-client",
  "golem-common",
@@ -4199,6 +4200,7 @@ dependencies = [
  "itertools 0.14.0",
  "lenient_bool",
  "log",
+ "mime_guess",
  "minijinja",
  "moonbit-component-generator",
  "nanoid",
@@ -4212,6 +4214,7 @@ dependencies = [
  "quote",
  "regex",
  "reqwest 0.12.23",
+ "schemars 0.8.22",
  "semver",
  "serde",
  "serde_derive",
@@ -5651,7 +5654,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "if_chain"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
 
+[[package]]
 name = "ignore"
 version = "0.4.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5666,13 +5674,6 @@ dependencies = [
  "walkdir",
  "winapi-util",
 ]
-
-[[package]]
-name = "if_chain"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
-
 
 [[package]]
 name = "im-rc"
