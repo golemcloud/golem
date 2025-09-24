@@ -522,7 +522,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
-  it('object with abcdedfg works', () => {
+  it('object with `a?: string | undefined` works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
       'objectWithUnionWithUndefined4',
