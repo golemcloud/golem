@@ -3,7 +3,7 @@ declare module 'golem:video-generation/advanced@1.0.0' {
   /**
    * @throws VideoError
    */
-  export function extendVideo(videoId: string, prompt: string | undefined, negativePrompt: string | undefined, cfgScale: number | undefined, providerOptions: Kv[] | undefined): string;
+  export function extendVideo(options: ExtendVideoOptions): string;
   /**
    * @throws VideoError
    */
@@ -11,16 +11,35 @@ declare module 'golem:video-generation/advanced@1.0.0' {
   /**
    * @throws VideoError
    */
-  export function generateVideoEffects(input: InputImage, effect: EffectType, model: string | undefined, duration: number | undefined, mode: string | undefined): string;
+  export function generateVideoEffects(options: GenerateVideoEffectsOptions): string;
   /**
    * @throws VideoError
    */
-  export function multiImageGeneration(inputImages: InputImage[], prompt: string | undefined, config: GenerationConfig): string;
+  export function multiImageGeneration(options: MultImageGenerationOptions): string;
   export type VideoError = golemVideoGeneration100Types.VideoError;
   export type Kv = golemVideoGeneration100Types.Kv;
   export type BaseVideo = golemVideoGeneration100Types.BaseVideo;
   export type GenerationConfig = golemVideoGeneration100Types.GenerationConfig;
   export type InputImage = golemVideoGeneration100Types.InputImage;
   export type EffectType = golemVideoGeneration100Types.EffectType;
+  export type ExtendVideoOptions = {
+    videoId: string;
+    prompt?: string;
+    negativePrompt?: string;
+    cfgScale?: number;
+    providerOptions?: Kv[];
+  };
+  export type GenerateVideoEffectsOptions = {
+    input: InputImage;
+    effect: EffectType;
+    model?: string;
+    duration?: number;
+    mode?: string;
+  };
+  export type MultImageGenerationOptions = {
+    inputImages: InputImage[];
+    prompt?: string;
+    config: GenerationConfig;
+  };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

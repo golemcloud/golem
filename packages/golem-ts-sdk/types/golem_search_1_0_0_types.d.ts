@@ -115,4 +115,8 @@ declare module 'golem:search/types@1.0.0' {
     fields: SchemaField[];
     primaryKey?: string;
   };
+  export type CreateIndexOptions = {
+    indexName: string;
+    schema?: Schema;
+  };
 }
