@@ -4837,6 +4837,46 @@ mod tests {
         assert_eq!(result.get_val().unwrap().value, expected);
     }
 
+    #[test]
+    async fn test_interpreter_custom_instance_conflicting_variants() {
+        let expr = r#"
+                let x = instance("abc");
+                let r1 = x.func1(foo("bar"));
+                let r2 = x.func2(foo(["baz", "qux"]));
+                {result1: r1, result2: r2}
+            "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let test_deps = RibTestDeps::test_deps_with_variant_conflicts(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+        let compiled = compiler
+            .compile(expr)
+            .map_err(|err| err.to_string())
+            .unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String("bar".to_string()))),
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::List(vec![
+                    Value::String("baz".to_string()),
+                    Value::String("qux".to_string()),
+                ]))),
+            },
+        ]);
+        assert_eq!(result.get_val().unwrap().value, expected);
+    }
+
     mod test_utils {
         use crate::interpreter::rib_interpreter::internal::NoopRibFunctionInvoke;
         use crate::interpreter::rib_interpreter::Interpreter;
@@ -4973,6 +5013,43 @@ mod tests {
 
         pub(crate) fn get_metadata_with_resource_without_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![])
+        }
+
+        pub(crate) fn get_metadata_simple_with_variant_conflicts() -> Vec<ComponentDependency> {
+            let func1 = AnalysedFunction {
+                name: "func1".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: variant(vec![case("foo", str())]),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            };
+
+            let func2 = AnalysedFunction {
+                name: "func2".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: variant(vec![
+                        case("foo", list(str())), // just different types to that of the foo and bar
+                    ]),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            };
+
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(
+                component_info,
+                vec![
+                    AnalysedExport::Function(func1),
+                    AnalysedExport::Function(func2),
+                ],
+            )]
         }
 
         pub(crate) fn get_metadata_with_multiple_interfaces_simple() -> Vec<ComponentDependency> {
@@ -5551,6 +5628,28 @@ mod tests {
             }
         }
 
+        struct SimpleVariantConflictInvoke;
+
+        #[async_trait]
+        impl RibComponentFunctionInvoke for SimpleVariantConflictInvoke {
+            async fn invoke(
+                &self,
+                _component_dependency_key: ComponentDependencyKey,
+                _instruction_id: &InstructionId,
+                _worker_name: EvaluatedWorkerName,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
+            ) -> RibFunctionInvokeResult {
+                let arg = args.0.first().unwrap();
+
+                match function_name.0.as_str() {
+                    "func1" | "func2" => Ok(Some(arg.clone())),
+                    _ => Err(format!("unexpected function name: {}", function_name.0).into()),
+                }
+            }
+        }
+
         struct CustomInstanceFunctionInvoke;
         #[async_trait]
         impl RibComponentFunctionInvoke for CustomInstanceFunctionInvoke {
@@ -5762,6 +5861,22 @@ mod tests {
                 let interpreter = Interpreter::new(
                     rib_input.unwrap_or_default(),
                     Arc::new(CustomInstanceFunctionInvoke),
+                    Arc::new(StaticWorkerNameGenerator),
+                );
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+
+            pub(crate) fn test_deps_with_variant_conflicts(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_simple_with_variant_conflicts();
+                let interpreter = Interpreter::new(
+                    rib_input.unwrap_or_default(),
+                    Arc::new(SimpleVariantConflictInvoke),
                     Arc::new(StaticWorkerNameGenerator),
                 );
 
