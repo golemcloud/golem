@@ -17,7 +17,7 @@ use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm_ast::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, s32, str, u32, unit_case, variant,
+    case, field, list, option, r#enum, record, result, s32, str, u32, unit_case, variant,
 };
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
@@ -405,6 +405,41 @@ pub fn reproducer_for_issue_with_enums() -> Vec<AgentType> {
                     schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
                         element_type: r#enum(&["foo", "bar", "baz"])
                             .named("union-with-only-literals"),
+                    }),
+                }],
+            }),
+        }],
+        dependencies: vec![],
+    }]
+}
+
+pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "bar-agent".to_string(),
+        description: "Constructs the agent bar-agent".to_string(),
+        constructor: AgentConstructor {
+            name: Some("BarAgent".to_string()),
+            description: "Constructs the agent bar-agent".to_string(),
+            prompt_hint: Some("Enter the following parameters: ".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "funEither".to_string(),
+            description: "".to_string(),
+            prompt_hint: Some("".to_string()),
+            input_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "either".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: result(str(), str()).named("result-exact"),
+                    }),
+                }],
+            }),
+            output_schema: DataSchema::Tuple(NamedElementSchemas {
+                elements: vec![NamedElementSchema {
+                    name: "return-value".to_string(),
+                    schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                        element_type: result(str(), str()).named("result-exact"),
                     }),
                 }],
             }),
