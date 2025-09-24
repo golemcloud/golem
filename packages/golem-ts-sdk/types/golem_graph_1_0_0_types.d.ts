@@ -195,4 +195,194 @@ declare module 'golem:graph/types@1.0.0' {
     property: string;
     ascending: boolean;
   };
+  /**
+   * Query result that maintains symmetry with data insertion formats
+   */
+  export type QueryResult = {
+    tag: 'vertices'
+    val: Vertex[]
+  } |
+  {
+    tag: 'edges'
+    val: Edge[]
+  } |
+  {
+    tag: 'paths'
+    val: Path[]
+  } |
+  {
+    tag: 'values'
+    val: PropertyValue[]
+  } |
+  {
+    tag: 'maps'
+    val: [string, PropertyValue][][]
+  };
+  /**
+   * Query parameters for parameterized queries
+   */
+  export type QueryParameters = [string, PropertyValue][];
+  /**
+   * Options for execute-query
+   */
+  export type ExecuteQueryOptions = {
+    query: string;
+    parameters?: QueryParameters;
+    timeoutSeconds?: number;
+    maxResults?: number;
+    explain?: boolean;
+    profile?: boolean;
+  };
+  /**
+   * Options for create-vertex
+   */
+  export type CreateVertexOptions = {
+    vertexType: string;
+    properties?: PropertyMap;
+    labels?: string[];
+  };
+  /**
+   * Options for update-vertex
+   */
+  export type UpdateVertexOptions = {
+    id: ElementId;
+    properties: PropertyMap;
+    partial?: boolean;
+    createMissing?: boolean;
+  };
+  /**
+   * Options for create-edge
+   */
+  export type CreateEdgeOptions = {
+    edgeType: string;
+    fromVertex: ElementId;
+    toVertex: ElementId;
+    properties?: PropertyMap;
+  };
+  /**
+   * Sub-options for update-edge
+   */
+  export type CreateMissingEdgeOptions = {
+    edgeType: string;
+    fromVertex: ElementId;
+    toVertex: ElementId;
+  };
+  /**
+   * Options for update-edge
+   */
+  export type UpdateEdgeOptions = {
+    id: ElementId;
+    properties: PropertyMap;
+    partial?: boolean;
+    createMissingWith?: CreateMissingEdgeOptions;
+  };
+  /**
+   * Options for find-vertices
+   */
+  export type FindVerticesOptions = {
+    vertexType?: string;
+    filters?: FilterCondition[];
+    sort?: SortSpec[];
+    limit?: number;
+    offset?: number;
+  };
+  /**
+   * Options for find-edges
+   */
+  export type FindEdgesOptions = {
+    edgeTypes?: string[];
+    filters?: FilterCondition[];
+    sort?: SortSpec[];
+    limit?: number;
+    offset?: number;
+  };
+  /**
+   * Options for get-adjacent-vertices
+   */
+  export type GetAdjacentVerticesOptions = {
+    vertexId: ElementId;
+    direction: Direction;
+    edgeTypes?: string[];
+    limit?: number;
+  };
+  /**
+   * Options for get-connected-edges
+   */
+  export type GetConnectedEdgesOptions = {
+    vertexId: ElementId;
+    direction: Direction;
+    edgeTypes?: string[];
+    limit?: number;
+  };
+  /**
+   * Query execution result with metadata
+   */
+  export type QueryExecutionResult = {
+    queryResultValue: QueryResult;
+    executionTimeMs?: number;
+    rowsAffected?: number;
+    explanation?: string;
+    profileData?: string;
+  };
+  /**
+   * Common path finding sub-options
+   */
+  export type PathOptions = {
+    maxDepth?: number;
+    edgeTypes?: string[];
+    vertexTypes?: string[];
+    vertexFilters?: FilterCondition[];
+    edgeFilters?: FilterCondition[];
+  };
+  /**
+   * Options for neighborhood
+   */
+  export type GetNeighborhoodOptions = {
+    center: ElementId;
+    depth: number;
+    direction: Direction;
+    edgeTypes?: string[];
+    maxVertices?: number;
+  };
+  /**
+   * Subgraph containing related vertices and edges
+   */
+  export type Subgraph = {
+    vertices: Vertex[];
+    edges: Edge[];
+  };
+  /**
+   * Options for find-shortest-path
+   */
+  export type FindShortestPathOptions = {
+    fromVertex: ElementId;
+    toVertex: ElementId;
+    path?: PathOptions;
+  };
+  /**
+   * Options for find-all-paths
+   */
+  export type FindAllPathsOptions = {
+    fromVertex: ElementId;
+    toVertex: ElementId;
+    path?: PathOptions;
+    limit?: number;
+  };
+  /**
+   * Options for path-exists
+   */
+  export type PathExistsOptions = {
+    fromVertex: ElementId;
+    toVertex: ElementId;
+    path?: PathOptions;
+  };
+  /**
+   * Options for get-vertices-at-distance
+   */
+  export type GetVerticesAtDistanceOptions = {
+    source: ElementId;
+    distance: number;
+    direction: Direction;
+    edgeTypes?: string[];
+  };
 }

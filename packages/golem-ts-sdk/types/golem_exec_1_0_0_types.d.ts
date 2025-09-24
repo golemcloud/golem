@@ -20,7 +20,7 @@ declare module 'golem:exec/types@1.0.0' {
     encoding?: Encoding;
   };
   /**
-   * Resource limits and execution constraints
+   * Resource limits
    */
   export type Limits = {
     timeMs?: bigint;
@@ -69,5 +69,18 @@ declare module 'golem:exec/types@1.0.0' {
   {
     tag: 'internal'
     val: string
+  };
+  /**
+   * Options for controlling the script runner environment
+   * - `stdin` is optional input to provide to the program.
+   * - `args` are command line arguments passed to the program.
+   * - `env` is a list of environment variables to set for the execution.
+   * - `limits` are optional resource limits for the execution.
+   */
+  export type RunOptions = {
+    stdin?: string;
+    args?: string[];
+    env?: [string, string][];
+    limits?: Limits;
   };
 }

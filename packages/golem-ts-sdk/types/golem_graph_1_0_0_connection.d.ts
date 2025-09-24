@@ -42,7 +42,7 @@ declare module 'golem:graph/connection@1.0.0' {
    * Configuration for connecting to graph databases
    */
   export type ConnectionConfig = {
-    hosts: string[];
+    hosts?: string[];
     port?: number;
     databaseName?: string;
     username?: string;

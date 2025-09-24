@@ -7,7 +7,7 @@ declare module 'golem:search/core@1.0.0' {
    * Index lifecycle
    * @throws SearchError
    */
-  export function createIndex(name: IndexName, schema: Schema | undefined): void;
+  export function createIndex(options: CreateIndexOptions): void;
   /**
    * @throws SearchError
    */
@@ -67,5 +67,6 @@ declare module 'golem:search/core@1.0.0' {
   export type SearchHit = golemSearch100Types.SearchHit;
   export type Schema = golemSearch100Types.Schema;
   export type SearchError = golemSearch100Types.SearchError;
+  export type CreateIndexOptions = golemSearch100Types.CreateIndexOptions;
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }

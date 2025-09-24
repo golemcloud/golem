@@ -6,16 +6,58 @@ declare module 'golem:graph/transactions@1.0.0' {
   import * as golemGraph100Types from 'golem:graph/types@1.0.0';
   export class Transaction {
     /**
+     * === QUERY OPERATIONS ===
+     * Execute a database-specific query string
+     * @throws GraphError
+     */
+    executeQuery(options: ExecuteQueryOptions): QueryExecutionResult;
+    /**
+     * == TRAVESAL OPERATIONS ==
+     * Find shortest path between two vertices
+     * @throws GraphError
+     */
+    findShortestPath(options: FindShortestPathOptions): Path | undefined;
+    /**
+     * Find all paths between two vertices (up to limit)
+     * @throws GraphError
+     */
+    findAllPaths(options: FindAllPathsOptions): Path[];
+    /**
+     * Get k-hop neighborhood around a vertex
+     * @throws GraphError
+     */
+    getNeighborhood(options: GetNeighborhoodOptions): Subgraph;
+    /**
+     * Check if path exists between vertices
+     * @throws GraphError
+     */
+    pathExists(options: PathExistsOptions): boolean;
+    /**
+     * Get vertices at specific distance from source
+     * @throws GraphError
+     */
+    getVerticesAtDistance(options: GetVerticesAtDistanceOptions): Vertex[];
+    /**
+     * Get adjacent vertices through specified edge types
+     * @throws GraphError
+     */
+    getAdjacentVertices(options: GetAdjacentVerticesOptions): Vertex[];
+    /**
+     * Get edges connected to a vertex
+     * @throws GraphError
+     */
+    getConnectedEdges(options: GetConnectedEdgesOptions): Edge[];
+    /**
      * === VERTEX OPERATIONS ===
      * Create a new vertex
      * @throws GraphError
      */
-    createVertex(vertexType: string, properties: PropertyMap): Vertex;
+    createVertex(options: CreateVertexOptions): Vertex;
     /**
-     * Create vertex with additional labels (for multi-label systems like Neo4j)
+     * Create multiple vertices in a single operation
      * @throws GraphError
      */
-    createVertexWithLabels(vertexType: string, additionalLabels: string[], properties: PropertyMap): Vertex;
+    createVertices(vertices: CreateVertexOptions[]): Vertex[];
     /**
      * Get vertex by ID
      * @throws GraphError
@@ -25,12 +67,7 @@ declare module 'golem:graph/transactions@1.0.0' {
      * Update vertex properties (replaces all properties)
      * @throws GraphError
      */
-    updateVertex(id: ElementId, properties: PropertyMap): Vertex;
-    /**
-     * Update specific vertex properties (partial update)
-     * @throws GraphError
-     */
-    updateVertexProperties(id: ElementId, updates: PropertyMap): Vertex;
+    updateVertex(options: UpdateVertexOptions): Vertex;
     /**
      * Delete vertex (and optionally its edges)
      * @throws GraphError
@@ -40,13 +77,18 @@ declare module 'golem:graph/transactions@1.0.0' {
      * Find vertices by type and optional filters
      * @throws GraphError
      */
-    findVertices(vertexType: string | undefined, filters: FilterCondition[] | undefined, sort: SortSpec[] | undefined, limit: number | undefined, offset: number | undefined): Vertex[];
+    findVertices(options: FindVerticesOptions): Vertex[];
     /**
      * === EDGE OPERATIONS ===
      * Create a new edge
      * @throws GraphError
      */
-    createEdge(edgeType: string, fromVertex: ElementId, toVertex: ElementId, properties: PropertyMap): Edge;
+    createEdge(options: CreateEdgeOptions): Edge;
+    /**
+     * Create multiple edges in a single operation
+     * @throws GraphError
+     */
+    createEdges(edges: CreateEdgeOptions[]): Edge[];
     /**
      * Get edge by ID
      * @throws GraphError
@@ -56,12 +98,7 @@ declare module 'golem:graph/transactions@1.0.0' {
      * Update edge properties
      * @throws GraphError
      */
-    updateEdge(id: ElementId, properties: PropertyMap): Edge;
-    /**
-     * Update specific edge properties (partial update)
-     * @throws GraphError
-     */
-    updateEdgeProperties(id: ElementId, updates: PropertyMap): Edge;
+    updateEdge(options: UpdateEdgeOptions): Edge;
     /**
      * Delete edge
      * @throws GraphError
@@ -71,39 +108,7 @@ declare module 'golem:graph/transactions@1.0.0' {
      * Find edges by type and optional filters
      * @throws GraphError
      */
-    findEdges(edgeTypes: string[] | undefined, filters: FilterCondition[] | undefined, sort: SortSpec[] | undefined, limit: number | undefined, offset: number | undefined): Edge[];
-    /**
-     * === TRAVERSAL OPERATIONS ===
-     * Get adjacent vertices through specified edge types
-     * @throws GraphError
-     */
-    getAdjacentVertices(vertexId: ElementId, direction: Direction, edgeTypes: string[] | undefined, limit: number | undefined): Vertex[];
-    /**
-     * Get edges connected to a vertex
-     * @throws GraphError
-     */
-    getConnectedEdges(vertexId: ElementId, direction: Direction, edgeTypes: string[] | undefined, limit: number | undefined): Edge[];
-    /**
-     * === BATCH OPERATIONS ===
-     * Create multiple vertices in a single operation
-     * @throws GraphError
-     */
-    createVertices(vertices: VertexSpec[]): Vertex[];
-    /**
-     * Create multiple edges in a single operation
-     * @throws GraphError
-     */
-    createEdges(edges: EdgeSpec[]): Edge[];
-    /**
-     * Upsert vertex (create or update)
-     * @throws GraphError
-     */
-    upsertVertex(id: ElementId | undefined, vertexType: string, properties: PropertyMap): Vertex;
-    /**
-     * Upsert edge (create or update)
-     * @throws GraphError
-     */
-    upsertEdge(id: ElementId | undefined, edgeType: string, fromVertex: ElementId, toVertex: ElementId, properties: PropertyMap): Edge;
+    findEdges(options: FindEdgesOptions): Edge[];
     /**
      * === TRANSACTION CONTROL ===
      * Commit the transaction
@@ -129,23 +134,22 @@ declare module 'golem:graph/transactions@1.0.0' {
   export type FilterCondition = golemGraph100Types.FilterCondition;
   export type SortSpec = golemGraph100Types.SortSpec;
   export type Direction = golemGraph100Types.Direction;
+  export type Subgraph = golemGraph100Types.Subgraph;
+  export type ExecuteQueryOptions = golemGraph100Types.ExecuteQueryOptions;
+  export type QueryExecutionResult = golemGraph100Types.QueryExecutionResult;
+  export type FindShortestPathOptions = golemGraph100Types.FindShortestPathOptions;
+  export type FindAllPathsOptions = golemGraph100Types.FindAllPathsOptions;
+  export type FindEdgesOptions = golemGraph100Types.FindEdgesOptions;
+  export type GetAdjacentVerticesOptions = golemGraph100Types.GetAdjacentVerticesOptions;
+  export type GetConnectedEdgesOptions = golemGraph100Types.GetConnectedEdgesOptions;
+  export type GetVerticesAtDistanceOptions = golemGraph100Types.GetVerticesAtDistanceOptions;
+  export type FindVerticesOptions = golemGraph100Types.FindVerticesOptions;
+  export type GetNeighborhoodOptions = golemGraph100Types.GetNeighborhoodOptions;
+  export type PathExistsOptions = golemGraph100Types.PathExistsOptions;
+  export type CreateVertexOptions = golemGraph100Types.CreateVertexOptions;
+  export type UpdateVertexOptions = golemGraph100Types.UpdateVertexOptions;
+  export type CreateEdgeOptions = golemGraph100Types.CreateEdgeOptions;
+  export type UpdateEdgeOptions = golemGraph100Types.UpdateEdgeOptions;
   export type GraphError = golemGraph100Errors.GraphError;
-  /**
-   * Vertex specification for batch creation
-   */
-  export type VertexSpec = {
-    vertexType: string;
-    additionalLabels?: string[];
-    properties: PropertyMap;
-  };
-  /**
-   * Edge specification for batch creation
-   */
-  export type EdgeSpec = {
-    edgeType: string;
-    fromVertex: ElementId;
-    toVertex: ElementId;
-    properties: PropertyMap;
-  };
   export type Result<T, E> = { tag: 'ok', val: T } | { tag: 'err', val: E };
 }
