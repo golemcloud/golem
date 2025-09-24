@@ -15,7 +15,7 @@ export type TaggedUnion =
     | { tag: 'j' };
 
 
-export type UnionWithLiterals = 'a' | 'b' | 'c' | boolean;
+export type UnionWithLiterals = 'lit1' | 'lit2' | 'lit3' | boolean;
 
 export type UnionWithOnlyLiterals = "foo" | "bar" | "baz";
 
@@ -133,4 +133,3 @@ export type ResultLike = { tag: 'okay'; value: string; } | { tag: 'error'; value
 
 // Result exact doesn't work.
 export type ResultExact = { tag: 'ok'; value: string; } | { tag: 'err'; value: string; };
-

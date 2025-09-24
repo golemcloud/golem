@@ -1,6 +1,5 @@
 import {BaseAgent, agent, UnstructuredText, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
 
-// TODO: Once the golem-ts-sdk is moved to golem, we could reuse the sample agents in the SDK tests
 import * as Types from './model';
 import {
     ObjectWithUnionWithUndefined1,
@@ -17,7 +16,7 @@ import {
     NumberType,
     StringType,
     BooleanType,
-    MapType, TupleComplexType, TupleType, ListComplexType, ResultLikeWithNoTag, ResultExact, ResultLike,
+    MapType, TupleComplexType, TupleType, ListComplexType, ResultLikeWithNoTag, ResultLike,
 } from './model';
 
 
@@ -77,53 +76,53 @@ class FooAgent extends BaseAgent {
         this.barAgent = BarAgent.get("foooo", 1);
     }
 
-    // async funAll(
-    //     complexType: Types.ObjectComplexType,
-    //     unionType: Types.UnionType,
-    //     unionComplexType: Types.UnionComplexType,
-    //     numberType: Types.NumberType,
-    //     stringType: Types.StringType,
-    //     booleanType: Types.BooleanType,
-    //     mapType: Types.MapType,
-    //     tupleComplexType: Types.TupleComplexType,
-    //     tupleType: Types.TupleType,
-    //     listComplexType: Types.ListComplexType,
-    //     objectType: Types.ObjectType,
-    //     resultLike: ResultLike,
-    //     resultLikeWithNoTag: ResultLikeWithNoTag,
-    //     unionWithNull: string | number | null,
-    //     objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
-    //     objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
-    //     objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
-    //     objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
-    //     optionalStringType: string | undefined,
-    //     optionalUnionType: UnionType | undefined,
-    //     taggedUnionType: TaggedUnion,
-    // ): Types.PromiseType {
-    //     return await this.barAgent.funAll(
-    //         complexType,
-    //         unionType,
-    //         unionComplexType,
-    //         numberType,
-    //         stringType,
-    //         booleanType,
-    //         mapType,
-    //         tupleComplexType,
-    //         tupleType,
-    //         listComplexType,
-    //         objectType,
-    //         resultLike,
-    //         resultLikeWithNoTag,
-    //         unionWithNull,
-    //         objectWithUnionWithUndefined1,
-    //         objectWithUnionWithUndefined2,
-    //         objectWithUnionWithUndefined3,
-    //         objectWithUnionWithUndefined4,
-    //         optionalStringType,
-    //         optionalUnionType,
-    //         taggedUnionType,
-    //     )
-    // }
+    async funAll(
+        complexType: Types.ObjectComplexType,
+        unionType: Types.UnionType,
+        unionComplexType: Types.UnionComplexType,
+        numberType: Types.NumberType,
+        stringType: Types.StringType,
+        booleanType: Types.BooleanType,
+        mapType: Types.MapType,
+        tupleComplexType: Types.TupleComplexType,
+        tupleType: Types.TupleType,
+        listComplexType: Types.ListComplexType,
+        objectType: Types.ObjectType,
+        resultLike: ResultLike,
+        resultLikeWithNoTag: ResultLikeWithNoTag,
+        unionWithNull: string | number | null,
+        objectWithUnionWithUndefined1: ObjectWithUnionWithUndefined1,
+        objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
+        objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
+        objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
+        optionalStringType: string | undefined,
+        optionalUnionType: UnionType | undefined,
+        taggedUnionType: TaggedUnion,
+    ): Types.PromiseType {
+        return await this.barAgent.funAll(
+            complexType,
+            unionType,
+            unionComplexType,
+            numberType,
+            stringType,
+            booleanType,
+            mapType,
+            tupleComplexType,
+            tupleType,
+            listComplexType,
+            objectType,
+            resultLike,
+            resultLikeWithNoTag,
+            unionWithNull,
+            objectWithUnionWithUndefined1,
+            objectWithUnionWithUndefined2,
+            objectWithUnionWithUndefined3,
+            objectWithUnionWithUndefined4,
+            optionalStringType,
+            optionalUnionType,
+            taggedUnionType,
+        )
+    }
 
     async funOptional(param1: string | number | null,
                       param2: ObjectWithUnionWithUndefined1,
@@ -132,15 +131,6 @@ class FooAgent extends BaseAgent {
                       param5: ObjectWithUnionWithUndefined4,
                       param6: string | undefined,
                       param7: UnionType | undefined,) {
-        const concatenatedResult = {
-            param1: param1,
-            param2: param2.a,
-            param3: param3.a,
-            param4: param4.a,
-            param5: param5.a,
-            param6: param6,
-            param7: param7,
-        };
 
         return this.barAgent.funOptional(
             param1,
@@ -184,6 +174,10 @@ class FooAgent extends BaseAgent {
 
     async funMap(mapType: MapType): Promise<Types.MapType> {
         return await this.barAgent.funText(mapType);
+    }
+
+    async funTaggedUnion(taggedUnionType: TaggedUnion): Promise<TaggedUnion> {
+        return await this.barAgent.funTaggedUnion(taggedUnionType);
     }
 
 
@@ -296,7 +290,6 @@ class BarAgent extends BaseAgent {
     }
 
 
-    // Works
     async funOptional(param1: string | number | null,
                       param2: ObjectWithUnionWithUndefined1,
                       param3: ObjectWithUnionWithUndefined2,
@@ -317,88 +310,75 @@ class BarAgent extends BaseAgent {
         return Promise.resolve(concatenatedResult);
     }
 
-    // Works
     async funObjectComplexType(text: ObjectComplexType): Promise<ObjectComplexType> {
         return text
     }
 
 
-    // Works
     async funUnionType(unionType: UnionType): Promise<UnionType> {
         return unionType
     }
 
-    // works
     async funUnionComplexType(unionComplexType: UnionComplexType): Promise<Types.UnionComplexType> {
         return unionComplexType
     }
 
-    // works
     async funNumber(numberType: NumberType): Promise<NumberType> {
         return numberType
     }
 
-    // works
     async funString(stringType: StringType): Promise<Types.StringType> {
         return stringType
     }
 
-    // works
     async funBoolean(booleanType: BooleanType): Promise<Types.BooleanType> {
         return booleanType
     }
 
-    // works
     async funText(mapType: MapType): Promise<Types.MapType> {
         return mapType
     }
 
-    // works
     async funTupleComplexType(complexType: TupleComplexType): Promise<Types.TupleComplexType> {
         return complexType
     }
 
-    // works
     async funTupleType(tupleType: TupleType): Promise<Types.TupleType> {
         return tupleType
     }
 
-    // works
     async funListComplexType(listComplexType: ListComplexType): Promise<Types.ListComplexType> {
         return listComplexType
     }
 
-    // works
     async funObjectType(objectType: ObjectType): Promise<ObjectType> {
         return objectType
     }
 
-    // no
     async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
         return unionWithLiterals;
     }
 
-    // works
     async funVoidReturn(text: string): Promise<void> {
         return undefined;
     }
 
-    // works
     async funNullReturn(text: string): Promise<null> {
         return null
     }
 
-    //
     async funUndefinedReturn(text: string): Promise<undefined> {
         return
     }
 
-    // no
     async funUnstructuredText(unstructuredText: UnstructuredText): Promise<void> {
         return
     }
 
-    //works
+    async funTaggedUnion(taggedUnionType: TaggedUnion): Promise<TaggedUnion> {
+        return taggedUnionType
+    }
+
     async funResultNoTag(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
         return eitherBothOptional
     }
@@ -408,17 +388,14 @@ class BarAgent extends BaseAgent {
     //     return either
     // }
 
-    // no
     async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return eitherOneOptional
     }
 
-    // works
     async funNoReturn(text: string) {
         console.log('Hello World');
     }
 
-    // works
     funArrowSync = (text: string) => {
         console.log('Hello World');
     };
