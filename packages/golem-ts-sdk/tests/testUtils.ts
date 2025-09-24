@@ -85,6 +85,10 @@ export function getUnionWithLiterals(): Type.Type {
   return fetchType('UnionWithLiterals');
 }
 
+export function getUnionWithOnlyLiterals(): Type.Type {
+  return fetchType('UnionWithOnlyLiterals');
+}
+
 export function getRecordFieldsFromAnalysedType(
   analysedType: AnalysedType,
 ): NameTypePair[] | undefined {

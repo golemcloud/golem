@@ -23,6 +23,8 @@ import {
   getUnionType,
   getUnionComplexType,
   getPromiseType,
+  getUnionWithOnlyLiterals,
+  getUnionWithLiterals,
 } from './testUtils';
 
 import { TestInterfaceType } from './testTypes';
@@ -111,6 +113,16 @@ describe('typescript value to wit value round-trip conversions', () => {
         runRoundTripTest(unionComplexData, complexType);
       }),
     );
+  });
+
+  it('should correctly perform round-trip conversion for arbitrary values of union types', () => {
+    const unionWithOnlyLiterals = getUnionWithOnlyLiterals();
+    runRoundTripTest('foo', unionWithOnlyLiterals);
+  });
+
+  it('should correctly perform round-trip conversion for arbitrary values of union that contains literals', () => {
+    const unionWithOnlyLiterals = getUnionWithLiterals();
+    runRoundTripTest({ n: 1 }, unionWithOnlyLiterals);
   });
 
   it('should preserve values with only required properties (excluding optional)', () => {
@@ -361,6 +373,7 @@ function runRoundTripTest<T>(data: T, type: Type.Type) {
 
   // Round trip wit-value -> value -> wit-value
   const value = Value.fromWitValue(witValue);
+
   const witValueReturned = Value.toWitValue(value);
   expect(witValueReturned).toEqual(witValue);
 

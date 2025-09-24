@@ -1668,7 +1668,6 @@ export function toTsValue(value: Value, type: Type.Type): any {
       }
 
     case 'union':
-
       const unionOfLiterals = Either.getOrThrowWith(
         getUnionOfLiterals(type.unionTypes),
         (error) => new Error(`Internal Error: ${error}`),
@@ -1700,9 +1699,6 @@ export function toTsValue(value: Value, type: Type.Type): any {
 
       if (value.kind === 'variant') {
         const caseValue = value.caseValue;
-        if (!caseValue) {
-          throw new Error(typeMismatchInDeserialize(value, 'union'));
-        }
 
         if (Option.isSome(taggedUnions)) {
           const tags = TaggedUnion.getTaggedTypes(taggedUnions.val);
@@ -1715,11 +1711,18 @@ export function toTsValue(value: Value, type: Type.Type): any {
             return tagName;
           } else {
             const innerTypeVal = innerType.val;
+            if (!caseValue) {
+              throw new Error(typeMismatchInDeserialize(value, 'union'));
+            }
             return toTsValue(caseValue, innerTypeVal[1]);
           }
         }
 
         const matchingType = filteredUnionTypes[value.caseIdx];
+
+        if (!caseValue) {
+          return matchingType.name;
+        }
 
         return toTsValue(caseValue, matchingType);
       } else if (value.kind === 'result') {

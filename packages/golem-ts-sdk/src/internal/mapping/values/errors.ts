@@ -48,9 +48,20 @@ export function unionTypeMatchError(
   tsValue: any,
 ): string {
   const defaultTypes = unionTypes.map((t) => {
+    const defaultName =
+      t.kind === 'object'
+        ? `an object with properties \`${t.properties
+            .map((t) => t.getName())
+            .join(', ')}\``
+        : t.kind === 'interface'
+          ? `an interface with properties \`${t.properties
+              .map((t) => t.getName())
+              .join(', ')}\``
+          : t.kind;
+
     return (
       t.name ??
-      (t.kind === 'literal' ? t.literalValue : t.kind) ??
+      (t.kind === 'literal' ? t.literalValue : defaultName) ??
       '<anonymous>'
     );
   });

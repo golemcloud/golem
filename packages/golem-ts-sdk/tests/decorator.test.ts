@@ -250,6 +250,35 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(wit).toEqual(expectedWit);
   });
 
+  it('should handle union with literals in method xxx', () => {
+    const wit = getWitType(
+      complexAgentMethod!.inputSchema,
+      'unionWithLiterals',
+    );
+
+    const expectedWit = {
+      nodes: [
+        {
+          name: 'union-with-literals',
+          owner: undefined,
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['a', undefined],
+              ['b', undefined],
+              ['c', undefined],
+              ['union-with-literals1', 1],
+            ],
+          },
+        },
+        { type: { tag: 'record-type', val: [['n', 2]] } },
+        { type: { tag: 'prim-f64-type' } },
+      ],
+    };
+
+    expect(wit).toEqual(expectedWit);
+  });
+
   it('should handle result type - exact in method', () => {
     const wit = getWitType(complexAgentMethod!.inputSchema, 'resultTypeExact');
 

@@ -232,35 +232,29 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
   });
 });
 
-test('Union of literals to AnalysedType', () => {
+test('Union with literals to AnalysedType', () => {
   const unstructuredTextType = getUnionWithLiterals();
 
   const analysedType = Either.getOrThrow(
     AnalysedType.fromTsType(unstructuredTextType, Option.none()),
   );
 
-  const expectedAnalysedType: AnalysedType.AnalysedType = {
+  const expectedAnalysedType = {
     kind: 'variant',
     value: {
+      name: 'union-with-literals',
       cases: [
-        {
-          name: 'a',
-        },
-        {
-          name: 'b',
-        },
-        {
-          name: 'c',
-        },
+        { name: 'a' },
+        { name: 'b' },
+        { name: 'c' },
         {
           name: 'union-with-literals1',
           typ: {
-            kind: 'bool',
+            kind: 'record',
+            value: { fields: [{ name: 'n', typ: { kind: 'f64' } }] },
           },
         },
       ],
-      name: 'union-with-literals',
-      owner: undefined,
     },
   };
 

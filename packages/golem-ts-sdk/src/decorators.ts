@@ -33,16 +33,12 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getSelfMetadata } from 'golem:api/host@1.1.7';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
-import {
-  AgentTypeName,
-  convertAgentClassNameToKebab,
-} from './newTypes/agentTypeName';
+import { AgentTypeName } from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
 import { UnstructuredText } from './newTypes/textInput';
 import { UnstructuredBinary } from './newTypes/binaryInput';
-import { convertTypeNameToKebab } from './internal/mapping/types/string-format';
 
 type TsType = Type.Type;
 
