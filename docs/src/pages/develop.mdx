@@ -15,7 +15,7 @@ The primary tool for developing an application on Golem is the [Golem CLI](/cli)
 To create a new application, use the `golem app new` command, passing the name of the application and it's default programming language (note: it is possible to add components using different languages later).
 
 ```shell copy
-golem app new my-app rust
+golem app new my-app
 ```
 
 ## Writing the code
@@ -34,7 +34,7 @@ and every component can be deployed using
 golem app deploy
 ```
 
-This is going to create a new **version** of each component. If there are workers created already, those are not going to be updated automatically to these new versions. Check the [workers page](/concepts/workers) for more information about updating workers.
+This is going to create a new **version** of each component. If there are agents created already, those are not going to be updated automatically to these new versions. Check the [agents page](/concepts/agents) for more information about updating agents.
 
 ## Defining APIs
 
