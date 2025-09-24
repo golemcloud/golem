@@ -72,23 +72,6 @@ declare_unions! {
 mod protobuf {
     use super::*;
 
-    impl TryFrom<golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition>
-        for PluginSpecDto
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition,
-        ) -> Result<Self, Self::Error> {
-            match value.definition.ok_or("Missing plugin type specific definition")? {
-                golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::ComponentTransformer(value) => Ok(Self::ComponentTransformer(value.try_into()?)),
-                golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::OplogProcessor(value) => Ok(Self::OplogProcessor(value.try_into()?)),
-                golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::Library(value) => Ok(Self::Library(value.try_into()?)),
-                golem_api_grpc::proto::golem::component::plugin_type_specific_definition::Definition::App(value) => Ok(Self::App(value.try_into()?))
-            }
-        }
-    }
-
     impl From<ComponentTransformerPluginSpec>
         for golem_api_grpc::proto::golem::component::ComponentTransformerDefinition
     {
@@ -144,66 +127,6 @@ mod protobuf {
                     .ok_or("Missing component_id")?
                     .try_into()?,
                 component_revision: ComponentRevision(value.component_version),
-            })
-        }
-    }
-
-    impl From<LibraryPluginDefinition>
-        for golem_api_grpc::proto::golem::component::LibraryPluginDefinition
-    {
-        fn from(value: LibraryPluginDefinition) -> Self {
-            golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
-                blob_storage_key: value.blob_storage_key.0,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::LibraryPluginDefinition>
-        for LibraryPluginDefinition
-    {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::LibraryPluginDefinition,
-        ) -> Result<Self, Self::Error> {
-            Ok(LibraryPluginDefinition {
-                blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
-            })
-        }
-    }
-
-    impl From<AppPluginDefinition> for golem_api_grpc::proto::golem::component::AppPluginDefinition {
-        fn from(value: AppPluginDefinition) -> Self {
-            golem_api_grpc::proto::golem::component::AppPluginDefinition {
-                blob_storage_key: value.blob_storage_key.0,
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::AppPluginDefinition> for AppPluginDefinition {
-        type Error = String;
-
-        fn try_from(
-            value: golem_api_grpc::proto::golem::component::AppPluginDefinition,
-        ) -> Result<Self, Self::Error> {
-            Ok(AppPluginDefinition {
-                blob_storage_key: PluginWasmFileKey(value.blob_storage_key),
-            })
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::component::PluginRegistration> for PluginRegistrationDto {
-        type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::component::PluginRegistration) -> Result<Self, Self::Error> {
-            Ok(PluginRegistrationDto {
-                id: value.id.ok_or("Missing plugin id")?.try_into()?,
-                account_id: value.account_id.ok_or("Missing account id")?.try_into()?,
-                name: value.name,
-                version: value.version,
-                description: value.description,
-                icon: Base64(value.icon),
-                homepage: value.homepage,
-                specs: value.specs.ok_or("Missing plugin specs")?.try_into()?,
             })
         }
     }

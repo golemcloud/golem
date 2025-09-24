@@ -15,4 +15,3 @@
 pub mod auth;
 pub mod component;
 pub mod login;
-pub mod plugin_registration;

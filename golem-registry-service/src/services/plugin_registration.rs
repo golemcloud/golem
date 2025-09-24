@@ -15,7 +15,7 @@
 use super::account::{AccountError, AccountService};
 use super::component::{ComponentError, ComponentService};
 use crate::model::auth::{AuthCtx, AuthorizationError};
-use crate::model::plugin_registration::{
+use golem_service_base::model::plugin_registration::{
     AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
 };
 use crate::repo::model::audit::ImmutableAuditFields;

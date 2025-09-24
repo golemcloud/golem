@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::audit::ImmutableAuditFields;
-use crate::model::plugin_registration::{
+use golem_service_base::model::plugin_registration::{
     AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
 };
 use anyhow::anyhow;

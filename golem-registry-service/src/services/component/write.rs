@@ -17,7 +17,7 @@ use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller
 use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
-use crate::model::plugin_registration::{AppPluginSpec, LibraryPluginSpec, PluginSpec};
+use golem_service_base::model::plugin_registration::{AppPluginSpec, LibraryPluginSpec, PluginSpec};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
