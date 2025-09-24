@@ -19,7 +19,7 @@ use std::sync::Arc;
 use super::file_loader::FileLoader;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::plugins::Plugins;
+use crate::services::plugins::PluginsService;
 use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
@@ -323,7 +323,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
     project_service: Arc<dyn ProjectService>,
@@ -509,7 +509,7 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasPlugins for DirectWorkerInvocationRpc<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
     }
 }
@@ -566,7 +566,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,

@@ -50,7 +50,7 @@ use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
-use crate::services::plugins::Plugins;
+use crate::services::plugins::PluginsService;
 use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
@@ -164,7 +164,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
@@ -2324,7 +2324,7 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
@@ -2379,7 +2379,7 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
@@ -2673,7 +2673,7 @@ impl HasConfig for PrivateDurableWorkerState {
 }
 
 impl HasPlugins for PrivateDurableWorkerState {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
     }
 }

@@ -41,7 +41,7 @@ use crate::services::worker_activator::WorkerActivator;
 use std::sync::Arc;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
-use crate::services::plugins::Plugins;
+use crate::services::plugins::PluginsService;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
 use tokio::runtime::Handle;
@@ -163,7 +163,7 @@ pub trait HasFileLoader {
 }
 
 pub trait HasPlugins {
-    fn plugins(&self) -> Arc<dyn Plugins>;
+    fn plugins(&self) -> Arc<dyn PluginsService>;
 }
 
 pub trait HasOplogProcessorPlugin {
@@ -279,7 +279,7 @@ pub struct All<Ctx: WorkerCtx> {
     worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
     resource_limits: Arc<dyn resource_limits::ResourceLimits>,
     project_service: Arc<dyn projects::ProjectService>,
@@ -351,7 +351,7 @@ impl<Ctx: WorkerCtx> All<Ctx> {
         worker_proxy: Arc<dyn worker_proxy::WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn oplog::plugin::OplogProcessorPlugin>,
         resource_limits: Arc<dyn resource_limits::ResourceLimits>,
         project_service: Arc<dyn projects::ProjectService>,
@@ -582,7 +582,7 @@ impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasFileLoader for T {
 }
 
 impl<Ctx: WorkerCtx, T: UsesAllDeps<Ctx = Ctx>> HasPlugins for T {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.all().plugins.clone()
     }
 }

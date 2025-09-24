@@ -29,7 +29,7 @@ use crate::durable_host::wasm_rpc::serialized::{
 };
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
-use crate::services::plugins::Plugins;
+use crate::services::plugins::PluginsService;
 use crate::services::projects::ProjectService;
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
@@ -81,7 +81,7 @@ pub struct PublicOplogChunk {
 pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     projects: Arc<dyn ProjectService>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentRevision,
@@ -140,7 +140,7 @@ pub struct PublicOplogSearchResult {
 pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
-    plugin_service: Arc<dyn Plugins>,
+    plugin_service: Arc<dyn PluginsService>,
     project_service: Arc<dyn ProjectService>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentRevision,
@@ -227,7 +227,7 @@ pub trait PublicOplogEntryOps: Sized {
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         projects: Arc<dyn ProjectService>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentRevision,
@@ -240,7 +240,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         value: OplogEntry,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         projects: Arc<dyn ProjectService>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentRevision,

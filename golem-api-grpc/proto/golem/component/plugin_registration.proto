@@ -8,47 +8,29 @@ import "golem/common/empty.proto";
 import "golem/component/component_id.proto";
 import "golem/common/project_id.proto";
 
-message PluginId {
+message PluginRegistrationId {
   golem.common.UUID value = 1;
 }
 
-message PluginDefinitionCreation {
+message PluginRegistrationCreation {
   string name = 1;
   string version = 2;
   string description = 3;
   bytes icon = 4;
   string homepage = 5;
   golem.component.PluginTypeSpecificDefinition specs = 6;
-  golem.component.PluginScope scope = 7;
 }
 
-message PluginDefinition {
-  golem.component.PluginId id = 1;
+message PluginRegistration {
+  PluginRegistrationId id = 1;
   string name = 2;
   string version = 3;
   string description = 4;
   bytes icon = 5;
   string homepage = 6;
   golem.component.PluginTypeSpecificDefinition specs = 7;
-  golem.component.PluginScope scope = 8;
-  golem.common.AccountId account_id = 9;
-  bool deleted = 10;
-}
-
-message PluginScope {
-  oneof scope {
-    golem.common.Empty global = 1;
-    golem.component.ComponentPluginScope component = 2;
-    ProjectPluginScope project = 3;
-  }
-}
-
-message ComponentPluginScope {
-  golem.component.ComponentId component_id = 1;
-}
-
-message ProjectPluginScope {
-  golem.common.ProjectId project_id = 1;
+  golem.common.AccountId account_id = 8;
+  bool deleted = 9;
 }
 
 message PluginTypeSpecificDefinition {

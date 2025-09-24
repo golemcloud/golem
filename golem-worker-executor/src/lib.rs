@@ -44,7 +44,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
-use crate::services::plugins::{Plugins, PluginsObservations};
+use crate::services::plugins::{PluginsService, PluginsObservations};
 use crate::services::projects::ProjectService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
@@ -164,7 +164,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>);
+    ) -> (Arc<dyn PluginsService>, Arc<dyn PluginsObservations>);
 
     fn create_component_service(
         &self,
@@ -201,7 +201,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         project_service: Arc<dyn ProjectService>,
         agent_type_service: Arc<dyn AgentTypesService>,

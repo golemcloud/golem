@@ -15,78 +15,56 @@
 use super::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
-use golem_common::model::PluginId;
-use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::{PluginInstallationId};
+use golem_common::model::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
+use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Part of the `Plugins` service for recording observed information as a way to pre-cache
-/// data. It is in a separate trait because it does not have to be parametric for the Owner/Scope
-/// types.
 #[async_trait]
-pub trait PluginsObservations: Send + Sync {
-    /// Observes a known plugin installation; as getting component metadata returns the active set
-    /// of installed plugins in its result, it is an opportunity to cache this information and
-    /// use it in further calls to `get`.
-    ///
-    /// Calling this method is completely optional and only serves performance improvement purposes.
-    /// `get` must always work even if `observe_plugin_installation` was never called.
-    async fn observe_plugin_installation(
-        &self,
-        account_id: &AccountId,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
-        plugin_installation: &PluginInstallation,
-    ) -> Result<(), WorkerExecutorError>;
-}
+pub trait PluginsService: Send + Sync {
+    // /// Observes a known plugin installation; as getting component metadata returns the active set
+    // /// of installed plugins in its result, it is an opportunity to cache this information and
+    // /// use it in further calls to `get`.
+    // ///
+    // /// Calling this method is completely optional and only serves performance improvement purposes.
+    // /// `get` must always work even if `observe_plugin_installation` was never called.
+    // async fn observe_plugin_installation(
+    //     &self,
+    //     component_id: &ComponentId,
+    //     component_version: ComponentRevision,
+    //     plugin_priority: &i32,
+    // ) -> Result<(), WorkerExecutorError>;
 
-#[async_trait]
-pub trait Plugins: PluginsObservations {
     /// Gets a plugin installation and the plugin definition it refers to for a given plugin
     /// installation id belonging to a specific component version
     async fn get(
         &self,
-        account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        installation_id: &PluginInstallationId,
-    ) -> Result<(PluginInstallation, PluginDefinition), WorkerExecutorError> {
+        plugin_priority: i32
+    ) -> Result<(InstalledPlugin, PluginRegistrationDto), WorkerExecutorError> {
         let plugin_installation = self
-            .get_plugin_installation(account_id, component_id, component_version, installation_id)
+            .get_plugin_installation(component_id, component_version, plugin_priority)
             .await?;
-        let plugin_definition = self
-            .get_plugin_definition(
-                account_id,
-                component_id,
-                component_version,
-                &plugin_installation,
-            )
-            .await?;
+        let plugin_definition = self.get_plugin_definition(&plugin_installation.plugin_id).await?;
         Ok((plugin_installation, plugin_definition))
     }
 
     async fn get_plugin_installation(
         &self,
-        account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        installation_id: &PluginInstallationId,
-    ) -> Result<PluginInstallation, WorkerExecutorError>;
+        plugin_priority: i32
+    ) -> Result<InstalledPlugin, WorkerExecutorError>;
 
     async fn get_plugin_definition(
         &self,
-        account_id: &AccountId,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
-        plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition, WorkerExecutorError>;
+        plugin_id: &PluginRegistrationId
+    ) -> Result<PluginRegistrationDto, WorkerExecutorError>;
 }
 
-pub fn configured(config: &PluginServiceConfig) -> Arc<dyn Plugins> {
+pub fn configured(config: &PluginServiceConfig) -> Arc<dyn PluginsService> {
     match config {
         PluginServiceConfig::Grpc(config) => {
             let client = CachedPlugins::new(
@@ -108,24 +86,23 @@ pub fn configured(config: &PluginServiceConfig) -> Arc<dyn Plugins> {
 }
 
 #[allow(clippy::type_complexity)]
-pub struct CachedPlugins<Inner: Plugins> {
+pub struct CachedPlugins<Inner: PluginsService> {
     inner: Inner,
     cached_plugin_installations: Cache<
         (
-            AccountId,
             ComponentId,
             ComponentRevision,
-            PluginInstallationId,
+            i32,
         ),
         (),
-        PluginInstallation,
+        InstalledPlugin,
         WorkerExecutorError,
     >,
     cached_plugin_definitions:
-        Cache<(AccountId, PluginId), (), PluginDefinition, WorkerExecutorError>,
+        Cache<PluginRegistrationId, (), PluginRegistrationDto, WorkerExecutorError>,
 }
 
-impl<Inner: Plugins + Clone> Clone for CachedPlugins<Inner> {
+impl<Inner: PluginsService + Clone> Clone for CachedPlugins<Inner> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -135,7 +112,7 @@ impl<Inner: Plugins + Clone> Clone for CachedPlugins<Inner> {
     }
 }
 
-impl<Inner: Plugins> CachedPlugins<Inner> {
+impl<Inner: PluginsService> CachedPlugins<Inner> {
     pub fn new(inner: Inner, plugin_cache_capacity: usize) -> Self {
         Self {
             inner,
@@ -156,57 +133,47 @@ impl<Inner: Plugins> CachedPlugins<Inner> {
 }
 
 #[async_trait]
-impl<Inner: Plugins> PluginsObservations for CachedPlugins<Inner> {
-    async fn observe_plugin_installation(
-        &self,
-        account_id: &AccountId,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
-        plugin_installation: &PluginInstallation,
-    ) -> Result<(), WorkerExecutorError> {
-        let key = (
-            account_id.clone(),
-            component_id.clone(),
-            component_version,
-            plugin_installation.id.clone(),
-        );
-        let installation = plugin_installation.clone();
-        let _ = self
-            .cached_plugin_installations
-            .get_or_insert_simple(&key, || Box::pin(async move { Ok(installation) }))
-            .await;
-        Ok(())
-    }
-}
+impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<Inner> {
+    // async fn observe_plugin_installation(
+    //     &self,
+    //     component_id: &ComponentId,
+    //     component_version: ComponentRevision,
+    //     plugin_priority: &i32,
+    // ) -> Result<(), WorkerExecutorError> {
+    //     let key = (
+    //         component_id.clone(),
+    //         component_version,
+    //         plugin_priority,
+    //     );
+    //     let installation = plugin_installation.clone();
+    //     let _ = self
+    //         .cached_plugin_installations
+    //         .get_or_insert_simple(&key, || Box::pin(async move { Ok(installation) }))
+    //         .await;
+    //     Ok(())
+    // }
 
-#[async_trait]
-impl<Inner: Plugins + Clone + 'static> Plugins for CachedPlugins<Inner> {
     async fn get_plugin_installation(
         &self,
-        account_id: &AccountId,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        installation_id: &PluginInstallationId,
-    ) -> Result<PluginInstallation, WorkerExecutorError> {
+        plugin_priority: i32
+    ) -> Result<InstalledPlugin, WorkerExecutorError> {
         let key = (
-            account_id.clone(),
             component_id.clone(),
             component_version,
-            installation_id.clone(),
+            plugin_priority,
         );
         let inner = self.inner.clone();
-        let account_id = account_id.clone();
         let component_id = component_id.clone();
-        let installation_id = installation_id.clone();
         self.cached_plugin_installations
             .get_or_insert_simple(&key, || {
                 Box::pin(async move {
                     inner
                         .get_plugin_installation(
-                            &account_id,
                             &component_id,
                             component_version,
-                            &installation_id,
+                            plugin_priority,
                         )
                         .await
                 })
@@ -216,25 +183,15 @@ impl<Inner: Plugins + Clone + 'static> Plugins for CachedPlugins<Inner> {
 
     async fn get_plugin_definition(
         &self,
-        account_id: &AccountId,
-        component_id: &ComponentId,
-        component_version: ComponentRevision,
-        plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition, WorkerExecutorError> {
-        let key = (account_id.clone(), plugin_installation.plugin_id.clone());
+        plugin_id: &PluginRegistrationId
+    ) -> Result<PluginRegistrationDto, WorkerExecutorError> {
         let inner = self.inner.clone();
-        let account_id = account_id.clone();
-        let component_id = component_id.clone();
-        let plugin_installation = plugin_installation.clone();
         self.cached_plugin_definitions
-            .get_or_insert_simple(&key, || {
+            .get_or_insert_simple(plugin_id, || {
                 Box::pin(async move {
                     inner
                         .get_plugin_definition(
-                            &account_id,
-                            &component_id,
-                            component_version,
-                            &plugin_installation,
+                            plugin_id
                         )
                         .await
                 })
@@ -247,44 +204,37 @@ impl<Inner: Plugins + Clone + 'static> Plugins for CachedPlugins<Inner> {
 pub struct PluginsUnavailable;
 
 #[async_trait]
-impl PluginsObservations for PluginsUnavailable {
-    async fn observe_plugin_installation(
-        &self,
-        _account_id: &AccountId,
-        _component_id: &ComponentId,
-        _component_version: ComponentRevision,
-        _plugin_installation: &PluginInstallation,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-}
+impl PluginsService for PluginsUnavailable {
+    // async fn observe_plugin_installation(
+    //     &self,
+    //     _account_id: &AccountId,
+    //     _component_id: &ComponentId,
+    //     _component_version: ComponentRevision,
+    //     _plugin_installation: &PluginInstallation,
+    // ) -> Result<(), WorkerExecutorError> {
+    //     Ok(())
+    // }
 
-#[async_trait]
-impl Plugins for PluginsUnavailable {
     async fn get_plugin_installation(
         &self,
-        _account_id: &AccountId,
         _component_id: &ComponentId,
         _component_version: ComponentRevision,
-        _installation_id: &PluginInstallationId,
-    ) -> Result<PluginInstallation, WorkerExecutorError> {
+        _plugin_priority: i32
+    ) -> Result<InstalledPlugin, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
     }
 
     async fn get_plugin_definition(
         &self,
-        _account_id: &AccountId,
-        _component_id: &ComponentId,
-        _component_version: ComponentRevision,
-        _plugin_installation: &PluginInstallation,
-    ) -> Result<PluginDefinition, WorkerExecutorError> {
+        _plugin_id: &PluginRegistrationId
+    ) -> Result<PluginRegistrationDto, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
     }
 }
 
 mod grpc {
     use golem_service_base::grpc::authorised_grpc_request;
-    use crate::services::plugins::{Plugins, PluginsObservations};
+    use crate::services::plugins::{PluginsService};
     use applying::Apply;
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -296,18 +246,17 @@ mod grpc {
         get_plugin_by_id_response, GetPluginByIdRequest,
     };
     use golem_common::client::{GrpcClient, GrpcClientConfig};
-    use golem_common::model::plugin::PluginOwner;
-    use golem_common::model::plugin::{PluginDefinition, PluginInstallation};
     use golem_common::model::RetryConfig;
     use golem_common::model::account::AccountId;
-    use golem_common::model::component::{ComponentId, ComponentRevision};
-    use golem_common::model::{PluginInstallationId};
+    use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use http::Uri;
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
+    use golem_common::model::plugin_registration::PluginRegistrationDto;
+    use golem_common::model::plugin_registration::PluginRegistrationId;
 
     #[derive(Clone)]
     pub struct PluginsGrpc {
@@ -356,27 +305,23 @@ mod grpc {
     }
 
     #[async_trait]
-    impl PluginsObservations for PluginsGrpc {
-        async fn observe_plugin_installation(
-            &self,
-            _account_id: &AccountId,
-            _component_id: &ComponentId,
-            _component_version: ComponentRevision,
-            _plugin_installation: &PluginInstallation,
-        ) -> Result<(), WorkerExecutorError> {
-            Ok(())
-        }
-    }
+    impl PluginsService for PluginsGrpc {
+        // async fn observe_plugin_installation(
+        //     &self,
+        //     _account_id: &AccountId,
+        //     _component_id: &ComponentId,
+        //     _component_version: ComponentRevision,
+        //     _plugin_installation: &PluginInstallation,
+        // ) -> Result<(), WorkerExecutorError> {
+        //     Ok(())
+        // }
 
-    #[async_trait]
-    impl Plugins for PluginsGrpc {
         async fn get_plugin_installation(
             &self,
-            account_id: &AccountId,
             component_id: &ComponentId,
             component_version: ComponentRevision,
-            installation_id: &PluginInstallationId,
-        ) -> Result<PluginInstallation, WorkerExecutorError> {
+            plugin_priority: i32
+        ) -> Result<PluginRegistrationDto, WorkerExecutorError> {
             let response = self
                 .components_client
                 .call("get_installed_plugins", move |client| {
@@ -396,7 +341,7 @@ mod grpc {
                     ))
                 })?
                 .into_inner();
-            let installations: Vec<PluginInstallation> = match response.result {
+            let installations: Vec<InstalledPlugin> = match response.result {
                 None => Err(WorkerExecutorError::runtime("Empty response"))?,
                 Some(get_installed_plugins_response::Result::Success(response)) => response
                     .installations
@@ -412,14 +357,13 @@ mod grpc {
             let mut result = None;
             for installation in installations {
                 self.observe_plugin_installation(
-                    account_id,
                     component_id,
                     component_version,
                     &installation,
                 )
                 .await?;
 
-                if installation.id == *installation_id {
+                if installation.priority == *plugin_priority {
                     result = Some(installation);
                 }
             }
@@ -431,17 +375,14 @@ mod grpc {
 
         async fn get_plugin_definition(
             &self,
-            _account_id: &AccountId,
-            _component_id: &ComponentId,
-            _component_version: ComponentRevision,
-            plugin_installation: &PluginInstallation,
-        ) -> Result<PluginDefinition, WorkerExecutorError> {
+            plugin_id: &PluginRegistrationId
+        ) -> Result<PluginRegistrationDto, WorkerExecutorError> {
             let response = self
                 .plugins_client
                 .call("get_plugin_by_id", move |client| {
                     let request = authorised_grpc_request(
                         GetPluginByIdRequest {
-                            id: Some(plugin_installation.plugin_id.clone().into()),
+                            id: Some(plugin_id.clone().into()),
                         },
                         &self.access_token,
                     );
@@ -472,10 +413,10 @@ mod grpc {
 
     fn convert_grpc_plugin_definition(
         value: golem_api_grpc::proto::golem::component::PluginDefinition,
-    ) -> Result<PluginDefinition, String> {
+    ) -> Result<PluginRegistrationDto, String> {
         let account_id: AccountId = value.account_id.ok_or("Missing account id")?.try_into()?;
 
-        Ok(PluginDefinition {
+        Ok(PluginRegistrationDto {
             id: value.id.ok_or("Missing plugin id")?.try_into()?,
             name: value.name,
             version: value.version,

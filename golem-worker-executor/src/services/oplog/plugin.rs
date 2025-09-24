@@ -16,7 +16,7 @@ use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
-use crate::services::plugins::Plugins;
+use crate::services::plugins::PluginsService;
 use crate::services::projects::ProjectService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
@@ -73,7 +73,7 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     component_service: Arc<dyn ComponentService>,
     shard_service: Arc<dyn ShardService>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     project_service: Arc<dyn ProjectService>,
 }
 
@@ -92,7 +92,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         component_service: Arc<dyn ComponentService>,
         shard_service: Arc<dyn ShardService>,
         worker_activator: Arc<dyn WorkerActivator<Ctx>>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
@@ -360,7 +360,7 @@ impl<Ctx: WorkerCtx> HasWorkerActivator<Ctx> for PerExecutorOplogProcessorPlugin
 }
 
 impl<Ctx: WorkerCtx> HasPlugins for PerExecutorOplogProcessorPlugin<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
     }
 }
@@ -378,7 +378,7 @@ struct CreateOplogConstructor {
     last_oplog_index: OplogIndex,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     initial_worker_metadata: WorkerMetadata,
     project_service: Arc<dyn ProjectService>,
@@ -411,7 +411,7 @@ impl CreateOplogConstructor {
         last_oplog_index: OplogIndex,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
         project_service: Arc<dyn ProjectService>,
@@ -475,7 +475,7 @@ pub struct ForwardingOplogService {
 
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     project_service: Arc<dyn ProjectService>,
 }
 
@@ -484,7 +484,7 @@ impl ForwardingOplogService {
         inner: Arc<dyn OplogService>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
@@ -624,7 +624,7 @@ impl ForwardingOplog {
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         project_service: Arc<dyn ProjectService>,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
@@ -742,7 +742,7 @@ struct ForwardingOplogState {
     last_oplog_idx: OplogIndex,
     oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     project_service: Arc<dyn ProjectService>,
 }
 

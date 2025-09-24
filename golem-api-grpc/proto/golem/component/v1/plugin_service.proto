@@ -5,18 +5,17 @@ package golem.component.v1;
 import "golem/common/empty.proto";
 import "golem/common/account_id.proto";
 import "golem/component/v1/component_error.proto";
-import "golem/component/plugin_definition.proto";
+import "golem/component/plugin_registration.proto";
 
 service PluginService {
   rpc ListPlugins (ListPluginsRequest) returns (ListPluginsResponse);
   rpc CreatePlugin (CreatePluginRequest) returns (CreatePluginResponse);
   rpc GetPlugin (GetPluginRequest) returns (GetPluginResponse);
   rpc DeletePlugin (DeletePluginRequest) returns (DeletePluginResponse);
-  rpc GetPluginById (GetPluginByIdRequest) returns (GetPluginByIdResponse);
+  rpc GetPluginById (GetPluginRegistrationByIdRequest) returns (GetPluginRegistrationByIdResponse);
 }
 
 message ListPluginsRequest {
-  golem.component.PluginScope scope = 1;
 }
 
 message ListPluginsResponse {
@@ -27,11 +26,11 @@ message ListPluginsResponse {
 }
 
 message ListPluginsSuccessResponse {
-  repeated golem.component.PluginDefinition plugins = 1;
+  repeated golem.component.PluginRegistration plugins = 1;
 }
 
 message CreatePluginRequest {
-  golem.component.PluginDefinitionCreation plugin = 1;
+  golem.component.PluginRegistrationCreation plugin = 1;
 }
 
 message CreatePluginResponse {
@@ -55,14 +54,14 @@ message GetPluginResponse {
 }
 
 message GetPluginSuccessResponse {
-  golem.component.PluginDefinition plugin = 1;
+  golem.component.PluginRegistration plugin = 1;
 }
 
-message GetPluginByIdRequest {
-  golem.component.PluginId id = 1;
+message GetPluginRegistrationByIdRequest {
+  golem.component.PluginRegistrationId id = 1;
 }
 
-message GetPluginByIdResponse {
+message GetPluginRegistrationByIdResponse {
   oneof result {
     GetPluginSuccessResponse success = 1;
     golem.component.v1.ComponentError error = 2;

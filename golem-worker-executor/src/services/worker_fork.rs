@@ -21,7 +21,7 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
-use crate::services::plugins::Plugins;
+use crate::services::plugins::PluginsService;
 use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
@@ -97,7 +97,7 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     pub events: Arc<Events>,
     pub file_loader: Arc<FileLoader>,
-    pub plugins: Arc<dyn Plugins>,
+    pub plugins: Arc<dyn PluginsService>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
     pub project_service: Arc<dyn ProjectService>,
@@ -253,7 +253,7 @@ impl<Ctx: WorkerCtx> HasFileLoader for DefaultWorkerFork<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasPlugins for DefaultWorkerFork<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
     }
 }
@@ -338,7 +338,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
