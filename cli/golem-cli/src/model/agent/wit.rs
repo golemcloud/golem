@@ -758,7 +758,8 @@ mod tests {
     use crate::model::agent::test;
     use crate::model::agent::test::{
         agent_type_with_wit_keywords, reproducer_for_issue_with_enums,
-        reproducer_for_multiple_types_called_element, single_agent_wrapper_types,
+        reproducer_for_issue_with_result_types, reproducer_for_multiple_types_called_element,
+        single_agent_wrapper_types,
     };
 
     use golem_common::model::agent::{
@@ -1319,6 +1320,35 @@ mod tests {
                    }
                 "#
             },
+        )
+    }
+
+    #[test]
+    pub fn result_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_result_types();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// Constructs the agent bar-agent
+                interface bar-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                
+                  /// Constructs the agent bar-agent
+                  initialize: func();
+                
+                  get-definition: func() -> agent-type;
+                
+                  fun-either: func(either: result<string, string>) -> result<string, string>;
+                }
+            "#},
         )
     }
 
