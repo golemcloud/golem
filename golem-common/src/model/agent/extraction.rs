@@ -130,11 +130,15 @@ pub async fn extract_agent_types_with_streams(
 }
 
 /// Same as extract_agent_types_with_streams, but inherits stdout and stderr from the current process
-pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+pub async fn extract_agent_types(
+    wasm_path: &Path,
+    fail_on_missing_discover_method: bool,
+) -> anyhow::Result<Vec<AgentType>> {
     extract_agent_types_with_streams(
         wasm_path,
         None::<pipe::MemoryOutputPipe>,
         None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
     )
     .await
 }
