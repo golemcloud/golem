@@ -1163,6 +1163,13 @@ function handleUnion(
   } else {
     const innerType = typeWithIndex[0];
 
+    if (innerType.kind === 'literal' && tsValue === innerType.literalValue) {
+      return Either.right({
+        kind: 'variant',
+        caseIdx: typeWithIndex[1],
+      });
+    }
+
     return Either.map(fromTsValue(tsValue, innerType), (result) => {
       return {
         kind: 'variant',
@@ -1721,7 +1728,11 @@ export function toTsValue(value: Value, type: Type.Type): any {
         const matchingType = filteredUnionTypes[value.caseIdx];
 
         if (!caseValue) {
-          return matchingType.name;
+          if (matchingType.kind === 'literal') {
+            return matchingType.literalValue;
+          } else {
+            throw new Error(typeMismatchInDeserialize(value, 'union'));
+          }
         }
 
         return toTsValue(caseValue, matchingType);
