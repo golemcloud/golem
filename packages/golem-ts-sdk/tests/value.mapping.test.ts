@@ -24,7 +24,7 @@ import {
   getUnionComplexType,
   getPromiseType,
   getUnionWithOnlyLiterals,
-  getUnionWithLiterals,
+  getUnionWithLiterals, getResultTypeExact,
 } from './testUtils';
 
 import { TestInterfaceType } from './testTypes';
@@ -133,6 +133,11 @@ describe('typescript value to wit value round-trip conversions', () => {
         runRoundTripTest(unionData, unionWithLiterals);
       }),
     );
+  });
+
+  it('should correctly perform round-trip conversion for wit result', () => {
+    const resultTypeExact = getResultTypeExact();
+    runRoundTripTest({tag: 'ok', val: 1}, resultTypeExact);
   });
 
   it('should preserve values with only required properties (excluding optional)', () => {

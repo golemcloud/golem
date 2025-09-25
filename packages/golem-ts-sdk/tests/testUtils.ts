@@ -53,6 +53,10 @@ export function getUnionType(): Type.Type {
   return fetchType('UnionType');
 }
 
+export function getResultTypeExact(): Type.Type {
+  return fetchType('ResultTypeExactBoth');
+}
+
 export function getUnionComplexType(): Type.Type {
   return fetchType('UnionComplexType');
 }

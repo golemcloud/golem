@@ -19,6 +19,7 @@ import * as Value from './Value';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';
 
+// Note: See `value.mapping.tests`
 export const fromTsValue = (
   tsValue: any,
   tsType: Type.Type,

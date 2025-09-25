@@ -238,16 +238,15 @@ function convertAgentMethodNameToKebab(methodName: string): string {
 function unwrapResult(witValue: WitValue.WitValue): Value.Value {
   const value = Value.fromWitValue(witValue);
 
-  const innerResult =
-    value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
+  return  value.kind === 'tuple' && value.value.length > 0 ? value.value[0] : value;
 
-  return innerResult.kind === 'result'
-    ? innerResult.value.ok
-      ? innerResult.value.ok
-      : (() => {
-          throw new Error(
-            `Remote agent method invocation failed. Cause: ${util.format(innerResult.value.err)}`,
-          );
-        })()
-    : innerResult;
+  // return innerResult.kind === 'result'
+  //   ? innerResult.value.ok
+  //     ? innerResult.value.ok
+  //     : (() => {
+  //         throw new Error(
+  //           `Remote agent method invocation failed. Cause: ${util.format(innerResult.value.err)}`,
+  //         );
+  //       })()
+  //   : innerResult;
 }
