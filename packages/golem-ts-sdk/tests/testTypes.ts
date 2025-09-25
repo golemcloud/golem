@@ -30,7 +30,7 @@ export type TaggedUnion =
 
 export type UnionWithOnlyLiterals = 'foo' | 'bar' | 'baz';
 
-export type UnionWithLiterals = 'a' | 'b' | 'c' | { n: number };
+export type UnionWithLiterals = 'a' | 'b' | 'c' |  boolean | { n: number } ;
 
 // tag and `val` are exact as wit-type result
 export type ResultTypeExactBoth =

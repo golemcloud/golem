@@ -1155,8 +1155,23 @@ function handleUnion(
     }
   }
 
-  // Handle others
-  const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
+  const hasFalseLiteral = filteredTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
+
+  const hasTrueLiteral = filteredTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
+
+  let hasBoolean = hasFalseLiteral && hasTrueLiteral;
+
+  let unionTypesLiteralBoolFiltered =
+    filteredTypes.filter(field => !(field.kind === 'literal' && (field.literalValue === 'false' || field.literalValue === 'true')));
+
+  const optional =
+    unionTypesLiteralBoolFiltered.find((field) => field.kind  === 'literal')?.optional;
+
+  unionTypesLiteralBoolFiltered.push({kind: "boolean", optional: optional ?? false})
+
+  const newUnionTypes = hasBoolean ? unionTypesLiteralBoolFiltered : filteredTypes;
+
+  const typeWithIndex = findTypeOfAny(tsValue, newUnionTypes);
 
   if (!typeWithIndex) {
     return Either.left(unionTypeMatchError(filteredTypes, tsValue));
@@ -1196,7 +1211,7 @@ function findTypeOfAny(
 function matchesType(value: any, type: Type.Type): boolean {
   switch (type.kind) {
     case 'boolean':
-      return typeof value === 'boolean';
+      return (typeof value === 'boolean' || value === true || value === false);
 
     case 'number':
       return typeof value === 'number';
@@ -1693,12 +1708,29 @@ export function toTsValue(value: Value, type: Type.Type): any {
         (error) => new Error(`Internal Error: ${error}`),
       );
 
-      const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
+
+      const hasFalseLiteral = type.unionTypes.some(t => t.kind === 'literal' && t.literalValue === 'false');
+
+      const hasTrueLiteral = type.unionTypes.some(type => type.kind === 'literal' && type.literalValue === 'true');
+
+      let hasBoolean = hasFalseLiteral && hasTrueLiteral;
+
+      let unionTypesLiteralBoolFiltered =
+        type.unionTypes.filter(field => !(field.kind === 'literal' && (field.literalValue === 'false' || field.literalValue === 'true')));
+
+      const optional =
+        unionTypesLiteralBoolFiltered.find((field) => field.kind  === 'literal')?.optional;
+
+      unionTypesLiteralBoolFiltered.push({kind: "boolean", optional: optional ?? false})
+
+      const newUnionTypes = hasBoolean ? unionTypesLiteralBoolFiltered : type.unionTypes;
+
+      const filteredUnionTypes: Type.Type[] = newUnionTypes.filter(
         (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
       );
 
       // This implies this optional value
-      if (filteredUnionTypes.length !== type.unionTypes.length) {
+      if (filteredUnionTypes.length !== newUnionTypes.length) {
         if (filteredUnionTypes.length === 1) {
           return toTsValue(value, filteredUnionTypes[0]);
         }
@@ -1725,6 +1757,7 @@ export function toTsValue(value: Value, type: Type.Type): any {
           }
         }
 
+        console.log(filteredUnionTypes);
         const matchingType = filteredUnionTypes[value.caseIdx];
 
         if (!caseValue) {

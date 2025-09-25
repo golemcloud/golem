@@ -250,11 +250,13 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(wit).toEqual(expectedWit);
   });
 
-  it('should handle union with literals in method xxx', () => {
+  it('should handle union with literals in method', () => {
     const wit = getWitType(
       complexAgentMethod!.inputSchema,
       'unionWithLiterals',
     );
+
+    console.log(JSON.stringify(wit));
 
     const expectedWit = {
       nodes: [

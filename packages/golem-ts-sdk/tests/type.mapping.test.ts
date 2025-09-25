@@ -28,6 +28,7 @@ import {
 
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 
+import * as WitType from '../src/internal/mapping/types/WitType';
 import * as Either from '../src/newTypes/either';
 import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
 
@@ -254,6 +255,7 @@ test('Union with literals to AnalysedType', () => {
             value: { fields: [{ name: 'n', typ: { kind: 'f64' } }] },
           },
         },
+        { name: 'union-with-literals2', typ: { kind: 'bool' } },
       ],
     },
   };

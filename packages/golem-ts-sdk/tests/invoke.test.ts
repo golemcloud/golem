@@ -245,6 +245,28 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
   );
 });
 
+test('testing my thing', () => {
+  overrideSelfMetadataImpl(SimpleAgentName.value);
+
+  const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
+
+  if (!typeRegistry) {
+    throw new Error('SimpleAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateSimpleAgent("foo", typeRegistry);
+
+  console.log("here???");
+
+  testInvoke(
+    typeRegistry,
+    'fun8',
+    [['a', 'a']],
+    resolvedAgent,
+    'a',
+  );
+})
+
 test('ComplexAgent can be successfully initiated', () => {
   fc.assert(
     fc.property(
@@ -392,6 +414,11 @@ function testInvoke(
       WitValue.fromTsValue(value, paramType),
       (error) => new Error(error),
     );
+
+    const vv = Value.fromWitValue(r);
+    console.log("sss " + JSON.stringify(vv));
+
+    console.log(JSON.stringify(Value.toTsValue(vv, paramType)))
 
     return r;
   });

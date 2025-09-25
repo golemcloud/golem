@@ -77,6 +77,7 @@ export const objectWithUnionWithUndefined4Arb: Arbitrary<ObjectWithUnionWithUnde
 export const unionWithLiteralArb: Arbitrary<UnionWithLiterals> = fc.oneof(
   fc.constantFrom<UnionWithLiterals>('a', 'b', 'c'),
   fc.record({ n: fc.integer() }),
+  fc.boolean(),
 );
 
 export const resultTypeExactArb: Arbitrary<ResultTypeExactBoth> = fc.oneof(
