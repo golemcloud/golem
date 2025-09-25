@@ -256,8 +256,6 @@ describe('Agent decorator should register the agent class and its methods into A
       'unionWithLiterals',
     );
 
-    console.log(JSON.stringify(wit));
-
     const expectedWit = {
       nodes: [
         {

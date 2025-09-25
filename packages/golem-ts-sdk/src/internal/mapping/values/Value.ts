@@ -1757,7 +1757,6 @@ export function toTsValue(value: Value, type: Type.Type): any {
           }
         }
 
-        console.log(filteredUnionTypes);
         const matchingType = filteredUnionTypes[value.caseIdx];
 
         if (!caseValue) {
