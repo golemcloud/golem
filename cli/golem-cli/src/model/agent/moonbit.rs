@@ -950,7 +950,7 @@ fn write_builder(
             writeln!(result, "{indent}{builder}.result({access}.map(inner => {{")?;
             match &result_type.ok {
                 Some(ok) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -968,7 +968,7 @@ fn write_builder(
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             match &result_type.err {
                 Some(err) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -1304,15 +1304,13 @@ fn extract_wit_value(
         AnalysedType::Result(result_type) => {
             writeln!(result, "{indent}{from}.result().unwrap().map(inner => {{")?;
             if let Some(ok) = &result_type.ok {
-                extract_wit_value(result, ctx, ok, "inner", &format!("{indent}  "))?;
+                extract_wit_value(result, ctx, ok, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             if let Some(err) = &result_type.err {
-                writeln!(result, "{indent}  inner.map(inner => {{")?;
-                extract_wit_value(result, ctx, err, "inner", &format!("{indent}    "))?;
-                writeln!(result, "{indent}  }})")?;
+                extract_wit_value(result, ctx, err, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
@@ -1478,7 +1476,8 @@ mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
     use crate::model::agent::test::{
-        reproducer_for_issue_with_enums, reproducer_for_multiple_types_called_element,
+        reproducer_for_issue_with_enums, reproducer_for_issue_with_result_types,
+        reproducer_for_multiple_types_called_element,
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
@@ -1542,6 +1541,16 @@ mod tests {
     fn enum_type() {
         let component_name = "test:agent".into();
         let agent_types = reproducer_for_issue_with_enums();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn bug_result_types() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_issue_with_result_types();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();
