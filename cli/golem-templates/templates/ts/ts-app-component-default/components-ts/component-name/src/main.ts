@@ -16,7 +16,7 @@ import {
     NumberType,
     StringType,
     BooleanType,
-    MapType, TupleComplexType, TupleType, ListComplexType, ResultLikeWithNoTag, ResultLike,
+    MapType, TupleComplexType, TupleType, ListComplexType, ResultLikeWithNoTag, ResultLike, ResultExact,
 } from './model';
 
 
@@ -227,13 +227,11 @@ class FooAgent extends BaseAgent {
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
         return await this.barAgent.funResultNoTag(eitherBothOptional);
     }
-    //
-    // // FIXME: moonbit generation fails
-    // // async funEither(either: ResultExact): Promise<ResultExact> {
-    // //     return await this.barAgent.funEither(either);
-    // // }
-    //
-    //
+
+    async funResultExact(either: ResultExact): Promise<ResultExact> {
+        return this.barAgent.funResultExact(either);
+    }
+
     async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return await this.barAgent.funResultLike(eitherOneOptional);
     }
@@ -383,10 +381,9 @@ class BarAgent extends BaseAgent {
         return eitherBothOptional
     }
 
-    // doesn't work - moonbit generation fails
-    // async funEither(either: ResultExact): Promise<ResultExact> {
-    //     return either
-    // }
+    async funResultExact(either: ResultExact): Promise<ResultExact> {
+        return either
+    }
 
     async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return eitherOneOptional
