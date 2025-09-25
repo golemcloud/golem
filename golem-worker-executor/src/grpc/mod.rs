@@ -1075,7 +1075,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let component_metadata = self
             .component_service()
             .get_metadata(
-                &owned_worker_id.project_id,
                 &owned_worker_id.worker_id.component_id,
                 Some(metadata.last_known_status.component_version),
             )
@@ -1575,7 +1574,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &owned_worker_id.project_id,
                             &owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_version),
                         )
@@ -1650,7 +1648,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     let component_metadata = self
                         .component_service()
                         .get_metadata(
-                            &owned_worker_id.project_id,
                             &owned_worker_id.worker_id.component_id,
                             Some(metadata.last_known_status.component_version),
                         )

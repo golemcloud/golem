@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::rdb::{DbInfo, PostgresInfo, Rdb};
+use crate::components::rdb::{DbInfo, MysqlInfo, PostgresInfo, Rdb};
 use async_trait::async_trait;
 use tracing::info;
 
@@ -34,6 +34,16 @@ impl ProvidedPostgresRdb {
     pub fn public_connection_string_to_db(&self, db_name: &str) -> String {
         let db_info = PostgresInfo {
             database_name: db_name.to_string(),
+            ..self.info.clone()
+        };
+
+        db_info.public_connection_string()
+    }
+
+    pub fn public_connection_string_with_user(&self, username: &str, password: &str) -> String {
+        let db_info = PostgresInfo {
+            username: username.to_string(),
+            password: password.to_string(),
             ..self.info.clone()
         };
 

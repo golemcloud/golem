@@ -279,10 +279,7 @@ pub fn last_unique_id() -> LastUniqueId {
 
 #[test_dep(tagged_as = "golem_host")]
 pub fn golem_host_analysed_type_resolve() -> SharedAnalysedTypeResolve {
-    let binding = PathBuf::from_iter([ env!("CARGO_MANIFEST_DIR"), "../wit" ]);
-    let wit_path = binding.as_path();
-
     SharedAnalysedTypeResolve::new(
-        AnalysedTypeResolve::from_wit_directory(wit_path).unwrap(),
+        AnalysedTypeResolve::from_wit_directory(Path::new("../wit")).unwrap(),
     )
 }

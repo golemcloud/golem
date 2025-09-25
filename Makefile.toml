@@ -409,16 +409,19 @@ cargo test -p golem-wasm-ast --tests --all-features -- $additional_params >> ./t
 dependencies = ["wit"]
 description = "Runs worker executor tests only"
 env = { "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_BACKTRACE" = "1", "RUST_LOG" = "info" }
-command = "cargo"
-args = [
-    "test",
-    "--package",
-    "golem-worker-executor",
-    "--test",
-    "*",
-    "--",
-    "--nocapture",
-]
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test * -- $JUNIT_OPTS
+'''
+
+[tasks.worker-executor-tests.windows]
+dependencies = ["wit"]
+script_runner = "pwsh"
+script_extension = "ps1"
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-worker-executor --test * -- $additional_params > ./target/raw-report-worker-executor-tests.xml
+'''
 
 [tasks.worker-executor-tests-untagged]
 dependencies = ["wit"]
@@ -537,7 +540,7 @@ dependencies = [
     "integration-tests-group3",
     "integration-tests-group4",
     "integration-tests-group5",
-    # "cli-integration-tests"
+    "cli-integration-tests"
 ]
 
 [tasks.integration-tests-group1]
@@ -554,7 +557,7 @@ script_extension = "ps1"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package integration-tests --test integration -- $additional_params
+cargo test --package integration-tests --test integration -- $additional_params > ./target/raw-report-integration-tests-group1.xml
 '''
 
 [tasks.integration-tests-group2]
@@ -571,7 +574,7 @@ script_extension = "ps1"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package golem-component-service --test tests -- $additional_params
+cargo test --package golem-component-service --test tests -- $additional_params > ./target/raw-report-integration-tests-group2.xml
 '''
 
 [tasks.integration-tests-group3]
@@ -590,9 +593,9 @@ script_extension = "ps1"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package golem-worker-service --test services_tests -- $additional_params
-cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $additional_params
-cargo test --package golem-worker-service --test api_oas_convert_tests -- --nocapture $additional_params
+cargo test --package golem-worker-service --test services_tests -- $additional_params > ./target/raw-report-integration-tests-group3.xml
+cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- $additional_params  >> ./target/raw-report-integration-tests-group3.xml
+cargo test --package golem-worker-service --test api_oas_convert_tests -- --nocapture $additional_params >> ./target/raw-report-integration-tests-group3.xml
 '''
 
 [tasks.integration-tests-group4]
@@ -602,7 +605,7 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package golem-service-base --test integration -- $JUNIT_OPTS
 cargo test --package cloud-service --test '*' -- $JUNIT_OPTS
-cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
+cargo test --package golem-debugging-service --test 'integration' -- $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group4.windows]
@@ -611,9 +614,9 @@ script_extension = "ps1"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package golem-service-base --test integration -- $additional_params
-cargo test --package cloud-service --test '*' -- $additional_params
-cargo test --package golem-debugging-service --test 'integration' -- --report-time $additional_params
+cargo test --package golem-service-base --test integration -- $additional_params > ./target/raw-report-integration-tests-group4.xml
+cargo test --package cloud-service --test '*' -- $additional_params >> ./target/raw-report-integration-tests-group4.xml
+cargo test --package golem-debugging-service --test 'integration' -- $additional_params >> ./target/raw-report-integration-tests-group4.xml
 '''
 
 [tasks.integration-tests-group5]
@@ -622,6 +625,16 @@ dependencies = ["build-bins"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+'''
+
+[tasks.integration-tests-group5.windows]
+script_runner = "pwsh"
+script_extension = "ps1"
+dependencies = ["build-bins"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+script = '''
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package integration-tests --test sharding -- $additional_params  > ./target/raw-report-integration-tests-group5.xml
 '''
 
 [tasks.cli-integration-tests]
@@ -634,12 +647,15 @@ exec --fail-on-error cargo test --package golem-cli :tag:app --test integration 
 exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
-[tasks.template-integration-tests]
-dependencies = ["build"]
-description = "Run template integration tests"
-script_runner = "@duckscript"
+[tasks.cli-integration-tests.windows]
+dependencies = ["build-bins-all"]
+script_runner = "pwsh"
+script_extension = "ps1"
 script = '''
-exec --fail-on-error cargo test --package golem-templates --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+$additional_params = $env:JUNIT_OPTS_WIN.split(' ')
+cargo test --package golem-cli :tag: --test integration -- $additional_params  > ./target/raw-report-cli-integration-tests.xml
+cargo test --package golem-cli :tag:app --test integration -- $additional_params  >> ./target/raw-report-cli-integration-tests.xml
+cargo test --package golem-cli :tag:uses_cargo --test integration -- $additional_params  >> ./target/raw-report-cli-integration-tests.xml
 '''
 
 [tasks.sharding-tests-debug]
@@ -701,7 +717,7 @@ script_extension = "ps1"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package integration-tests --test api -- $additional_params
+cargo test --package integration-tests --test api -- $additional_params > ./target/raw-report-api-tests-http.xml
 '''
 
 [tasks.api-tests-grpc]
@@ -718,7 +734,7 @@ script_extension = "ps1"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
 script = '''
 $additional_params = $env:JUNIT_OPTS_WIN.split(' ')
-cargo test --package integration-tests --test api -- :tag: $additional_params
+cargo test --package integration-tests --test api -- :tag: $additional_params > ./target/raw-report-api-tests-grpc.xml
 '''
 
 ## ** CHECK-OPENAPI **

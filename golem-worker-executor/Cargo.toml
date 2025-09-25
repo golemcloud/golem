@@ -55,6 +55,7 @@ fred = { workspace = true }
 fs-set-times = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
+heck = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -72,6 +73,7 @@ nonempty-collections = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 ringbuf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

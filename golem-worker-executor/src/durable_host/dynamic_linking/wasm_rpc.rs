@@ -241,11 +241,7 @@ async fn dynamic_function_call<
             let remote_component_metadata = store
                 .data()
                 .component_service()
-                .get_metadata(
-                    &remote_worker_id.project_id,
-                    &remote_worker_id.worker_id.component_id,
-                    None,
-                )
+                .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
             let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
@@ -328,11 +324,7 @@ async fn dynamic_function_call<
             let remote_component_metadata = store
                 .data()
                 .component_service()
-                .get_metadata(
-                    &remote_worker_id.project_id,
-                    &remote_worker_id.worker_id.component_id,
-                    None,
-                )
+                .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
             let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
@@ -418,11 +410,7 @@ async fn dynamic_function_call<
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -473,11 +461,7 @@ async fn dynamic_function_call<
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -525,11 +509,7 @@ async fn dynamic_function_call<
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
@@ -588,11 +568,7 @@ async fn dynamic_function_call<
                 store
                     .data()
                     .component_service()
-                    .get_metadata(
-                        &remote_worker_id.project_id,
-                        &remote_worker_id.worker_id.component_id,
-                        None,
-                    )
+                    .get_metadata(&remote_worker_id.worker_id.component_id, None)
                     .await?
                     .metadata
             };
