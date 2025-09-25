@@ -132,7 +132,7 @@ describe('typescript value to wit value round-trip conversions', () => {
     fc.assert(
       fc.property(unionWithLiteralArb, (unionData) => {
         const unionWithLiterals = getUnionWithLiterals();
-        runRoundTripTest(true, unionWithLiterals);
+        runRoundTripTest(unionData, unionWithLiterals);
       }),
     );
   });
