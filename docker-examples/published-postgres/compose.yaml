@@ -35,9 +35,7 @@ services:
       - golem-cloud-service
       - golem-debugging-service
     volumes:
-        - ./nginx.conf.template:/etc/nginx/nginx.conf.template:ro
-    entrypoint: /bin/sh
-    command: -c "envsubst < /etc/nginx/nginx.conf.template > /etc/nginx/nginx.conf && nginx -g 'daemon off;'"
+        - ./nginx.conf.template:/etc/nginx/templates/default.conf.template:ro
 
   redis:
     image: redis:latest
