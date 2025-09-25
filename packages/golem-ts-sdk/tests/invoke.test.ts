@@ -192,7 +192,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
             param7: unionOrUndefined,
           },
         );
-        //
+
         testInvoke(
           typeRegistry,
           'fun8',
@@ -388,10 +388,12 @@ function testInvoke(
       );
     }
 
-    return Either.getOrThrowWith(
+    const r = Either.getOrThrowWith(
       WitValue.fromTsValue(value, paramType),
       (error) => new Error(error),
     );
+
+    return r;
   });
 
   const dataValues: DataValue = {

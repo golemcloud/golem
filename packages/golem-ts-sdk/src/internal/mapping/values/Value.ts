@@ -988,38 +988,7 @@ function handleUnion(
   type: Type.Type,
   possibleTypes: Type.Type[],
 ): Either.Either<Value, string> {
-  const hasFalseLiteral = possibleTypes.some(
-    (t) => t.kind === 'literal' && t.literalValue === 'false',
-  );
-
-  const hasTrueLiteral = possibleTypes.some(
-    (type) => type.kind === 'literal' && type.literalValue === 'true',
-  );
-
-  let hasBoolean = hasFalseLiteral && hasTrueLiteral;
-
-  let unionTypesLiteralBoolFiltered = possibleTypes.filter(
-    (field) =>
-      !(
-        field.kind === 'literal' &&
-        (field.literalValue === 'false' || field.literalValue === 'true')
-      ),
-  );
-
-  const optional = unionTypesLiteralBoolFiltered.find(
-    (field) => field.kind === 'literal',
-  )?.optional;
-
-  unionTypesLiteralBoolFiltered.push({
-    kind: 'boolean',
-    optional: optional ?? false,
-  });
-
-  const newUnionTypes = hasBoolean
-    ? unionTypesLiteralBoolFiltered
-    : possibleTypes;
-
-  const filteredTypes = newUnionTypes.filter(
+  const filteredTypes = possibleTypes.filter(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
@@ -1186,7 +1155,8 @@ function handleUnion(
     }
   }
 
-  const typeWithIndex = findTypeOfAny(tsValue, newUnionTypes);
+  // Handle others
+  const typeWithIndex = findTypeOfAny(tsValue, filteredTypes);
 
   if (!typeWithIndex) {
     return Either.left(unionTypeMatchError(filteredTypes, tsValue));
@@ -1226,7 +1196,7 @@ function findTypeOfAny(
 function matchesType(value: any, type: Type.Type): boolean {
   switch (type.kind) {
     case 'boolean':
-      return typeof value === 'boolean' || value === true || value === false;
+      return typeof value === 'boolean';
 
     case 'number':
       return typeof value === 'number';
@@ -1723,43 +1693,12 @@ export function toTsValue(value: Value, type: Type.Type): any {
         (error) => new Error(`Internal Error: ${error}`),
       );
 
-      const hasFalseLiteral = type.unionTypes.some(
-        (t) => t.kind === 'literal' && t.literalValue === 'false',
-      );
-
-      const hasTrueLiteral = type.unionTypes.some(
-        (type) => type.kind === 'literal' && type.literalValue === 'true',
-      );
-
-      let hasBoolean = hasFalseLiteral && hasTrueLiteral;
-
-      let unionTypesLiteralBoolFiltered = type.unionTypes.filter(
-        (field) =>
-          !(
-            field.kind === 'literal' &&
-            (field.literalValue === 'false' || field.literalValue === 'true')
-          ),
-      );
-
-      const optional = unionTypesLiteralBoolFiltered.find(
-        (field) => field.kind === 'literal',
-      )?.optional;
-
-      unionTypesLiteralBoolFiltered.push({
-        kind: 'boolean',
-        optional: optional ?? false,
-      });
-
-      const newUnionTypes = hasBoolean
-        ? unionTypesLiteralBoolFiltered
-        : type.unionTypes;
-
-      const filteredUnionTypes: Type.Type[] = newUnionTypes.filter(
+      const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
         (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
       );
 
       // This implies this optional value
-      if (filteredUnionTypes.length !== newUnionTypes.length) {
+      if (filteredUnionTypes.length !== type.unionTypes.length) {
         if (filteredUnionTypes.length === 1) {
           return toTsValue(value, filteredUnionTypes[0]);
         }
