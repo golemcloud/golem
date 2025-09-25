@@ -11,10 +11,10 @@ application, without having to write servers or implement protocols like HTTP,
 gRPC, or GraphQL.
 
 Without having to write any additional code, Golem provides you with the ability
-to trigger the creation of workers from your components based on HTTP API calls.
+to trigger the creation of agents from your components based on HTTP API calls.
 
 Although useful for building tooling or quick prototypes, the generic APIs that
-Golem gives you to create and interact with your workers are usually not the
+Golem gives you to create and interact with your agents are usually not the
 polished, engineered APIs that you want to expose to other organizations,
 developers of mobile or web applications, or other backend teams.
 
@@ -37,7 +37,7 @@ Like OpenAPI specifications, API Definitions contain the following elements:
 
 In an API definition, the routes define not just the structure of the overall
 HTTP, but also how invocation of these APIs triggers the creation and activation
-of workers.
+of agents.
 
 The next section introduces routes in more detail.
 
@@ -48,18 +48,15 @@ The elements of a route are as follows:
 - **Path**. The path of the route, such as `/users/{user-id}`. Paths may
   contain variables, which may be accessed inside the route binding.
 - **Method**. The method of the route, such as GET, PUT, POST, or DELETE.
-- **Binding**. The binding defines what worker will be created and invoked
+- **Binding**. The binding defines what agent will be created and invoked
   when the endpoint itself is invoked.
 
 In the following section, you will learn more about the binding.
 
 ### Bindings
 
-Bindings are the glue that connects your endpoint to an actual worker.
-Examples of what binding can do include invoking a worker, retrieving files from the worker filesystem and
-forwarding http requests to the wasi:http/proxy world.
-
-There are many different binding types that address various usecases, learn more about them [here](/http-api-definitions/api-definition-bindings).
+Bindings are the glue that connects your endpoint to an actual agent.
+Examples of what binding can do include invoking an agent or retrieving files from the agent filesystem.
 
 # Management
 

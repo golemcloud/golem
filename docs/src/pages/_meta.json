@@ -45,5 +45,6 @@
   "name-mapping": "Name Mapping",
   "type-mapping": "Type Mapping",
   "rest-api": "REST API",
-  "rib": "Rib"
+  "rib": "Rib",
+  "js-apis": "JavaScript APIs"
 }

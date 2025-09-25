@@ -37,13 +37,13 @@ Application plugins are similar to library plugins with the difference that the 
 
 ### Oplog processor plugins
 
-Oplog processor plugins are special **golem workers** implementing the `golem:api@1.1.7/oplog-processor` interface. These plugins are instantiated and by Golem, and got periodically invoked with oplog entries - a journal of operations performed by workers where the plugin is installed.
+Oplog processor plugins are special **golem agents** implementing the `golem:api@1.1.7/oplog-processor` interface. These plugins are instantiated and by Golem, and got periodically invoked with oplog entries - a journal of operations performed by agents where the plugin is installed.
 
 <Callout type="warning">
   Oplog processor plugin support is experimental. The final version will guarantee **exactly-once**
-  semantics for processing the oplog of the workers, which means that if the plugin is installed and
-  activated for a worker, we guarantee that the plugin will receive _all of the oplog entries_ of
-  that worker (even from before the plugin was acitve), and each entry will be only sent exactly
+  semantics for processing the oplog of the agents, which means that if the plugin is installed and
+  activated for an agent, we guarantee that the plugin will receive _all of the oplog entries_ of
+  that agent (even from before the plugin was active), and each entry will be only sent exactly
   once. This guarantee is not implemented yet.
 </Callout>
 
@@ -59,4 +59,4 @@ Defining a plugin does not immediately make that plugin used by Golem. To make u
 
 Installing a plugin to a component creates a new **component version**, similarly how updating a component's WASM file does. This guarantees that already running agents are not affected by the plugin installation process. To make an existing agent use of an installed plugin, the agent must be **updated** to the new component version.
 
-Oplog processor plugins can also be **activated** and **deactivated** on a running agent dynamically using the Worker API. This is an advanced feature which allows the user to temporarily pause an effect of a plugin for a given worker.
+Oplog processor plugins can also be **activated** and **deactivated** on a running agent dynamically using the Agent API. This is an advanced feature which allows the user to temporarily pause an effect of a plugin for a given agent.

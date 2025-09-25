@@ -1,3 +1,5 @@
+import { Tabs } from "nextra/components"
+
 # Logs
 
 ## Golem server logs
@@ -68,21 +70,21 @@ For both `file` and `stdout` logging, a set of boolean flags control the format 
 | `span_events_full`   | Emit one event at all points (new, enter, exit, drop) |
 | `without_time`       | Do not emit timestamps for the log entries            |
 
-## Golem worker logs
+## Golem agent logs
 
-For logging from **workers** running on Golem, there are two options:
+<Tabs items={["TypeScript",]}>
+    <Tabs.Tab>
+    In TypeScript agents, use the standard functions of `console` to log messages. `console.log` writes to the agent's standard output,
+    while `console.debug`, `console.info`, etc. are writing log entries with the specific log level.
+    </Tabs.Tab>
+</Tabs>
 
-- Print log lines to the **stdout** and/or **stderr** channels of the worker
-- Use the [WASI Logging interface](https://github.com/WebAssembly/wasi-logging)
+### Getting agent logs
 
-Using the WASI Logging interface depends on the guest language.
-
-### Getting worker logs
-
-Worker logs (both stdout/err and WASI logging entries) are persisted for each worker, and they can be watched in live by using the **connect API**. There are three ways to connect to a worker:
+Agent logs (both stdout/err and WASI logging entries) are persisted for each agent, and they can be watched in live by using the **connect API**. There are three ways to connect to an agent:
 
 - Using `golem`
 - Using the connect WebSocket API
 - Using the [Golem Console](https://console.golem.cloud/) (Golem Cloud only)
 
-To connect to a worker's log with `golem`, use either the `golem worker connect` command or the `--connect` flag when making an invocation. See the [CLI documentation](/cli/workers) for more details.
+To connect to a agent's log with `golem`, use either the `golem agent stream` command or the `--stream` flag when making an invocation. See the [CLI documentation](/cli/agents) for more details.

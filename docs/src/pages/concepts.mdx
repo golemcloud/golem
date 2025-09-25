@@ -2,15 +2,99 @@ import { Cards, Card } from "nextra/components"
 
 # Concepts
 
-This section is a collection of Golem's primary **concepts**.
+This page will teach you how to think about Golem so you can build correct, reliable TypeScript agents. You'll find the core jargon, how execution actually works, what the runtime guarantees, and what still belongs in your code.
+
+## Agents, Briefly
+
+On Golem, an **agent** is a durable, stateful unit of execution you write in TypeScript. You publish an **Agent Type** (a versioned definition of code + config). Each running instance of that type is an agent with its own durable state and identity. Agents talk to the outside world through **capabilities** you grant them: calling HTTP APIs, using tools (including MCP), or messaging other agents.
+
+## The Runtime Promise
+
+While your code looks like straight-line TypeScript, the runtime quietly does a lot: it persists state and history, mediates external calls, guarantees agent-to-agent delivery, parks idle agents at zero compute, and records a full trace you can search and replay. The outcome is an agent that keeps its place, doesn't double-fire effects, and can explain itself after the fact.
+
+## Terminology
+
+- **Agent Type** — Your versioned TypeScript definition for a class of agents.
+- **Agent** — A running instance with its own durable state.
+- **Capability** — A granted permission to call an API/tool or message another agent.
+- **Message** — A durable, once-delivered communication between agents, ordered per stream.
+- **Effect** — An external side-effect (charge a card, post a webhook) issued via the runtime's I/O mediation.
+- **Idempotency key** — A unique key the runtime automatically attaches to each outbound request so cooperative endpoints process the effect exactly once.
+- **Checkpoint (snapshot)** — A durable save-point of agent state used for recovery and safe replay.
+- **Durable log (oplog)** — An append-only record of inputs, messages, effects, and decisions, powering observability and replay.
+- **Trigger** — How you start or talk to agents via platform APIs.
+- **Scheduler** — Places, suspends, and resumes agents across the cluster; enables suspend-to-zero.
+
+## The Lifecycle: From Trigger to Completion
+
+Every interaction begins with a **trigger**. You create an agent or send a command to an existing one. The runtime loads its state and starts executing your TypeScript code.
+
+When you call an external API (say, to take a payment), the call goes through Golem's mediated I/O. Before anything leaves your process, the runtime records the intent in the durable log and adds an idempotency key to the request. If the downstream system is cooperative—which most modern APIs are—it will deduplicate on that key. When the response comes back, Golem commits the effect exactly once and takes a checkpoint.
+
+If the next step needs to wait—perhaps for a human approval or a webhook callback—the agent **suspends**. While parked, it consumes zero compute. The scheduler resumes the agent when the event arrives or a timer fires, and execution continues with state intact.
+
+If the node running your agent fails mid-execution, the scheduler detects the failure, restores state from the last checkpoint, and replays from there. Replay skips completed steps and reconciles already-committed effects, so you don't re-bill a customer or re-open a ticket. Finally, the agent either completes or waits for the next trigger.
+
+### A Simple Example Makes This Concrete:
+
+**Order flow.** Charge the card, then send the receipt. If email delivery fails after the charge succeeded, the runtime retries the "send receipt" step. The charge will not be executed again—the idempotency key and effect commit prevent it—even if the agent had crashed between the two steps.
+
+## Semantics You Can Rely On
+
+### Inside the Runtime
+Execution is exactly-once with deterministic recovery from checkpoints and the durable log. Messages between agents are persisted and delivered once, preserving order per sender→receiver stream.
+
+### Outside the Runtime
+External effects are exactly-once when you call through the mediated I/O. Golem automatically attaches an idempotency key and commits effects atomically with the log. On replay, Golem consults prior commits and downstream receipts to avoid re-doing work. For endpoints that don't support idempotency, you can still wrap them behind a thin service that does.
+
+### Suspend & Resume
+Agents can wait minutes or months without burning CPU. Resumes are instant, with full context.
+
+### Upgrades
+Agent Types are versioned. You can run versions side-by-side, route new creations to the new version, and migrate live agents forward without downtime.
+
+### Observability & Replay
+Every prompt, tool call, message, and effect is recorded. You can search the trace and replay to reproduce behavior without re-firing effects. Snapshots let you mark "known-good" points and safely rewind or fork investigations.
+
+## State: What Lives in the Agent vs. Your Databases
+
+**Keep live decision context in the agent:** conversation history, in-flight workflow state, pointers to authoritative records, and results you'll immediately use. It's durable and consistent with execution; you don't write persistence code to keep it safe.
+
+**Keep cold data in your existing stores:** analytics, reporting, bulk queries, and compliance archives. Store stable identifiers in the agent and hydrate as needed.
+
+> **A good heuristic:** what the agent needs to make its next decision belongs with the agent; everything else belongs where your organization already manages long-lived data.
+
+## Human-in-the-Loop
+
+Agents can pause anywhere for a human decision. The wait is durable, with deadlines and fallbacks (auto-cancel, escalate, choose defaults). When the decision arrives, the runtime applies it exactly once, records it in the log, and continues. You don't need polling loops or extra schedulers.
+
+## Resilience and Retries
+
+The runtime handles the gritty parts of distributed life: network blips, timeouts, 429s, and transient 5xx responses. Retries use back-off and jitter and are governed by policy at the Agent Type level.
+
+There's one area where your domain logic matters: **semantic soft errors**. If a downstream returns HTTP 200 but the body means "try again later" or "needs human", signal that explicitly in your code so the runtime can either retry it or branch to a HITL path. The runtime can only treat as retryable what you indicate is retryable.
+
+## Security, Isolation, and Audit
+
+Agents run in strict isolation and can only use capabilities you grant. Those capabilities scope access to external APIs, tools, and other agents. Every access and effect is captured in the durable log for a clear audit trail.
+
+## Scaling and Availability
+
+Idle agents scale to zero. The scheduler spreads active agents across the cluster for throughput and resumes parked agents on demand. If a node fails, agents that were hosted there are briefly unavailable while they're recovered; new agent creations and agents on other nodes continue uninterrupted. Recovery is automatic and state-correct.
+
+## Responsibilities: The Runtime vs. You
+
+**Golem guarantees:** durable state and history, exactly-once messaging, exactly-once external effects via automatic idempotency keys, suspend/resume, side-by-side upgrades, and full observability with safe replay.
+
+**You own:** your domain logic—modeling state, deciding what constitutes a retryable condition vs. a human decision, scoping capabilities with least privilege, and setting timeouts/SLOs that reflect downstream reality. When an external API can't honor idempotency, add a thin façade that does; Golem will still mediate and log the effect.
+
+## More details
 
 <Cards num={2}>
   <Card title="Reliability" href="concepts/reliability" />
-  <Card title="Components" href="concepts/components" />
-  <Card title="Workers" href="concepts/workers" />
-  <Card title="Invocations" href="concepts/invocations" />
+  <Card title="Agents" href="concepts/agents" />
   <Card title="Worker Gateway" href="concepts/worker-gateway" />
-  <Card title="Worker to Worker Communication" href="concepts/worker-to-worker-communication" />
+  <Card title="Agent to Agent Communication" href="concepts/agent-to-agent-communication" />
   <Card title="API Definitions" href="/concepts/api-definitions" />
   <Card title="Plugins" href="/concepts/plugins" />
 </Cards>

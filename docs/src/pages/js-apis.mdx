@@ -1,0 +1,750 @@
+# Supported JS APIs
+
+### APIs
+
+#### Console
+
+If the `logging` feature flag is enabled in the generated crate, it depends on `wasi:logging`, otherwise just on the
+core WASI interfaces.
+
+- `assert`
+- `clear`
+- `count`
+- `countReset`
+- `debug`
+- `dir`
+- `dirXml`
+- `error`
+- `group`
+- `groupCollapsed`
+- `groupEnd`
+- `info`
+- `log`
+- `table`
+- `time`
+- `timeEnd`
+- `timeLog`
+- `trace`
+- `warn`
+
+#### HTTP (fetch)
+
+Only if the `http` feature flag is enabled in the generated crate. It depends on `wasi:http`.
+
+- `fetch`
+- `Headers`
+- `Request`
+- `Response`
+- `FormData`
+- `Blob`
+- `File`
+
+#### URL
+
+- `URL`
+- `URLSearchParams`
+
+#### Streams
+
+Implemented by https://github.com/MattiasBuelens/web-streams-polyfill
+
+- `ByteLengthQueuingStrategy`
+- `CountQueuingStrategy`
+- `ReadableByteStreamController`
+- `ReadableStream`
+- `ReadableStreamBYOBReader`
+- `ReadableStreamBYOBRequest`
+- `ReadableStreamDefaultController`
+- `ReadableStreamDefaultReader`
+- `TransformStream`
+- `TransformStreamDefaultController`
+- `WritableStream`
+- `WritableStreamDefaultController`
+
+#### Timeout functions
+
+- `setTimeout`
+- `clearTimeout`
+- `setInterval`
+- `clearInterval`
+- `setImmediate`
+
+
+#### Encoding
+
+- `TextEncoder`
+- `TextDecoder`
+- `TextDecoderStream`
+- `TextEncoderStream`
+
+### `node:util`
+- `format`
+- `deprecate`
+- `debugLog`
+- `inspect`
+- `isArray`
+- `isBoolean`
+- `isNull`
+- `isNullOrUndefined`
+- `isNumber`
+- `isString`
+- `isSymbol`
+- `isUndefined`
+- `isRegExp`
+- `isObject`
+- `isDate`
+- `isError`
+- `isFunction`
+- `isPrimitive`
+- `isBuffer`
+- `log`
+- `_extend`
+- `promisify`
+- `callbackify`
+
+### `node:buffer`
+- `Buffer`
+- `INSPECT_MAX_BYTES`
+- `kMaxLength`
+- `kStringMaxLength`
+- `constants`
+- `SlowBuffer`
+
+### `node:fs`
+- `readFile`
+- `readFileSync`
+- `writeFile`
+- `writeFileSync`
+
+### `node:process`
+- `argv`
+- `argv0`
+- `env`
+- `cwd`
+
+### `base64-js`
+- `byteLength`
+- `toByteArray`
+- `fromByteArray`
+
+### `ieee754`
+- `read`
+- `write`
+
+### Provided by QuickJS
+
+- Global:
+    - `parseInt`
+    - `parseFloat`
+    - `isNaN`
+    - `isFinite`
+    - `quickMicrotask`
+    - `decodeURI`
+    - `decodeURIComponent`
+    - `encodeURI`
+    - `encodeURIComponent`
+    - `escape`
+    - `unescape`
+    - `Infinity`
+    - `NaN`
+    - `undefined`
+    - `[Symbol.toStringTag]`
+
+- `Object`
+    - static methods and properties:
+        - `create`
+        - `getPrototypeOf`
+        - `setPrototypeOf`
+        - `defineProperty`
+        - `defineProperties`
+        - `getOwnPropertyNames`
+        - `getOwnPropertySymbols`
+        - `groupBy`
+        - `keys`
+        - `values`
+        - `entries`
+        - `isExtensible`
+        - `preventExtensions`
+        - `getOwnPropertyDescriptor`
+        - `getOwnPropertyDescriptors`
+        - `is`
+        - `assign`
+        - `seal`
+        - `freeze`
+        - `isSealed`
+        - `isFrozen`
+        - `fromEntries`
+        - `hasOwn`
+    - methods and properties:
+        - `toString`
+        - `toLocaleString`
+        - `valueOf`
+        - `hasOwnProperty`
+        - `isPrototypeOf`
+        - `propertyIsEnumerable`
+        - `__proto__`
+        - `__defineGetter__`
+        - `__defineSetter__`
+        - `__lookupGetter__`
+        - `__lookupSetter__`
+- `Function`
+    - methods and properties:
+        - `call`
+        - `apply`
+        - `bind`
+        - `toString`
+        - `[Symbol.hasInstance]`
+        - `fileName`
+        - `lineNumber`
+        - `columnNumber`
+- `Error`
+    - methods and properties:
+        - `name`
+        - `message`
+        - `toString`
+    - static methods and properties:
+        - `isError`
+        - `captureStackTrace`
+        - `stackTraceLimit`
+        - `prepareStackTrace`
+- `Generator`
+    - methods and properties:
+        - `next`
+        - `return`
+        - `throw`
+        - `[Symbol.toStringTag]`
+    - static methods and properties:
+        - `from`
+- `Iterator`
+    - static methods and properties:
+        - `from`
+    - methods and properties:
+        - `drop`
+          `filter`
+          `flatMap`
+          `map`
+          `take`
+          `every`
+          `find`
+          `forEach`
+          `some`
+          `reduce`
+          `toArray`
+          `[Symbol.iterator]`
+          `[Symbol.toStringTag]`
+- `Array`
+    - static methods and properties:
+        - `isArray`
+        - `from`
+        - `of`
+        - `[Symbol.species]`
+    - methods and properties:
+        - `at`
+        - `with`
+        - `concat`
+        - `every`
+        - `some`
+        - `forEach`
+        - `map`
+        - `filter`
+        - `reduce`
+        - `reduceRight`
+        - `fill`
+        - `find`
+        - `findIndex`
+        - `findLast`
+        - `findLastIndex`
+        - `indexOf`
+        - `lastIndexOf`
+        - `includes`
+        - `join`
+        - `toString`
+        - `toLocaleString`
+        - `pop`
+        - `push`
+        - `shift`
+        - `unshift`
+        - `reverse`
+        - `toReversed`
+        - `sort`
+        - `toSorted`
+        - `slice`
+        - `splice`
+        - `toSpliced`
+        - `copyWithin`
+        - `flatMap`
+        - `flat`
+        - `values`
+        - `[Symbol.iterator]`
+        - `keys`
+        - `entries`
+- `Number`
+    - static methods and properties:
+        - `parseInt`
+        - `parseFloat`
+        - `isNaN`
+        - `isFinite`
+        - `isInteger`
+        - `isSafeInteger`
+        - `MAX_VALUE`
+        - `MIN_VALUE`
+        - `NaN`
+        - `NEGATIVE_INFINITY`
+        - `POSITIVE_INFINITY`
+        - `EPSILON`
+        - `MAX_SAFE_INTEGER`
+        - `MIN_SAFE_INTEGER`
+    - methods and properties:
+        - `toExponential`
+        - `toFixed`
+        - `toPrecision`
+        - `toString`
+        - `toLocaleString`
+        - `valueOf`
+- `Boolean`
+    - methods and properties:
+        - `toString`
+        - `valueOf`
+- `String`
+    - static methods and properties:
+        - `fromCharCode`
+        - `fromCodePoint`
+        - `raw`
+    - methods and properties:
+        - `length`
+        - `at`
+        - `charCodeAt`
+        - `charAt`
+        - `concat`
+        - `codePointAt`
+        - `isWellFormed`
+        - `toWellFormed`
+        - `indexOf`
+        - `lastIndexOf`
+        - `includes`
+        - `endsWith`
+        - `startsWith`
+        - `match`
+        - `matchAll`
+        - `search`
+        - `split`
+        - `substring`
+        - `substr`
+        - `slice`
+        - `repeat`
+        - `replace`
+        - `replaceAll`
+        - `padEnd`
+        - `padStart`
+        - `trim`
+        - `trimEnd`
+        - `trimRight`
+        - `trimStart`
+        - `trimLeft`
+        - `toString`
+        - `valueOf`
+        - `localeCompare`
+        - `normalize`
+        - `toLowerCase`
+        - `toUpperCase`
+        - `toLocaleLowerCase`
+        - `toLocaleUpperCase`
+        - `[Symbol.iterator]`
+        - `anchor`
+        - `big`
+        - `blink`
+        - `bold`
+        - `fixed`
+        - `fontcolor`
+        - `fontsize`
+        - `italics`
+        - `link`
+        - `small`
+        - `strike`
+        - `sub`
+        - `sup`
+- `Symbol`
+    - static methods and properties:
+        - `for`
+        - `keyFor`
+    - methods and properties:
+        - `toString`
+        - `valueOf`
+        - `description`
+        - `[Symbol.toPrimitive]`
+        - `[Symbol.toStringTag]`
+- `Map`
+    - static methods and properties:
+        - `groupBy`
+        - `[Symbol.species]`
+    - methods and properties:
+        - `set`
+        - `get`
+        - `has`
+        - `delete`
+        - `clear`
+        - `size`
+        - `forEach`
+        - `values`
+        - `keys`
+        - `entries`
+        - `[Symbol.iterator]`
+        - `[Symbol.toStringTag]`
+- `Set`
+    - static methods and properties:
+        - `[Symbol.species]`
+    - methods and properties:
+        - `add`
+        - `has`
+        - `delete`
+        - `clear`
+        - `size`
+        - `forEach`
+        - `isDisjointFrom`
+        - `isSubsetOf`
+        - `isSupersetOf`
+        - `intersection`
+        - `difference`
+        - `symmetricDifference`
+        - `union`
+        - `values`
+        - `keys`
+        - `[Symbol.iterator]`
+        - `entries`
+        - `[Symbol.toStringTag]`
+- `WeakMap`
+    - methods and properties:
+        - `set`
+        - `get`
+        - `has`
+        - `delete`
+        - `[Symbol.toStringTag]`
+- `WeakSet`
+    - methods and properties:
+        - `add`
+        - `has`
+        - `delete`
+        - `[Symbol.toStringTag]`
+- `GeneratorFunction`
+    - methods and properties:
+        - `[Symbol.toStringTag]`
+- `Math`
+    - static methods and properties:
+        - `min`
+        - `max`
+        - `abs`
+        - `floor`
+        - `ceil`
+        - `round`
+        - `sqrt`
+        - `acos`
+        - `asin`
+        - `atan`
+        - `atan2`
+        - `cos`
+        - `exp`
+        - `log`
+        - `pow`
+        - `sin`
+        - `tan`
+        - `trunc`
+        - `sign`
+        - `cosh`
+        - `sinh`
+        - `tanh`
+        - `acosh`
+        - `asinh`
+        - `atanh`
+        - `expm1`
+        - `log1p`
+        - `log2`
+        - `log10`
+        - `cbrt`
+        - `hypot`
+        - `random`
+        - `f16round`
+        - `fround`
+        - `imul`
+        - `clz32`
+        - `sumPrecise`
+        - `[Symbol.toStringTag]`
+        - `E`
+        - `LN10`
+        - `LN2`
+        - `LOG2E`
+        - `LOG10E`
+        - `PI`
+        - `SQRT1_2`
+        - `SQRT2`
+- `Reflect`
+    - static methods and properties:
+        - `apply`
+        - `construct`
+        - `defineProperty`
+        - `deleteProperty`
+        - `get`
+        - `getOwnPropertyDescriptor`
+        - `getPrototypeOf`
+        - `has`
+        - `isExtensible`
+        - `ownKeys`
+        - `preventExtensions`
+        - `set`
+        - `setPrototypeOf`
+        - `[Symbol.toStringTag]`
+- `RegExp`
+    - static methods and properties:
+        - `escape`
+        - `[Symbol.species]`
+    - methods and properties:
+        - `flags`
+        - `source`
+        - `global`
+        - `ignoreCase`
+        - `multiline`
+        - `dotAll`
+        - `unicode`
+        - `unicodeSets`
+        - `sticky`
+        - `hasIndices`
+        - `exec`
+        - `compile`
+        - `test`
+        - `toString`
+        - `[Symbol.replace]`
+        - `[Symbol.match]`
+        - `[Symbol.matchAll]`
+        - `[Symbol.search]`
+        - `[Symbol.split]`
+- `JSON`
+    - static methods and properties:
+        - `parse`
+        - `stringify`
+        - `[Symbol.toStringTag]`
+- `Promise`
+    - static methods and properties:
+        - `resolve`
+        - `reject`
+        - `all`
+        - `allSettled`
+        - `any`
+        - `try`
+        - `race`
+        - `withResolvers`
+        - `[Symbol.species]`
+    - methods and properties:
+        - `then`
+        - `catch`
+        - `finally`
+        - `[Symbol.toStringTag]`
+- `AsyncFunction`
+    - methods and properties:
+        - `[Symbol.toStringTag]`
+- `AsyncIterator`
+    - methods and properties:
+        - `next`
+        - `return`
+        - `throw`
+- `AsyncGeneratorFunction`
+    - methods and properties:
+        - `[Symbol.toStringTag]`
+- `AsyncGenerator`
+    - methods and properties:
+        - `next`
+        - `return`
+        - `throw`
+        - `[Symbol.toStringTag]`
+- `Date`
+    - static methods and properties:
+        - `now`
+        - `parse`
+        - `UTC`
+    - methods and properties:
+        - `valueOf`
+        - `toString`
+        - `[Symbol.toPrimitive]`
+        - `toUTCString`
+        - `toGMTString`
+        - `toISOString`
+        - `toDateString`
+        - `toTimeString`
+        - `toLocaleString`
+        - `toLocaleDateString`
+        - `toLocaleTimeString`
+        - `getTimezoneOffset`
+        - `getTime`
+        - `getYear`
+        - `getFullYear`
+        - `getUTCFullYear`
+        - `getMonth`
+        - `getUTCMonth`
+        - `getDate`
+        - `getUTCDate`
+        - `getHours`
+        - `getUTCHours`
+        - `getMinutes`
+        - `getUTCMinutes`
+        - `getSeconds`
+        - `getUTCSeconds`
+        - `getMilliseconds`
+        - `getUTCMilliseconds`
+        - `getDay`
+        - `getUTCDay`
+        - `setTime`
+        - `setMilliseconds`
+        - `setUTCMilliseconds`
+        - `setSeconds`
+        - `setUTCSeconds`
+        - `setMinutes`
+        - `setUTCMinutes`
+        - `setHours`
+        - `setUTCHours`
+        - `setDate`
+        - `setUTCDate`
+        - `setMonth`
+        - `setUTCMonth`
+        - `setYear`
+        - `setFullYear`
+        - `setUTCFullYear`
+        - `toJSON`
+- `BigInt`
+    - static methods and properties:
+        - `asIntN`
+        - `asUintN`
+    - methods and properties:
+        - `toString`
+        - `valueOf`
+        - `[Symbol.toStringTag]`
+- `ArrayBuffer`
+    - static methods and properties:
+        - `isView`
+        - `[Symbol.species`
+    - methods and properties:
+        - `byteLength`
+        - `maxByteLength`
+        - `resizeable`
+        - `detached`
+        - `resize`
+        - `slice`
+        - `transfer`
+        - `transferToFixedLength`
+        - `[Symbol.toStringTag]`
+- `SharedArrayBuffer`
+    - static methods and properties:
+        - `[Symbol.species]`
+    - methods and properties:
+        - `byteLength`
+        - `maxByteLength`
+        - `growable`
+        - `grow`
+        - `slice`
+        - `[Symbol.toStringTag]`
+- Typed arrays (`Int8Array`, `Uint8Array`, `Int16Array`, `Uint16Array`, `Int32Array`, `Uint32Array`, `BigInt64Array`,
+  `BigUint64Array`, `Float32Array`, `Float64Array`, `Float16Array`)
+    - static methods and properties:
+        - `from`
+        - `of`
+        - `[Symbol.species]`
+    - methods and properties:
+        - `length`
+        - `at`
+        - `with`
+        - `buffer`
+        - `byteLength`
+        - `set`
+        - `byteOffset`
+        - `values`
+        - `[Symbol.iterator]`
+        - `keys`
+        - `entries`
+        - `[Symbol.toStringTag]`
+        - `copyWithin`
+        - `every`
+        - `some`
+        - `forEach`
+        - `map`
+        - `filter`
+        - `reduce`
+        - `reduceRight`
+        - `fill`
+        - `find`
+        - `findIndex`
+        - `findLast`
+        - `findLastIndex`
+        - `reverse`
+        - `toReversed`
+        - `slice`
+        - `subarray`
+        - `sort`
+        - `toSorted`
+        - `join`
+        - `toLocaleString`
+        - `indexOf`
+        - `lastIndexOf`
+        - `includes`
+- `DataView`
+    - methods and properties:
+        - `buffer`
+        - `byteLength`
+        - `byteOffset`
+        - `getInt8`
+        - `getUint8`
+        - `getInt16`
+        - `getUint16`
+        - `getInt32`
+        - `getUint32`
+        - `getBigInt64`
+        - `getBigUint64`
+        - `getFloat16`
+        - `getFloat32`
+        - `getFloat64`
+        - `setInt8`
+        - `setUint8`
+        - `setInt16`
+        - `setUint16`
+        - `setInt32`
+        - `setUint32`
+        - `setBigInt64`
+        - `setBigUint64`
+        - `setFloat16`
+        - `setFloat32`
+        - `setFloat64`
+        - `[Symbol.toStringTag]`
+- `Atomics`
+    - static methods and properties:
+        - `add`
+        - `and`
+        - `or`
+        - `sub`
+        - `xor`
+        - `exchange`
+        - `compareExchange`
+        - `load`
+        - `store`
+        - `isLockFree`
+        - `pause`
+        - `wait`
+        - `notify`
+        - `[Symbol.toStringTag]`
+- `Performance`
+    - methods and properties:
+        - `now`
+- `WeakRef`
+    - methods and properties:
+        - `deref`
+        - `[Symbol.toStringTag]`
+- `FinalizationRegistry`
+    - methods and properties:
+        - `register`
+        - `unregister`
+        - `[Symbol.toStringTag]`
+- `Callsite`
+    - methods and properties:
+      -`isNative`
+        - `getFileName`
+        - `getFunction`
+        - `getFunctionName`
+        - `getColumnNumber`
+        - `getLineNumber`
+        - `[Symbol.toStringTag]`
+- `Proxy`

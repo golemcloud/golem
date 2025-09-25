@@ -1,4 +1,4 @@
-import { Callout, Card, Cards, Tabs } from "nextra/components"
+import { Callout, Card, Cards, Tabs, Steps } from "nextra/components"
 
 # Quickstart
 
@@ -211,6 +211,45 @@ After this command, the API is deployed to our locally running Golem instance an
 ```shell copy
 curl -X POST http://localhost:9006/agent-1/increment
 ```
+
+### Notes about the Golem 1.3 release
+
+Read the following important notes about the Golem 1.3 release, especially if you have used previous Golem versions:
+
+<Steps>
+#### Changes in naming
+
+  Previously Golem called _agents_ as workers, and the new name has not been applied everywhere yet. The APIs described in this section are still using the _worker_ name.
+
+#### Grouping multiple agent types
+
+  In Golem 1.3, a component can define multiple **agent types**, and it is recommended to put all agent types that are calling each other into the same component. This is a change from previous versions, where one component was implementing one specific worker interface.
+
+  Currently the agent-to-agent RPC is only possible if the caller have access to the called agent type's source.
+
+  It is still possible to have multiple components in an application. There are some component-level settings that may motivate this, such as per-component environment variables and configuration, or the component type (durable or ephemeral). Another possible reason for grouping agent types into separate components can be to apply different update policies to them.
+
+#### Durability while testing locally
+
+  Golem provides durable execution by default, which can be inconvenient when iterating on a code and testing things locally. To start from a fresh state when trying out new changes, one possibility is to restart the local Golem server with `golem server run --clean`. **This deletes all data**. A more fine grained options is to pass `--reset` to CLI options such as `golem agent invoke`. This will delete existing agents and APIs but only for the invoked component.
+
+#### Supported TypeScript types
+
+   The Golem TypeScript SDK supports a subset of TypeScript types when defining agent constructors and methods. See the [type mapping page](/type-mapping) for details. If something is not supported, it is going to be a compile time error. Please report such issues to our [issue tracker](https://github.com/golemcloud/golem/issues).
+
+#### Supported JS APIs
+
+   Only a subset of browser and Node APIs are supported in Golem agents currently. See [the full list](/js-apis) for details. This limits the external libraries that can be used in Golem agents. Please report any important missing APIs to our [issue tracker](https://github.com/golemcloud/golem/issues).
+
+#### RPC cycles
+
+   When calling agents from other agents, the default mode is that the invoked method's result is awaited in the callee. As every agent is single threaded and invocations cannot overlap, it is possible to create a deadlock if agents are invoking each other in a cycle. This can be fixed by not awaiting the invocation, but instead just _trigger_ the invocation (or schedule for later). See the [agent-to-agent communication page](/develop/rpc) for details.
+
+#### AI libraries
+
+   Golem 1.3 comes with a suite of libraries for building AI agents. See the [AI libraries page](/develop/ai) for details. When importing one of these libraries in the agent's code, don't forget to also **specify the implementation** in the `golem.yaml` file, as described on the AI libraries page. The agent templates are coming with commented out sections in the application manifest (`golem.yaml`) for all the supported libraries.
+</Steps>
+
 
 ### Next Steps
 

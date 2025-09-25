@@ -2,7 +2,7 @@
 
 Golem associates an **invocation context** with each agent invocation. This invocation context consists of a stack of **spans**, each having a collection of **attributes**. Currently only string attributes are supported.
 
-The invocation context can be queried and manipulated (by adding custom spans with custom attributes) using [Golem specific host functions](/golem-host-functions).
+The invocation context can be queried and manipulated (by adding custom spans with custom attributes) using [the SDK](/develop/additional).
 
 By default the invocation context's spans are not used by Golem for anything - it is just information propagated among agents to be used by either the agents, or **oplog processor plugins** installed to them. It is possible to reconstruct all information about invocation context from the oplog, so oplog processor plugins can be used for example to provide live traces of agents through OpenTelemetry.
 

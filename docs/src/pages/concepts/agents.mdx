@@ -10,66 +10,65 @@ In server-based programming, the fundamental unit of work is the _server_, which
 accepts incoming connections, and handles requests by generating responses.
 
 In Golem, which is a serverless computing platform, the fundamental unit of
-work is the _worker_. A worker is a _running instance_ of a component, with a
+work is the _agent_. An agent is a _running instance_ of an agent type, defined in a component, with a
 unique identity, which allows addressing specific workers.
 
-Workers are similar to _lambdas_ or _functions_ in other serverless computing
+Agents are similar to _lambdas_ or _functions_ in other serverless computing
 platforms, but they are far more powerful and expressive.
 
 <Callout type="info">
-  The relationship between a component and a worker is the same as the relationship between an
+  The relationship between an agent type and an agent is the same as the relationship between an
   executable and a process: processes are running instances of executables. While the executable
   contains mostly code, which awaits execution, a process contains both code, as well as dynamic
   state, which captures work-in-progress.
 </Callout>
 
-# Worker Essentials
+# Agent Essentials
 
-The fundamental elements of every worker include:
+The fundamental elements of every agent include:
 
-- **Identity**. Every worker has a unique identity, which allows addressing
-  specific workers.
-- **State**. Every worker has state, including memory, environment variables,
+- **Identity**. Every agent has a unique identity, which allows addressing
+  specific agents.
+- **State**. Every agent has state, including memory, environment variables,
   and file system.
-- **API**. Every worker has a public API, defined by its component.
+- **API**. Every agent has a public API, defined by its agent type.
 
 These core elements are discussed in the sections that follow.
 
-## Ephemeral vs Durable Workers
+## Ephemeral vs Durable Agents
 
-Golem supports two types of workers, **ephemeral** and **durable**. Ephemeral workers are created on the fly for each invocation, and are not suitable for stateful applications. This makes them cheaper and more performant. Durable workers, on the other hand, preserve their state across invocations and provide much stronger guarantees.
+Golem supports two types of agents, **ephemeral** and **durable**. Ephemeral agents are created on the fly for each invocation, and are not suitable for stateful applications. This makes them cheaper and more performant. Durable agents, on the other hand, preserve their state across invocations and provide much stronger guarantees.
 
-Whether a worker is ephemeral or durable depends on the configuration of the deployed **component**. The component type can be changed from ephemeral to durable or the other way around, but this change results in a new _component version_, and will not affect the already running workers.
+Whether an agent is ephemeral or durable depends on the configuration of the deployed **component**. The component type can be changed from ephemeral to durable or the other way around, but this change results in a new _component version_, and will not affect the already running agents.
 
 ## Identity
 
-Every worker has a globally unique identity, which is formed from the
+Every agent has a globally unique identity, which is formed from the
 following elements:
 
 - **Component ID**. Every component deployed on Golem has a globally
   unique identity (UUID), which is assigned by Golem when a new component
   is uploaded to Golem.
-- **Worker Name**. The worker name can be chosen by you for each worker.
-  If you do not need to address specific workers, you can also use a UUID for
-  the worker name. The only constraint is that worker names must be unique
-  within the scope of their component. _Ephemeral workers_ have no user-defined names, their name is always a generated UUID provided by the execution environment.
+- **Agent type**. The agent type name identifies the agent type of the ones
+  defined in the component. Each component may define multiple agent types.
+- **Agent parameters**. Each agent type defines a **constructor** and part of an agent's identity is the values passed to this constructor. Every set of constructor parameter values identifies exactly one instance of that agent type.
 
-The unique identity of workers allows them to be addressed individually,
+The unique identity of agents allows them to be addressed individually,
 which unlocks many powerful patterns for building distributed systems.
 
-## Durable Worker State
+## Durable Agent State
 
-Workers are inherently stateful, in the same way that any running process
-is stateful. Workers have the following stateful elements:
+Agents are inherently stateful, in the same way that any running process
+is stateful. Agents have the following stateful elements:
 
-- **Memory**. A worker has in-memory state, such as global variables, stack,
-  and so on, which constantly changes over the life of the worker.
-- **Environment Variables**. A worker has environment variables, which it
-  inherits from component settings and any initial settings when the worker is
+- **Memory**. An agent has in-memory state, such as global variables, stack,
+  and so on, which constantly changes over the life of the agent.
+- **Environment Variables**. An agent has environment variables, which it
+  inherits from component settings and any initial settings when the agent is
   created, and which may change over time.
-- **File System**. A worker has a file system, which currently starts out
-  empty, but which may evolve over the life of the worker.
-- **Status**. The status of the worker, managed by Golem, is one of the
+- **File System**. An agent has a file system, which currently starts out
+  empty, but which may evolve over the life of the agent.
+- **Status**. The status of the agent, managed by Golem, is one of the
   following: running, idle, suspended, interrupted, retrying, failed, or
   exited.
 
@@ -79,48 +78,48 @@ code the CPU is currently executing.
 
 ## API
 
-Workers are running instances of components. Because components have a public
-API, which is defined by WIT, workers inherit this API.
+Agents are running instances of agent types. Agent types define a public
+API, which every agent inherits.
 
-To perform work, such as handling a request, you _invoke_ a worker's public API.
+To perform work, such as handling a request, you _invoke_ an agent's public API.
 This process is referred to as _invocation_, and you can learn more in the
-section on [invocation](/concepts/invocations).
+section on [invocation](/invoke).
 
-# Durable Worker Guarantees
+# Durable Agent Guarantees
 
-Golem executes workers with strong guarantees. To understand these guarantees,
+Golem executes agents with strong guarantees. To understand these guarantees,
 you should read the section on [reliability](/concepts/reliability).
 
 However, in brief, Golem provides the following guarantees:
 
-- **Transactional Execution**. Workers are executed transactionally. Once a
-  worker is started, it will be executed to completion, even in the presence of
-  faults, restarts, or updates. It's perfectly acceptable to use workers for
+- **Transactional Execution**. Agents are executed transactionally. Once a
+  agent is started, it will be executed to completion, even in the presence of
+  faults, restarts, or updates. It's perfectly acceptable to use agents for
   high-value use cases, such as financial transaction processing; or for
   implementing APIs that coordinate updates across multiple systems.
-- **Durable State**. All worker state, including in-memory state, is durable,
+- **Durable State**. All agent state, including in-memory state, is durable,
   and can be treated as automatically persistent. This means that state
   survives failures, restarts, and updates without the loss of any
-  information. Workers may treat their memory as a database, and use it to
+  information. Agents may treat their memory as a database, and use it to
   persist state indefinitely and across any number of invocations.
-- **Reliable Internal Communication**. Workers can communicate with each other
-  using their public APIs, in a type-safe way. Worker-to-worker communication
+- **Reliable Internal Communication**. Agents can communicate with each other
+  using their public APIs, in a type-safe way. Agent-to-agent communication
   is reliable, with exactly-once semantics, and can be used to build
   sophisticated and stateful distributed systems.
-- **Resilient External Communication**. Workers can freely communicate with
+- **Resilient External Communication**. Agents can freely communicate with
   external systems, such as databases, message queues, and APIs. External
   communication is automatically resilient, with exactly-once semantics for
   systems that support idempotency keys, and at-least-once semantics for
   systems that do not.
 - **Indefinite Life**. Unless forcibly deleted or failed in a way that is
-  unrecoverable (e.g. corruption of memory in a C program), workers live
+  unrecoverable (e.g. corruption of memory in a C program), agents live
   forever, without loss of state or progress. This allows workers to be used
   for long-running tasks, such as background processing, or for implementing
   APIs that require long-lived state.
-- **Secure Sandboxing**. Workers are executed in completely sandboxed
-  environments, with no possibility of workers interacting with each other
-  (except via their public APIs), and no possibility that one worker's failure
-  impacts another worker's health.
+- **Secure Sandboxing**. Agents are executed in completely sandboxed
+  environments, with no possibility of agents interacting with each other
+  (except via their public APIs), and no possibility that one agent's failure
+  impacts another agent's health.
 
 Some of these guarantees are common across all serverless platforms, but others
 are unique to the durable computing environment that Golem provides.
@@ -134,63 +133,64 @@ This enables increased reliability and use of serverless for long-running tasks,
 financial transactions, and other use cases that are not well-suited to
 traditional serverless platforms.
 
-## Comparing Functions to Workers
+## Comparing Functions to Agents
 
-|               | Worker | Function | Explanation                                                                                                           |
+|               | Agent | Function | Explanation                                                                                                           |
 | :------------ | :----: | :------: | :-------------------------------------------------------------------------------------------------------------------- |
 | Low-Latency   |   ✅   |    ✅    | Functions in serverless environments are designed to execute quickly, making them suitable for low-latency use cases. |
 | Scalable      |   ✅   |    ✅    | Functions in serverless environments scale automatically, making them suitable for high-throughput use cases.         |
-| Stateful      |   ✅   |    ❌    | Workers are inherently stateful, which means they maintain state for their lifetime, and across repeated invocations. |
-| Long-Running  |   ✅   |    ❌    | Workers run indefinitely, without loss of state or progress, making them uniquely suitable for long-running tasks.    |
-| Transactional |   ✅   |    ❌    | Workers are executed with strong transactional guarantees, transparently surviving faults, restarts, and updates.     |
-| Persistent    |   ✅   |    ❌    | All worker state, including in-memory state, is persistent and survives failures, restarts, and updates without loss. |
+| Stateful      |   ✅   |    ❌    | Agents are inherently stateful, which means they maintain state for their lifetime, and across repeated invocations. |
+| Long-Running  |   ✅   |    ❌    | Agents run indefinitely, without loss of state or progress, making them uniquely suitable for long-running tasks.    |
+| Transactional |   ✅   |    ❌    | Agents are executed with strong transactional guarantees, transparently surviving faults, restarts, and updates.     |
+| Persistent    |   ✅   |    ❌    | All agent state, including in-memory state, is persistent and survives failures, restarts, and updates without loss. |
 
 ## Emulating Classic Serverless
 
-Golem's **ephemeral workers** are emulating the classic serverless behavior, with the difference that they can have multiple entry points (exported functions). To fully emulate the classic serverless approach, you only need to do two things:
+Golem's **ephemeral agents** are emulating the classic serverless behavior, with the difference that they can have multiple entry points (exported functions). To fully emulate the classic serverless approach, you only need to do two things:
 
 1. **One-Export Component**. While WASM components can have any number of
    exports, when emulating classic serverless, you should only have one export
    per component. This export represents the event or request handler that you
    would typically have in a classic serverless function.
-2. **Define the component as ephemeral**. Choosing the ephemeral component type will make all its workers ephemeral, which means invocations does not have to specify a _worker name_, and for each invocation a new instance of the ephemeral worker will be created.
+2. **Define the component as ephemeral**. Choosing the ephemeral component type will make all its agents ephemeral (of every agent type defined in that component).
+3. **Request ID parameter**. Because agents are identified by their constructor parameters, it is required to have a constructor parameter that can be different for each request. This can be a string or UUID parameter.
 
-Golem still persists some information about each ephemeral worker that was created, which can be used for debugging purposes, but this state gets persisted in the background, not affecting the worker's performance.
+Golem still persists some information about each ephemeral agent that was created, which can be used for debugging purposes, but this state gets persisted in the background, not affecting the agent's performance.
 
 ## Operations
 
-Workers support the following operations:
+Agents support the following operations:
 
-- **Creation**. Workers benefit from automatic creation, which occurs when a
-  worker is invoked for the first time. Therefore, it is not necessary to
-  create workers explicitly.
-- **Interruption**. Workers can be interrupted at any time, which causes the
-  worker to stop executing. Interrupted workers can be resumed later.
-- **Deletion**. Workers can be deleted, which causes all state of the worker
-  to be permanently deleted. Deleted workers cannot be undeleted or resumed,
+- **Creation**. Agents benefit from automatic creation, which occurs when an
+  agent is invoked for the first time. Therefore, it is not necessary to
+  create agents explicitly.
+- **Interruption**. Agents can be interrupted at any time, which causes the
+  agent to stop executing. Interrupted agents can be resumed later.
+- **Deletion**. Agents can be deleted, which causes all state of the agent
+  to be permanently deleted. Deleted agents cannot be undeleted or resumed,
   and if invoked again, they will be recreated from scratch.
-- **Updating**. Workers can be updated to a newer version of a component, which
-  is useful for long-lived workers that can benefit from bug fixes or new
+- **Updating**. Agents can be updated to a newer version of a component, which
+  is useful for long-lived agents that can benefit from bug fixes or new
   features.
-- **Observation**. The persistent operation log of a worker can be queried and searched, which can be useful in debugging and auditing scenarios.
+- **Observation**. The persistent operation log of an agent can be queried and searched, which can be useful in debugging and auditing scenarios.
 
 Details about how to perform these operations can be found in the CLI guide,
 the REST API reference, and language-specific SDK documentation.
 
-### Worker Update
+### Agent Update
 
-When a new version of a **component** is created (by deploying a new version of the component, changing its type or installing plugins to it), the existing workers continue to run using the version they have been created with. Existing workers have to be explicitly updated to a new version if needed.
+When a new version of a **component** is created (by deploying a new version of the component, changing its type or installing plugins to it), the existing agents continue to run using the version they have been created with. Existing agents have to be explicitly updated to a new version if needed.
 
-Newly created workers are created using the latest version of the component. This also means that for **ephemeral workers** each invocation always runs using the latest version of the component.
+Newly created agents are created using the latest version of the component. This also means that for **ephemeral agents** each invocation always runs using the latest version of the component.
 
-There are two ways to update an existing worker to a new version of a component, and the update operation (triggered through the REST API, CLI, Console or host interface) can choose from either of them. These are the following:
+There are two ways to update an existing agents to a new version of a component, and the update operation (triggered through the REST API, CLI, Console or host interface) can choose from either of them. These are the following:
 
-- **Automatic update**. Golem tries to automatically update the worker to the new version, and may fail to do so.
-- **Manual update**. For manual update the component author must provide a pair of save/load functions that are used to migrate the state of the worker from the old version to the new version.
+- **Automatic update**. Golem tries to automatically update the agent to the new version, and may fail to do so.
+- **Manual update**. For manual update the component author must provide a pair of save/load functions that are used to migrate the state of the agent from the old version to the new version.
 
 #### Automatic update details
 
-Automatic update can be initiated any time, even while the worker is processing an invocation. The executor interrupts the worker, reloads it using the new component version and then replays the worker's oplog from the beginning of time. If the replay succeeds with the new codebase, the worker continues running from where it was interrupted, but now on the new component version. If the replay fails, the worker gets reverted to the original component version and continues running with that.
+Automatic update can be initiated any time, even while the agent is processing an invocation. The executor interrupts the agent, reloads it using the new component version and then replays the agent's oplog from the beginning of time. If the replay succeeds with the new codebase, the worker continues running from where it was interrupted, but now on the new component version. If the replay fails, the agent gets reverted to the original component version and continues running with that.
 
 How can the replay fail? Golem performs **divergence detection** during replaying the oplog. The following situations are considered divergences:
 
@@ -201,4 +201,4 @@ Because of these strict requirements, automatic update is only useful when the c
 
 #### Manual update details
 
-For manual update the old component version must implement the `golem:api/save-snaphot` interface, and the new component version must implement the `golem:api/load-snapshot` interface. The update operation is enqueued the same way as invocations are enqueued, as it can only be performed when the worker is idle. As soon as all the previously enqueued and running invocations are finished, the executor calls the save snapshot function that returns an array of bytes representing the state of the worker. Then the worker gets restarted using the new component version, and the new component's load snapshot functions is called with the saved state. The load snapshot function may return with a failure in which case the worker's component version gets reverted to the original version and it continues running with that. Otherwise if the snapshot was successfully loaded the worker continues running with the new component version.
+For manual update the old component version must implement `saveSnapshot` method, and the new component version must implement the `loadSnapshot` method. The update operation is enqueued the same way as invocations are enqueued, as it can only be performed when the agent is idle. As soon as all the previously enqueued and running invocations are finished, the executor calls the save snapshot function that returns an array of bytes representing the state of the agent. Then the agent gets restarted using the new component version, and the new component's load snapshot functions is called with the saved state. The load snapshot function may return with a failure in which case the agent's component version gets reverted to the original version and it continues running with that. Otherwise if the snapshot was successfully loaded the agent continues running with the new component version.

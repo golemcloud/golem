@@ -4,7 +4,7 @@ import { Card, Cards } from "nextra/components"
 # Introduction
 
 Golem is a durable computing platform that makes it simple to build and
-deploy highly reliabile distributed systems.
+deploy highly reliable distributed systems.
 
 When developing for Golem, you normally don't need to worry about most of
 the complexity of ensuring reliable execution. Golem takes care of the heavy
@@ -150,14 +150,14 @@ you with a high degree of built-in reliability.
 
 These guarantees are summarized as follows:
 
-- **Transactional execution**. Golem ensures that your workers execute
+- **Transactional execution**. Golem ensures that your agents execute
   transactionally. Once they begin execution, they will complete execution,
   even if there are software or hardware faults, restarts, or updates.
-- **Durable state**. Golem ensures that the state of your workers is durable.
-  If a worker is recovered after a failure, it will resume with the same state
+- **Durable state**. Golem ensures that the state of your agents is durable.
+  If an agent is recovered after a failure, it will resume with the same state
   as before the failure.
 - **Reliable internal communication**. Golem ensures that communication
-  between workers is delivered reliably. If a message is sent, it will
+  between agents is delivered reliably. If a message is sent, it will
   eventually be delivered, with exactly-once semantics; even if there are
   network partitions, faults, or other failures.
 - **Resilient external communication**. Golem automatically applies retry
@@ -169,8 +169,7 @@ looking at how each of them improves different faucets of reliability.
 
 ## Resiliency
 
-As discussed in [Components](/concepts/components), all components deployed
-on Golem ultimately derive their capability to interact with external systems
+All components deployed on Golem ultimately derive their capability to interact with external systems
 from _WASI_, which is the Posix-like interface provided by the WASM component
 model.
 
@@ -188,10 +187,10 @@ Golem automatically applies retry strategies to the following types of failures:
 - HTTP Request Failures
 
 In the case of errors which are not resolved on their own, Golem will
-eventually give up and mark the worker as failed. This is to prevent the
+eventually give up and mark the agent as failed. This is to prevent the
 system from getting stuck in an infinite loop of retries.
 
-These workers can be detected using worker enumeration.
+These agents can be detected using agent enumeration.
 
 ### Limitations
 
@@ -205,28 +204,27 @@ consider implementing your own retry strategies for such cases.
 
 ### Customization
 
-Currently, you can customize a worker's retry policy, including number of
+Currently, you can customize an agent's retry policy, including number of
 retries, delays, and so on, but it is a global setting that applies to all
-failed operations. See [Golem host functions](/golem-host-functions) for
-more details, or langauge-specific SDKs.
+failed operations. See the [page about retries](/develop/retries) for details.
 
 ## Fault-Tolerance
 
-Golem's fault-tolerance guarantees are focused on ensuring that your workers
+Golem's fault-tolerance guarantees are focused on ensuring that your agents
 are executed transactionally and that their state is durable, regardless of
 software or hardware faults, restarts, or updates.
 
 In order to more precisely define the scope of these guarantees, we need to
 introduce some terminology:
 
-- **Failure Event**. A _failure event_ is any event that causes a worker to
+- **Failure Event**. A _failure event_ is any event that causes an agent to
   interrupt execution, but excluding all internal errors in the worker itself.
   This includes operating system faults, hardware faults, disruptions
   (termination through the container orchestrator), restarts, and updates.
 - **Supervision**. _Supervision_ is the process by which Golem detects failure
-  events and takes action to recover interrupted workers.
+  events and takes action to recover interrupted agents.
 - **Recovery**. _Recovery_ is the process by which Golem restores the state of
-  a worker to its state before the failure event, and resumes execution.
+  an agent to its state before the failure event, and resumes execution.
 
 ### Limitations
 
@@ -243,12 +241,12 @@ do to mitigate it.
 
 ### Execution Semantics
 
-All local code, as well as all communication between workers, is executed with
+All local code, as well as all communication between agents, is executed with
 exactly-once semantics. All local code executed strictly inside Golem,
-including worker-to-worker communication, is guaranteed to have exactly-once
-semantics. This means that during recovery, the state of the worker is restored
+including agent-to-agent communication, is guaranteed to have exactly-once
+semantics. This means that during recovery, the state of the agent is restored
 to the exact state it was in before the failure event, and no operations
-performed by the worker are repeated.
+performed by the agent are repeated.
 
 However, for remote operations, such as invoking an HTTP API, Golem cannot
 generally guarantee exactly-once semantics. This is because a failure event
@@ -281,33 +279,33 @@ times without causing any side effects.
 ## High-Availability
 
 Golem is designed to be highly-available with respect to the creation and
-execution of new workers in the Golem cluster.
+execution of new agents in the Golem cluster.
 
 This is accomplished by supporting large cluster sizes that can evenly
 distribute workloads any number of nodes, and by automatically rebalancing
 workloads across the cluster when nodes are added or removed.
 
 However, because Golem allows and encourages communication with specific,
-stateful workers, there are limitations around the availability of specific
-workers in the cluster.
+stateful agents, there are limitations around the availability of specific
+agents in the cluster.
 
 The following sections overview these limitations.
 
 ### Limitations
 
-The availability of specific workers in a Golem cluster is affected by several
+The availability of specific agents in a Golem cluster is affected by several
 different factors, including all of the following:
 
-- **Cluster Size**. The number of worker executor nodes in the cluster.
+- **Cluster Size**. The number of executor nodes in the cluster.
   If the cluster is too small, then it may not be able to handle the
   workload, leading to degraded performance or unavailability.
 - **Cluster Resizing**. Cluster resizing requires rebalancing the workload
   across the new set of nodes. This process may take some time, during which
-  availability of specific workers being relocated may be degraded.
-- **Worker Executor Node Health**. If the node running a shard of workers goes
-  down, then those workers will be unavailable until the node is recovered.
+  availability of specific agents being relocated may be degraded.
+- **Executor Node Health**. If the node running a shard of agents goes
+  down, then those agents will be unavailable until the node is recovered.
   This process may take anywhere from a few seconds to a few minutes,
-  depending on how quickly the failure is detected and the number of workers
+  depending on how quickly the failure is detected and the number of agents
   in the shard.
 - **Shard Manager Health**. If the shard manager goes down, there are scenarios
   where this can negatively impact availability.
@@ -315,7 +313,7 @@ different factors, including all of the following:
 ### Tuning
 
 Though not supported currently, it is very likely Golem will increase the
-availability of specific high-priority workers by supporting instant-failover.
+availability of specific high-priority agents by supporting instant-failover.
 
 # Conclusion
 
@@ -336,9 +334,9 @@ developers to focus on their core business logic rather than intricate failure
 handling mechanisms. While Golem offers substantial reliability features, it's
 essential to understand its current limitations. These include the potential
 for at-least-once semantics in certain external system interactions and
-limitations in the availability of specific workers during cluster changes.
+limitations in the availability of specific agents during cluster changes.
 However, Golem's team is actively working on addressing these areas, with
-plans for customizable retry strategies and improved worker availability on
+plans for customizable retry strategies and improved agent availability on
 the horizon.
 
 For developers leveraging Golem, a deep understanding of these reliability
@@ -350,7 +348,7 @@ features to create robust distributed applications.
 As distributed systems continue to grow in complexity and importance, platforms
 like Golem evolve to meet these challenges. Future releases promise to bring
 even more advanced reliability features, such as automatic idempotency key
-generation and instant failover for high-priority workers, further enhancing
+generation and instant failover for high-priority agents, further enhancing
 Golem's ability to support mission-critical applications.
 
 In conclusion, Golem provides a powerful foundation for building highly reliable

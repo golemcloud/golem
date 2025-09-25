@@ -1,176 +1,142 @@
-# Why Golem?
+## Why Golem?
 
-Golem is a durable computing platform that makes it simple to build and deploy
-highly reliable distributed systems.
+**Because agents are distributed systems.**
 
-Through durable computing, workers executing on Golem are automatically
-fault-tolerant, update-tolerant, and flaky-tolerant.
+Most "agent frameworks" stop at prompt chaining. Real agents run for minutes to months, cross many tools and APIs, pause for people, and must never lose state or double-fire.
 
-Golem workers continue execution uninterrupted, even when hardware fails, servers go down, clusters are resized,
-or new updates are deployed.
+Golem is an agent-native runtime that gives you durability, exactly-once effects, full observability, and suspend-to-zero — without the need to build queues, schedulers, or idempotency plumbing.
 
-Golem simplifies the development of highly-reliable, distributed applications.
+## What You Get (Day One)
 
-## Benefits
+### Production Guarantees Built In
 
-Golem shares many of the benefits of serverless computing, including faster
-development, lower maintenance overhead, and reduced need for operations.
+- **Durable state:** After a crash or restart, an agent resumes at the last successful point—no lost context or rework.
 
-Due to the fact that Golem is built on durable computing, Golem offers benefits
-not seen in most serverless solutions, including:
+- **Exactly-once external effects:** Retries won't double-charge cards, re-open tickets, or post duplicate webhooks.
 
-- **Fault-Tolerance**. Golem performs real-time, incremental backups of the
-  state of workers and supervises all workers. In the event of a fault, Golem
-  restores failed workers to new nodes, where they continue execution where they
-  left off.
-- **Update-Tolerance**. Golem lets you deploy new versions of your software at
-  any time, and these new versions only affect new workers (by default). Because
-  versions are isolated, you can update freely without breaking critical live
-  code.
-- **Flaky-Tolerance**. While Golem is reliable, sometimes your system needs to
-  talk to external systems. Golem performs sophisticated, user-configurable
-  retry policies on recoverable failures, freeing you from the drudgery of
-  retries.
+- **Durable internal delivery:** Agent-to-agent messages are persisted and delivered once.
 
-These benefits allow you to easily build highly-reliable distributed systems,
-without complex architecture or infrastructure.
+- **Suspend & resume:** Park idle agents (human approval, scheduled wake, long waits) at zero compute; resume instantly.
 
-## Example Use Cases
+- **Automatic recovery & back-off:** Transient failures are retried to policy; agents are rescheduled on healthy nodes.
 
-In the following examples, you will learn how Golem simplifies the architecture
-and development of several different types of distributed applications.
+- **Isolation & permissions:** Per-agent sandboxes and scoped capabilities prevent cross-talk or privilege bleed.
 
-### Order Processing
+- **Observability with rewind:** Inspect the full history of prompts, tools, and data and replay safely—no duplicate effects.
 
-In an online storefront, we may have to take many steps during end-to-end
-processing of an order:
+- **Zero-downtime upgrades:** Run versions side-by-side or migrate live agents forward.
 
-1. Check and reserve sufficient inventory.
-2. Validate details of the order, such as shipping address.
-3. Validate payment method details.
-4. Charge the user's credit card or debit their bank account.
-5. Retry or abort on an failed charge (as appropriate), or continue on success.
-6. Record the successful charge in a database.
-7. Dispatch the order to fulfillment.
-8. Send the customer an email with their order details.
-9. Send the user updates as the state of the order is updated by fulfillment.
-10. Handle unexpected errors during fulfillment, or the user's cancellation of
-    the order before dispatch.
+### The Code You Write; The Runtime You Don't
 
-The major part of this process can take several seconds to several minutes,
-while the entire process could take days or even weeks.
+Use normal TypeScript to write agents and tools. Beneath it, Golem runs a complete runtime—persistence, exactly-once I/O, observability, autoscaling, isolation, and safe upgrades—so your agents survive reality without bespoke infra.
 
-In a perfect world, we could write a simple function that performs all of these
-step in order, in a handful of helper functions that call out to other web
-services.
+## What You Stop Building
 
-However, if we were to push this naive solution into production, we would run
-into serious problems. Due to faults, updates, and upgrades, there would exist
-some customers whose order processing was interrupted midway.
+- Durable queues & outboxes
+- Idempotency keys & dedupe logic
+- Cron catch-ups & retry schedulers
+- Long-poll loops & timeout workarounds
+- Ad-hoc audit logs & incident recon tooling
+- DIY "workflow engines" glued to lambdas
 
-When running code is interrupted midway, it often leaves the overall system in
-an inconsistent state. The user might be surprised to see they were charged for
-the items that will never be delivered, because the function that was processing
-the order was interrupted midway.
+> Frameworks chain steps; Golem makes those steps durable, replayable, and exactly-once.
 
-In order to compensate for these failure scenarios, we might adopt an
-event-driven architecture. Because events are stored persistently in a durable
-message queue like Apache Kafka or Apache Pulsar, we would then have a reliable
-means to detect which steps have been performed, and which have not. We could
-write processes that recover partially completed orders, and resume at the point
-where they left off.
+## Where Golem Shines
 
-While industry-proven and reliable, this approach ends up significantly
-increasing our development and maintenance costs, and turns what could be a
-simple and short program into many disparate services, all introducing
-additional overhead and points of failure.
+### Use Cases
 
-With Golem, the entire order processing process can be written and deployed as a
-serverless function. When an API triggers an invocation of the function, the
-worker will run transactionally, regardless of faults, updates, or flakiness.
-This automatic reliability lets us focus on business logic, rather than the
-complexities of designing and maintaining an event-driven architecture.
+- **Human-in-the-Loop Workflows**
+  Agents pause for review, capture the outcome, and resume with full state—no repeated actions.
 
-### Session Management
+- **Intelligent Incident Response**
+  Investigate, coordinate remediation, and escalate without losing track or duplicating fixes.
 
-In a multiplayer online betting game, each gaming session could last several
-minutes to an hour, and depending on the nature of the game, players may be able
-to place bets days or weeks in advance of the live session.
+- **Reliable Data & Transactions Across Systems**
+  Synchronize CRMs/ERPs/APIs/payments with exactly-once guarantees.
 
-The responsibilities of session management include:
+- **Personalized Content & Offers at Scale**
+  Assemble and deliver tailored experiences with no duplicates or misses—even during spikes.
 
-1. **Financial Transaction Processing**. Taking bets and settlement, which
-   involve traditional commerce processes such as the preceding storefront example.
-2. **State Management**. Managing the state of the game session during play, as
-   game play unfolds.
+- **Multi-Agent Research & Analysis**
+  Collaborating agents that run for hours to weeks, preserving context and avoiding re-work.
 
-Due to the financial nature of betting games, it is important that bets be
-tracked precisely and placed only be allowed when the state of the game and the
-rules of the game permit the bets to be placed. Moreover, faults can occur at
-any point and should never halt the progress of a game nor interfere with bets
-that have been placed so far.
+- **Continuous Risk Monitoring & Alerting**
+  Real-time detection and actions without false repeats or missed alerts.
 
-One way of solving this problem would be to use a relational database in order
-to obtain ACID guarantees on bets. However, the state of the game evolves in
-real-time, so to make concurrent bets in the presence of a changing game state,
-it would also be necessary to store the game state in the database. Storing both
-all bets and the game state itself in the relational database could negatively
-impact performance, necessitating alternate approaches, such as event-sourcing
-with CQRS.
+*If your workflows are long-running, stateful, cross many tools, or HITL, Golem turns fragile prototypes into production-grade agents.*
 
-In the end, a traditional solution to the problem of session management is
-likely to be highly tailored to the specific nature of the game and the audience
-size, and likely to involve some kind of event-sourcing, potentially with CQRS,
-in order to ensure consistency and recoverability in the event of unanticipated
-failures.
+## Is Golem a Fit for You?
 
-With Golem, the entire game session can be deployed as a single serverless
-worker, which responds to updates in game state and takes new bets. Since the
-data is stored in memory and latency of workers in Golem is very low,
-performance can be very high, without sacrificing the durability guarantees of
-other approaches based on ACID databases or event-sourcing.
+### ✅ Strong Fit If You Need:
 
-### AI Agent
+- Agents that must never lose progress or repeat side-effects
+- HITL pauses, external API waits, or long-tail tasks (minutes → months)
+- Auditable execution with full traces of prompts, tools, and data
+- Multi-agent coordination with guaranteed messaging
+- To ship now without building durable infra yourself
 
-When implementing an AI agent, each step of the AI agent may translate into
-multiple different models, some of which may have to be repeated if they do not
-yield a satisfactory answer.
+### ❌ Probably Not a Fit Right Now If:
 
-In addition, many AI agents are stateful, and must accumulate the total
-information they have produced from the beginning of time until the current
-moment in time, as this information assists subsequent step formation and
-execution.
+- Your app is stateless or completes in a single request/response
+- You only need a prompt library or a light orchestration DSL and reliability doesn't matter to you
+- You require a programming language other than TypeScript today (more languages are on the way)
+- You already run on a durable runtime that guarantees exactly-once and you're satisfied with its ops/tooling
 
-Each execution of a model takes time and resources, which equates to higher
-latency or higher costs. Due to these realities, it is often a technical
-requirement for AI agents to execute _durably_, such that they are
-fault-tolerant.
+*Our goal is to help you decide quickly — even if the answer is "not yet."*
 
-Implementing fault-tolerant AI agents can be done using state machines and
-event-sourcing, together with durable queues and key/value stores.
+## How Golem Fits Your Stack
 
-Golem provides an alternative: each executing AI agent can be a single worker,
-which can naturally accumulate state in memory, without the need for queues or
-databases.
+1. **Build** agents and tools in TypeScript.
+2. **Grant** capabilities (APIs, tools, other agents).
+3. **Deploy** agent types to the runtime.
+4. **Trigger** via secure APIs; send commands or messages.
+5. **Observe** execution with searchable traces and safe replay.
 
-Because Golem workers are fault-tolerant, they will continue execution
-uninterrupted regardless of failures in hardware, restarts, updates, or
-upgrades.
+**Interop:** Agents call your services over HTTP under exactly-once mediation. Connect tools (including MCP) and other agents with durable delivery. Start with one use case; retire bespoke queues and schedulers over time.
 
-Because Golem workers are update-tolerant, they can be updated without affecting
-running workers.
+## Why a Runtime (Not Just a Library)?
 
-Finally, because Golem workers are flaky-tolerant, the model executions will
-eventually succeed, even if the cause of the transient failure is a rate limit
-or other issue.
+Libraries help you write flows; runtimes keep them correct under failures, retries, and upgrades.
 
-## Summary
+- **Failure semantics:** Exactly-once effects and durable delivery are properties of the runtime, not application glue.
+- **State correctness:** Snapshots + durable logs let agents resume exactly where they left off.
+- **Operate at scale:** Millions of agents can suspend to zero and wake as events arrive—without cost spikes.
+- **Debug the truth:** Full, replayable traces beat partial logs stitched across services.
 
-All of the examples presented here can be implemented reliably and scalably with
-existing and industry-proven architectures.
+If you like, use your favorite agent libraries for control flow; but run them on Golem for durability and correctness.
 
-However, when using Golem, each becomes at least an order of magnitude simpler,
-without compromising reliability or scalability.
+## What Changes in Your Day-to-Day
 
-Golem gives you the ability to build highly-reliable distributed systems with
-simple code and simple architecture.
+- Fewer incidents about "what ran twice?" or "where did we lose state?"
+- Faster iteration—upgrade logic without draining in-flight agents
+- Straight-line agent code instead of scattered jobs and compensations
+- Real root-cause analysis at 2 a.m. with full, searchable history
+
+## FAQs
+
+**Do I have to re-write everything?**
+
+No. Start by running the stateful, failure-sensitive parts of your agents on Golem. Keep your existing APIs and data stores.
+
+**What languages are supported?**
+
+TypeScript today, with more languages on the way.
+
+**How does Golem prevent duplicate effects?**
+
+An I/O gateway mediates external calls with durable logs and idempotent commits to ensure exactly-once behavior—even under retries and failover.
+
+**Can agents pause for humans or slow APIs?**
+
+Yes. Agents suspend & resume with full state intact and zero compute while waiting.
+
+## Next Steps
+
+- Check the [Quickstart](/quickstart) guide to learn how to install and build your first Golem agent
+- Explore the [Develop](/develop) section to learn in details how to write Golem agents
+- The [Usage](/usage) section contains detailed information about deploying, invoking and debugging agents, using the command line interface and more.
+
+---
+
+**Agents that don't forget. Actions that don't repeat.**
+*Ship agents you can trust—without rebuilding distributed systems infrastructure.*

@@ -10,7 +10,7 @@ The worker executor requires three types of storage backends:
 
 - A **blob storage** for storing and retrieving arbitrary sized binary blobs
 - A **key-value storge** with some extra requirements for set/sorted-set-like operations
-- An **indexed storage** for an append-only, indexable store for the worker's operation log (oplog)
+- An **indexed storage** for an append-only, indexable store for agent's operation log (oplog)
 
 Currently Golem provides the following implementations, configurable through the worker executor's config file:
 
@@ -22,20 +22,20 @@ Currently Golem provides the following implementations, configurable through the
 
 ## Compilation cache
 
-The Golem **component service** stores the component WASM files in its own storage layer (configured to be either S3 or a persistent volume) and exposes them through its [download API](/rest-api/oss-rest-api/component) for the worker executor. The WASM files need to be **compiled** to native code before execution, which is a time-consuming task. To reduce the time required for instantiating workers, these compiled binaries are cached in the worker executor's **blob storage**.
+The Golem **component service** stores the component WASM files in its own storage layer (configured to be either S3 or a persistent volume) and exposes them through its [download API](/rest-api/component) for the worker executor. The WASM files need to be **compiled** to native code before execution, which is a time-consuming task. To reduce the time required for instantiating agents, these compiled binaries are cached in the worker executor's **blob storage**.
 
 The **component compilation service** is a special, horizontally scalable component of the Golem system which shares this storage with worker executors and is capable of precompiling components before they are being used by any of the executors.
 
 ## Oplog
 
-Running workers continously persist operations into the worker's **oplog**. The oplog is append-only (persisted entries are never modified) and it is indexable (during the recovery of a worker it is read from the earliest entry to the latest one).
+Running agents continuously persist operations into the worker's **oplog**. The oplog is append-only (persisted entries are never modified) and it is indexable (during the recovery of an agent it is read from the earliest entry to the latest one).
 The oplog is stored in multiple configurable layers. The default configuration is the following:
 
-- The **primary oplog layer** uses the **indexed storage**. This is the one where running worker's entries are appended to
+- The **primary oplog layer** uses the **indexed storage**. This is the one where running agent's entries are appended to
 - There is a **secondary layer** that is also persisted to the **indexed storage**, but on this level each entry holds a compressed set of oplog entries.
 - A **tertiary layer** holds even larger chunks of compressed oplog entries and stores them in the **blob storage**.
 
-Oplogs are continuously moved towards the lower layers to prevent the primary oplog storage (Redis) from getting full. Workers which were not active for a while are fully stored in the blob storage only.
+Oplogs are continuously moved towards the lower layers to prevent the primary oplog storage (Redis) from getting full. Agents which were not active for a while are fully stored in the blob storage only.
 
 In addition to the above, there are oplog entries holding user-defined data (such as invocation parameters). As these user-defined payloads can have an arbitrary size, the worker executor has to protect its storage layer against putting too large entries into the primary oplog. For this reason large payloads are written to the **blob storage** and the corresponding oplog entry only stores a reference to them. Payloads below a configurable limit are stored inline in the oplog entry.
 
@@ -68,15 +68,15 @@ These options have the following meaning:
 
 ## Worker metadata
 
-The **oplog** is the primary source of truth for everything we need to store about a worker, but for performance reasons the **key value store** is also used to store aggregated worker metadata for workers. This metadata is not always completely up-to-date; it store the last oplog index it was calculated from, and its latest version can be reproduced by reading and processing the newer oplog entries. For workers which has no longer data in the primary oplog, we don't store worker metadata either. When these workers have to be recovered, their metadata is reconstructed by reading the whole archived oplog.
+The **oplog** is the primary source of truth for everything we need to store about an agent, but for performance reasons the **key value store** is also used to store aggregated agent metadata for agents. This metadata is not always completely up-to-date; it store the last oplog index it was calculated from, and its latest version can be reproduced by reading and processing the newer oplog entries. For agents which has no longer data in the primary oplog, we don't store agent metadata either. When these agents have to be recovered, their metadata is reconstructed by reading the whole archived oplog.
 
 ## Promises and schedules
 
-The worker executor also stores **promise information** in its **key-value storage**. This is simply an entry for each created Golem promise, storing it's completion state. Internally Golem also uses scheduled promise completion (for example for waking up workers after long sleeps). These scheduled events are also stored in the **key-value storage**.
+The worker executor also stores **promise information** in its **key-value storage**. This is simply an entry for each created Golem promise, storing it's completion state. Internally Golem also uses scheduled promise completion (for example for waking up agents after long sleeps). These scheduled events are also stored in the **key-value storage**.
 
 ## WASI Blob store and Key Value store
 
-Golem implements (partially) the [WASI Blob Store](https://github.com/WebAssembly/wasi-blobstore) and [WASI Key-Value Store](https://github.com/WebAssembly/wasi-keyvalue) proposals. These interfaces allow workers to store blobs and key-value data in the worker executor's configured **blob storage** and **key-value storage** layers.
+Golem implements (partially) the [WASI Blob Store](https://github.com/WebAssembly/wasi-blobstore) and [WASI Key-Value Store](https://github.com/WebAssembly/wasi-keyvalue) proposals. These interfaces allow agents to store blobs and key-value data in the worker executor's configured **blob storage** and **key-value storage** layers.
 
 ## Adding new storage implementations
 
