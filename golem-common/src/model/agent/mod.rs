@@ -39,7 +39,7 @@ use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{case, variant};
+use golem_wasm_ast::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeStr};
 use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
@@ -459,7 +459,7 @@ impl Display for NamedElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
@@ -471,6 +471,16 @@ pub struct NamedElementValue {
 impl Display for NamedElementValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}({})", self.name, self.value)
+    }
+}
+
+impl IntoValue for NamedElementValue {
+    fn into_value(self) -> Value {
+        Value::Tuple(vec![self.name.into_value(), self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        tuple(vec![str(), ElementValue::get_type()])
     }
 }
 

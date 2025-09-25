@@ -61,7 +61,7 @@ mod internal {
     use crate::{
         ActualType, ComponentDependencies, CustomInstanceSpec, DynamicParsedFunctionName,
         ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod,
-        FunctionCallError, FunctionName, InferredType, TypeMismatchError,
+        FunctionCallError, FunctionName, InferredType, TypeInternal, TypeMismatchError,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
@@ -429,6 +429,19 @@ mod internal {
         parameter_types: &[AnalysedType],
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
+            // This is to get around a variant conflict problem and is not the best solution
+            if let AnalysedType::Variant(type_variant) = param_type {
+                if let TypeInternal::Variant(collections) =
+                    arg.inferred_type_mut().internal_type_mut()
+                {
+                    *collections = type_variant
+                        .cases
+                        .iter()
+                        .map(|case| (case.name.clone(), case.typ.as_ref().map(InferredType::from)))
+                        .collect();
+                }
+            }
+
             check_function_arguments(function_name, param_type, arg)?;
             arg.add_infer_type_mut(
                 InferredType::from(param_type).add_origin(TypeOrigin::Declared(arg.source_span())),

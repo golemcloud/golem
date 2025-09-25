@@ -32,7 +32,7 @@ pub struct WorkerNameHelp;
 
 impl MessageWithFields for WorkerNameHelp {
     fn message(&self) -> String {
-        "Accepted worker name formats:"
+        "Accepted agent name formats:"
             .log_color_help_group()
             .to_string()
     }
@@ -42,19 +42,19 @@ impl MessageWithFields for WorkerNameHelp {
 
         // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
         fields.field(
-            "<WORKER>",
+            "<AGENT>",
             &indoc!(
                 "
-                    Standalone worker name, usable when only one component is selected based on the
+                    Standalone agent name, usable when only one component is selected based on the
                     current application directory.
                     "
             ),
         );
         fields.field(
-            "<COMPONENT>/<WORKER>",
+            "<COMPONENT>/<AGENT>",
             &indoc!(
                     "
-                        Component specific worker name.
+                        Component specific agent name.
 
                         When used in an application (sub)directory then the given component name is fuzzy
                         matched against the application component names. If no matches are found, then
@@ -67,24 +67,24 @@ impl MessageWithFields for WorkerNameHelp {
                 ),
         );
         fields.field(
-            "<PROJECT>/<COMPONENT>/<WORKER>",
+            "<PROJECT>/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Project and component specific worker name.
+                    Project and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<WORKER>, except it can refer to components in a
+                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
                     specific project.
 
                     "
             ),
         );
         fields.field(
-            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<WORKER>",
+            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, project and component specific worker name.
+                    Account, project and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<WORKER>, except it can refer to components in a
+                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
                     specific project owned by another account
                     "
             ),

@@ -470,7 +470,7 @@ impl IntoValue for WitNode {
                 case_value: Some(Box::new(Value::Tuple(vec![
                     idx.into_value(),
                     value
-                        .map(IntoValue::into_value)
+                        .map(|idx| Value::Option(Some(Box::new(idx.into_value()))))
                         .unwrap_or(Value::Option(None)),
                 ]))),
             },

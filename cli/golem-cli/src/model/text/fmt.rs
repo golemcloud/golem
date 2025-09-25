@@ -17,15 +17,18 @@ use crate::log::{log_warn_action, logln, LogColorize, LogIndent};
 use crate::model::deploy_diff::DiffSerialize;
 use crate::model::text::component::is_sensitive_env_var_name;
 use crate::model::{Format, WorkerNameMatch};
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use cli_table::{Row, Title, WithTitle};
 use colored::control::SHOULD_COLORIZE;
 use colored::Colorize;
 use golem_client::model::{InitialComponentFile, WorkerStatus};
 use itertools::Itertools;
 use regex::Regex;
+use serde::Serialize;
 use similar::TextDiff;
 use std::collections::BTreeMap;
+use std::fmt::Write;
+use synoptic::TokOpt;
 
 pub trait TextView {
     fn log(&self);
@@ -543,4 +546,88 @@ pub fn format_worker_name_match(worker_name_match: &WorkerNameMatch) -> String {
         worker_name_match.component_name.0.blue().bold(),
         worker_name_match.worker_name.0.green().bold(),
     )
+}
+
+pub fn to_colored_json<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    let mut highlighter =
+        synoptic::from_extension("js", 2).ok_or_else(|| anyhow!("Failed to get JS highlighter"))?;
+
+    let serialized_lines: Vec<String> = serde_json::to_string_pretty(value)?
+        .lines()
+        .map(|line| line.to_string())
+        .collect();
+
+    highlighter.run(serialized_lines.as_slice());
+
+    let mut output = String::new();
+
+    for (idx, line) in serialized_lines.iter().enumerate() {
+        let lines = highlighter.line(idx, line);
+        let mut tokens = lines.iter().peekable();
+        while let Some(token) = tokens.next() {
+            match token {
+                TokOpt::Some(text, kind) => {
+                    let mut style_kind = kind.as_str();
+
+                    if kind == "string" {
+                        if let Some(TokOpt::None(next)) = tokens.peek() {
+                            if next.trim_start().starts_with(':') {
+                                style_kind = "key";
+                            }
+                        }
+                    }
+
+                    match style_kind {
+                        "key" => write!(output, "{}", text.blue().bold())?,
+                        "string" => write!(output, "{}", text.green())?,
+                        "keyword" => write!(output, "{}", text.magenta().bold())?,
+                        "digit" => write!(output, "{}", text.cyan())?,
+                        "boolean" => write!(output, "{}", text.yellow())?,
+                        _ => write!(output, "{}", text)?,
+                    }
+                }
+                TokOpt::None(text) => {
+                    write!(output, "{}", text)?;
+                }
+            }
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
+pub fn to_colored_yaml<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    let mut highlighter = synoptic::from_extension("yaml", 2)
+        .ok_or_else(|| anyhow!("Failed to get YAML highlighter"))?;
+
+    let serialized_lines: Vec<String> = serde_yaml::to_string(value)?
+        .lines()
+        .map(|line| line.to_string())
+        .collect();
+
+    highlighter.run(serialized_lines.as_slice());
+
+    let mut output = String::new();
+
+    for (idx, line) in serialized_lines.iter().enumerate() {
+        for token in highlighter.line(idx, line) {
+            match token {
+                TokOpt::Some(text, kind) => match kind.as_str() {
+                    "string" => write!(output, "{}", text.green())?,
+                    "comment" => write!(output, "{}", text.yellow())?,
+                    "key" => write!(output, "{}", text.blue().bold())?,
+                    "digit" => write!(output, "{}", text.cyan())?,
+                    "tag" => write!(output, "{}", text.magenta().bold())?,
+                    _ => write!(output, "{}", text)?,
+                },
+                TokOpt::None(text) => {
+                    write!(output, "{}", text)?;
+                }
+            }
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
 }

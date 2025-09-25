@@ -309,7 +309,7 @@ impl AppCommandHandler {
 
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        if let Err(error) = app_ctx.custom_command(command) {
+        if let Err(error) = app_ctx.custom_command(command).await {
             match error {
                 CustomCommandError::CommandNotFound => {
                     logln("");

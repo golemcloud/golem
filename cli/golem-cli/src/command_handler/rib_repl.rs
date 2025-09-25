@@ -161,7 +161,7 @@ impl RibReplHandler {
                 let result = repl.execute(&script).await;
                 match &result {
                     Ok(rib_result) => match self.ctx.format() {
-                        Format::Json | Format::Yaml => {
+                        Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
                             let result = rib_result.as_ref().and_then(|r| r.get_val());
                             self.ctx.log_handler().log_serializable(&result);
                         }
