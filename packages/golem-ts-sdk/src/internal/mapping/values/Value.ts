@@ -988,7 +988,38 @@ function handleUnion(
   type: Type.Type,
   possibleTypes: Type.Type[],
 ): Either.Either<Value, string> {
-  const filteredTypes = possibleTypes.filter(
+  const hasFalseLiteral = possibleTypes.some(
+    (t) => t.kind === 'literal' && t.literalValue === 'false',
+  );
+
+  const hasTrueLiteral = possibleTypes.some(
+    (type) => type.kind === 'literal' && type.literalValue === 'true',
+  );
+
+  let hasBoolean = hasFalseLiteral && hasTrueLiteral;
+
+  let unionTypesLiteralBoolFiltered = possibleTypes.filter(
+    (field) =>
+      !(
+        field.kind === 'literal' &&
+        (field.literalValue === 'false' || field.literalValue === 'true')
+      ),
+  );
+
+  const optional = unionTypesLiteralBoolFiltered.find(
+    (field) => field.kind === 'literal',
+  )?.optional;
+
+  unionTypesLiteralBoolFiltered.push({
+    kind: 'boolean',
+    optional: optional ?? false,
+  });
+
+  const newUnionTypes = hasBoolean
+    ? unionTypesLiteralBoolFiltered
+    : possibleTypes;
+
+  const filteredTypes = newUnionTypes.filter(
     (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
   );
 
@@ -1154,37 +1185,6 @@ function handleUnion(
       });
     }
   }
-
-  const hasFalseLiteral = filteredTypes.some(
-    (t) => t.kind === 'literal' && t.literalValue === 'false',
-  );
-
-  const hasTrueLiteral = filteredTypes.some(
-    (type) => type.kind === 'literal' && type.literalValue === 'true',
-  );
-
-  let hasBoolean = hasFalseLiteral && hasTrueLiteral;
-
-  let unionTypesLiteralBoolFiltered = filteredTypes.filter(
-    (field) =>
-      !(
-        field.kind === 'literal' &&
-        (field.literalValue === 'false' || field.literalValue === 'true')
-      ),
-  );
-
-  const optional = unionTypesLiteralBoolFiltered.find(
-    (field) => field.kind === 'literal',
-  )?.optional;
-
-  unionTypesLiteralBoolFiltered.push({
-    kind: 'boolean',
-    optional: optional ?? false,
-  });
-
-  const newUnionTypes = hasBoolean
-    ? unionTypesLiteralBoolFiltered
-    : filteredTypes;
 
   const typeWithIndex = findTypeOfAny(tsValue, newUnionTypes);
 

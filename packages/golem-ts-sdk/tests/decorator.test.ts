@@ -268,11 +268,13 @@ describe('Agent decorator should register the agent class and its methods into A
               ['b', undefined],
               ['c', undefined],
               ['union-with-literals1', 1],
+              ['union-with-literals2', 3],
             ],
           },
         },
         { type: { tag: 'record-type', val: [['n', 2]] } },
         { type: { tag: 'prim-f64-type' } },
+        { type: { tag: 'prim-bool-type' } },
       ],
     };
 

@@ -192,7 +192,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
             param7: unionOrUndefined,
           },
         );
-
+        //
         testInvoke(
           typeRegistry,
           'fun8',
