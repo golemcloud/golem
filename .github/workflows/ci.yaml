@@ -546,20 +546,6 @@ jobs:
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta-golem-component-compilation-service.outputs.tags }}
           labels: ${{ steps.meta-golem-component-compilation-service.outputs.labels }}
-      - name: Extract metadata (tags, labels) for golem router
-        id: meta-golem-router
-        uses: docker/metadata-action@v5
-        with:
-          images: golemservices/golem-router
-      - name: Build and push golem router
-        uses: useblacksmith/build-push-action@v1
-        with:
-          context: .
-          file: ./golem-router/docker/Dockerfile
-          push: true
-          platforms: ${{ env.PLATFORMS }}
-          tags: ${{ steps.meta-golem-router.outputs.tags }}
-          labels: ${{ steps.meta-golem-router.outputs.labels }}
 
   publish:
     needs:
