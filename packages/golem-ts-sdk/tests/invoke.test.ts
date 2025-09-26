@@ -51,6 +51,8 @@ import * as Value from '../src/internal/mapping/values/Value';
 import { DataValue } from 'golem:agent/common';
 import { TsType } from '../src/internal/mapping/types/taggedUnion';
 import * as util from 'node:util';
+import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
+import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 
 test('SimpleAgent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -261,13 +263,26 @@ test('ComplexAgent can be successfully initiated', () => {
         }
 
         // TestInterfaceType
-        const arg0 = typeRegistry.constructorArgs[0].type;
+        const arg0 = AgentConstructorParamRegistry.lookupParamType(
+          ComplexAgentClassName,
+          typeRegistry.constructorArgs[0].name,
+        );
 
         // string | null
-        const arg1 = typeRegistry.constructorArgs[1].type;
+        const arg1 = AgentConstructorParamRegistry.lookupParamType(
+          ComplexAgentClassName,
+          typeRegistry.constructorArgs[1].name,
+        );
 
         // UnionType | null
-        const arg2 = typeRegistry.constructorArgs[2].type;
+        const arg2 = AgentConstructorParamRegistry.lookupParamType(
+          ComplexAgentClassName,
+          typeRegistry.constructorArgs[2].name,
+        );
+
+        if (!arg0 || !arg1 || !arg2) {
+          throw new Error('Test error: constructor params not found');
+        }
 
         const interfaceWit = Either.getOrThrowWith(
           WitValue.fromTsValue(interfaceValue, arg0),
@@ -326,10 +341,22 @@ function initiateSimpleAgent(
   constructorParamString: string,
   simpleAgentClassMeta: ClassMetadata,
 ) {
-  const constructorInfo = simpleAgentClassMeta.constructorArgs[0].type;
+  const constructorInfo = simpleAgentClassMeta.constructorArgs[0];
+
+  const constructorParamAnalysedType =
+    AgentConstructorParamRegistry.lookupParamType(
+      SimpleAgentClassName,
+      constructorInfo.name,
+    );
+
+  if (!constructorParamAnalysedType) {
+    throw new Error(
+      `Constructor parameter type for SimpleAgent constructor parameter ${constructorInfo.name} not found in metadata.`,
+    );
+  }
 
   const witValue = Either.getOrThrowWith(
-    WitValue.fromTsValue(constructorParamString, constructorInfo),
+    WitValue.fromTsValue(constructorParamString, constructorParamAnalysedType),
     (error) => new Error(error),
   );
 
@@ -380,20 +407,22 @@ function testInvoke(
   }
 
   const witValues = parameterName.map(([paramName, value]) => {
-    const paramType: TsType | undefined = parametersInfo.get(paramName);
+    const paramAnalysedType = AgentMethodParamRegistry.lookupParamType(
+      SimpleAgentClassName,
+      methodName,
+      paramName,
+    );
 
-    if (!paramType) {
+    if (!paramAnalysedType) {
       throw new Error(
-        `Parameter type for ${paramName} not found in method ${methodName} metadata`,
+        `Parameter type for parameter ${paramName} of method ${methodName} not found in metadata.`,
       );
     }
 
-    const r = Either.getOrThrowWith(
-      WitValue.fromTsValue(value, paramType),
+    return Either.getOrThrowWith(
+      WitValue.fromTsValue(value, paramAnalysedType),
       (error) => new Error(error),
     );
-
-    return r;
   });
 
   const dataValues: DataValue = {

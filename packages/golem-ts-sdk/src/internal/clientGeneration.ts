@@ -109,7 +109,9 @@ function getMethodProxy(
 
   const returnType = methodSignature?.returnType;
 
-  const methodNameKebab = convertAgentMethodNameToKebab(prop.toString());
+  const methodName = prop.toString();
+
+  const methodNameKebab = convertAgentMethodNameToKebab(methodName);
 
   const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
 
@@ -119,6 +121,7 @@ function getMethodProxy(
         const param = paramInfo[index];
         const analysedType = AgentMethodParamRegistry.lookupParamType(
           agentClassName,
+          methodName,
           param[0],
         );
         if (!analysedType) {

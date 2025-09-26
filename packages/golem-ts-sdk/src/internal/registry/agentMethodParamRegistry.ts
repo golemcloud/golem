@@ -62,9 +62,10 @@ export const AgentMethodParamRegistry = {
   lookupParamType(
     agentClassName: AgentClassName,
     agentMethodName: string,
+    paramName: string,
   ): AnalysedType | undefined {
     const classMeta = agentMethodParamRegistry.get(agentClassName.value);
-    return classMeta?.get(agentMethodName)?.get(agentMethodName)?.analysedType;
+    return classMeta?.get(agentMethodName)?.get(paramName)?.analysedType;
   },
 
   setLanguageCodes(

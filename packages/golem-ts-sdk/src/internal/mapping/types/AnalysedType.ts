@@ -218,7 +218,7 @@ export const option = (name: string| undefined, inner: AnalysedType): AnalysedTy
  export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record', value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
  export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
  export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
- export const variant = (name: string | undefined, cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
+ export const variant = (name: string | undefined, taggedTypes: boolean,  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
 
  export const resultOk =  (name: string | undefined, ok: AnalysedType): AnalysedType =>
       ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, ok } });
@@ -444,7 +444,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         });
       }
 
-      const result = variant(type.name, possibleTypes);
+      const result = variant(type.name, false, possibleTypes);
 
       if (!type.name) {
         unionTypeMapRegistry.set(hash, result);
@@ -728,7 +728,7 @@ function convertTaggedTypesToVariant(typeName: string | undefined, taggedTypes: 
     }
   }
 
-  return Either.right(variant(typeName, possibleTypes));
+  return Either.right(variant(typeName, true, possibleTypes));
 }
 
 
