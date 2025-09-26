@@ -690,6 +690,129 @@ function fromTsValueInternal(
         return handleKeyValuePairs(tsValue, innerListType, keyType, valueType);
       }
 
+
+      if (tsValue instanceof Uint8Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof Uint16Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+
+      if (tsValue instanceof Uint32Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+
+      if (tsValue instanceof BigUint64Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof Int8Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof Int16Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof Int32Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof BigInt64Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof Float32Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
+      if (tsValue instanceof Float64Array) {
+        return Either.map(
+          Either.all(
+            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
+          ),
+          (values) => ({
+            kind: 'list',
+            value: values,
+          }),
+        );
+      }
+
       return Either.left(typeMismatchInSerialize(tsValue, analysedType));
 
     case 'tuple':
@@ -937,7 +1060,7 @@ function handleVariant(
     return handleTaggedTypedUnion(tsValue, nameOptionTypePairs);
   }
 
-  for (const variant of nameOptionTypePairs) {
+  for (const [idx, variant] of nameOptionTypePairs.entries()) {
     const analysedType = variant.typ;
 
     if (!analysedType) {
@@ -957,12 +1080,10 @@ function handleVariant(
 
     const matches = matchesType(tsValue, analysedType);
 
-    const index = nameOptionTypePairs.findIndex((v) => v.name === variant.name);
-
     if (matches) {
       const value: Value = {
         kind: 'variant',
-        caseIdx: index,
+        caseIdx: idx,
         caseValue: Either.getOrThrowWith(
           fromTsValue(tsValue, analysedType),
           (error) => new Error(`Internal Error: ${error}`),
@@ -972,6 +1093,7 @@ function handleVariant(
       return Either.right(value);
     }
   }
+
 
   return Either.left(unionTypeMatchError(nameOptionTypePairs, tsValue));
 }
@@ -1220,8 +1342,9 @@ function matchesArray(value: any, elementType: AnalysedType): boolean {
 }
 
 function handleObjectMatch(value: any, props: NameTypePair[]): boolean {
-  if (typeof value !== 'object' || value !== 'interface' || value === null)
+  if (typeof value !== 'object' && value !== 'interface'){
     return false;
+  }
 
   const valueKeys = Object.keys(value);
   if (valueKeys.length !== props.length) return false;

@@ -396,7 +396,7 @@ function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
 
   // Round trip wit-value -> value -> wit-value
   const value = Value.fromWitValue(witValue);
-
+  
   const witValueReturned = Value.toWitValue(value);
   expect(witValueReturned).toEqual(witValue);
 
