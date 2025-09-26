@@ -32,6 +32,8 @@ export interface NameOptionTypePair {
   typ?: AnalysedType;
 }
 
+export type TypedArrayKind = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
+
 export type AnalysedType =
     | { kind: 'variant'; value: TypeVariant, taggedTypes: boolean }
     | { kind: 'result'; value: TypeResult }
@@ -40,7 +42,7 @@ export type AnalysedType =
     | { kind: 'flags'; value: TypeFlags }
     | { kind: 'record'; value: TypeRecord }
     | { kind: 'tuple'; value: TypeTuple }
-    | { kind: 'list'; value: TypeList }
+    | { kind: 'list'; value: TypeList, typedArray: TypedArrayKind | undefined }
     | { kind: 'string' }
     | { kind: 'chr' }
     | { kind: 'f64' }
@@ -212,8 +214,8 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const u8 =  (): AnalysedType => ({ kind: 'u8' });
  export const s8 =  (): AnalysedType => ({ kind: 's8' });
 
- export const list = (name: string | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
-export const option = (name: string| undefined, inner: AnalysedType): AnalysedType => ({ kind: 'option', value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
+ export const list = (name: string | undefined, typedArrayKind: TypedArrayKind | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
+ export const option = (name: string| undefined, inner: AnalysedType): AnalysedType => ({ kind: 'option', value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
  export const tuple =  (name: string | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple', value: { name: convertTypeNameToKebab(name), owner: undefined, items } });
  export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record', value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
  export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
@@ -591,7 +593,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
 
       return Either.zipWith(key, value, (k, v) =>
-        list(type.name, tuple(undefined, [k, v])));
+        list(type.name, undefined, tuple(undefined, [k, v])));
 
     case "literal":
       const literalName = type.literalValue;
@@ -661,16 +663,16 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       const name = type.name;
 
       switch (name) {
-        case "Float64Array": return Either.right(list(undefined, f64()));
-        case "Float32Array": return Either.right(list(undefined, f32()));
-        case "Int8Array":    return Either.right(list(undefined, s8()));
-        case "Uint8Array":   return Either.right(list(undefined, u8()));
-        case "Int16Array":   return Either.right(list(undefined, s16()));
-        case "Uint16Array":  return Either.right(list(undefined, u16()));
-        case "Int32Array":   return Either.right(list(undefined, s32()));
-        case "Uint32Array":  return Either.right(list(undefined, u32()));
-        case "BigInt64Array":  return Either.right(list(undefined, s64()));
-        case "BigUint64Array": return Either.right(list(undefined, u64()));
+        case "Float64Array": return Either.right(list(undefined, 'f64', f64()));
+        case "Float32Array": return Either.right(list(undefined, 'f32',  f32()));
+        case "Int8Array":    return Either.right(list(undefined, 'i8', s8()));
+        case "Uint8Array":   return Either.right(list(undefined,  'u8', u8()));
+        case "Int16Array":   return Either.right(list(undefined,  'i16', s16()));
+        case "Uint16Array":  return Either.right(list(undefined,  'u16', u16()));
+        case "Int32Array":   return Either.right(list(undefined, 'i32', s32()));
+        case "Uint32Array":  return Either.right(list(undefined, 'u32',  u32()));
+        case "BigInt64Array":  return Either.right(list(undefined, 'big-i64', s64()));
+        case "BigUint64Array": return Either.right(list(undefined,'big-u64', u64()));
       }
 
       const arrayElementType =
@@ -682,7 +684,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
       const elemType = fromTsTypeInternal(arrayElementType, Option.none());
 
-      return Either.map(elemType, (inner) => list(type.name, inner));
+      return Either.map(elemType, (inner) => list(type.name, undefined, inner));
   }
 }
 

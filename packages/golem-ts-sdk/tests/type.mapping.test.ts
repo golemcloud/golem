@@ -325,6 +325,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'union-complex-type4',
             typ: {
               kind: 'list',
+              typedArray: undefined,
               value: {
                 inner: {
                   kind: 'string',
@@ -492,6 +493,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'f',
                     typ: {
                       kind: 'list',
+                      typedArray: undefined,
                       value: {
                         inner: {
                           kind: 'string',
@@ -505,6 +507,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'g',
                     typ: {
                       kind: 'list',
+                      typedArray: undefined,
                       value: {
                         inner: {
                           kind: 'record',
@@ -608,6 +611,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'j',
                     typ: {
                       kind: 'list',
+                      typedArray: undefined,
                       value: {
                         inner: {
                           kind: 'tuple',
@@ -702,6 +706,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'union-complex-type9',
             typ: {
               kind: 'list',
+              typedArray: undefined,
               value: {
                 inner: {
                   kind: 'tuple',
@@ -727,6 +732,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'union-complex-type10',
             typ: {
               kind: 'list',
+              typedArray: undefined,
               value: {
                 inner: {
                   kind: 'record',

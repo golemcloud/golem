@@ -35,7 +35,6 @@ import {
   NameOptionTypePair,
   NameTypePair,
 } from '../types/AnalysedType';
-import { ts } from 'ts-morph';
 
 export type Value =
   | {
@@ -515,16 +514,7 @@ function buildNodes(value: Value, nodes: WitNode[]): number {
   }
 }
 
-// Note that we take `type: Type` instead of `type: AnalysedType`(because at this point `AnalysedType` of the `tsValue` is also available)
-// as `Type` holds more information, and can be used to determine the error messages for wrong `tsValue` more accurately.
 export function fromTsValue(
-  tsValue: any,
-  analysedType: AnalysedType,
-): Either.Either<Value, string> {
-  return fromTsValueInternal(tsValue, analysedType);
-}
-
-function fromTsValueInternal(
   tsValue: any,
   analysedType: AnalysedType,
 ): Either.Either<Value, string> {
@@ -662,6 +652,192 @@ function fromTsValueInternal(
 
     case 'list':
       const innerListType = analysedType.value.inner;
+      const typedArray = analysedType.typedArray;
+
+      if (typedArray) {
+        switch (typedArray) {
+          case 'u8':
+            if (tsValue instanceof Uint8Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'u16':
+            if (tsValue instanceof Uint16Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'u32':
+            if (tsValue instanceof Uint32Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'big-u64':
+            if (tsValue instanceof BigUint64Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'i8':
+            if (tsValue instanceof Int8Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'i16':
+            if (tsValue instanceof Int16Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'i32':
+            if (tsValue instanceof Int32Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'big-i64':
+            if (tsValue instanceof BigInt64Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'f32':
+            if (tsValue instanceof Float32Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+          case 'f64':
+            if (tsValue instanceof Float64Array) {
+              return Either.map(
+                Either.all(
+                  Array.from(tsValue).map((item) =>
+                    fromTsValue(item, innerListType),
+                  ),
+                ),
+                (values) => ({
+                  kind: 'list',
+                  value: values,
+                }),
+              );
+            } else {
+              return Either.left(
+                typeMismatchInSerialize(tsValue, analysedType),
+              );
+            }
+        }
+      }
 
       if (Array.isArray(tsValue)) {
         return Either.map(
@@ -688,126 +864,6 @@ function fromTsValueInternal(
         const valueType = innerListType.value.items[1];
 
         return handleKeyValuePairs(tsValue, innerListType, keyType, valueType);
-      }
-
-      if (tsValue instanceof Uint8Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Uint16Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Uint32Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof BigUint64Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Int8Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Int16Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Int32Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof BigInt64Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Float32Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
-      }
-
-      if (tsValue instanceof Float64Array) {
-        return Either.map(
-          Either.all(
-            Array.from(tsValue).map((item) => fromTsValue(item, innerListType)),
-          ),
-          (values) => ({
-            kind: 'list',
-            value: values,
-          }),
-        );
       }
 
       return Either.left(typeMismatchInSerialize(tsValue, analysedType));
