@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { describe, it, expect } from 'vitest';
-import * as Option from '../src/newTypes/option';
 import {
   getTestInterfaceType,
   getRecordFieldsFromAnalysedType,
@@ -28,19 +27,11 @@ import {
 
 import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 
-import * as Either from '../src/newTypes/either';
 import { NameTypePair } from '../src/internal/mapping/types/AnalysedType';
 
 // Interface type indirectly tests primitive types, union, list etc
 describe('TypeScript Interface to AnalysedType', () => {
-  const interfaceType = getTestInterfaceType();
-  const analysed = Either.getOrThrowWith(
-    AnalysedType.fromTsType(interfaceType, Option.none()),
-    (err) => {
-      throw new Error(`Failed to construct analysed type: ${err}`);
-    },
-  );
-
+  const [analysed] = getTestInterfaceType();
   const recordFields = getRecordFieldsFromAnalysedType(analysed)!;
 
   it('Interface should be AnalysedType.Record', () => {
@@ -89,21 +80,18 @@ describe('TypeScript Interface to AnalysedType', () => {
 
 describe('TypeScript primitives to AnalysedType', () => {
   it('Boolean type is converted to AnalysedType.Bool', () => {
-    const booleanType = getBooleanType();
-    const result = AnalysedType.fromTsType(booleanType, Option.none());
-    expect(Either.getRight(result)).toEqual(AnalysedType.bool());
+    const [booleanType] = getBooleanType();
+    expect(booleanType).toEqual(AnalysedType.bool());
   });
 
   it('String type is converted to AnalysedType.String', () => {
-    const stringType = getStringType();
-    const result = AnalysedType.fromTsType(stringType, Option.none());
-    expect(Either.getRight(result)).toEqual(AnalysedType.str());
+    const [analysedType] = getStringType();
+    expect(analysedType).toEqual(AnalysedType.str());
   });
 
   it('Number type is converted to AnalysedType.F64', () => {
-    const numberType = getNumberType();
-    const result = AnalysedType.fromTsType(numberType, Option.none());
-    expect(Either.getRight(result)).toEqual(AnalysedType.f64());
+    const [analysedType] = getNumberType();
+    expect(analysedType).toEqual(AnalysedType.f64());
   });
 });
 
@@ -111,29 +99,18 @@ describe('TypeScript primitives to AnalysedType', () => {
 // as TypeScript allows returning the value that the promise resolves to
 describe('TypeScript Promise type to AnalysedType', () => {
   it('Promise type is converted to AnalysedType', () => {
-    const promiseType = getPromiseType();
-    const result = Either.getOrElse(
-      AnalysedType.fromTsType(promiseType, Option.none()),
-      (error) => {
-        throw new Error(`Failed to construct analysed type: ${error}`);
-      },
-    );
-
-    expect(result).toEqual(AnalysedType.str());
+    const [promiseType] = getPromiseType();
+    expect(promiseType).toEqual(AnalysedType.str());
   });
 });
 
 describe('TypeScript Object to AnalysedType', () => {
   it('transforms object with different properties successfully to analysed type', () => {
-    const interfaceType = getTestObjectType();
-    const analysed = Either.getOrThrow(
-      AnalysedType.fromTsType(interfaceType, Option.none()),
-    );
+    const [analysedType] = getTestObjectType();
 
-    expect(analysed).toBeDefined();
-    expect(analysed.kind).toBe('record');
+    expect(analysedType.kind).toBe('record');
 
-    const recordFields = getRecordFieldsFromAnalysedType(analysed)!;
+    const recordFields = getRecordFieldsFromAnalysedType(analysedType)!;
 
     const expected: NameTypePair[] = [
       {
@@ -162,13 +139,7 @@ describe('TypeScript Object to AnalysedType', () => {
 
 describe('TypeScript Union to AnalysedType.Variant', () => {
   it('Union is converted to Variant with the name of the type as case name', () => {
-    const enumType = getUnionType();
-    const analysedType = Either.getOrElse(
-      AnalysedType.fromTsType(enumType, Option.none()),
-      (error) => {
-        throw new Error(`Failed to construct analysed type: ${error}`);
-      },
-    );
+    const [enumType] = getUnionType();
 
     const expected: AnalysedType.AnalysedType = {
       kind: 'variant',
@@ -229,16 +200,12 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
       },
     };
 
-    expect(analysedType).toEqual(expected);
+    expect(enumType).toEqual(expected);
   });
 });
 
 test('Union with literals to AnalysedType', () => {
-  const unstructuredTextType = getUnionWithLiterals();
-
-  const analysedType = Either.getOrThrow(
-    AnalysedType.fromTsType(unstructuredTextType, Option.none()),
-  );
+  const [unionWithLiterals] = getUnionWithLiterals();
 
   const expectedAnalysedType = {
     kind: 'variant',
@@ -259,7 +226,7 @@ test('Union with literals to AnalysedType', () => {
     },
   };
 
-  expect(analysedType).toEqual(expectedAnalysedType);
+  expect(unionWithLiterals).toEqual(expectedAnalysedType);
 });
 
 function checkPrimitiveFields(fields: any[]) {
