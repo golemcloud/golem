@@ -391,12 +391,13 @@ function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
   const witValueEither = WitValue.fromTsValue(data, type[0]);
 
   const witValue = EffectEither.getOrElse(witValueEither, (err) => {
+    console.log('here???');
     throw new Error(err);
   });
 
   // Round trip wit-value -> value -> wit-value
   const value = Value.fromWitValue(witValue);
-  
+
   const witValueReturned = Value.toWitValue(value);
   expect(witValueReturned).toEqual(witValue);
 

@@ -690,7 +690,6 @@ function fromTsValueInternal(
         return handleKeyValuePairs(tsValue, innerListType, keyType, valueType);
       }
 
-
       if (tsValue instanceof Uint8Array) {
         return Either.map(
           Either.all(
@@ -715,7 +714,6 @@ function fromTsValueInternal(
         );
       }
 
-
       if (tsValue instanceof Uint32Array) {
         return Either.map(
           Either.all(
@@ -727,7 +725,6 @@ function fromTsValueInternal(
           }),
         );
       }
-
 
       if (tsValue instanceof BigUint64Array) {
         return Either.map(
@@ -863,9 +860,23 @@ function fromTsValueInternal(
       const okType = analysedType.value.ok;
       const errType = analysedType.value.err;
 
-      if (typeof tsValue === 'object' && tsValue !== null && 'ok' in tsValue) {
+      if (typeof tsValue !== 'object' || tsValue === null) {
+        return Either.left(typeMismatchInSerialize(tsValue, analysedType));
+      }
+
+      if (!('tag' in tsValue)) {
+        return Either.left(typeMismatchInSerialize(tsValue, analysedType));
+      }
+
+      if (tsValue['tag'] === 'ok') {
         if (okType) {
-          return Either.map(fromTsValue(tsValue.ok, okType), (v) => ({
+          const otherKey = Object.keys(tsValue).find((k) => k !== 'tag');
+
+          if (!otherKey) {
+            return Either.left(typeMismatchInSerialize(tsValue, analysedType));
+          }
+
+          return Either.map(fromTsValue(tsValue[otherKey], okType), (v) => ({
             kind: 'result',
             value: {
               ok: v,
@@ -879,13 +890,15 @@ function fromTsValueInternal(
             ok: undefined,
           },
         });
-      } else if (
-        typeof tsValue === 'object' &&
-        tsValue !== null &&
-        'err' in tsValue
-      ) {
+      } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
         if (errType) {
-          return Either.map(fromTsValue(tsValue.err, errType), (v) => ({
+          const otherKey = Object.keys(tsValue).find((k) => k !== 'tag');
+
+          if (!otherKey) {
+            return Either.left(typeMismatchInSerialize(tsValue, analysedType));
+          }
+
+          return Either.map(fromTsValue(tsValue[otherKey], errType), (v) => ({
             kind: 'result',
             value: {
               err: v,
@@ -1093,7 +1106,6 @@ function handleVariant(
       return Either.right(value);
     }
   }
-
 
   return Either.left(unionTypeMatchError(nameOptionTypePairs, tsValue));
 }
@@ -1342,7 +1354,7 @@ function matchesArray(value: any, elementType: AnalysedType): boolean {
 }
 
 function handleObjectMatch(value: any, props: NameTypePair[]): boolean {
-  if (typeof value !== 'object' && value !== 'interface'){
+  if (typeof value !== 'object' && value !== 'interface') {
     return false;
   }
 
