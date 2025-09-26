@@ -14,7 +14,6 @@
 
 import { WitNode, WitValue } from 'golem:rpc/types@0.2.2';
 
-import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import {
   missingObjectKey,
@@ -25,11 +24,7 @@ import {
   enumMismatchInSerialize,
 } from './errors';
 import * as Either from '../../../newTypes/either';
-import {
-  getTaggedUnion,
-  getUnionOfLiterals,
-  TaggedUnion,
-} from '../types/taggedUnion';
+import { TaggedTypeMetadata } from '../types/taggedUnion';
 import {
   AnalysedType,
   NameOptionTypePair,
@@ -886,9 +881,9 @@ export function fromTsValue(
 
     case 'variant':
       const variantTypes = analysedType.value.cases;
-      const isTaggedType = analysedType.taggedTypes;
+      const taggedTypes = analysedType.taggedTypes;
 
-      return handleVariant(tsValue, isTaggedType, variantTypes);
+      return handleVariant(tsValue, taggedTypes, variantTypes);
 
     case 'enum':
       if (
@@ -1002,6 +997,7 @@ function handleTupleType(
           owner: undefined,
           items: analysedTypes,
         },
+        emptyType: undefined,
       }),
     );
   }
@@ -1122,10 +1118,10 @@ function handleObject(
 
 function handleVariant(
   tsValue: any,
-  isTaggedType: boolean,
+  taggedTypes: TaggedTypeMetadata[],
   nameOptionTypePairs: NameOptionTypePair[],
 ): Either.Either<Value, string> {
-  if (isTaggedType) {
+  if (taggedTypes.length > 0) {
     return handleTaggedTypedUnion(tsValue, nameOptionTypePairs);
   }
 
@@ -1179,7 +1175,7 @@ function handleTaggedTypedUnion(
   if (typeof tsValue !== 'object' || tsValue === null) {
     return Either.left(
       typeMismatchInSerialize(tsValue, {
-        taggedTypes: true,
+        taggedTypes: [],
         kind: 'variant',
         value: {
           cases: nameOptionTypePairs,
@@ -1494,120 +1490,36 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
     return analysedType.value.cases[value.value];
   }
 
-  if (value.kind === 'result' && analysedType.kind === 'result') {
-
-    const okName = analysedType.okValueName;
-    const errName = analysedType.errValueName;
-    const okType = analysedType.value.ok;
-    const errType = analysedType.value.err;
-
-    // ok and err together
-    if (okName && errName && okType && errType) {
-      if (value.value.ok) {
-        return {
-          tag: 'ok',
-          [okName]: toTsValue(value.value.ok, okType),
-        };
-      }
-
-      if (value.value.err) {
-        return {
-          tag: 'err',
-          [errName]: toTsValue(value.value.err, errType),
-        };
-      }
-    }
-
-    if (okName && okType && !errType) {
-      if (value.value.ok) {
-        return {
-          tag: 'ok',
-          [okName]: toTsValue(value.value.ok, okType),
-        };
-      } else {
-        return {
-          tag: 'err',
-        };
-      }
-    }
-
-    if (errName && errType && !okType) {
-      if (value.value.err) {
-        return {
-          tag: 'err',
-          [errName]: toTsValue(value.value.err, errType),
-        };
-      } else {
-        return {
-          tag: 'ok',
-        };
-      }
-    }
-  }
-
-  if (value.kind === 'variant' && analysedType.kind === 'variant') {
-
-    const isTaggedUnion = analysedType.taggedTypes;
-
-    const variants = analysedType.value.cases;
-
-    if (isTaggedUnion) {
-
-      const caseType = variants[value.caseIdx]
-
-      const tagValue = caseType.name
-      
-      const variantType = toTsValue(caseType.typ
-
-
-    }
-
-
-    const taggedUnion = Either.getOrThrowWith(
-      getTaggedUnion(type.unionTypes),
-      (error) => new Error(`Internal Error: ${error}`),
-    );
-
-    if (Option.isSome(taggedUnion)) {
-      const tags = TaggedUnion.getTaggedTypes(taggedUnion.val);
-
-      const taggedTypeMetadata = tags[value.caseIdx];
-
-      const tagName = taggedTypeMetadata.tagLiteralName;
-      const innerType = taggedTypeMetadata.valueType;
-
-      if (innerType.tag === 'some') {
-        if (!value.caseValue) {
-          if (innerType.val[1].optional) {
-            return { tag: tagName };
-          }
-
-          throw new Error(
-            `Expected value for the tag 3 '${tagName}' of the union type '${name}'`,
-          );
-        }
-
-        return {
-          tag: tagName,
-          [innerType.val[0]]: toTsValue(value.caseValue, innerType.val[1]),
-        };
-      }
-
-      return {
-        tag: tagName,
-      };
-    }
-  }
-
-  switch (type.kind) {
-    case 'boolean':
+  switch (analysedType.kind) {
+    case 'bool':
       if (value.kind === 'bool') {
         return value.value;
       } else {
         throw new Error(typeMismatchInDeserialize(value, 'boolean'));
       }
 
-    case 'number':
+    case 'u64':
+      if (analysedType.isBigInt) {
+        return convertToBigInt(value);
+      }
+
+      return convertToNumber(value);
+
+    case 's64':
+      if (analysedType.isBigInt) {
+        return convertToBigInt(value);
+      }
+
+      return convertToNumber(value);
+
+    case 's8':
+    case 'u8':
+    case 's16':
+    case 'u16':
+    case 's32':
+    case 'u32':
+    case 'f32':
+    case 'f64':
       return convertToNumber(value);
 
     case 'string':
@@ -1617,106 +1529,95 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
         throw new Error(typeMismatchInDeserialize(value, 'string'));
       }
 
-    case 'bigint':
-      return convertToBigInt(value);
+    case 'list':
+      const typedArray = analysedType.typedArray;
 
-    // This shouldn't happen as null would be always value.kind === optional
-    case 'null':
-      if (value.kind === 'tuple' && value.value.length === 0) {
-        return null;
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'null'));
-      }
+      if (typedArray) {
+        switch (typedArray) {
+          case 'u8':
+            if (value.kind === 'list') {
+              return new Uint8Array(value.value.map((v) => convertToNumber(v)));
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Uint8Array'));
+            }
+          case 'u16':
+            if (value.kind === 'list') {
+              return new Uint16Array(
+                value.value.map((v) => convertToNumber(v)),
+              );
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Uint16Array'));
+            }
 
-    // This shouldn't happen as optional would be always value.kind === optional
-    case 'undefined':
-      if (value.kind === 'tuple' && value.value.length === 0) {
-        return undefined;
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'undefined'));
-      }
+          case 'u32':
+            if (value.kind === 'list') {
+              return new Uint32Array(
+                value.value.map((v) => convertToNumber(v)),
+              );
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Uint32Array'));
+            }
+          case 'big-u64':
+            if (value.kind === 'list') {
+              return new BigUint64Array(
+                value.value.map((v) => convertToBigInt(v)),
+              );
+            } else {
+              throw new Error(
+                typeMismatchInDeserialize(value, 'BigUint64Array'),
+              );
+            }
 
-    case 'array':
-      switch (type.name) {
-        case 'Uint8Array':
-          if (value.kind === 'list') {
-            return new Uint8Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Uint8Array'));
-          }
-        case 'Uint8ClampedArray':
-          if (value.kind === 'list') {
-            return new Uint8ClampedArray(
-              value.value.map((v) => convertToNumber(v)),
-            );
-          } else {
-            throw new Error(
-              typeMismatchInDeserialize(value, 'Uint8ClampedArray'),
-            );
-          }
-        case 'Int8Array':
-          if (value.kind === 'list') {
-            return new Int8Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Int8Array'));
-          }
+          case 'i8':
+            if (value.kind === 'list') {
+              return new Int8Array(value.value.map((v) => convertToNumber(v)));
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Int8Array'));
+            }
 
-        case 'Int16Array':
-          if (value.kind === 'list') {
-            return new Int16Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Int16Array'));
-          }
-        case 'Uint16Array':
-          if (value.kind === 'list') {
-            return new Uint16Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Uint16Array'));
-          }
-        case 'Int32Array':
-          if (value.kind === 'list') {
-            return new Int32Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Int32Array'));
-          }
-        case 'Uint32Array':
-          if (value.kind === 'list') {
-            return new Uint32Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Uint32Array'));
-          }
-        case 'Float32Array':
-          if (value.kind === 'list') {
-            return new Float32Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Float32Array'));
-          }
-        case 'Float64Array':
-          if (value.kind === 'list') {
-            return new Float64Array(value.value.map((v) => convertToNumber(v)));
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'Float64Array'));
-          }
-        case 'BigInt64Array':
-          if (value.kind === 'list') {
-            return new BigInt64Array(
-              value.value.map((v) => convertToBigInt(v)),
-            );
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'BigInt64Array'));
-          }
-        case 'BigUint64Array':
-          if (value.kind === 'list') {
-            return new BigUint64Array(
-              value.value.map((v) => convertToBigInt(v)),
-            );
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'BigUint64Array'));
-          }
+          case 'i16':
+            if (value.kind === 'list') {
+              return new Int16Array(value.value.map((v) => convertToNumber(v)));
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Int16Array'));
+            }
+          case 'i32':
+            if (value.kind === 'list') {
+              return new Int32Array(value.value.map((v) => convertToNumber(v)));
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Int32Array'));
+            }
+          case 'big-i64':
+            if (value.kind === 'list') {
+              return new BigInt64Array(
+                value.value.map((v) => convertToBigInt(v)),
+              );
+            } else {
+              throw new Error(
+                typeMismatchInDeserialize(value, 'BigInt64Array'),
+              );
+            }
+          case 'f32':
+            if (value.kind === 'list') {
+              return new Float32Array(
+                value.value.map((v) => convertToNumber(v)),
+              );
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Float32Array'));
+            }
+          case 'f64':
+            if (value.kind === 'list') {
+              return new Float64Array(
+                value.value.map((v) => convertToNumber(v)),
+              );
+            } else {
+              throw new Error(typeMismatchInDeserialize(value, 'Float64Array'));
+            }
+        }
       }
 
       if (value.kind === 'list') {
-        const elemType = type.element;
+        const elemType = analysedType.value.inner;
 
         if (!elemType) {
           throw new Error(`Unable to infer the type of Array`);
@@ -1727,127 +1628,159 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
       }
 
     case 'tuple':
-      const typeArg = type.elements;
       if (value.kind === 'tuple') {
-        return value.value.map((item: Value, idx: number) =>
-          toTsValue(item, typeArg[idx]),
-        );
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'tuple'));
-      }
+        const emptyType = analysedType.emptyType;
+        if (emptyType) {
+          switch (emptyType) {
+            case 'null':
+              if (value.value.length === 0) return null;
+              throw new Error(`Unable to infer the type of Array`);
+            case 'void':
+              if (value.value.length === 0) return undefined;
+              throw new Error(`Unable to infer the type of Array`);
+            case 'undefined':
+              if (value.value.length === 0) return undefined;
+              throw new Error(`Unable to infer the type of Array`);
+          }
+        }
 
-    case 'union':
-      const unionOfLiterals = Either.getOrThrowWith(
-        getUnionOfLiterals(type.unionTypes),
-        (error) => new Error(`Internal Error: ${error}`),
-      );
+        if (value.kind === 'tuple') {
+          if (value.value.length !== analysedType.value.items.length) {
+            throw new Error(typeMismatchInDeserialize(value, 'tuple'));
+          }
 
-      if (Option.isSome(unionOfLiterals)) {
-        if (value.kind === 'enum') {
-          return unionOfLiterals.val.literals[value.value];
+          return value.value.map((item: Value, idx: number) =>
+            toTsValue(item, analysedType.value.items[idx]),
+          );
         } else {
-          throw new Error(typeMismatchInDeserialize(value, 'enum'));
+          throw new Error(typeMismatchInDeserialize(value, 'tuple'));
         }
       }
 
-      const taggedUnions = Either.getOrThrowWith(
-        getTaggedUnion(type.unionTypes),
-        (error) => new Error(`Internal Error: ${error}`),
-      );
+      throw new Error(typeMismatchInDeserialize(value, 'tuple'));
 
-      const filteredUnionTypes: Type.Type[] = type.unionTypes.filter(
-        (t) => t.kind !== 'undefined' && t.kind !== 'null' && t.kind !== 'void',
-      );
+    case 'result':
+      if (value.kind === 'result') {
+        const okName = analysedType.okValueName;
+        const errName = analysedType.errValueName;
+        const okType = analysedType.value.ok;
+        const errType = analysedType.value.err;
 
-      // This implies this optional value
-      if (filteredUnionTypes.length !== type.unionTypes.length) {
-        if (filteredUnionTypes.length === 1) {
-          return toTsValue(value, filteredUnionTypes[0]);
+        // ok and err together
+        if (okName && errName && okType && errType) {
+          if (value.value.ok) {
+            return {
+              tag: 'ok',
+              [okName]: toTsValue(value.value.ok, okType),
+            };
+          }
+
+          if (value.value.err) {
+            return {
+              tag: 'err',
+              [errName]: toTsValue(value.value.err, errType),
+            };
+          }
         }
-      }
 
-      if (value.kind === 'variant') {
-        const caseValue = value.caseValue;
-
-        if (Option.isSome(taggedUnions)) {
-          const tags = TaggedUnion.getTaggedTypes(taggedUnions.val);
-          const taggedTypeMetadata = tags[value.caseIdx];
-
-          const tagName = taggedTypeMetadata.tagLiteralName;
-          const innerType = taggedTypeMetadata.valueType;
-
-          if (Option.isNone(innerType)) {
-            return tagName;
+        if (okName && okType && !errType) {
+          if (value.value.ok) {
+            return {
+              tag: 'ok',
+              [okName]: toTsValue(value.value.ok, okType),
+            };
           } else {
-            const innerTypeVal = innerType.val;
+            return {
+              tag: 'err',
+            };
+          }
+        }
+
+        if (errName && errType && !okType) {
+          if (value.value.err) {
+            return {
+              tag: 'err',
+              [errName]: toTsValue(value.value.err, errType),
+            };
+          } else {
+            return {
+              tag: 'ok',
+            };
+          }
+        }
+      }
+
+      throw new Error(typeMismatchInDeserialize(value, 'result'));
+    case 'variant':
+      if (value.kind === 'variant') {
+        const taggedMetadata = analysedType.taggedTypes;
+
+        const variants = analysedType.value.cases;
+
+        if (taggedMetadata.length > 0) {
+          const caseType = variants[value.caseIdx];
+          const tagValue = caseType.name;
+          const valueType = caseType.typ;
+
+          if (valueType) {
+            const caseValue = value.caseValue;
+
             if (!caseValue) {
+              if (valueType.kind === 'option') {
+                return { tag: tagValue };
+              }
+
               throw new Error(typeMismatchInDeserialize(value, 'union'));
             }
-            return toTsValue(caseValue, innerTypeVal[1]);
-          }
-        }
 
-        const matchingType = filteredUnionTypes[value.caseIdx];
+            const result = toTsValue(caseValue, valueType);
 
-        if (!caseValue) {
-          if (matchingType.kind === 'literal') {
-            return matchingType.literalValue;
-          } else {
-            throw new Error(typeMismatchInDeserialize(value, 'union'));
-          }
-        }
+            const metadata = analysedType.taggedTypes.find(
+              (lit) => lit.tagLiteralName === tagValue,
+            )?.valueType;
 
-        return toTsValue(caseValue, matchingType);
-      } else if (value.kind === 'result') {
-        const caseValue = value.value;
-
-        if (Option.isSome(taggedUnions)) {
-          const tags = TaggedUnion.getTaggedTypes(taggedUnions.val);
-
-          const okOrErr = 'ok' in caseValue ? 'ok' : 'err';
-
-          const taggedTypeMetadata = tags.find(
-            (tag) => tag.tagLiteralName === okOrErr,
-          );
-
-          if (!taggedTypeMetadata) {
-            throw new Error(typeMismatchInDeserialize(value, 'result'));
-          }
-
-          const tagName = taggedTypeMetadata.tagLiteralName;
-          const innerType = taggedTypeMetadata.valueType;
-
-          if (Option.isNone(innerType)) {
-            return tagName;
-          } else {
-            const innerTypeVal = innerType.val;
-            const okOrErrvalue = caseValue[okOrErr];
-
-            if (!okOrErrvalue) {
-              throw new Error(
-                `Expected value for the tag 4 '${tagName}' of the union type '${name}'`,
-              );
+            if (!metadata) {
+              throw new Error(typeMismatchInDeserialize(value, 'union'));
             }
 
-            return toTsValue(okOrErrvalue, innerTypeVal[1]);
+            if (Option.isNone(metadata)) {
+              throw new Error(typeMismatchInDeserialize(value, 'union'));
+            }
+
+            return {
+              tag: tagValue,
+              [metadata.val[0]]: result,
+            };
           }
         }
 
-        throw new Error(typeMismatchInDeserialize(value, 'union'));
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'union'));
+        const result = variants[value.caseIdx];
+        const type = result.typ;
+
+        if (!type) {
+          return result.name;
+        }
+
+        const v = value.caseValue;
+
+        if (!v) {
+          throw new Error(typeMismatchInDeserialize(value, 'union'));
+        }
+
+        return toTsValue(v, type);
       }
 
-    case 'object':
+      throw new Error(typeMismatchInDeserialize(value, 'variant'));
+
+    case 'record':
       if (value.kind === 'record') {
         const fieldValues = value.value;
-        const expectedTypeFields = type.properties;
+        const expectedTypeFields = analysedType.value.fields;
         return expectedTypeFields.reduce(
           (acc, field, idx) => {
-            const name = field.getName();
-            const expectedFieldType = field.getTypeAtLocation(
-              field.getDeclarations()[0],
-            );
+            const name = field.name;
+            const expectedFieldType = field.typ;
+
             acc[name] = toTsValue(fieldValues[idx], expectedFieldType);
             return acc;
           },
@@ -1856,98 +1789,6 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
       } else {
         throw new Error(typeMismatchInDeserialize(value, 'object'));
       }
-
-    case 'class':
-      throw new Error(
-        unhandledTypeError(
-          value,
-          Option.some(name ?? 'anonymous'),
-          Option.none(),
-        ),
-      );
-
-    case 'interface':
-      if (value.kind === 'record') {
-        const fieldValues = value.value;
-        const expectedTypeFields = type.properties;
-        return expectedTypeFields.reduce(
-          (acc, field, idx) => {
-            const name = field.getName();
-            const expectedFieldType = field.getTypeAtLocation(
-              field.getDeclarations()[0],
-            );
-            acc[name] = toTsValue(fieldValues[idx], expectedFieldType);
-            return acc;
-          },
-          {} as Record<string, any>,
-        );
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'interface'));
-      }
-
-    case 'promise':
-      const innerType = type.element;
-      if (!innerType) {
-        throw new Error(
-          `Internal Error: Expected Promise to have one type argument`,
-        );
-      }
-      return toTsValue(value, innerType);
-
-    case 'map':
-      if (value.kind === 'list') {
-        const entries: [any, any][] = value.value.map((item: Value) => {
-          if (item.kind !== 'tuple' || item.value.length !== 2) {
-            throw new Error(
-              `Internal Error: Expected tuple of two items, got ${item}`,
-            );
-          }
-
-          return [
-            toTsValue(item.value[0], type.key),
-            toTsValue(item.value[1], type.value),
-          ] as [any, any];
-        });
-        return new Map(entries);
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'Map'));
-      }
-
-    case 'literal':
-      const literalValue = type.literalValue;
-      if (
-        value.kind === 'bool' ||
-        value.kind === 'string' ||
-        value.kind === 'f64' ||
-        value.kind === 's32'
-      ) {
-        return value.value;
-      } else {
-        throw new Error(typeMismatchInDeserialize(value, 'boolean'));
-      }
-
-    case 'alias':
-      throw new Error(
-        unhandledTypeError(
-          value,
-          Option.some(name ?? 'anonymous'),
-          Option.none(),
-        ),
-      );
-
-    case 'others':
-      throw new Error(
-        unhandledTypeError(
-          value,
-          Option.some(name ?? 'anonymous'),
-          Option.none(),
-        ),
-      );
-
-    case 'unresolved-type':
-      throw new Error(
-        `Failed to resolve type for \`${type.text}\`: ${type.error}`,
-      );
   }
 }
 

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { buildJSONFromType, LiteTypeJSON, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
+import { buildJSONFromType, Node, Type as CoreType } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
@@ -35,10 +35,11 @@ export interface NameOptionTypePair {
 export type TypedArrayKind = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
 export type EmptyType = 'null' | 'void' | 'undefined';
 
+
 // This is similar to internal analyzed-type in wasm-rpc (golem)
 // while having extra information useful for WIT -> WIT type and value mapping
 export type AnalysedType =
-    | { kind: 'variant'; value: TypeVariant, taggedTypes: boolean }
+    | { kind: 'variant'; value: TypeVariant, taggedTypes: TaggedTypeMetadata[] }
     | { kind: 'result'; value: TypeResult, okValueName: string | undefined, errValueName: string | undefined }
     | { kind: 'option'; value: TypeOption }
     | { kind: 'enum'; value: TypeEnum }
@@ -48,10 +49,10 @@ export type AnalysedType =
     | { kind: 'list'; value: TypeList, typedArray: TypedArrayKind | undefined }
     | { kind: 'string' }
     | { kind: 'chr' }
-    | { kind: 'f64' }
-    | { kind: 'f32' }
-    | { kind: 'u64' }
-    | { kind: 's64' }
+    | { kind: 'f64'  }
+    | { kind: 'f32'}
+    | { kind: 'u64', isBigInt: boolean  }
+    | { kind: 's64', isBigInt: boolean }
     | { kind: 'u32' }
     | { kind: 's32' }
     | { kind: 'u16' }
@@ -208,8 +209,8 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const chr = (): AnalysedType => ({ kind: 'chr' });
  export const f64 = (): AnalysedType => ({ kind: 'f64' });
  export const f32 = (): AnalysedType => ({ kind: 'f32' });
- export const u64 = (): AnalysedType => ({ kind: 'u64' });
- export const s64 = (): AnalysedType => ({ kind: 's64' });
+ export const u64 = (isBigInt: boolean): AnalysedType => ({ kind: 'u64', isBigInt });
+ export const s64 = (isBigInt: boolean): AnalysedType => ({ kind: 's64' , isBigInt});
  export const u32 = (): AnalysedType => ({ kind: 'u32' });
  export const s32 = (): AnalysedType => ({ kind: 's32' });
  export const u16 = (): AnalysedType => ({ kind: 'u16' });
@@ -223,7 +224,7 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record',  value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
  export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
  export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
- export const variant = (name: string | undefined, taggedTypes: boolean,  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
+ export const variant = (name: string | undefined, taggedTypes: TaggedTypeMetadata[],  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
 
  export const result = (name: string | undefined, okValueName: string| undefined, errValueName: string | undefined, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
       ({ kind: 'result', okValueName, errValueName, value: { name: convertTypeNameToKebab(name), owner: undefined, ok, err } });
@@ -274,7 +275,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       return Either.right(str())
 
     case "bigint":
-      return Either.right(u64())
+      return Either.right(u64(true))
 
     case "null":
       return Either.left("Unsupported type `null` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
@@ -444,7 +445,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         });
       }
 
-      const result = variant(type.name, false, possibleTypes);
+      const result = variant(type.name, [], possibleTypes);
 
       if (!type.name) {
         unionTypeMapRegistry.set(hash, result);
@@ -669,8 +670,8 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         case "Uint16Array":  return Either.right(list(undefined,  'u16', u16()));
         case "Int32Array":   return Either.right(list(undefined, 'i32', s32()));
         case "Uint32Array":  return Either.right(list(undefined, 'u32',  u32()));
-        case "BigInt64Array":  return Either.right(list(undefined, 'big-i64', s64()));
-        case "BigUint64Array": return Either.right(list(undefined,'big-u64', u64()));
+        case "BigInt64Array":  return Either.right(list(undefined, 'big-i64', s64(true)));
+        case "BigUint64Array": return Either.right(list(undefined,'big-u64', u64(true,)));
       }
 
       const arrayElementType =
@@ -728,7 +729,7 @@ function convertTaggedTypesToVariant(typeName: string | undefined, taggedTypes: 
     }
   }
 
-  return Either.right(variant(typeName, true, possibleTypes));
+  return Either.right(variant(typeName, taggedTypes, possibleTypes));
 }
 
 
