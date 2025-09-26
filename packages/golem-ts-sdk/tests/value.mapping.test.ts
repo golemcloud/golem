@@ -26,6 +26,7 @@ import {
   getUnionWithOnlyLiterals,
   getUnionWithLiterals,
   getResultTypeExact,
+  ComplexAgentName,
 } from './testUtils';
 
 import { TestInterfaceType } from './testTypes';
@@ -47,6 +48,7 @@ import * as fc from 'fast-check';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as EffectEither from '../src/newTypes/either';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
+import { AnalysedType } from '../src/internal/mapping/types/AnalysedType';
 
 describe('typescript value to wit value round-trip conversions', () => {
   it('should correctly perform round-trip conversion for arbitrary values of interface type', () => {
@@ -385,8 +387,8 @@ describe('typescript value to wit value round-trip conversions', () => {
   });
 });
 
-function runRoundTripTest<T>(data: T, type: Type.Type) {
-  const witValueEither = WitValue.fromTsValue(data, type);
+function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
+  const witValueEither = WitValue.fromTsValue(data, type[0]);
 
   const witValue = EffectEither.getOrElse(witValueEither, (err) => {
     throw new Error(err);
@@ -399,7 +401,7 @@ function runRoundTripTest<T>(data: T, type: Type.Type) {
   expect(witValueReturned).toEqual(witValue);
 
   // Round trip ts-value -> wit-value -> ts-value
-  const tsValueReturned = WitValue.toTsValue(witValueReturned, type);
+  const tsValueReturned = WitValue.toTsValue(witValueReturned, type[1]);
 
   expect(tsValueReturned).toEqual(data);
 }
