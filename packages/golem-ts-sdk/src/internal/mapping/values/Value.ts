@@ -1434,13 +1434,14 @@ function handleObjectMatch(value: any, props: NameTypePair[]): boolean {
   return true;
 }
 
-export function toTsValue(value: Value, type: Type.Type): any {
-  const name = type.name;
+export function toTsValue(value: Value, analysedType: AnalysedType): any {
+  //const name = type.name;
 
   if (
     value.kind === 'record' &&
     value.value.length === 0 &&
-    type.kind === 'null'
+    analysedType.kind === 'tuple' &&
+    analysedType.emptyType === 'null'
   ) {
     return null;
   }
@@ -1448,7 +1449,8 @@ export function toTsValue(value: Value, type: Type.Type): any {
   if (
     value.kind === 'record' &&
     value.value.length === 0 &&
-    type.kind === 'undefined'
+    analysedType.kind === 'tuple' &&
+    analysedType.emptyType === 'null'
   ) {
     return undefined;
   }
@@ -1456,7 +1458,8 @@ export function toTsValue(value: Value, type: Type.Type): any {
   if (
     value.kind === 'record' &&
     value.value.length === 0 &&
-    type.kind === 'void'
+    analysedType.kind === 'tuple' &&
+    analysedType.emptyType === 'null'
   ) {
     return undefined;
   }
@@ -1466,97 +1469,100 @@ export function toTsValue(value: Value, type: Type.Type): any {
     if (!caseValue) {
       // Select between undefined and null
 
-      if (type.kind === 'null') return null;
-      if (type.kind === 'undefined' || type.kind === 'void') return undefined;
-      if (type.kind === 'union') {
-        const unionKinds = type.unionTypes.map((t) => t.kind);
-
-        if (unionKinds.includes('null')) {
-          return null;
-        }
-
-        if (unionKinds.includes('undefined')) {
-          return undefined;
-        }
+      if (analysedType.kind === 'tuple' && analysedType.emptyType === 'null')
+        return null;
+      if (
+        (analysedType.kind === 'tuple' &&
+          analysedType.emptyType === 'undefined') ||
+        (analysedType.kind === 'tuple' && analysedType.emptyType === 'void')
+      )
+        return undefined;
+      if (analysedType.kind === 'option') {
+        return undefined;
       }
 
       return undefined;
     }
 
-    return toTsValue(caseValue, type);
+    const innerType =
+      analysedType.kind === 'option' ? analysedType.value.inner : analysedType;
+
+    return toTsValue(caseValue, innerType);
   }
 
-  if (value.kind === 'enum' && type.kind === 'union') {
-    const unionOfLiterals = Either.getOrThrowWith(
-      getUnionOfLiterals(type.unionTypes),
-      (error) => new Error(`Internal Error: ${error}`),
-    );
-
-    if (Option.isSome(unionOfLiterals)) {
-      return unionOfLiterals.val.literals[value.value];
-    } else {
-      throw new Error(typeMismatchInDeserialize(value, 'enum'));
-    }
+  if (value.kind === 'enum' && analysedType.kind === 'enum') {
+    return analysedType.value.cases[value.value];
   }
 
-  if (value.kind === 'result' && type.kind === 'union') {
-    const taggedUnion = Either.getOrThrowWith(
-      getTaggedUnion(type.unionTypes),
-      (error) => new Error(`Internal Error: ${error}`),
-    );
+  if (value.kind === 'result' && analysedType.kind === 'result') {
 
-    if (Option.isSome(taggedUnion)) {
-      const tags = TaggedUnion.getTaggedTypes(taggedUnion.val);
+    const okName = analysedType.okValueName;
+    const errName = analysedType.errValueName;
+    const okType = analysedType.value.ok;
+    const errType = analysedType.value.err;
 
-      const okOrErrTag = 'ok' in value.value ? 'ok' : 'err';
-
-      const taggedTypeMetadata = tags.find(
-        (tag) => tag.tagLiteralName === okOrErrTag,
-      );
-
-      if (!taggedTypeMetadata) {
-        throw new Error(typeMismatchInDeserialize(value, 'result'));
-      }
-
-      const tagName = taggedTypeMetadata.tagLiteralName;
-      const innerType = taggedTypeMetadata.valueType;
-
-      if (innerType.tag === 'some') {
-        if (!value.value) {
-          if (innerType.val[1].optional) {
-            return { tag: tagName };
-          }
-
-          throw new Error(
-            `Expected value for the tag 1 '${tagName}' of the union type '${name}'`,
-          );
-        }
-
-        const okOrErrValue = value.value[okOrErrTag];
-
-        if (!okOrErrValue) {
-          if (innerType.val[1].optional) {
-            return { tag: tagName };
-          }
-
-          throw new Error(
-            `Expected value for the tag 2 '${tagName}' of the union type '${name}'`,
-          );
-        }
-
+    // ok and err together
+    if (okName && errName && okType && errType) {
+      if (value.value.ok) {
         return {
-          tag: tagName,
-          [innerType.val[0]]: toTsValue(okOrErrValue, innerType.val[1]),
+          tag: 'ok',
+          [okName]: toTsValue(value.value.ok, okType),
         };
       }
 
-      return {
-        tag: tagName,
-      };
+      if (value.value.err) {
+        return {
+          tag: 'err',
+          [errName]: toTsValue(value.value.err, errType),
+        };
+      }
+    }
+
+    if (okName && okType && !errType) {
+      if (value.value.ok) {
+        return {
+          tag: 'ok',
+          [okName]: toTsValue(value.value.ok, okType),
+        };
+      } else {
+        return {
+          tag: 'err',
+        };
+      }
+    }
+
+    if (errName && errType && !okType) {
+      if (value.value.err) {
+        return {
+          tag: 'err',
+          [errName]: toTsValue(value.value.err, errType),
+        };
+      } else {
+        return {
+          tag: 'ok',
+        };
+      }
     }
   }
 
-  if (value.kind === 'variant' && type.kind === 'union') {
+  if (value.kind === 'variant' && analysedType.kind === 'variant') {
+
+    const isTaggedUnion = analysedType.taggedTypes;
+
+    const variants = analysedType.value.cases;
+
+    if (isTaggedUnion) {
+
+      const caseType = variants[value.caseIdx]
+
+      const tagValue = caseType.name
+      
+      const variantType = toTsValue(caseType.typ
+
+
+    }
+
+
     const taggedUnion = Either.getOrThrowWith(
       getTaggedUnion(type.unionTypes),
       (error) => new Error(`Internal Error: ${error}`),

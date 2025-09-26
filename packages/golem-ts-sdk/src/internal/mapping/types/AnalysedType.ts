@@ -33,15 +33,18 @@ export interface NameOptionTypePair {
 }
 
 export type TypedArrayKind = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
+export type EmptyType = 'null' | 'void' | 'undefined';
 
+// This is similar to internal analyzed-type in wasm-rpc (golem)
+// while having extra information useful for WIT -> WIT type and value mapping
 export type AnalysedType =
     | { kind: 'variant'; value: TypeVariant, taggedTypes: boolean }
-    | { kind: 'result'; value: TypeResult }
+    | { kind: 'result'; value: TypeResult, okValueName: string | undefined, errValueName: string | undefined }
     | { kind: 'option'; value: TypeOption }
     | { kind: 'enum'; value: TypeEnum }
     | { kind: 'flags'; value: TypeFlags }
     | { kind: 'record'; value: TypeRecord }
-    | { kind: 'tuple'; value: TypeTuple }
+    | { kind: 'tuple'; value: TypeTuple, emptyType: EmptyType | undefined }
     | { kind: 'list'; value: TypeList, typedArray: TypedArrayKind | undefined }
     | { kind: 'string' }
     | { kind: 'chr' }
@@ -216,19 +219,14 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
 
  export const list = (name: string | undefined, typedArrayKind: TypedArrayKind | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
  export const option = (name: string| undefined, inner: AnalysedType): AnalysedType => ({ kind: 'option', value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
- export const tuple =  (name: string | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple', value: { name: convertTypeNameToKebab(name), owner: undefined, items } });
- export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record', value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
+ export const tuple =  (name: string | undefined, emptyType: EmptyType | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple',   emptyType: emptyType, value: { name: convertTypeNameToKebab(name), owner: undefined, items } });
+ export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record',  value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
  export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
  export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
  export const variant = (name: string | undefined, taggedTypes: boolean,  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
 
- export const resultOk =  (name: string | undefined, ok: AnalysedType): AnalysedType =>
-      ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, ok } });
- export const resultErr = (name: string | undefined, err: AnalysedType): AnalysedType =>
-      ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, err } });
-
- export const result = (name: string | undefined, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
-      ({ kind: 'result', value: { name: convertTypeNameToKebab(name), owner: undefined, ok, err } });
+ export const result = (name: string | undefined, okValueName: string| undefined, errValueName: string | undefined, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
+      ({ kind: 'result', okValueName, errValueName, value: { name: convertTypeNameToKebab(name), owner: undefined, ok, err } });
 
 
  export const handle =  (name: string | undefined, resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
@@ -289,7 +287,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
     case "tuple":
       const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
-      return Either.map(tupleElems, (items) => tuple(type.name, items));
+      return Either.map(tupleElems, (items) => tuple(type.name, undefined, items));
 
     case "union": {
       const hash = JSON.stringify(buildJSONFromType(type));
@@ -593,7 +591,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
 
       return Either.zipWith(key, value, (k, v) =>
-        list(type.name, undefined, tuple(undefined, [k, v])));
+        list(type.name, undefined, tuple(undefined, undefined, [k, v])));
 
     case "literal":
       const literalName = type.literalValue;
@@ -751,9 +749,14 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
     return Either.left(errTypeResult.val);
   }
 
+  const okValueName = resultType.okType ? convertTypeNameToKebab(resultType.okType[0]) : undefined;
+  const errValueName = resultType.errType ? convertTypeNameToKebab(resultType.errType[0]) : undefined;
+
   return Either.right(
     result(
       typeName,
+      okValueName,
+      errValueName,
       okTypeResult ? okTypeResult.val : undefined,
       errTypeResult ? errTypeResult.val : undefined
     )
