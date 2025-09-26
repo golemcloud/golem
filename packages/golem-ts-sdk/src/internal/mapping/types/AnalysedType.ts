@@ -33,7 +33,7 @@ export interface NameOptionTypePair {
 }
 
 export type AnalysedType =
-    | { kind: 'variant'; value: TypeVariant }
+    | { kind: 'variant'; value: TypeVariant, taggedTypes: boolean }
     | { kind: 'result'; value: TypeResult }
     | { kind: 'option'; value: TypeOption }
     | { kind: 'enum'; value: TypeEnum }

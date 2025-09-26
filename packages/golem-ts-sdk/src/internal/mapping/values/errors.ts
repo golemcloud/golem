@@ -22,14 +22,14 @@ import {
   getUnionOfLiterals,
   TaggedUnion,
 } from '../types/taggedUnion';
+import { AnalysedType, NameOptionTypePair } from '../types/AnalysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchInSerialize(
   tsValue: any,
-  expectedType: Type.Type,
+  expectedType: AnalysedType,
 ): string {
-  const nameOrKind = expectedType.name ?? expectedType.kind;
-  return `Type mismatch. Expected \`${nameOrKind}\`, but got \`${safeDisplay(tsValue)}\` which is of type \`${typeof tsValue}\``;
+  return `Type mismatch. Expected \`${safeDisplay(expectedType.kind)}\`, but got \`${safeDisplay(tsValue)}\` which is of type \`${typeof tsValue}\``;
 }
 
 // Unable to convert the value to the expected type in the output direction
@@ -44,45 +44,18 @@ export function missingObjectKey(key: string, tsValue: any): string {
 
 // tsValue does not match any of the union types when converting from TS to WIT
 export function unionTypeMatchError(
-  unionTypes: Type.Type[],
+  unionTypes: NameOptionTypePair[],
   tsValue: any,
 ): string {
-  const defaultTypes = unionTypes.map((t) => {
-    const defaultName =
-      t.kind === 'object'
-        ? `an object with properties \`${t.properties
-            .map((t) => t.getName())
-            .join(', ')}\``
-        : t.kind === 'interface'
-          ? `an interface with properties \`${t.properties
-              .map((t) => t.getName())
-              .join(', ')}\``
-          : t.kind;
-
-    return (
-      t.name ??
-      (t.kind === 'literal' ? t.literalValue : defaultName) ??
-      '<anonymous>'
-    );
-  });
-
-  const unionOfLiterals = Either.getOrThrowWith(
-    getUnionOfLiterals(unionTypes),
-    (err) => new Error(`Failed to analyse union types: ${err}`),
-  );
-
-  const taggedUnion = Either.getOrThrowWith(
-    getTaggedUnion(unionTypes),
-    (err) => new Error(`Failed to analyse union types: ${err}`),
-  );
-
-  const types = Option.isSome(taggedUnion)
-    ? TaggedUnion.getTagNames(taggedUnion.val)
-    : Option.isSome(unionOfLiterals)
-      ? unionOfLiterals.val.literals
-      : defaultTypes;
-
+  const types = unionTypes.map((t) => t.name);
   return `Value '${safeDisplay(tsValue)}' does not match any of the union types: ${types.join(', ')}`;
+}
+
+export function enumMismatchInSerialize(
+  enumValues: string[],
+  tsValue: any,
+): string {
+  return `Value '${safeDisplay(tsValue)}' does not match any of the enum values: ${enumValues.join(', ')}`;
 }
 
 // unhandled type of tsValue when converting from TS to WIT
