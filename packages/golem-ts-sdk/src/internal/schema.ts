@@ -345,7 +345,6 @@ function convertToElementSchema(
     const witType = typeInfo[0];
     const analysedType = typeInfo[1];
 
-    // Storing the analysed type information in the registry.
     AgentMethodParamRegistry.setAnalysedType(
       agentClassName,
       methodName,
