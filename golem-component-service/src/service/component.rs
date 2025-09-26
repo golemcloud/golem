@@ -883,7 +883,6 @@ impl ComponentServiceDefault {
 
         info!(
             owner = %owner,
-            exports = ?component.metadata.exports(),
             dynamic_linking = ?component.metadata.dynamic_linking(),
             "Uploaded component",
         );
