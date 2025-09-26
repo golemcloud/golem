@@ -22,11 +22,11 @@ import { TypeMappingScope } from './scope';
 
 export { WitType } from "golem:rpc/types@0.2.2";
 
-export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScope>): Either.Either<WitType, string> => {
+export const fromTsType = (type: Type.Type, scope: Option.Option<TypeMappingScope>): Either.Either<[WitType, AnalysedType.AnalysedType], string> => {
     const analysedTypeEither = AnalysedType.fromTsType(type, scope);
     return Either.flatMap(analysedTypeEither, (analysedType) => {
       const witType = fromAnalysedType(analysedType);
-      return Either.right(witType);
+      return Either.right(([witType, analysedType]));
     });
 };
 

@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
+import { AnalysedType } from '../mapping/types/AnalysedType';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
@@ -25,6 +26,7 @@ const agentMethodRegistry = new Map<
       prompt?: string;
       description?: string;
       multimodal?: boolean;
+      returnType?: AnalysedType;
     }
   >
 >();
@@ -44,6 +46,14 @@ export const AgentMethodRegistry = {
     return agentMethodRegistry.get(agentClassName.value);
   },
 
+  lookupReturnType(
+    agentClassName: AgentClassName,
+    agentMethodName: string,
+  ): AnalysedType | undefined {
+    const classMeta = agentMethodRegistry.get(agentClassName.value);
+    return classMeta?.get(agentMethodName)?.returnType;
+  },
+
   setPrompt(agentClassName: AgentClassName, method: string, prompt: string) {
     AgentMethodRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodRegistry.get(agentClassName.value)!;
@@ -58,6 +68,16 @@ export const AgentMethodRegistry = {
     AgentMethodRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodRegistry.get(agentClassName.value)!;
     classMeta.get(method)!.description = description;
+  },
+
+  setReturnType(
+    agentClassName: AgentClassName,
+    method: string,
+    returnType: AnalysedType,
+  ) {
+    AgentMethodRegistry.ensureMeta(agentClassName, method);
+    const classMeta = agentMethodRegistry.get(agentClassName.value)!;
+    classMeta.get(method)!.returnType = returnType;
   },
 
   setAsMultimodal(agentClassName: AgentClassName, method: string) {

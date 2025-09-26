@@ -695,6 +695,17 @@ function fromTsValueInternal(
     case 'tuple':
       const analysedTypeTupleElems = analysedType.value.items;
 
+      if (analysedTypeTupleElems.length === 0) {
+        if (tsValue === null || tsValue === undefined) {
+          return Either.right({
+            kind: 'tuple',
+            value: [],
+          });
+        } else {
+          return Either.left(typeMismatchInSerialize(tsValue, analysedType));
+        }
+      }
+
       return handleTupleType(tsValue, analysedTypeTupleElems);
 
     case 'variant':

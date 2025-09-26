@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
+import { AnalysedType } from '../mapping/types/AnalysedType';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
@@ -25,6 +26,7 @@ const agentMethodParamRegistry = new Map<
     Map<
       AgentMethodParamNameString,
       {
+        analysedType?: AnalysedType;
         languageCode?: string[];
         mimeTypes?: string[];
       }
@@ -57,6 +59,14 @@ export const AgentMethodParamRegistry = {
     return agentMethodParamRegistry.get(agentClassName.value);
   },
 
+  lookupParamType(
+    agentClassName: AgentClassName,
+    agentMethodName: string,
+  ): AnalysedType | undefined {
+    const classMeta = agentMethodParamRegistry.get(agentClassName.value);
+    return classMeta?.get(agentMethodName)?.get(agentMethodName)?.analysedType;
+  },
+
   setLanguageCodes(
     agentClassName: AgentClassName,
     agentMethodName: string,
@@ -71,6 +81,22 @@ export const AgentMethodParamRegistry = {
     const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
     const methodMeta = classMeta.get(agentMethodName)!;
     methodMeta.get(paramName)!.languageCode = languageCodes;
+  },
+
+  setAnalysedType(
+    agentClassName: AgentClassName,
+    agentMethodName: string,
+    paramName: string,
+    analysedType: AnalysedType,
+  ) {
+    AgentMethodParamRegistry.ensureMeta(
+      agentClassName,
+      agentMethodName,
+      paramName,
+    );
+    const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
+    const methodMeta = classMeta.get(agentMethodName)!;
+    methodMeta.get(paramName)!.analysedType = analysedType;
   },
 
   setMimeTypes(

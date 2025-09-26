@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
+import { AnalysedType } from '../mapping/types/AnalysedType';
 
 type AgentClassNameString = string;
 type ParamName = string;
@@ -24,6 +25,7 @@ const agentConstructorParamRegistry = new Map<
     {
       languageCodes?: string[];
       mimeTypes?: string[];
+      analysedType?: AnalysedType;
     }
   >
 >();
@@ -43,6 +45,14 @@ export const AgentConstructorParamRegistry = {
     return agentConstructorParamRegistry.get(agentClassName.value);
   },
 
+  lookupParamType(
+    agentClassName: AgentClassName,
+    paramName: string,
+  ): AnalysedType | undefined {
+    const classMeta = agentConstructorParamRegistry.get(agentClassName.value);
+    return classMeta?.get(paramName)?.analysedType;
+  },
+
   setLanguageCodes(
     agentClassName: AgentClassName,
     paramName: string,
@@ -51,6 +61,16 @@ export const AgentConstructorParamRegistry = {
     AgentConstructorParamRegistry.ensureMeta(agentClassName, paramName);
     const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
     classMeta.get(paramName)!.languageCodes = languageCodes;
+  },
+
+  setAnalysedType(
+    agentClassName: AgentClassName,
+    paramName: string,
+    analysedType: AnalysedType,
+  ) {
+    AgentConstructorParamRegistry.ensureMeta(agentClassName, paramName);
+    const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
+    classMeta.get(paramName)!.analysedType = analysedType;
   },
 
   setMimeTypes(

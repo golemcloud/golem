@@ -32,6 +32,8 @@ import { DataValue, ElementValue } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
 import * as util from 'node:util';
 import { RemoteMethod } from '../baseAgent';
+import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
+import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -52,7 +54,12 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 
     const metadata = metadataOpt.val;
 
-    const workerIdEither = getWorkerId(agentTypeName, args, metadata);
+    const workerIdEither = getWorkerId(
+      agentClassName,
+      agentTypeName,
+      args,
+      metadata,
+    );
 
     if (Either.isLeft(workerIdEither)) {
       throw new Error(workerIdEither.val);
@@ -65,7 +72,13 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
         const val = target[prop];
 
         if (typeof val === 'function') {
-          return getMethodProxy(metadata, prop, agentTypeName, workerId);
+          return getMethodProxy(
+            metadata,
+            prop,
+            agentClassName,
+            agentTypeName,
+            workerId,
+          );
         }
         return val;
       },
@@ -76,6 +89,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 function getMethodProxy(
   classMetadata: ClassMetadata,
   prop: string | symbol,
+  agentClassName: AgentClassName,
   agentTypeName: AgentTypeName,
   workerId: WorkerId,
 ): RemoteMethod<any[], any> {
@@ -103,8 +117,19 @@ function getMethodProxy(
     const parameterWitValuesEither = Either.all(
       fnArgs.map((fnArg, index) => {
         const param = paramInfo[index];
-        const typ = param[1];
-        return WitValue.fromTsValue(fnArg, typ);
+        const analysedType = AgentMethodParamRegistry.lookupParamType(
+          agentClassName,
+          param[0],
+        );
+        if (!analysedType) {
+          throw new Error(
+            `Parameter type for parameter ${param[0]} of method ${String(
+              prop,
+            )} not found in metadata.`,
+          );
+        }
+
+        return WitValue.fromTsValue(fnArg, analysedType);
       }),
     );
     if (Either.isLeft(parameterWitValuesEither)) {
@@ -170,6 +195,7 @@ function getMethodProxy(
 // would be a way to reuse - may be a host function that retrieves the worker-id
 // given value in JSON format, and the wit-type of each value and agent-type name?
 function getWorkerId(
+  agentClassName: AgentClassName,
   agentTypeName: AgentTypeName,
   constructorArgs: any[],
   classMetadata: ClassMetadata,
@@ -191,7 +217,19 @@ function getWorkerId(
 
   const constructorParamInfo = classMetadata.constructorArgs;
 
-  const constructorParamTypes = constructorParamInfo.map((param) => param.type);
+  const constructorParamTypes = constructorParamInfo.map((param) => {
+    const analysedType = AgentConstructorParamRegistry.lookupParamType(
+      agentClassName,
+      param.name,
+    );
+
+    if (!analysedType) {
+      throw new Error(
+        `Parameter type for constructor parameter ${param.name} of agent class ${agentClassName.value} not found in metadata.`,
+      );
+    }
+    return analysedType;
+  });
 
   const constructorParamWitValuesResult: Either.Either<ElementValue[], string> =
     Either.all(

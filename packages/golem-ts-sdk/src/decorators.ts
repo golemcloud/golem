@@ -298,7 +298,10 @@ export function agent(customName?: string) {
 
             const paramTypes: MethodParams = methodInfo.methodParams;
 
-            const returnType: TsType = methodInfo.returnType;
+            const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
+              agentClassName,
+              methodName,
+            );
 
             const paramTypeArray = Array.from(paramTypes);
 
@@ -325,7 +328,22 @@ export function agent(customName?: string) {
               };
             }
 
-            const returnValue = WitValue.fromTsValue(result, returnType);
+            if (!returnTypeAnalysed) {
+              const error: AgentError = {
+                tag: 'invalid-type',
+                val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
+              };
+
+              return {
+                tag: 'err',
+                val: error,
+              };
+            }
+
+            const returnValue = WitValue.fromTsValue(
+              result,
+              returnTypeAnalysed,
+            );
 
             if (Either.isLeft(returnValue)) {
               const agentError: AgentError = {
