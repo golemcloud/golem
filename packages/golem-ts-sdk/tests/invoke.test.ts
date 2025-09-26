@@ -49,7 +49,6 @@ import {
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
 import { DataValue } from 'golem:agent/common';
-import { TsType } from '../src/internal/mapping/types/taggedUnion';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';

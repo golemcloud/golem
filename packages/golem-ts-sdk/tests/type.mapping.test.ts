@@ -172,6 +172,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
 
     const expected: AnalysedType.AnalysedType = {
       kind: 'variant',
+      taggedTypes: false,
       value: {
         cases: [
           {
@@ -307,6 +308,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
     name: 'unionComplexProp',
     typ: {
       kind: 'variant',
+      taggedTypes: false,
       value: {
         name: 'union-complex-type',
         cases: [
@@ -462,6 +464,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'e',
                     typ: {
                       kind: 'variant',
+                      taggedTypes: false,
                       value: {
                         cases: [
                           {
