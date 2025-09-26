@@ -34,7 +34,7 @@ export function typeMismatchInSerialize(
 
 // Unable to convert the value to the expected type in the output direction
 export function typeMismatchInDeserialize(value: Value, expectedType: string) {
-  return `Failed to deserialize \`${safeDisplay(value)}\` to typescript type \`${expectedType}\``;
+  return `Failed to deserialize the following internal value to typescript type \`${expectedType}\`: \`${safeDisplay(value)}\``;
 }
 
 // Missing keys in tsValue when converting from TS to WIT
