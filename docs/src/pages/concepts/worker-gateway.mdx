@@ -19,7 +19,7 @@ interact with the node directly, because it could fail, and you would have to
 implement logic that detects failure and waits until the agent is recovered on
 a new node before retrying the invocation.
 
-In order to address these issues, Golem has a _Worker Gateway_ service, which is
+To address these issues, Golem has a _Worker Gateway_ service, which is
 effectively stateless and scaled independently of worker executor nodes.
 
 The primary functions of the _Worker Gateway_ are as follows:

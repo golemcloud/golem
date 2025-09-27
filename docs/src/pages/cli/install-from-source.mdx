@@ -3,7 +3,7 @@ import { Steps } from "nextra/components"
 
 # Golem CLI installation from source
 
-If the precompiled binaries are not available for your platform, or prefer to install from source, you can build it with the Rust toolchain,
+If the precompiled binaries are not available for your platform, or you prefer to install from source, you can build it with the Rust toolchain.
 
 ## Prerequisites
 To build `golem-cli` you need to use `cargo`, Rust's build tool.
@@ -18,7 +18,7 @@ rustup default stable
 
 ## Installing `golem-cli`
 
-The `golem-cli` command is the more lightweight version of Golem's command line interface, that allows you to interact with a running Golem cluster but it does not have a built-in local version of Golem itself.
+The `golem-cli` command is the lightweight version of Golem's command line interface, which allows you to interact with a running Golem cluster, but it does not include a built-in local version of Golem itself.
 
 To install `golem-cli` from source, use `cargo install`:
 
@@ -34,9 +34,9 @@ This will create a binary file named `golem-cli` in the `~/.cargo/bin` directory
 
 ## Installing `golem`
 
-The `golem` binary is the full version of Golem's command line interface, containing everything `golem-cli` has and also has a built-in local version of Golem itself.
+The `golem` binary is the full version of Golem's command line interface, containing everything `golem-cli` has, and it also includes a built-in local version of Golem itself.
 
-The `golem` package is not published to [crates.io](https://crates.io/) so in order to install it from source, follow the steps below.
+The `golem` package is not published to [crates.io](https://crates.io/), so to install it from source, follow the steps below.
 
 <Steps>
     ### Clone the repository

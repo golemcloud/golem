@@ -4,7 +4,7 @@ import { Tabs } from "nextra/components"
 
 # Agent Filesystem
 
-Each agent runs in a sandboxed filesystem. Both the `/` path and the current working directory of a worker point to the root of this sandboxed filesystem.
+Each agent runs in a sandboxed filesystem. Both the `/` path and the current working directory of an agent point to the root of this sandboxed filesystem.
 There is no way for an agent to access files outside its own filesystem.
 
 ## Accessing the filesystem
@@ -50,14 +50,14 @@ components:
 After deploying the component, any new agents created will have the file `/foobar.txt` (and `./foobar.txt` as the agent's initial current directory is the root) available to them.
 The file `/bar.txt` on the other hand is only available for reading. Trying to open the file for writing will fail with a language-dependent error.
 
-### Updating a worker
+### Updating an agent
 
 Updating an agent that uses IFS requires some special consideration depending on the update mode you choose:
 
-* **Automatic updates**: When using automatic updates the old worker invocations are replayed on top of the new IFS. This means that the worker
+* **Automatic updates**: When using automatic updates the old agent invocations are replayed on top of the new IFS. This means that the agent
 should produce _exactly_ the same results and side effects as it did with the old IFS. For example, changing the format of a file will work without issues, but changing
-a file that gets read by the worker and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
-* **Manual updates**: When using manual updates, you are responsible for saving and restoring the content of files in the worker filesystem. You can
+a file that gets read by the agent and returned to the user will likely lead to divergence. In such cases a manual update might be necessary.
+* **Manual updates**: When using manual updates, you are responsible for saving and restoring the content of files in the agent filesystem. You can
 use the `golem:api/save-snapshot` function to persist the files and later restore / migrate them using `golem:api/load-snapshot`.
 
 ## Externally accessing agent files

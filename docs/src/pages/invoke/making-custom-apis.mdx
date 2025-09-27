@@ -1,4 +1,4 @@
-# Make Custom Http APIs for your Golem App
+# Make Custom HTTP APIs for your Golem App
 
 Golem's [Gateway](/concepts/worker-gateway) service not only exposes the [low-level REST API for invocations](/invoke/http)
 but also provides a way to expose the agent methods as HTTP APIs.
@@ -7,7 +7,7 @@ Future versions will support other protocols such as MCP, gRPC, or GraphQL.
 
 ## HTTP API definition
 
-The HTTP APIs are defined in the [application manifest](/app-manifest) (`golem.yaml) `httpApi` section. Every template provided by Golem contains a sample API definition that can be used as a starting point.
+The HTTP APIs are defined in the [application manifest](/app-manifest) (`golem.yaml`) `httpApi` section. Every template provided by Golem contains a sample API definition that can be used as a starting point.
 
 The `httpApi` section consists of two main parts:
 
@@ -34,7 +34,7 @@ httpApi:
 
 #### Routes calling agents
 
-The most common type of route is one that invokes an agent method. A route consists of an HTTP method and path, with optional variables in it, and a **Rib script**. The script's job is invoking an agent's method by taking information from the request to assemble the agent ID and the method's parameters, and constructing an HTTP response from the method's response. This allows a lot of flexibility on mapping the agent to a HTTP API.
+The most common type of route is one that invokes an agent method. A route consists of an HTTP method and path, with optional variables in it, and a **Rib script**. The script's job is invoking an agent's method by taking information from the request to assemble the agent ID and the method's parameters, and constructing an HTTP response from the method's response. This allows a lot of flexibility in mapping the agent to an HTTP API.
 
 The `routes` field is a list of routes, each consisting of:
 
@@ -57,7 +57,7 @@ The response script has access to the `request` object, which allows access to d
 
 - `request.path.xyz` refers to a path variable named `xyz`
 - `request.headers.xyz` refers to a header named `xyz`
-- `request.body` refers to the JSON request body - it can be inspected by accessing it's fields such as `request.body.exampleField` etc.
+- `request.body` refers to the JSON request body - it can be inspected by accessing its fields such as `request.body.exampleField` etc.
 - `request.auth` when authentication is configured (see below)
 
 The script can construct an agent reference for any of the agent types defined in the **component** identified by `componentName` by using the agent type name and providing the necessary constructor parameters. For example if there is an agent type `counter-agent` with a single string constructor parameter, the following Rib snippets are constructing an instance of it:

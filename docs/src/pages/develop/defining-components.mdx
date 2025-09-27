@@ -60,9 +60,9 @@ class MyAgent extends BaseAgent {
 A component must define at least one agent, but can also define multiple ones.
 
 ### Agent constructors
-Every agent must define a **constructor** with an arbitrary number of parameters. These parameters are forming the **agent identifier**. Every possible parameter value combination identifies a particular agent instance.
+Every agent must define a **constructor** with an arbitrary number of parameters. These parameters form the **agent identifier**. Every possible parameter value combination identifies a particular agent instance.
 
-For example an agent working on a particular user's particular request could be defined as:
+For example, an agent working on a particular user's particular request could be defined as:
 
 <Tabs items={["TypeScript"]}>
     <Tabs.Tab>
@@ -85,12 +85,12 @@ class RequestHandler extends BaseAgent {
 An agent with a constructor like this can be identified by `request-handler("user-123", "request-456")`.
 
 <Callout type="info">
-    Note that the agent name is converted to _kebab-case_ (`request-handler`) when referred to in an agent identifier. This is due to some technical implementation details of the underlying Golem runtime. You can learn more about these mappings [on the name mappings page](/name mappings).
+    Note that the agent name is converted to _kebab-case_ (`request-handler`) when referred to in an agent identifier. This is due to some technical implementation details of the underlying Golem runtime. You can learn more about these mappings on the [name mapping page](/name-mapping).
 </Callout>
 
 ### Agent methods
 
-Every public method of an agent class is an **agent method**, which can be called by other remote agents, externally through Golem's invocation API, and can [also be be mapped to HTTP APIs](/invoke/making-custom-apis).
+Every public method of an agent class is an **agent method**, which can be called by other remote agents, externally through Golem's invocation API, and can [also be mapped to HTTP APIs](/invoke/making-custom-apis).
 
 Agent methods can (and should) be also annotated with the `@prompt` and `@description` decorators:
 - `prompt` should provide information for an external AI to understand what needs to be passed to the method as parameters
@@ -121,7 +121,7 @@ class RequestHandler extends BaseAgent {
 </Tabs>
 
 ### Supported data types
-The SDK supports a large variety of data types to be used in agent constructors and agent methods, both in parameter and return type position. When a type is not supported, it is going to report an error compile-time.
+The SDK supports a large variety of data types to be used in agent constructors and agent methods, both in parameter and return type position. When a type is not supported, it will report an error at compile time.
 
 Check the [page about data type mapping](/type-mapping) to learn how each type is mapped to **Rib** (when calling the agent methods from the API gateway or the REPL) and **JSON** (when using the invocation API).
 
@@ -147,7 +147,7 @@ import { argv, env } from "node:process";
 </Tabs.Tab>
 </Tabs>
 
-Environment variables can be specified when a agent is **explicitly created**, but there are some environment variables that are always set by Golem:
+Environment variables can be specified when an agent is **explicitly created**, but there are some environment variables that are always set by Golem:
 
 - `GOLEM_AGENT_ID` - the ID of the agent
 - `GOLEM_AGENT_TYPE` - the agent type (first part of the agent ID)

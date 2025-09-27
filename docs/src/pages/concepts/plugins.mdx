@@ -21,15 +21,15 @@ Golem supports the following types of plugins:
 
 ### Component transformer plugins
 
-Component transformer plugins are external web services providing a HTTP endpoint that receives a WASM component and returns a transformed WASM component. The most common use case for this type of plugin is to use **component composition** to achieve one of the following goals:
+Component transformer plugins are external web services providing an HTTP endpoint that receives a WASM component and returns a transformed WASM component. The most common use case for this type of plugin is to use **component composition** to achieve one of the following goals:
 
 - Replace one or more of the host interfaces provided by Golem. For example a component transformer plugin may implement the WASI KeyValue store interface for a component by connecting to a third party database, instead of using the one provided by Golem.
 - Wrap the host interfaces provided by Golem. In this case the adapter the plugin composes the uploaded component with both imports and exports the same interfaces, and by that wraps Golem's implementation for example to publish metrics or perform logging.
-- Extend the provided interface of the component by exporting additional invokeable functions.
+- Extend the provided interface of the component by exporting additional invokable functions.
 
 #### Library plugins
 
-Library plugins are special component transformer plugins that does not require any external HTTP services running. A library plugin is a WASM component that is going to be composed with the user's uploaded components in a way that every exported interface of the plugin's WASM is plugged into the user component's matching imports.
+Library plugins are special component transformer plugins that do not require any external HTTP service to be running. A library plugin is a WASM component that is going to be composed with the user's uploaded components in a way that every exported interface of the plugin's WASM is plugged into the user component's matching imports.
 
 #### Application plugins
 
@@ -37,7 +37,7 @@ Application plugins are similar to library plugins with the difference that the 
 
 ### Oplog processor plugins
 
-Oplog processor plugins are special **golem agents** implementing the `golem:api@1.1.7/oplog-processor` interface. These plugins are instantiated and by Golem, and got periodically invoked with oplog entries - a journal of operations performed by agents where the plugin is installed.
+Oplog processor plugins are special **golem agents** implementing the `golem:api@1.1.7/oplog-processor` interface. These plugins are instantiated by Golem and are periodically invoked with oplog entries, a journal of operations performed by agents where the plugin is installed.
 
 <Callout type="warning">
   Oplog processor plugin support is experimental. The final version will guarantee **exactly-once**

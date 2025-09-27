@@ -19,7 +19,7 @@ The `invoke` endpoint enqueues an invocation for the given agent and returns imm
 POST /v1/components/{component_id}/workers/{agent_id}/invoke?function={function_name}
 ```
 
-This POST request invokes the worker called `worker_name` of the component identified by `component_id` (a UUID), calling the function `function_name`.
+This POST request invokes the agent called `agent_id` of the component identified by `component_id` (a UUID), calling the function `function_name`.
 Read the [name mapping page](/name-mapping) to learn how the function names are mapped.
 
 The **body** of the POST request must be a JSON object containing a single field called `params`, which is an **array** of typed JSON values. The format of typed JSON values is described below.

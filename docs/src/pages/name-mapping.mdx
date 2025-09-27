@@ -6,10 +6,10 @@ The agents defined by code are compiled to WebAssembly and there are some specif
 The _component name_ must always be in the form of `namespace:name`. This is enforced when the component is created.
 
 ## Agent types
-The agent types have names idiomatic to the used programming language (for example `SampleAgent` in TypeScript). However, when referring to them in agent IDs, invocations, etc., we always use the name converted to **kebab case** (for example `sample-agent`).
+The agent types have names idiomatic to the used programming language (for example `SampleAgent` in TypeScript). However, when referring to them in agent IDs, invocations, etc., we always use the name converted to **kebab-case** (for example `sample-agent`).
 
 ## Agent IDs
-Every agent is identified by a unique ID which consists of the **agent type** (in kebab case) and its constructor arguments. The constructor arguments are specified in a specific text format in these IDs.
+Every agent is identified by a unique ID which consists of the **agent type** (in kebab-case) and its constructor arguments. The constructor arguments are specified in a specific text format in these IDs.
 
 - For regular data types, the WAVE encoding is used, same as in Rib scripts. See the [Type Mapping](/type-mapping) page for more details.
 - Unstructured text parameters are either inlined between `"`, or a remote URL (not in quotes). The inline string can be optionally prefixed with a language code in square brackets.
@@ -38,15 +38,15 @@ agent-3(12,{x: 1, y: 2, properties: {a, c}})
 ### Agent with two unstructured text parameters
 
 ```
-agent-4(https://url1.com/,https://url2.com/) // tuple with two unstructured text params pointing to remote url
+agent-4(https://url1.com/,https://url2.com/) // tuple with two unstructured text params pointing to a remote URL
 agent-4("hello, world!",[en]"\"hello,\" world!") // tuple with two unstructured inline text params, second having a language code prefix
 ```
 
 ### Agent with two unstructured binary parameters
 
 ```
-agent-5(https://url1.com/,https://url2.com/) // tuple with two unstructured binary params pointing to remote url
-agent-5([application/json]"SGVsbG8gd29ybGQh",[image/png]"SGVsbG8gd29ybGQh") // tuple with two unstructured inline binary params with mimetype prefixes
+agent-5(https://url1.com/,https://url2.com/) // tuple with two unstructured binary params pointing to a remote URL
+agent-5([application/json]"SGVsbG8gd29ybGQh",[image/png]"SGVsbG8gd29ybGQh") // tuple with two unstructured inline binary params with MIME type prefixes
 ```
 
 ### Agent with multimodal parameters
@@ -56,7 +56,7 @@ agent-6(z([application/json]"SGVsbG8gd29ybGQh"),x(101)) // multimodal with two v
 ```
 
 ## Method names
-Agent method names are also converted to **kebab case**.
+Agent method names are also converted to **kebab-case**.
 
 ### Method names in Rib scripts
 When calling methods from Rib, first we get an instance of the agent using the constructor syntax:
@@ -80,4 +80,4 @@ The rule to construct the method name is:
 namespace:name/agent-type.{method-name}
 ```
 
-Here `namespace:name` is the component name, `agent-type` is the agent type name in kebab case, and `method-name` is the method name in kebab case.
+Here `namespace:name` is the component name, `agent-type` is the agent type name in kebab-case, and `method-name` is the method name in kebab-case.

@@ -2,7 +2,7 @@ import { Cards, Card } from "nextra/components"
 
 # Deployment
 
-Golem Services are distributed as Docker images. They are available in [Golem Services Docker Hub](https://hub.docker.com/u/golemservices). Each Docker image is built for OS/ARCH-s:
+Golem Services are distributed as Docker images. They are available in [Golem Services Docker Hub](https://hub.docker.com/u/golemservices). Each Docker image is built for the following architectures:
 
 - linux/amd64
 - linux/arm64
@@ -15,7 +15,7 @@ The services are using the following storage backends:
 
 ## Golem Services
 
-Following sections provide a description of each service.
+The following sections provide a description of each service.
 
 ### Cloud Service
 
@@ -37,30 +37,30 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-de
 
 ### Worker Service
 
-[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) providing APIs and [API Gateway](concepts/worker-gateway) functionality for agents and act like routing service for worker executors. Service is using RDB as data storage.
+[golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [API Gateway](/concepts/worker-gateway) functionality for agents and acts as a routing service for worker executors. The service uses an RDB as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 
 ### Worker Executor
 
-[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](concepts/agents) which belongs to assigned shards. Service is using Redis and Blob storage as data storage.
+[golem-worker-executor](https://github.com/golemcloud/golem/tree/main/golem-worker-executor) is responsible for running the [agents](/concepts/agents) that belong to assigned shards. The service uses Redis and Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-executor/config/worker-executor.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-executor)
 
 ### Shard Manager
 
-[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) is a single node in charge of maintaining the worker executors shards assignments, only one instance can be alive at any given time. Service is using Redis as data storage.
+[golem-shard-manager](https://github.com/golemcloud/golem/tree/main/golem-shard-manager) is a single node in charge of maintaining the worker executors' shard assignments; only one instance can be alive at any given time. The service uses Redis as data storage.
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-shard-manager/config/shard-manager.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-shard-manager)
 
 ### Component Compilation Service
 
-[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is sidecar service responsible for compiling components. Service is using Blob storage as data storage.
+[golem-component-compilation-service](https://github.com/golemcloud/golem/tree/main/golem-component-compilation-service) is a sidecar service responsible for compiling components. The service uses Blob storage as data storage.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-component-compilation-service/config/component-compilation-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-component-compilation-service)
 
 ### Golem Router
 
-[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is [nginx](https://nginx.org/) Golem APIs proxy.
+[golem-router](https://github.com/golemcloud/golem/tree/main/golem-router) is an [Nginx](https://nginx.org/) proxy for Golem APIs.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-router/golem-services.conf.template), [docker image](https://hub.docker.com/r/golemservices/golem-router)
 

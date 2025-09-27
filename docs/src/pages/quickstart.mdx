@@ -28,33 +28,32 @@ There are precompiled binaries of two variants of the CLI here:
 - `golem` is the full version of the command line interface, including a locally runnable version of Golem itself.
 - `golem-cli` is a lightweight version of the command line interface, requiring a running Golem cluster
 
-In this documentation we will use the `golem` command in the snippets. The available commands of (except the one for starting up the local Golem cluster) are the same in both variants.
+In this documentation we will use the `golem` command in the snippets. The available commands (except the one for starting the local Golem cluster) are the same in both variants.
 
 ### Running Golem
 
-It is possible to test Golem locally without installing anything else than the above described `golem` executable. To use it, start the local Golem cluster by running the following command:
+It is possible to test Golem locally without installing anything other than the `golem` executable described above. To use it, start the local Golem cluster by running the following command:
 
 ```shell copy
 golem server run
 ```
 
-To use the open source version of Golem in production you will need to deploy it in your own infrastructure. See the [deployment](deploy) page for available deployment options.
+To use the open source version of Golem in production, you will need to deploy it to your own infrastructure. See the [deployment](/deploy) page for available deployment options.
 
 It is also possible to use our _hosted version_ of Golem, available at [https://console.golem.cloud].
 
 
 ### Building an Example
 
-Golem runs components that are WebAssembly programs implementing **agents**. Every component contains defines one or more **agent types**, and golem runs stateful, durable instances of these agent types that we call agents.
-applications, except they may expose functions that can be called externally.
+Golem runs components that are WebAssembly programs implementing **agents**. Every component defines one or more **agent types**, and Golem runs stateful, durable instances of these agent types that we call agents.
 
-The `golem` command line interface provides integrates a set of commands to create, build, and deploy components.
+The `golem` command line interface provides a set of commands to create, build, and deploy components.
 
 To get started, you create an application and a single component using one of the supported programming languages with the `golem app new` command. If no additional parameters are provided, the command will interactively ask for all required information.
 
 <Tabs items={["TypeScript"]}>
   <Tabs.Tab>
-  Create TypeScript agent using the default template:
+  Create a TypeScript agent using the default template:
 
   ```shell copy
   golem app new
@@ -66,11 +65,11 @@ To get started, you create an application and a single component using one of th
   > Add another component or create application? Create application
   ```
 
-  Note: for TypeScript, you need to have `npm` installed on your system.
+  Note: For TypeScript, you need to have `npm` installed on your system.
   </Tabs.Tab>
 </Tabs>
 
-This will generate a new component in a new directory of the provided application name, and it is ready to be compiled and deployed to Golem.
+This will generate a new component in a new directory named after the provided application name, and it is ready to be compiled and deployed to Golem.
 
 To **build** the newly created component, use the following command:
 
@@ -84,7 +83,7 @@ This compiles the newly created application, which consists of a _single Golem c
 
 <Tabs items={["TypeScript"]}>
   <Tabs.Tab>
-The default template's source code is located in `components-ts/example-counter/src/main.ts` file, assuming that the `example:counter` name has been used in the `app new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
+The default template's source code is located in the `components-ts/example-counter/src/main.ts` file, assuming that the `example:counter` name has been used in the `app new` command. The directory structure allows applications to have multiple components, even implemented in multiple programming languages if needed.
 
 Let's use the following code snippet for this example:
 
@@ -131,13 +130,13 @@ golem app deploy
 
 When you add a component you will see some basic information about the component such as its name, unique identifier, version, and size. In addition, you will see a list of exports. These are the exported agent types of the component.
 
-Uploading a component to Golem does not actually execute the component. Instead, it only makes it available for execution to Golem.
+Uploading a component to Golem does not actually execute the component. Instead, it only makes it available for execution in Golem.
 
 Every separate running instance of your component is referred to as an _agent_, based on one of the agent types implemented by that component.
 
 ### Create Agents
 
-In Golem, every agent has a unique id that has a specific format: it consists of the _agent type_ followed by the values passed to the agent's constructor.
+In Golem, every agent has a unique ID that has a specific format: it consists of the _agent type_ followed by the values passed to the agent's constructor.
 
 There are individual CLI commands to create agents and invoke agent methods, where this agent name is used to identify the agent.
 
@@ -149,7 +148,7 @@ First start the REPL using:
 golem repl
 ```
 
-The REPL uses a special scripting language called [Rib](rib). We can create some counter agents and interact with them using the following commands:
+The REPL uses a special scripting language called [Rib](/rib). We can create some counter agents and interact with them using the following commands:
 
 ```shell copy
 >>> let a1 = counter-agent("agent-1")
@@ -166,13 +165,13 @@ The REPL uses a special scripting language called [Rib](rib). We can create some
 
 Note that the REPL provides autocompletion on Tab.
 
-Check the [Invoke section](invoke) to learn about more about other ways to invoke agents.
+Check the [Invoke section](/invoke) to learn more about other ways to invoke agents.
 
-### Expose a HTTP API
+### Expose an HTTP API
 
 Agents can be invoked from other agents, through the REPL or CLI, or Golem's Invocation API, but Golem Applications can also define **HTTP APIs** that map routes to agents and agent methods.
 
-To finish the QuickStart example with a HTTP POST endpoint for tracking counts, let's open the `golem.yaml` file in the component's directory. It's going to contain a a `components` and a `dependencies` section already.
+To finish the Quickstart example with an HTTP POST endpoint for tracking counts, let's open the `golem.yaml` file in the component's directory. It's going to contain a `components` and a `dependencies` section already.
 
 To define the HTTP API, we add its definition and information about how to expose it:
 

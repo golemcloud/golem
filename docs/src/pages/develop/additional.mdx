@@ -44,7 +44,7 @@ It is possible to query **metadata** for Golem agents. This metadata is defined 
 
     There are two exported functions to query agent metadata:
 
-    - `getSelfMetadata()` returns the metadata for the current worker
+    - `getSelfMetadata()` returns the metadata for the current agent
     - `getWorkerMetadata(workerId: WorkerId)` returns the metadata for a specific agent given by its `WorkerId`
 
     </Tabs.Tab>
@@ -174,7 +174,7 @@ export type DurableFunctionType =
 - `write-local` indicates that the side effect writes to the worker's local state (for example local file system)
 - `read-remote` indicates that the side effect reads from external state (for example a key-value store)
 - `write-remote` indicates that the side effect manipulates external state (for example an RPC call)
-- `write-remote-batched` indicates that the side effect manipulates external state through multiple invoked functions (for example a HTTP request where reading the response involves multiple host function calls)
+- `write-remote-batched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
 - `write-remote-transaction` indicates that the side effect manipulates external state through multiple invoked functions, and all of them are part of a single transaction (for example a database transaction)
 
 The `DurableExecutionState` type provides information about the current execution state, and can be queried using the `currentDurableExecutionState` function:

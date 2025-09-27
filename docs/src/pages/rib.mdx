@@ -870,17 +870,17 @@ will fail to compile.
 
 ## External Interactions
 
-### Http Request Input and Field Selection
+### HTTP Request Input and Field Selection
 
-Rib is currently mainly used in worker-gateway which will allow us to expose Http APIs on top of worker functions.
+Rib is currently mainly used in worker-gateway which will allow us to expose HTTP APIs on top of worker functions.
 If you are using Rib in the context of [worker-gateway](/invoke/making-custom-apis) then
-you can use the variable `request` in your Rib script, which allows you to access various parameters of input Http request.
+you can use the variable `request` in your Rib script, which allows you to access various parameters of an input HTTP request.
 In other words, `request` is a global input to the Rib script when used in API definitions, and
 `worker-gateway` will ensure to pass the value of `request` to the rib evaluator internally.
 
 Please refer to [worker-gateway](/invoke/making-custom-apis) documents for more details.
 
-`request` will hold all the details of an input Http request in gateway,
+`request` will hold all the details of an input HTTP request in gateway,
 such as headers, path, query parameters and body.
 
 #### Request Body Parameters
@@ -900,7 +900,7 @@ request.headers.user
 
 #### Request Path Parameters
 
-To select the value of a path variable in your http request `/v4/{user-id}/get-cart-contents`
+To select the value of a path variable in your HTTP request `/v4/{user-id}/get-cart-contents`
 
 ```rib copy
 request.path.user-id
@@ -908,7 +908,7 @@ request.path.user-id
 
 #### Request Query Parameters
 
-To select the value of a query variable in your http request `/v4/{user-id}/get-cart-contents?{country}`
+To select the value of a query variable in your HTTP request `/v4/{user-id}/get-cart-contents?{country}`
 
 ```rib copy
 request.query.country
@@ -921,7 +921,7 @@ Example:
 let user-id: u8 = request.path.user-id;
 ```
 
-To select the value of a query variable in your http request `/v4/{user-id}/get-cart-contents?{country}`
+To select the value of a query variable in your HTTP request `/v4/{user-id}/get-cart-contents?{country}`
 
 ```rib
 let country: string = request.query.country;
@@ -929,7 +929,7 @@ let country: string = request.query.country;
 
 #### A typical Rib script in API definition (worker gateway)
 
-Here is a full example of a Rib script that look up various elements in a Http Request.
+Here is a full example of a Rib script that looks up various elements in an HTTP request.
 
 Given the route is `/v4/{user-id}/get-cart-contents?{country}` , which is a POST request,
 which has a body, then the following Rib script can be valid, and has a dependency to a component
@@ -946,19 +946,19 @@ result
 ```
 
 This Rib script will be part of an API definition (please refer to [worker-gateway](/invoke/making-custom-apis) for more details)
-When registering this API definition, it already keeps track of the requirements of the input http request.
+When registering this API definition, it already keeps track of the requirements of the input HTTP request.
 In this case, the input request is a POST request with a body, and the body is of type `{foo: string, bar: string}`,
 and the path variable is `user-id` of type `u8`, and the query parameter is `country` of type `string`.
 
 Once the API is deployed and the API is invoked, worker gateway will validate the input request against these requirements,
 and if they don't satisfy, it results in a BadRequest error.
 
-Please note the language Rib by itself don't support a keyword such as `request`, or `path` or `body` or `headers`.
-The above examples are valid only if are using Rib through [worker-gateway](/invoke/making-custom-apis).
-If Rib script is evaluated in the context of a http request, these values are available in the context of the Rib evaluator.
+Please note that the Rib language by itself does not support keywords such as `request`, `path`, `body`, or `headers`.
+The above examples are valid only when using Rib through [worker-gateway](/invoke/making-custom-apis).
+If a Rib script is evaluated in the context of an HTTP request, these values are available in the context of the Rib evaluator.
 
 Currently, there are two ways to use `Rib` in golem. One is [worker-gateway](/invoke/making-custom-apis)
-and the other is golem REPL. In the case of REPL, `request` is not available, since we are not executing Rib in the context of an Http request.
+and the other is golem REPL. In the case of REPL, `request` is not available, since we are not executing Rib in the context of an HTTP request.
 
 Here is an example of an invalid Rib script
 
@@ -973,13 +973,13 @@ request.body
 ```
 
 In the above case, compiler is not able to infer the type of `request` or `request.body`
-as it is not passed as an argument to a agent method.
+as it is not passed as an argument to an agent method.
 
 ### Invoke agent methods
 
 Rib is mainly used to write scripts to manipulate the input and call agent methods.
 Refer to the [worker-gateway](/invoke/making-custom-apis) documentation for more on how you use Rib to invoke agent methods.
-This is useful to expose some http APIs on top of these agents running in golem platform, and you don't want to keep
+This is useful to expose some HTTP APIs on top of these agents running in the Golem platform, and you don't want to keep
 updating or change the components and expose additional APIs, as you can write a simple Rib script to do the necessary changes to the input
 and pass it to the agent methods functions. Invoking functions is similar to any other languages.
 
