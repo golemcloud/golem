@@ -685,9 +685,11 @@ mod test {
         UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::component::ComponentId;
     use golem_common::model::{
-        AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-        OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig, ScanCursor,
+        FailedUpdateRecord, IdempotencyKey,
+        OwnedWorkerId, PluginInstallationId, RetryConfig, ScanCursor,
         SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
@@ -1410,7 +1412,7 @@ mod test {
 
         async fn scan_for_component(
             &self,
-            _project_id: &ProjectId,
+            _environment_id: &EnvironmentId,
             _component_id: &ComponentId,
             _cursor: ScanCursor,
             _count: u64,
