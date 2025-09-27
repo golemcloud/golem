@@ -16,7 +16,12 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
 import { ComplexAgentClassName, SimpleAgentClassName } from './testUtils';
-import { AgentType, DataSchema, WitType } from 'golem:agent/common';
+import {
+  AgentType,
+  DataSchema,
+  ElementSchema,
+  WitType,
+} from 'golem:agent/common';
 import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
@@ -492,7 +497,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
-  it('object with \`a?: string | number | undefined\` works', () => {
+  it('object with a?: string | number | undefined works', () => {
     const objectWithUnionWithNull2 = getWitType(
       complexAgentMethod!.inputSchema,
       'objectWithUnionWithUndefined3',
@@ -591,19 +596,19 @@ function getElementSchema(inputSchema: DataSchema, parameterName: string) {
 }
 
 function getWitType(dataSchema: DataSchema, parameterName: string) {
-  const optionalParamInput = dataSchema.val.find((s) => s[0] === parameterName);
+  const paramType = dataSchema.val.find((s) => s[0] === parameterName);
 
-  if (!optionalParamInput) {
+  if (!paramType) {
     throw new Error(
       `${parameterName} not found in scheme ${util.format(dataSchema)}`,
     );
   }
 
-  const optionalParamInputElement = optionalParamInput[1];
+  const paramElementSchema: ElementSchema = paramType[1];
 
   const witTypeOpt =
-    optionalParamInputElement.tag === 'component-model'
-      ? optionalParamInputElement.val
+    paramElementSchema.tag === 'component-model'
+      ? paramElementSchema.val
       : undefined;
 
   if (!witTypeOpt) {

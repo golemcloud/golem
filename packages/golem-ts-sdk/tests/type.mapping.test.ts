@@ -618,7 +618,10 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'j',
                     typ: {
                       kind: 'list',
-                      mapType: undefined,
+                      mapType: {
+                        keyType: { kind: 'string' },
+                        valueType: { kind: 'f64' },
+                      },
                       typedArray: undefined,
                       value: {
                         inner: {
@@ -716,7 +719,10 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'union-complex-type9',
             typ: {
               kind: 'list',
-              mapType: undefined,
+              mapType: {
+                keyType: { kind: 'string' },
+                valueType: { kind: 'f64' },
+              },
               typedArray: undefined,
               value: {
                 inner: {
@@ -1073,9 +1079,10 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'f',
-      typedArray: undefined,
       typ: {
         kind: 'list',
+        typedArray: undefined,
+        mapType: undefined,
         value: {
           inner: {
             kind: 'string',
@@ -1089,6 +1096,7 @@ function checkObjectComplexFields(fields: any[]) {
       name: 'g',
       typ: {
         kind: 'list',
+        mapType: undefined,
         typedArray: undefined,
         value: {
           inner: {
@@ -1125,9 +1133,9 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'h',
-      typedArray: undefined,
       typ: {
         kind: 'tuple',
+        emptyType: undefined,
         value: {
           items: [
             {
@@ -1143,9 +1151,9 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'i',
-      typedArray: undefined,
       typ: {
         kind: 'tuple',
+        emptyType: undefined,
         value: {
           items: [
             {
@@ -1187,12 +1195,17 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'j',
-      typedArray: undefined,
       typ: {
         kind: 'list',
+        mapType: {
+          keyType: { kind: 'string' },
+          valueType: { kind: 'f64' },
+        },
+        typedArray: undefined,
         value: {
           inner: {
             kind: 'tuple',
+            emptyType: undefined,
             value: {
               items: [
                 {
