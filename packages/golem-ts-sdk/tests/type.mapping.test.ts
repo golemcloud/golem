@@ -143,7 +143,7 @@ describe('TypeScript Union to AnalysedType.Variant', () => {
 
     const expected: AnalysedType.AnalysedType = {
       kind: 'variant',
-      taggedTypes: false,
+      taggedTypes: [],
       value: {
         cases: [
           {
@@ -275,7 +275,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
     name: 'unionComplexProp',
     typ: {
       kind: 'variant',
-      taggedTypes: false,
+      taggedTypes: [],
       value: {
         name: 'union-complex-type',
         cases: [
@@ -339,6 +339,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'union-complex-type5',
             typ: {
               kind: 'tuple',
+              emptyType: undefined,
               value: {
                 items: [
                   {
@@ -432,7 +433,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'e',
                     typ: {
                       kind: 'variant',
-                      taggedTypes: false,
+                      taggedTypes: [],
                       value: {
                         cases: [
                           {
@@ -545,6 +546,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'h',
                     typ: {
                       kind: 'tuple',
+                      emptyType: undefined,
                       value: {
                         items: [
                           {
@@ -566,6 +568,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                     name: 'i',
                     typ: {
                       kind: 'tuple',
+                      emptyType: undefined,
                       value: {
                         items: [
                           {
@@ -615,6 +618,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
                       value: {
                         inner: {
                           kind: 'tuple',
+                          emptyType: undefined,
                           value: {
                             items: [
                               {
@@ -661,6 +665,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
             name: 'union-complex-type8',
             typ: {
               kind: 'tuple',
+              emptyType: undefined,
               value: {
                 items: [
                   {
@@ -710,6 +715,7 @@ function checkUnionComplexFields(fields: NameTypePair[]) {
               value: {
                 inner: {
                   kind: 'tuple',
+                  emptyType: undefined,
                   value: {
                     items: [
                       {

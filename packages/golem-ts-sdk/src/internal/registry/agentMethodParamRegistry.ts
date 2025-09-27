@@ -14,6 +14,7 @@
 
 import { AgentClassName } from '../../newTypes/agentClassName';
 import { AnalysedType } from '../mapping/types/AnalysedType';
+import * as Option from '../../newTypes/option';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
@@ -66,6 +67,24 @@ export const AgentMethodParamRegistry = {
   ): AnalysedType | undefined {
     const classMeta = agentMethodParamRegistry.get(agentClassName.value);
     return classMeta?.get(agentMethodName)?.get(paramName)?.analysedType;
+  },
+
+  paramTypes(
+    agentClassName: AgentClassName,
+    agentMethodName: string,
+  ): [string, Option.Option<AnalysedType>][] {
+    const classMeta = agentMethodParamRegistry.get(agentClassName.value);
+    if (!classMeta) {
+      return [];
+    }
+    const methodMeta = classMeta.get(agentMethodName);
+    if (!methodMeta) {
+      return [];
+    }
+    return Array.from(methodMeta.entries()).map(([paramName, meta]) => [
+      paramName,
+      Option.fromNullable(meta.analysedType),
+    ]);
   },
 
   setLanguageCodes(

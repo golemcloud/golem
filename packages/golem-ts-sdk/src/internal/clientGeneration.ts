@@ -34,6 +34,7 @@ import * as util from 'node:util';
 import { RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
+import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -107,13 +108,16 @@ function getMethodProxy(
 
   const paramInfo = Array.from(methodParams);
 
-  const returnType = methodSignature?.returnType;
-
   const methodName = prop.toString();
 
   const methodNameKebab = convertAgentMethodNameToKebab(methodName);
 
   const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
+
+  const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
+    agentClassName,
+    methodName,
+  );
 
   function encodeArgs(fnArgs: any[]) {
     const parameterWitValuesEither = Either.all(
@@ -169,7 +173,13 @@ function getMethodProxy(
           })()
         : rpcResult.val;
 
-    return Value.toTsValue(unwrapResult(rpcWitValue), returnType);
+    if (!returnTypeAnalysed) {
+      throw new Error(
+        `Return type for method ${String(prop)} not found in metadata`,
+      );
+    }
+
+    return Value.toTsValue(unwrapResult(rpcWitValue), returnTypeAnalysed);
   }
 
   async function invokeFireAndForget(...fnArgs: any[]) {

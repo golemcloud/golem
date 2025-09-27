@@ -402,7 +402,7 @@ function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
   expect(witValueReturned).toEqual(witValue);
 
   // Round trip ts-value -> wit-value -> ts-value
-  const tsValueReturned = WitValue.toTsValue(witValueReturned, type[1]);
+  const tsValueReturned = WitValue.toTsValue(witValueReturned, type[0]);
 
   expect(tsValueReturned).toEqual(data);
 }

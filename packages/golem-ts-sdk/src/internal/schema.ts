@@ -262,7 +262,10 @@ export function buildOutputSchema(
   const undefinedSchema = handleUndefinedReturnType(returnType);
 
   if (Option.isSome(undefinedSchema)) {
-    return Either.right([tuple(undefined, []), undefinedSchema.val]);
+    return Either.right([
+      tuple(undefined, 'undefined', []),
+      undefinedSchema.val,
+    ]);
   }
 
   const schema: Either.Either<[AnalysedType, ElementSchema], string> =

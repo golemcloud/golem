@@ -52,6 +52,7 @@ import { DataValue } from 'golem:agent/common';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 test('SimpleAgent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -395,7 +396,10 @@ function testInvoke(
 ) {
   const methodSignature = typeRegistry.methods.get(methodName);
   const parametersInfo = methodSignature?.methodParams;
-  const returnTypeInfo = methodSignature?.returnType;
+  const returnTypeInfo = AgentMethodRegistry.lookupReturnType(
+    SimpleAgentClassName,
+    methodName,
+  );
 
   if (!parametersInfo) {
     throw new Error(`Method ${methodName} not found in metadata`);
@@ -441,7 +445,7 @@ function testInvoke(
           })();
 
     const result = deserializeDataValue(resultDataValue, [
-      ['return-value', returnTypeInfo],
+      ['return-value', Option.some(returnTypeInfo)],
     ])[0];
 
     expect(result).toEqual(expectedOutput);
