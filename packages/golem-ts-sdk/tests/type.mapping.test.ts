@@ -794,6 +794,7 @@ function checkUnionFields(fields: any[]) {
     name: 'unionProp',
     typ: {
       kind: 'variant',
+      taggedTypes: [],
       value: {
         name: 'union-type',
         cases: [
@@ -1006,6 +1007,7 @@ function checkObjectComplexFields(fields: any[]) {
       name: 'e',
       typ: {
         kind: 'variant',
+        taggedTypes: [],
         value: {
           cases: [
             {
@@ -1064,6 +1066,7 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'f',
+      typedArray: undefined,
       typ: {
         kind: 'list',
         value: {
@@ -1079,6 +1082,7 @@ function checkObjectComplexFields(fields: any[]) {
       name: 'g',
       typ: {
         kind: 'list',
+        typedArray: undefined,
         value: {
           inner: {
             kind: 'record',
@@ -1114,6 +1118,7 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'h',
+      typedArray: undefined,
       typ: {
         kind: 'tuple',
         value: {
@@ -1131,6 +1136,7 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'i',
+      typedArray: undefined,
       typ: {
         kind: 'tuple',
         value: {
@@ -1174,6 +1180,7 @@ function checkObjectComplexFields(fields: any[]) {
     },
     {
       name: 'j',
+      typedArray: undefined,
       typ: {
         kind: 'list',
         value: {
