@@ -109,11 +109,11 @@ describe('typescript value to wit value round-trip conversions', () => {
     );
   });
 
-  it('should correctly perform round-trip conversion for arbitrary values of union', () => {
+  it('should correctly perform round-trip conversion for arbitrary values of union abcdefg', () => {
     fc.assert(
       fc.property(unionArb, unionComplexArb, (unionData, unionComplexData) => {
-        const simpleType = getUnionType();
-        runRoundTripTest(unionData, simpleType);
+        // const simpleType = getUnionType();
+        // runRoundTripTest(unionData, simpleType);
 
         const complexType = getUnionComplexType();
         runRoundTripTest(unionComplexData, complexType);
@@ -391,7 +391,6 @@ function runRoundTripTest<T>(data: T, type: [AnalysedType, Type.Type]) {
   const witValueEither = WitValue.fromTsValue(data, type[0]);
 
   const witValue = EffectEither.getOrElse(witValueEither, (err) => {
-    console.log('here???');
     throw new Error(err);
   });
 

@@ -100,7 +100,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         const resolvedAgent = initiateSimpleAgent(arbString, typeRegistry);
 
         testInvoke(
-          typeRegistry,
           'fun1',
           [['param', arbString]],
           resolvedAgent,
@@ -108,7 +107,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun2',
           [
             [
@@ -124,7 +122,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun3',
           [
             [
@@ -140,7 +137,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun4',
           [
             [
@@ -156,23 +152,15 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun5',
           [['param', arbString]],
           resolvedAgent,
           `Weather in ${arbString} is sunny!`,
         );
 
-        testInvoke(
-          typeRegistry,
-          'fun6',
-          [['param', arbString]],
-          resolvedAgent,
-          undefined,
-        );
+        testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined);
 
         testInvoke(
-          typeRegistry,
           'fun7',
           [
             ['param1', stringOrNumberOrNull],
@@ -196,7 +184,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun8',
           [['a', unionWithLiterals]],
           resolvedAgent,
@@ -204,7 +191,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun9',
           [['param', taggedUnion]],
           resolvedAgent,
@@ -212,7 +198,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun10',
           [['param', unionWithOnlyLiterals]],
           resolvedAgent,
@@ -220,7 +205,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun11',
           [['param', resultTypeExactBoth]],
           resolvedAgent,
@@ -228,7 +212,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun12',
           [['param', resultTypeNonExact]],
           resolvedAgent,
@@ -236,7 +219,6 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         );
 
         testInvoke(
-          typeRegistry,
           'fun13',
           [['param', resultTypeNonExact2]],
           resolvedAgent,
@@ -388,28 +370,21 @@ function initiateSimpleAgent(
 }
 
 function testInvoke(
-  typeRegistry: ClassMetadata,
   methodName: string,
-  parameterName: [string, any][],
+  parameterAndValue: [string, any][],
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
 ) {
-  const methodSignature = typeRegistry.methods.get(methodName);
-  const parametersInfo = methodSignature?.methodParams;
   const returnTypeInfo = AgentMethodRegistry.lookupReturnType(
     SimpleAgentClassName,
     methodName,
   );
 
-  if (!parametersInfo) {
-    throw new Error(`Method ${methodName} not found in metadata`);
-  }
-
   if (!returnTypeInfo) {
     throw new Error(`Method ${methodName} not found in metadata`);
   }
 
-  const witValues = parameterName.map(([paramName, value]) => {
+  const witValues = parameterAndValue.map(([paramName, value]) => {
     const paramAnalysedType = AgentMethodParamRegistry.lookupParamType(
       SimpleAgentClassName,
       methodName,

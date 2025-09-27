@@ -12,16 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
-import * as Either from '../../../newTypes/either';
-import {
-  getTaggedUnion,
-  getUnionOfLiterals,
-  TaggedUnion,
-} from '../types/taggedUnion';
 import { AnalysedType, NameOptionTypePair } from '../types/AnalysedType';
 
 // type mismatch in tsValue when converting from TS to WIT

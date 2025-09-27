@@ -30,6 +30,7 @@ import {
   NameOptionTypePair,
   NameTypePair,
 } from '../types/AnalysedType';
+import { ts } from 'ts-morph';
 
 export type Value =
   | {
@@ -919,15 +920,16 @@ export function fromTsValue(
         return Either.left(typeMismatchInSerialize(tsValue, analysedType));
       }
 
+      const okValueName = analysedType.okValueName;
+      const errValueName = analysedType.errValueName;
+
       if (tsValue['tag'] === 'ok') {
         if (okType) {
-          const otherKey = Object.keys(tsValue).find((k) => k !== 'tag');
-
-          if (!otherKey) {
+          if (!okValueName) {
             return Either.left(typeMismatchInSerialize(tsValue, analysedType));
           }
 
-          return Either.map(fromTsValue(tsValue[otherKey], okType), (v) => ({
+          return Either.map(fromTsValue(tsValue[okValueName], okType), (v) => ({
             kind: 'result',
             value: {
               ok: v,
@@ -943,18 +945,19 @@ export function fromTsValue(
         });
       } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
         if (errType) {
-          const otherKey = Object.keys(tsValue).find((k) => k !== 'tag');
-
-          if (!otherKey) {
+          if (!errValueName) {
             return Either.left(typeMismatchInSerialize(tsValue, analysedType));
           }
 
-          return Either.map(fromTsValue(tsValue[otherKey], errType), (v) => ({
-            kind: 'result',
-            value: {
-              err: v,
-            },
-          }));
+          return Either.map(
+            fromTsValue(tsValue[errValueName], errType),
+            (v) => ({
+              kind: 'result',
+              value: {
+                err: v,
+              },
+            }),
+          );
         }
 
         return Either.right({
@@ -1446,7 +1449,7 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
     value.kind === 'record' &&
     value.value.length === 0 &&
     analysedType.kind === 'tuple' &&
-    analysedType.emptyType === 'null'
+    analysedType.emptyType === 'undefined'
   ) {
     return undefined;
   }
@@ -1455,7 +1458,7 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
     value.kind === 'record' &&
     value.value.length === 0 &&
     analysedType.kind === 'tuple' &&
-    analysedType.emptyType === 'null'
+    analysedType.emptyType === 'void'
   ) {
     return undefined;
   }
@@ -1463,17 +1466,11 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
   if (value.kind === 'option') {
     const caseValue = value.value;
     if (!caseValue) {
-      // Select between undefined and null
-
-      if (analysedType.kind === 'tuple' && analysedType.emptyType === 'null')
-        return null;
-      if (
-        (analysedType.kind === 'tuple' &&
-          analysedType.emptyType === 'undefined') ||
-        (analysedType.kind === 'tuple' && analysedType.emptyType === 'void')
-      )
-        return undefined;
       if (analysedType.kind === 'option') {
+        if (analysedType.emptyType === 'null') {
+          return null;
+        }
+
         return undefined;
       }
 
@@ -1616,6 +1613,41 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
         }
       }
 
+      // If it's a map type
+      if (analysedType.mapType) {
+        if (value.kind === 'list') {
+          const elemType = analysedType.value.inner;
+
+          if (
+            !elemType ||
+            elemType.kind !== 'tuple' ||
+            elemType.value.items.length !== 2
+          ) {
+            throw new Error(`Unable to infer the type of Map`);
+          }
+
+          const keyType = elemType.value.items[0];
+
+          const valueType = elemType.value.items[1];
+
+          const map = new Map();
+
+          for (const item of value.value) {
+            if (item.kind !== 'tuple' || item.value.length !== 2) {
+              throw new Error(typeMismatchInDeserialize(item, 'map'));
+            }
+
+            const k = toTsValue(item.value[0], keyType);
+            const v = toTsValue(item.value[1], valueType);
+            map.set(k, v);
+          }
+
+          return map;
+        } else {
+          throw new Error(typeMismatchInDeserialize(value, 'map'));
+        }
+      }
+
       if (value.kind === 'list') {
         const elemType = analysedType.value.inner;
 
@@ -1751,6 +1783,8 @@ export function toTsValue(value: Value, analysedType: AnalysedType): any {
               tag: tagValue,
               [metadata.val[0]]: result,
             };
+          } else {
+            return { tag: tagValue };
           }
         }
 

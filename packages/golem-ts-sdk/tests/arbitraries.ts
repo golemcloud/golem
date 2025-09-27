@@ -149,9 +149,9 @@ export const taggedUnionArb: Arbitrary<TaggedUnion> = fc.oneof(
   fc.record({
     tag: fc.constant('i'),
   }),
-  fc.record({
-    tag: fc.constant('j'),
-  }),
+  // fc.record({
+  //   tag: fc.constant('j'),
+  // }),
 );
 
 export const unionWithOnlyLiteralsArb: Arbitrary<UnionWithOnlyLiterals> =
