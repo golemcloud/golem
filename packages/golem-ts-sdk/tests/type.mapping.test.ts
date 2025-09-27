@@ -209,6 +209,7 @@ test('Union with literals to AnalysedType', () => {
 
   const expectedAnalysedType = {
     kind: 'variant',
+    taggedTypes: [],
     value: {
       name: 'union-with-literals',
       cases: [
