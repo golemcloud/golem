@@ -59,6 +59,11 @@ export function LogViewer({
     }
   };
 
+  const trim = (str: string, maxLength: number) => {
+    if (str.length <= maxLength) return str;
+    return str.slice(0, maxLength) + "...";
+  }
+
   const getStatusColor = () => {
     switch (status) {
       case "success":
@@ -77,7 +82,7 @@ export function LogViewer({
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2">
               {getStatusIcon()}
-              <DialogTitle className="text-lg">{title}</DialogTitle>
+              <DialogTitle className="text-lg">{trim(title, 53)}</DialogTitle>
             </div>
             <Badge variant="outline" className={getStatusColor()}>
               {operation}
@@ -102,7 +107,7 @@ export function LogViewer({
           <ScrollArea className="h-full w-full max-h-[60vh]">
             <div className="p-4">
               <pre className="text-sm font-mono whitespace-pre-wrap break-words leading-relaxed">
-                {logs || "No output available"}
+                {logs || title || "No output available"}
               </pre>
             </div>
           </ScrollArea>
