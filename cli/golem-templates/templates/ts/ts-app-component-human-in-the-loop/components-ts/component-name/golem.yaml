@@ -10,7 +10,7 @@ httpApi:
           path: /workflow
           binding:
             type: default
-            componentName: golem-it:cloud-test
+            __cn__: componentname
             response: |
               let id: string = request.request_id.value;
               let wf = approval-workflow(id);
@@ -22,7 +22,7 @@ httpApi:
           path: /human/{username}/pending
           binding:
             type: default
-            componentName: golem-it:cloud-test
+            __cn__: componentname
             response: |
               let username: string = request.path.username;
               let human = human-agent(username);
@@ -33,7 +33,7 @@ httpApi:
           path: /human/{username}/decide
           binding:
             type: default
-            componentName: golem-it:cloud-test
+            __cn__: componentname
             response: |
               let username: string = request.path.username;
               let workflowId: string = request.body.workflowId;
