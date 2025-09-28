@@ -396,8 +396,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     );
 
     let golem_config = Arc::new(golem_config.clone());
-    let promise_service: Arc<dyn PromiseService> =
-        Arc::new(DefaultPromiseService::new(key_value_storage.clone()));
+
     let shard_service = Arc::new(ShardServiceDefault::new());
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
@@ -480,6 +479,11 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             .expect("Access token must be an UUID"),
         golem_config.public_worker_api.retries.clone(),
         golem_config.public_worker_api.connect_timeout,
+    ));
+
+    let promise_service: Arc<dyn PromiseService> = Arc::new(DefaultPromiseService::new(
+        key_value_storage.clone(),
+        worker_proxy.clone(),
     ));
 
     let rdbms_service: Arc<dyn rdbms::RdbmsService> =

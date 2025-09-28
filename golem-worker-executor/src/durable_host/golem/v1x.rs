@@ -133,6 +133,15 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         promise_id: golem_api_1_x::host::PromiseId,
     ) -> anyhow::Result<Vec<u8>> {
+        // only the agent that originally created the promise is woken up when it is completed.
+        if golem_common::base_model::WorkerId::from(promise_id.worker_id.clone())
+            != *self.worker_id()
+        {
+            return Err(anyhow!(
+                "Tried awaiting a promise not created by the current agent"
+            ));
+        }
+
         self.observe_function_call("golem::api", "await_promise");
         let promise_id: PromiseId = promise_id.into();
         match self

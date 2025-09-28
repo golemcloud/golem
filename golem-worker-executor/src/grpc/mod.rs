@@ -342,13 +342,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .promise_id
             .as_ref()
             .ok_or(WorkerExecutorError::invalid_request("promise_id not found"))?;
-        let owned_worker_id = extract_owned_worker_id(
-            &(&request, promise_id.clone()),
-            |(_, r)| &r.worker_id,
-            |(r, _)| &r.project_id,
-        )?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
-        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let data = request.data;
 
@@ -356,39 +349,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .clone()
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
+
         let completed = self.promise_service().complete(promise_id, data).await?;
-
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-            .await?
-            .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
-            ))?;
-
-        let should_activate = match &metadata.last_known_status.status {
-            WorkerStatus::Interrupted
-            | WorkerStatus::Running
-            | WorkerStatus::Suspended
-            | WorkerStatus::Retrying => true,
-            WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
-        };
-
-        if should_activate {
-            // By making sure the worker is in memory. If it was suspended because of waiting
-            // for a promise, replaying that call will now not suspend as the promise has been
-            // completed, and the worker will continue running.
-            Worker::get_or_create_running(
-                &self.services,
-                &account_id,
-                &owned_worker_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-            )
-            .await?;
-        }
 
         let success = golem::workerexecutor::v1::CompletePromiseSuccess { completed };
 

@@ -12,30 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::worker_proxy::WorkerProxy;
 use crate::metrics::promises::record_promise_created;
+use crate::services::worker_proxy::WorkerProxyError;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
-use async_mutex::Mutex;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
-use dashmap::DashMap;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 #[cfg(test)]
 use std::collections::HashSet;
-use std::ops::DerefMut;
 use std::sync::Arc;
-use tokio::sync::oneshot;
 use tracing::debug;
 
 /// Service implementing creation, completion and polling of promises
 #[async_trait]
 pub trait PromiseService: Send + Sync {
     async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
-
-    async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, WorkerExecutorError>;
 
     async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError>;
 
@@ -48,32 +44,20 @@ pub trait PromiseService: Send + Sync {
     async fn delete(&self, promise_id: PromiseId);
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct DefaultPromiseService {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
-    promises: Arc<DashMap<PromiseId, PromiseState>>,
+    worker_proxy: Arc<dyn WorkerProxy>,
 }
 
 impl DefaultPromiseService {
-    pub fn new(key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>) -> Self {
+    pub fn new(
+        key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
+        worker_proxy: Arc<dyn WorkerProxy>,
+    ) -> Self {
         Self {
             key_value_storage,
-            promises: Arc::new(DashMap::new()),
-        }
-    }
-
-    fn insert_if_empty(&self, key: PromiseId, value: PromiseState) {
-        loop {
-            match self.promises.try_entry(key.clone()) {
-                Some(entry) => {
-                    entry.or_insert(value);
-                    break;
-                }
-                None => match self.promises.get(&key) {
-                    Some(_) => break,
-                    None => continue,
-                },
-            }
+            worker_proxy,
         }
     }
 
@@ -115,56 +99,6 @@ impl PromiseService for DefaultPromiseService {
         promise_id
     }
 
-    async fn wait_for(&self, promise_id: PromiseId) -> Result<Vec<u8>, WorkerExecutorError> {
-        if !self.exists(&promise_id).await {
-            Err(WorkerExecutorError::PromiseNotFound { promise_id })
-        } else {
-            let response: Option<RedisPromiseState> = self
-                .key_value_storage
-                .with_entity("promise", "await", "promise")
-                .get(
-                    KeyValueStorageNamespace::Promise,
-                    &get_promise_result_redis_key(&promise_id),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to get promise {promise_id} from Redis: {err}")
-                });
-
-            match response {
-                Some(RedisPromiseState::Complete(data)) => Ok(data),
-                _ => {
-                    let (sender, receiver) = oneshot::channel::<Vec<u8>>();
-
-                    let pending = PromiseState::Pending(
-                        Arc::new(Mutex::new(Some(sender))),
-                        Mutex::new(receiver),
-                    );
-
-                    self.insert_if_empty(promise_id.clone(), pending);
-
-                    let entry = self.promises.get(&promise_id).unwrap_or_else(|| {
-                        panic!("Promise {promise_id:?} not found after inserting it into the map!")
-                    });
-
-                    let promise_state = entry.value();
-
-                    match promise_state {
-                        PromiseState::Pending(_, receiver) => {
-                            let mut mutex_guard = receiver.lock().await;
-                            let receiver = mutex_guard.deref_mut();
-                            let data = receiver
-                                .await
-                                .map_err(|_| WorkerExecutorError::PromiseDropped { promise_id })?;
-                            Ok(data)
-                        }
-                        PromiseState::Complete(data) => Ok(data.clone()),
-                    }
-                }
-            }
-        }
-    }
-
     async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
         if !self.exists(&promise_id).await {
             Err(WorkerExecutorError::PromiseNotFound { promise_id })
@@ -195,6 +129,10 @@ impl PromiseService for DefaultPromiseService {
     ) -> Result<bool, WorkerExecutorError> {
         let key = get_promise_result_redis_key(&promise_id);
 
+        if !self.exists(&promise_id).await {
+            return Err(WorkerExecutorError::PromiseNotFound { promise_id });
+        };
+
         let written: bool = self
             .key_value_storage
             .with_entity("promise", "complete", "promise")
@@ -206,37 +144,22 @@ impl PromiseService for DefaultPromiseService {
             .await
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
-        if !self.exists(&promise_id).await {
-            Err(WorkerExecutorError::PromiseNotFound { promise_id })
-        } else if written {
-            let complete = PromiseState::Complete(data.clone());
-            self.insert_if_empty(promise_id.clone(), complete);
-            let entry = self.promises.get(&promise_id).unwrap_or_else(|| {
-                panic!(
-                    "Promise {:?} not found after inserting it into the map!",
-                    promise_id.clone()
-                )
-            });
-            let promise_state = entry.value();
-            match promise_state {
-                PromiseState::Pending(sender, _) => {
-                    let mut mutex_guard = sender.lock().await;
-                    let owned_sender =
-                        mutex_guard
-                            .take()
-                            .ok_or(WorkerExecutorError::PromiseAlreadyCompleted {
-                                promise_id: promise_id.clone(),
-                            })?;
-                    owned_sender
-                        .send(data)
-                        .map_err(|_| WorkerExecutorError::PromiseDropped { promise_id })?;
-                    Ok(true)
-                }
-                _ => Ok(true),
+        // Wake up the worker that owns the promise, ensuring that it resumes its work.
+        // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
+        // the result to redis, but failed before the worker could persist the result.
+        {
+            let resume_result = self.worker_proxy.resume(&promise_id.worker_id, false).await;
+            match resume_result {
+                // InvalidRequest will be returned if the worker is already running or failed, we are fine with those
+                Ok(_)
+                | Err(WorkerProxyError::InternalError(WorkerExecutorError::InvalidRequest {
+                    ..
+                })) => {}
+                Err(other) => Err(other)?,
             }
-        } else {
-            Ok(false)
         }
+
+        Ok(written)
     }
 
     async fn delete(&self, promise_id: PromiseId) {
@@ -258,15 +181,6 @@ fn get_promise_redis_key(promise_id: &PromiseId) -> String {
 
 fn get_promise_result_redis_key(promise_id: &PromiseId) -> String {
     format!("{}:completed", promise_id.to_redis_key())
-}
-
-#[derive(Debug)]
-enum PromiseState {
-    Pending(
-        Arc<Mutex<Option<oneshot::Sender<Vec<u8>>>>>,
-        Mutex<oneshot::Receiver<Vec<u8>>>,
-    ),
-    Complete(Vec<u8>),
 }
 
 #[derive(Debug, Eq, PartialEq, Encode, Decode)]
@@ -304,10 +218,6 @@ impl PromiseServiceMock {
 #[async_trait]
 impl PromiseService for PromiseServiceMock {
     async fn create(&self, _worker_id: &WorkerId, _oplog_idx: OplogIndex) -> PromiseId {
-        unimplemented!()
-    }
-
-    async fn wait_for(&self, _promise_id: PromiseId) -> Result<Vec<u8>, WorkerExecutorError> {
         unimplemented!()
     }
 

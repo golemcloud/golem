@@ -12,38 +12,38 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{flaky, inherit_test_dep, test, timeout};
-
-use assert2::check;
-
-use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use tracing::Instrument;
-
 use crate::Tracing;
+use assert2::check;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
+use golem_api_grpc::proto::golem::worker::v1::CompletePromiseRequest;
+use golem_api_grpc::proto::golem::worker::CompleteParameters;
 use golem_client::model::AnalysedType;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
-    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
 };
+use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use test_r::{flaky, inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::log::info;
+use tracing::Instrument;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -1691,5 +1691,80 @@ async fn resolve_components_from_name(deps: &EnvBasedTestDependencies, _tracing:
                 Value::Option(Some(Box::new(worker_id_value))),
                 Value::Option(None),
             ])
+    );
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn promise(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
+    let executor = deps.clone().into_admin().await;
+
+    let component_id = executor.component("promise").store().await;
+    let worker_id = executor.start_worker(&component_id, "promise-1").await;
+
+    let result = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{create}", vec![])
+        .await
+        .unwrap();
+
+    let promise_id = ValueAndType::new(result[0].clone(), PromiseId::get_type());
+
+    let poll1 = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
+        .await;
+
+    let executor_clone = executor.clone();
+    let worker_id_clone = worker_id.clone();
+    let promise_id_clone = promise_id.clone();
+
+    let fiber = tokio::spawn(
+        async move {
+            executor_clone
+                .invoke_and_await(
+                    &worker_id_clone,
+                    "golem:it/api.{await}",
+                    vec![promise_id_clone],
+                )
+                .await
+        }
+        .in_current_span(),
+    );
+
+    // While waiting for the promise, the worker gets suspended
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
+        .await;
+
+    executor
+        .deps
+        .worker_service()
+        .complete_promise(
+            &executor.token,
+            PromiseId {
+                worker_id: worker_id.clone(),
+                oplog_idx: OplogIndex::from_u64(3),
+            },
+            vec![42],
+        )
+        .await
+        .unwrap();
+
+    let result = fiber.await.unwrap();
+
+    let poll2 = executor
+        .invoke_and_await(&worker_id, "golem:it/api.{poll}", vec![promise_id.clone()])
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+
+    check!(result == Ok(vec![Value::List(vec![Value::U8(42)])]));
+    check!(poll1 == Ok(vec![Value::Option(None)]));
+    check!(
+        poll2
+            == Ok(vec![Value::Option(Some(Box::new(Value::List(vec![
+                Value::U8(42)
+            ]))))])
     );
 }
