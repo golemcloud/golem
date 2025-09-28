@@ -20,7 +20,7 @@ httpApi:
   #   local:
   #   - host: localhost:9006
   #     definitions:
-  #     - componentname-api
+  #     - component-name-api
 
 components:
   componentname:
