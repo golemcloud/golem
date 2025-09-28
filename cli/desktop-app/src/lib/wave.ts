@@ -27,7 +27,10 @@ function convertValueWithType(value: unknown, typ?: Typ): string {
   }
 
   // Handle each WIT type with proper recursion
-  switch (typ.type) {
+  // Convert type to lowercase for consistent handling
+  const typeStr = typ.type.toLowerCase();
+
+  switch (typeStr) {
     case "str":
     case "string":
       return `"${String(value).replace(/"/g, '\\"')}"`;
@@ -58,15 +61,14 @@ function convertValueWithType(value: unknown, typ?: Typ): string {
     case "option": {
       if (value === null || value === undefined) return "none";
       const innerValue = convertValueWithType(value, typ.inner);
-      return typ.inner && isSimpleType(typ.inner.type)
-        ? innerValue
-        : `some(${innerValue})`;
+      // Always use some() wrapper for clarity and consistency with Rust
+      return `some(${innerValue})`;
     }
 
     case "list": {
       if (!Array.isArray(value)) return convertBasicValue(value);
       const items = value.map(item => convertValueWithType(item, typ.inner));
-      return `[${items.join(", ")}]`;
+      return `[${items.join(",")}]`;
     }
 
     case "record":
@@ -83,7 +85,7 @@ function convertValueWithType(value: unknown, typ?: Typ): string {
 
     case "flags":
       if (!Array.isArray(value)) return convertBasicValue(value);
-      return `{${value.map(flag => String(flag)).join(", ")}}`;
+      return `{${value.map(flag => String(flag)).join(",")}}`;
 
     case "handle":
       return `"${String(value).replace(/"/g, '\\"')}"`;
@@ -107,19 +109,35 @@ function convertRecord(value: unknown, typ: Typ): string {
 
   if (typ.fields) {
     for (const field of typ.fields) {
-      if (field.name in obj) {
-        const fieldValue = obj[field.name];
-        const convertedValue = convertValueWithType(fieldValue, field.typ);
-        entries.push(`${field.name}: ${convertedValue}`);
+      // WIT uses kebab-case for field names like "company-name", "box-number"
+      // But the input might be camelCase like "companyName", "boxNumber"
+      const fieldNameInSchema = field.name;
+
+      // Convert schema field name to camelCase to check the input object
+      const camelFieldName = fieldNameInSchema.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
+
+      let fieldValue;
+      if (fieldNameInSchema in obj) {
+        fieldValue = obj[fieldNameInSchema];
+      } else if (camelFieldName in obj) {
+        fieldValue = obj[camelFieldName];
+      } else {
+        // Skip missing optional fields
+        continue;
       }
+
+      const convertedValue = convertValueWithType(fieldValue, field.typ);
+      // Convert kebab-case field names to camelCase for the WAVE output
+      const outputFieldName = fieldNameInSchema?.replace(/-([a-z])/g, (g) => g[1]!.toUpperCase());
+      entries.push(`${outputFieldName}:${convertedValue}`);
     }
   } else {
     for (const [key, val] of Object.entries(obj)) {
-      entries.push(`${key}: ${convertBasicValue(val)}`);
+      entries.push(`${key}:${convertBasicValue(val)}`);
     }
   }
 
-  return `{${entries.join(", ")}}`;
+  return `{${entries.join(",")}}`;
 }
 
 function convertVariant(value: unknown, typ: Typ): string {
