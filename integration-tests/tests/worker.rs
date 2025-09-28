@@ -22,15 +22,14 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
-    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
-    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
+    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
 };
-use golem_wasm_rpc::IntoValue;
 use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
