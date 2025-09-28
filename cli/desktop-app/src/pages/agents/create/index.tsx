@@ -31,7 +31,7 @@ import { API } from "@/service";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { AgentTypeForComponent } from "@/types/agent-types";
+import { AgentTypeSchema } from "@/types/agent-types";
 import { RecursiveParameterInput } from "@/components/invoke/RecursiveParameterInput";
 
 const formSchema = z.object({
@@ -108,8 +108,8 @@ export default function CreateAgent() {
   const navigate = useNavigate();
   const { componentId, appId } = useParams();
 
-  const [agentTypes, setAgentTypes] = useState<AgentTypeForComponent[]>([]);
-  const [selectedAgentType, setSelectedAgentType] = useState<AgentTypeForComponent | null>(null);
+  const [agentTypes, setAgentTypes] = useState<AgentTypeSchema[]>([]);
+  const [selectedAgentType, setSelectedAgentType] = useState<AgentTypeSchema | null>(null);
   const [constructorValues, setConstructorValues] = useState<Record<string, unknown>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -164,12 +164,18 @@ export default function CreateAgent() {
     const agentType = agentTypes[agentTypeIndex];
     setSelectedAgentType(agentType || null);
 
-    if (agentType) {
+    if (agentType && agentType.agentType) {
       // Initialize constructor parameter values
       const initialValues: Record<string, unknown> = {};
-      agentType.constructor.parameters.forEach(param => {
-        initialValues[param.name] = createEmptyValue(param.type);
+
+      // Access the inputSchema.elements for constructor parameters
+      const constructorParams = agentType.agentType.constructor.inputSchema.elements || [];
+
+      constructorParams.forEach(param => {
+        // The parameter schema is in param.schema.elementType
+        initialValues[param.name] = createEmptyValue(param.schema?.elementType || param.schema);
       });
+
       setConstructorValues(initialValues);
       form.setValue("constructorParams", initialValues);
     } else {
@@ -177,7 +183,6 @@ export default function CreateAgent() {
       form.setValue("constructorParams", {});
     }
   };
-
   const handleConstructorParamChange = (paramName: string, value: unknown) => {
     const newValues = { ...constructorValues, [paramName]: value };
     setConstructorValues(newValues);
@@ -194,10 +199,15 @@ export default function CreateAgent() {
       }
 
       // Convert constructor params to array in the correct order
-      const constructorParamsArray = selectedAgentType.constructor.parameters.map(param =>
+      const constructorElements = selectedAgentType.agentType.constructor.inputSchema.elements || [];
+      const constructorParamsArray = constructorElements.map(param =>
         constructorParams?.[param.name]
       );
 
+      // Extract constructor parameter types in the same order
+      const constructorParamTypes = constructorElements.map(param =>
+        param.schema?.elementType || param.schema
+      );
       // Convert env array to object, filtering out empty entries
       const envObject = envArray.reduce((acc, item) => {
         if (item.key && item.key.trim()) {
@@ -208,16 +218,15 @@ export default function CreateAgent() {
 
       // Filter out empty arguments
       const filteredArgs = argsArray.filter(arg => arg && arg.trim().length > 0);
-
       const response = await API.agentService.createAgent(
         appId,
         componentID,
-        selectedAgentType.typeName,
+        selectedAgentType.agentType.typeName,
         constructorParamsArray,
+        constructorParamTypes,
         filteredArgs,
         envObject
       );
-
       navigate(
         `/app/${appId}/components/${componentId}/agents/${response.worker_name}`,
       );
@@ -271,11 +280,12 @@ export default function CreateAgent() {
                           <SelectValue placeholder="Select an agent type..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {agentTypes.map((agentType, index) => {
+                          {agentTypes.map((_agentType, index) => {
+                            let agentType = _agentType.agentType;
                             // Count how many times this typeName appears in the array
-                            const typeNameCount = agentTypes.filter(t => t.typeName === agentType.typeName).length;
+                            const typeNameCount = agentTypes.filter(t => t.agentType.typeName === agentType.typeName).length;
                             // Find the position of this item among items with the same typeName
-                            const typeNameIndex = agentTypes.slice(0, index + 1).filter(t => t.typeName === agentType.typeName).length;
+                            const typeNameIndex = agentTypes.slice(0, index + 1).filter(t => t.agentType.typeName === agentType.typeName).length;
 
                             return (
                               <SelectItem key={index} value={index.toString()}>
@@ -302,21 +312,22 @@ export default function CreateAgent() {
               />
 
               {/* Constructor Parameters */}
-              {selectedAgentType && selectedAgentType.constructor.parameters.length > 0 && (
+
+              {selectedAgentType && selectedAgentType.agentType.constructor.inputSchema.elements.length > 0 && (
                 <div className="space-y-4">
                   <div>
                     <Label className="text-base font-semibold">Constructor Parameters</Label>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {selectedAgentType.constructor.description}
+                      {selectedAgentType.agentType.constructor.description}
                     </p>
                   </div>
                   <Card className="bg-muted/30">
                     <CardContent className="p-4 space-y-4">
-                      {selectedAgentType.constructor.parameters.map((param) => (
+                      {selectedAgentType.agentType.constructor.inputSchema.elements.map((param) => (
                         <RecursiveParameterInput
                           key={param.name}
                           name={param.name}
-                          typeDef={param.type}
+                          typeDef={param.schema?.elementType || param.schema}
                           value={constructorValues[param.name]}
                           onChange={(_, value) => handleConstructorParamChange(param.name, value)}
                         />
