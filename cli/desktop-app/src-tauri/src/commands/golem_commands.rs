@@ -20,6 +20,7 @@ pub async fn call_golem_command(
     let subcommand_refs: Vec<&str> = subcommands.iter().map(|s| s.as_str()).collect();
     let mut final_subcommands = subcommand_refs;
     final_subcommands.push("--format=json");
+    final_subcommands.push("--yes");
 
     // Execute the command asynchronously
     executor.execute_golem_cli(&folder_path, &command, &final_subcommands).await
