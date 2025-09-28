@@ -29,6 +29,14 @@ import {
 import { TaggedTypeMetadata } from '../types/taggedUnion';
 import { Value } from './Value';
 
+/**
+ * Converts a TypeScript value to a Value based on the provided AnalysedType.
+ * This can happen when returning a TypeScript value on a method,
+ * or during RPC calls where parameters are converted to Value
+ *
+ * @param tsValue
+ * @param analysedType
+ */
 export function serialize(
   tsValue: any,
   analysedType: AnalysedType,

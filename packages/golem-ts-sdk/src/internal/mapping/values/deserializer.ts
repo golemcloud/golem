@@ -17,6 +17,12 @@ import { Value } from './Value';
 import { AnalysedType } from '../types/AnalysedType';
 import * as Option from '../../../newTypes/option';
 
+/**
+ * converts a Value to a TypeScript value, based on AnalysedType
+ *
+ * @param value
+ * @param analysedType
+ */
 export function deserialize(value: Value, analysedType: AnalysedType): any {
   if (
     value.kind === 'record' &&
