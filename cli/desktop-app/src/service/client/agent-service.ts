@@ -1,9 +1,10 @@
 import { Agent } from "../../types/agent";
 import { InvokeResponse } from "../../hooks/useInvoke";
-import { convertValuesToWaveArgs, convertPayloadToWaveArgs } from "@/lib/wave";
+import { convertValuesToWaveArgs, convertPayloadToWaveArgs, convertToWaveFormat } from "@/lib/wave";
 import { Typ } from "@/types/component";
 import { CLIService } from "./cli-service";
 import { ComponentService } from "./component-service";
+import { AgentTypeSchema } from "@/types/agent-types";
 
 export class AgentService {
   private cliService: CLIService;
@@ -70,15 +71,37 @@ export class AgentService {
     appId: string,
     componentID: string,
     name: string,
+    constructorParamsArray: any[],
+    constructorParamTypes: Typ[] | undefined,
     args?: string[],
     env?: Record<string, string>,
   ) => {
+
     const component = await this.componentService.getComponentById(
       appId,
       componentID,
     );
 
-    const commandArgs = ["new", `${component?.componentName!}/${name}`];
+    // Convert constructor parameters to WAVE format and build agent name
+    let agentName = name;
+    if (constructorParamsArray && constructorParamsArray.length > 0) {
+      // Convert parameters to WAVE format using types if available
+      const waveParams = constructorParamsArray.map((param, index) => {
+        const typ = constructorParamTypes?.[index];
+        // Remove spaces from the WAVE format to avoid "Worker name must not contain whitespaces" error
+        const waveFormatted = convertToWaveFormat(param, typ);
+        return waveFormatted.replace(/\s+/g, '');
+      });
+
+      // Construct the agent name with parameters (no spaces allowed)
+      const paramsString = waveParams.join(",");
+      agentName = `${name}(${paramsString})`;
+    } else {
+      // No constructor parameters - just add empty parentheses
+      agentName = `${name}()`;
+    }
+
+    const commandArgs = ["new", `${component?.componentName!}/${agentName}`];
 
     // Add environment variables as -e flags
     if (env) {
@@ -247,4 +270,15 @@ export class AgentService {
     ]);
     return r;
   };
+
+  public async getAgentTypesForComponent(
+    appId: string,
+    componentId: string,
+  ): Promise<AgentTypeSchema[]> {
+    // golem-cli app list-agent-types --format=json
+    const result = (await this.cliService.callCLI(appId, "app", [
+      "list-agent-types",
+    ])) as AgentTypeSchema[];
+    return result.filter(spec => spec.implementedBy == componentId);
+  }
 }
