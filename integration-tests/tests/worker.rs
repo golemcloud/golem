@@ -17,8 +17,6 @@ use assert2::check;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
-use golem_api_grpc::proto::golem::worker::v1::CompletePromiseRequest;
-use golem_api_grpc::proto::golem::worker::CompleteParameters;
 use golem_client::model::AnalysedType;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};

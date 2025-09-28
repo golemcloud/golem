@@ -26,6 +26,8 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 #[cfg(test)]
 use std::collections::HashSet;
 use std::sync::Arc;
+#[cfg(test)]
+use tokio::sync::Mutex;
 use tracing::debug;
 
 /// Service implementing creation, completion and polling of promises
