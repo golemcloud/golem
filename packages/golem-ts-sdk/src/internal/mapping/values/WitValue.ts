@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Type } from '@golemcloud/golem-ts-types-core';
 import { WitValue } from 'golem:rpc/types@0.2.2';
 import * as Either from '../../../newTypes/either';
 import * as Value from './Value';
 import { AnalysedType } from '../types/AnalysedType';
+import { serialize } from './serializer';
+import { deserialize } from './deserializer';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';
 
@@ -25,7 +26,7 @@ export const fromTsValue = (
   tsValue: any,
   analysedType: AnalysedType,
 ): Either.Either<WitValue, string> => {
-  const valueEither = Value.fromTsValue(tsValue, analysedType);
+  const valueEither = serialize(tsValue, analysedType);
   return Either.map(valueEither, Value.toWitValue);
 };
 
@@ -34,5 +35,5 @@ export const toTsValue = (
   expectedType: AnalysedType,
 ): any => {
   const value = Value.fromWitValue(witValue);
-  return Value.toTsValue(value, expectedType);
+  return deserialize(value, expectedType);
 };

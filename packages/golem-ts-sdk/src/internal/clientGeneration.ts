@@ -35,6 +35,7 @@ import { RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
+import { deserialize } from './mapping/values/deserializer';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -179,7 +180,7 @@ function getMethodProxy(
       );
     }
 
-    return Value.toTsValue(unwrapResult(rpcWitValue), returnTypeAnalysed);
+    return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed);
   }
 
   async function invokeFireAndForget(...fnArgs: any[]) {

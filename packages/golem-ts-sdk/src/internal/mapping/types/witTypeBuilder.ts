@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Copied from wasm-rpc rust implementation
 import {NamedWitTypeNode, NodeIndex, ResourceMode, WitTypeNode} from "golem:rpc/types@0.2.2";
 import {AnalysedType, getNameFromAnalysedType, getOwnerFromAnalysedType, NameOptionTypePair, NameTypePair} from "./AnalysedType";
 import {WitType} from "golem:agent/common";

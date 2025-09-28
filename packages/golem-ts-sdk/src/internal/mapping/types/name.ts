@@ -15,10 +15,6 @@
 
 let variantNameGlobalIdx = 0;
 
-// Every time variant case name is called, and if the type is anonymous,
-// `variantNameGlobalIdx` is incremented. If the type has a name, we use it as it is, along with
-// the actual index of the variant term.
-// This variant name generation is only applicable if the union types are not tagged.
 export function generateVariantCaseName(variantName: string | undefined, termIdx: number): string {
 
   if (!variantName) {
