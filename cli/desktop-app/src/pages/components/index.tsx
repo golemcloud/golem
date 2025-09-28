@@ -85,19 +85,11 @@ export const ComponentCard = React.memo(
     agentStatus?: ComponentAgentStatus;
     onCardClick: (componentId: string) => void;
   }) => {
-    // Retrieve the latest version from the versions array
     const latestVersion = data.versions?.[data.versions?.length - 1];
-    // Count total exports using a helper function
-    const exportCount = (latestVersion?.metadata?.exports as string[]) || [];
-    // Convert component size from bytes to kilobytes
+    const exports = (latestVersion?.exports as string[]) || [];
     const componentSize = Math.round(
       (latestVersion?.componentSize || 0) / 1024,
     );
-
-    /**
-     * Handles a click on the entire card.
-     * Only triggers if componentId is present.
-     */
     const handleClick = () => {
       if (data.componentId) {
         onCardClick(data.componentId);
@@ -126,10 +118,6 @@ export const ComponentCard = React.memo(
         </CardHeader>
         <CardContent className="space-y-6">
           {/* Agent Status Grid */}
-          {/*
-            Removed the extra ":grid-cols-4" class which appeared to be a typo.
-            Adjust classes to a responsive 2-column (mobile) to 4-column (desktop) layout.
-          */}
           {agentStatus && (
             <div className="grid grid-cols-4 gap-4">
               {WORKER_STATUS_METRICS.map(metric => (
@@ -167,7 +155,7 @@ export const ComponentCard = React.memo(
               variant="secondary"
               className="bg-muted hover:bg-muted/80 text-muted-foreground transition-colors rounded-md cursor-pointer shadow"
             >
-              {exportCount || 0} Exports
+              {exports.length || 0} Exports
             </Badge>
             <Badge
               variant="secondary"
