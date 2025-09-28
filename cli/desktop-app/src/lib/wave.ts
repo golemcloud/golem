@@ -114,7 +114,9 @@ function convertRecord(value: unknown, typ: Typ): string {
       const fieldNameInSchema = field.name;
 
       // Convert schema field name to camelCase to check the input object
-      const camelFieldName = fieldNameInSchema.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
+      const camelFieldName = fieldNameInSchema.replace(/-([a-z])/g, g =>
+        g[1].toUpperCase(),
+      );
 
       let fieldValue;
       if (fieldNameInSchema in obj) {
@@ -127,9 +129,8 @@ function convertRecord(value: unknown, typ: Typ): string {
       }
 
       const convertedValue = convertValueWithType(fieldValue, field.typ);
-      // Convert kebab-case field names to camelCase for the WAVE output
-      const outputFieldName = fieldNameInSchema?.replace(/-([a-z])/g, (g) => g[1]!.toUpperCase());
-      entries.push(`${outputFieldName}:${convertedValue}`);
+      // Keep field names as-is from schema (camelCase) since WASM interface expects camelCase
+      entries.push(`${fieldNameInSchema}:${convertedValue}`);
     }
   } else {
     for (const [key, val] of Object.entries(obj)) {
