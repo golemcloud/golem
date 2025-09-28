@@ -1368,7 +1368,7 @@ function matchesType(value: any, type: AnalysedType): boolean {
 
         // we don't care the name otherwise as they may be generated names
 
-        const result = matchesType(value.type, value.value);
+        const result = matchesType(value, type);
 
         if (result) {
           return true;

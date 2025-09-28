@@ -40,6 +40,8 @@ import { AgentConstructorRegistry } from './internal/registry/agentConstructorRe
 import { UnstructuredText } from './newTypes/textInput';
 import { UnstructuredBinary } from './newTypes/binaryInput';
 import { AnalysedType } from './internal/mapping/types/AnalysedType';
+import * as Value from './internal/mapping/values/Value';
+import * as util from 'node:util';
 
 type TsType = Type.Type;
 
@@ -201,8 +203,27 @@ export function agent(customName?: string) {
 
     AgentTypeRegistry.register(agentClassName, agentType);
 
-    const constructorParamTypes =
-      AgentConstructorParamRegistry.constructorParams(agentClassName);
+    const constructorParamTypes:
+      | [string, Option.Option<AnalysedType>][]
+      | undefined = TypeMetadata.get(agentClassName.value)?.constructorArgs.map(
+      (arg) => {
+        return [
+          arg.name,
+          Option.fromNullable(
+            AgentConstructorParamRegistry.lookupParamType(
+              agentClassName,
+              arg.name,
+            ),
+          ),
+        ];
+      },
+    );
+
+    if (!constructorParamTypes) {
+      throw new Error(
+        `Failed to retrieve constructor parameter types for agent ${agentClassName.value}.`,
+      );
+    }
 
     (ctor as any).get = getRemoteClient(ctor);
 
@@ -299,9 +320,34 @@ export function agent(customName?: string) {
               methodName,
             );
 
-            const paramTypes = AgentMethodParamRegistry.paramTypes(
-              agentClassName,
-              methodName,
+            const methodParams = TypeMetadata.get(
+              agentClassName.value,
+            )?.methods.get(methodName)?.methodParams;
+
+            if (!methodParams) {
+              const error: AgentError = {
+                tag: 'invalid-method',
+                val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName}.`,
+              };
+              return {
+                tag: 'err',
+                val: error,
+              };
+            }
+
+            const paramTypes = Array.from(methodParams.entries()).map(
+              (param) => {
+                return [
+                  param[0],
+                  Option.fromNullable(
+                    AgentMethodParamRegistry.lookupParamType(
+                      agentClassName,
+                      methodName,
+                      param[0],
+                    ),
+                  ),
+                ] as [string, Option.Option<AnalysedType>];
+              },
             );
 
             const convertedArgs = deserializeDataValue(methodArgs, paramTypes);
@@ -703,7 +749,7 @@ export function deserializeDataValue(
 
             if (Option.isNone(param)) {
               throw new Error(
-                `Internal error: Unknown parameter type for ${elem.val} at index ${idx}`,
+                `Internal error: Unknown parameter type for ${util.format(Value.fromWitValue(elem.val))} at index ${idx}`,
               );
             }
 
@@ -715,7 +761,7 @@ export function deserializeDataValue(
     case 'multimodal':
       const multiModalElements = dataValue.val;
 
-      return multiModalElements.map(([name, elem], idx) => {
+      return multiModalElements.map(([name, elem]) => {
         switch (elem.tag) {
           case 'unstructured-text':
             const textRef = elem.val;
@@ -732,7 +778,7 @@ export function deserializeDataValue(
 
             if (!param) {
               throw new Error(
-                `Unable to process multimodal input of elem ${elem.val}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
               );
             }
 
@@ -740,7 +786,7 @@ export function deserializeDataValue(
 
             if (Option.isNone(paramType)) {
               throw new Error(
-                `Internal error: Unknown parameter type for multimodal input ${elem.val} with name ${name}`,
+                `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
               );
             }
 

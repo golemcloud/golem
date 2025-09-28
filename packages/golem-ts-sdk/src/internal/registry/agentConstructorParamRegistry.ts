@@ -77,6 +77,10 @@ export const AgentConstructorParamRegistry = {
     classMeta.get(paramName)!.languageCodes = languageCodes;
   },
 
+  setIfNotExists(agentClassName: AgentClassName, param: string) {
+    AgentConstructorParamRegistry.ensureMeta(agentClassName, param);
+  },
+
   setAnalysedType(
     agentClassName: AgentClassName,
     paramName: string,

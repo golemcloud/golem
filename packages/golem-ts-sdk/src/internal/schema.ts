@@ -47,6 +47,11 @@ export function getConstructorDataSchema(
       const paramTypeName = paramType.name;
 
       if (paramTypeName && paramTypeName === 'UnstructuredText') {
+        AgentConstructorParamRegistry.setIfNotExists(
+          agentClassName,
+          paramInfo.name,
+        );
+
         const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
 
         const languageCodes = metadata?.get(paramInfo.name)?.languageCodes;
@@ -68,6 +73,11 @@ export function getConstructorDataSchema(
       }
 
       if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+        AgentConstructorParamRegistry.setIfNotExists(
+          agentClassName,
+          paramInfo.name,
+        );
+
         const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
 
         const mimeTypes = metadata?.get(paramInfo.name)?.mimeTypes;
@@ -303,6 +313,12 @@ function convertToElementSchema(
   const paramTypeName = parameterType.name;
 
   if (paramTypeName && paramTypeName === 'UnstructuredText') {
+    AgentMethodParamRegistry.ensureMeta(
+      agentClassName,
+      methodName,
+      parameterName,
+    );
+
     const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
 
     const parameterMetadata = methodMetadata?.get(methodName);
@@ -324,6 +340,12 @@ function convertToElementSchema(
   }
 
   if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+    AgentMethodParamRegistry.ensureMeta(
+      agentClassName,
+      methodName,
+      parameterName,
+    );
+
     const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
 
     const parameterMetadata = methodMetadata?.get(methodName);

@@ -18,7 +18,7 @@ export type TypeMappingScope = {
   scope: 'interface' | 'object' | 'method' | 'constructor';
   name: string;
   parameterName: string
-  optional: boolean
+  questionMarkOptional: boolean
 }
   | {
   scope: 'others';
@@ -26,10 +26,10 @@ export type TypeMappingScope = {
 };
 
 export const TypeMappingScope = {
-  isOptionalParam(scope: TypeMappingScope) {
+  isQuestionMarkOptionalParam(scope: TypeMappingScope) {
     return (scope.scope === 'interface' ||
       scope.scope === 'object' ||
-      scope.scope === 'method' || scope.scope === 'constructor') && scope.optional;
+      scope.scope === 'method' || scope.scope === 'constructor') && scope.questionMarkOptional;
   },
 
   paramName(scope: TypeMappingScope): Option.Option<string> {
@@ -43,39 +43,39 @@ export const TypeMappingScope = {
 
   },
 
-  interface(name: string, parameterName: string, optional: boolean): TypeMappingScope {
+  interface(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
     return {
       scope: 'interface',
       name,
       parameterName,
-      optional,
+      questionMarkOptional,
     };
   },
 
-  object(name: string, parameterName: string, optional: boolean): TypeMappingScope {
+  object(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
     return {
       scope: 'object',
       name,
       parameterName,
-      optional,
+      questionMarkOptional,
     };
   },
 
-  method(name: string, parameterName: string, optional: boolean): TypeMappingScope {
+  method(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
     return {
       scope: 'method',
       name,
       parameterName,
-      optional,
+      questionMarkOptional,
     };
   },
 
-  constructor(name: string, parameterName: string, optional: boolean): TypeMappingScope {
+  constructor(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
     return {
       scope: 'constructor',
       name: name,
       parameterName: parameterName,
-      optional: optional,
+      questionMarkOptional,
     }
 
   },

@@ -33,7 +33,7 @@ export interface NameOptionTypePair {
 }
 
 export type TypedArrayKind = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
-export type EmptyType = 'null' | 'void' | 'undefined';
+export type EmptyType = 'null' | 'void' | 'undefined' | 'question-mark';
 
 
 // This is similar to internal analyzed-type in wasm-rpc (golem)
@@ -239,6 +239,8 @@ const unionTypeMapRegistry = new Map<string, AnalysedType>();
 
 export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
   if (Option.isSome(scope) && (scope.val.scope === "constructor" || scope.val.scope === "method")) {
+    // A question mark optional is not allowed if the scope is just method or constructor
+    // They are only allowed in objects and interface scopes.
     if (tsType.optional) {
       return Either.left(`Optional parameters are not supported in ${scope.val.scope}. Parameter \`${scope.val.parameterName}\` is optional. Remove \`?\` and change the type to a union with \`undefined\``);
     }
@@ -247,9 +249,14 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
   const result =
     fromTsTypeInternal(tsType, scope);
 
-  if (Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val)) {
+  if (Option.isSome(scope) && TypeMappingScope.isQuestionMarkOptionalParam(scope.val)) {
     return Either.map(result, (analysedType) => {
-      return option(undefined, "undefined",analysedType)
+
+      if (analysedType.kind === 'option' && analysedType.emptyType !== 'question-mark') {
+        return analysedType;
+      }
+
+      return option(undefined, "question-mark", analysedType)
     })
   }
 
@@ -390,7 +397,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         }
 
         // Type is already optional and further loop will solve it
-        if ((Option.isSome(scope) && TypeMappingScope.isOptionalParam(scope.val))) {
+        if ((Option.isSome(scope) && TypeMappingScope.isQuestionMarkOptionalParam(scope.val))) {
           const innerType = innerTypeEither.val;
 
           if (!type.name){
