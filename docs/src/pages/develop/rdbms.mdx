@@ -1,4 +1,4 @@
-import { Tabs } from "nextra/components"
+import { Callout, Tabs } from "nextra/components"
 
 # Using Relational Databases
 
@@ -887,12 +887,14 @@ The currently supported databases are:
 
 To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` resource and call `execute` on it:
 
+#### MySQL
 <Tabs items={["TypeScript"]}>
   <Tabs.Tab>
   ```typescript
   import { DbConnection } from "golem:rdbms/mysql@0.0.1";
 
-  const conn = DbConnection.open("localhost:3006");
+  // Connecting to the database called 'test' with user 'root'
+  const conn = DbConnection.open("mysql://root@localhost:3306/test");
   conn.execute(
     `CREATE TABLE IF NOT EXISTS test_users
       (
@@ -902,8 +904,39 @@ To execute an SQL statement with `golem-rdbms`, first crete a `db-connection` re
           PRIMARY KEY (user_id)
             );`, [])
   ```
+
+  <Callout type="info">
+  The functions in the `golem:rdbms/mysql@0.0.1` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
   </Tabs.Tab>
 </Tabs>
+
+#### PostgreSQL
+
+<Tabs items={["TypeScript"]}>
+  <Tabs.Tab>
+  ```typescript
+  import { DbConnection } from "golem:rdbms/postgres@0.0.1";
+
+  // Connecting to the database called 'test' with user 'user'
+  const conn = DbConnection.open("postgres://user@localhost:5432/test");
+  conn.execute(
+    `CREATE TABLE IF NOT EXISTS test_users
+      (
+          user_id             varchar(25)    NOT NULL,
+          name                varchar(255)    NOT NULL,
+          created_on          timestamp NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id)
+            );`, [])
+  ```
+
+  <Callout type="info">
+    The functions in the `golem:rdbms/postgres@0.0.1` module are **not async**. This is due to a limitation of the current Golem runtime, and are subject to change in future releases.
+  </Callout>
+  </Tabs.Tab>
+</Tabs>
+
+#### API
 
 Additionally you can:
 
