@@ -876,6 +876,7 @@ async fn test_ts_counter() {
     assert!(outputs.stdout_contains("- 1"));
 }
 
+// We can expand this to be property based testing in the future
 #[test]
 async fn test_ts_code_first_complex() {
     let mut ctx = TestContext::new();
@@ -946,6 +947,7 @@ async fn test_ts_code_first_complex() {
 
     let uuid = Uuid::new_v4().to_string();
 
+    // fun no return
     let outputs = ctx
         .cli([
             flag::YES,
@@ -954,6 +956,26 @@ async fn test_ts_code_first_complex() {
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-no-return",
             "\"sample\""
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // function optional
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-optional",
+            "some(case1(\"foo\"))",
+            "{a: some(\"foo\")}",
+            "{a: some(case1(\"foo\"))}",
+            "{a: some(case1(\"foo\"))}",
+            "{a: some(\"foo\")}",
+            "some(\"foo\")",
+            "some(case3(\"foo\"))"
         ])
         .await;
 
