@@ -690,7 +690,7 @@ impl ComponentMetadataDictionary {
             let component_details = ComponentDetails {
                 component_info,
                 metadata: component.metadata.exports().to_vec(),
-                agent_types: component.metadata.agent_types().to_vec(),
+                agent_types: component.metadata.native_agent_types().to_vec(),
             };
 
             metadata.insert(component.versioned_component_id.clone(), component_details);

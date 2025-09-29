@@ -65,7 +65,7 @@ impl AgentTypesService for AgentTypesServiceDefault {
         let components = self.component_service.find_by_name(None, owner).await?;
         let mut agent_types = Vec::new();
         for component in components {
-            agent_types.extend(component.metadata.agent_types().iter().cloned().map(
+            agent_types.extend(component.metadata.native_agent_types().iter().cloned().map(
                 |agent_type| RegisteredAgentType {
                     agent_type,
                     implemented_by: component.versioned_component_id.component_id.clone(),

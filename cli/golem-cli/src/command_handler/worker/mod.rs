@@ -207,8 +207,7 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        self.validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
-            .await?;
+        self.validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)?;
 
         log_action(
             "Creating",
@@ -283,10 +282,12 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        // First validate without the function name
-        let agent_type = self
-            .validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
-            .await?;
+        // First, validate without the function name
+        let agent_type = self.validate_worker_and_function_names(
+            &component,
+            &worker_name_match.worker_name,
+            None,
+        )?;
 
         let matched_function_name = fuzzy_match_function_name(
             function_name,
@@ -342,13 +343,12 @@ impl WorkerCommandHandler {
             },
         };
 
-        // Re-validate with function name
+        // Re-validate with function-name
         self.validate_worker_and_function_names(
             &component,
             &worker_name_match.worker_name,
             Some(&function_name),
-        )
-        .await?;
+        )?;
 
         if trigger {
             log_action(
@@ -1774,7 +1774,7 @@ impl WorkerCommandHandler {
         }
     }
 
-    pub async fn validate_worker_and_function_names(
+    pub fn validate_worker_and_function_names(
         &self,
         component: &Component,
         worker_name: &WorkerName,
@@ -1784,13 +1784,12 @@ impl WorkerCommandHandler {
             return Ok(None);
         }
 
-        match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata).await {
+        match AgentId::parse_and_resolve_wit_type(&worker_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
                     if let Some((namespace, package, interface)) = component
                         .metadata
                         .find_function(function_name)
-                        .await
                         .ok()
                         .flatten()
                         .and_then(|f| match f.name.site {
@@ -1838,7 +1837,7 @@ impl WorkerCommandHandler {
                 log_text_view(&AvailableAgentConstructorsHelp {
                     component_name: component.component_name.0.clone(),
                     constructors: show_exported_agent_constructors(
-                        component.metadata.agent_types(),
+                        &component.metadata.wit_agent_types(),
                     ),
                 });
 

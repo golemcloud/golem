@@ -26,27 +26,25 @@ use std::collections::HashMap;
 use test_r::test;
 
 #[test]
-async fn roundtrip_test_1() {
+fn roundtrip_test_1() {
     roundtrip_test(
         "agent-1",
         DataValue::Tuple(ElementValues { elements: vec![] }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_2() {
+fn roundtrip_test_2() {
     roundtrip_test(
         "agent-2",
         DataValue::Tuple(ElementValues {
             elements: vec![ElementValue::ComponentModel(12u32.into_value_and_type())],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_3() {
+fn roundtrip_test_3() {
     roundtrip_test(
         "agent-3",
         DataValue::Tuple(ElementValues {
@@ -67,11 +65,10 @@ async fn roundtrip_test_3() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_4() {
+fn roundtrip_test_4() {
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -85,11 +82,10 @@ async fn roundtrip_test_4() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_5() {
+fn roundtrip_test_5() {
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -107,11 +103,10 @@ async fn roundtrip_test_5() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_6() {
+fn roundtrip_test_6() {
     roundtrip_test(
         "agent-5",
         DataValue::Tuple(ElementValues {
@@ -125,11 +120,10 @@ async fn roundtrip_test_6() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_7() {
+fn roundtrip_test_7() {
     roundtrip_test(
         "agent-5",
         DataValue::Tuple(ElementValues {
@@ -149,11 +143,10 @@ async fn roundtrip_test_7() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_8() {
+fn roundtrip_test_8() {
     roundtrip_test(
         "agent-6",
         DataValue::Multimodal(NamedElementValues {
@@ -176,21 +169,19 @@ async fn roundtrip_test_8() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn invalid_agent_type() {
+fn invalid_agent_type() {
     failure_test(
         "unknown-agent",
         DataValue::Tuple(ElementValues { elements: vec![] }),
         "Unknown agent type: unknown-agent",
     )
-    .await
 }
 
 #[test]
-async fn invalid_agent_param_count() {
+fn invalid_agent_param_count() {
     failure_test(
         "agent-1",
         DataValue::Tuple(ElementValues {
@@ -198,11 +189,10 @@ async fn invalid_agent_param_count() {
         }),
         "Unexpected number of parameters: got 1, expected 0",
     )
-    .await
 }
 
 #[test]
-async fn invalid_agent_param_type() {
+fn invalid_agent_param_type() {
     failure_test(
         "agent-2",
         DataValue::Tuple(ElementValues {
@@ -210,11 +200,10 @@ async fn invalid_agent_param_type() {
         }),
         "Failed to parse parameter value \"hello\": invalid value type at 0..7",
     )
-    .await
 }
 
 #[test]
-async fn invalid_text_url() {
+fn invalid_text_url() {
     failure_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -229,30 +218,26 @@ async fn invalid_text_url() {
         }),
         "Failed to parse parameter value not?a/valid!url as URL: relative URL without a base",
     )
-    .await
 }
 
-async fn roundtrip_test(agent_type: &str, parameters: DataValue) {
+fn roundtrip_test(agent_type: &str, parameters: DataValue) {
     let id = AgentId {
         agent_type: agent_type.to_string(),
         parameters,
     };
     let s = id.to_string();
     println!("{s}");
-    let id2 = AgentId::parse(s, TestAgentTypes::new()).await.unwrap();
+    let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
 }
 
-async fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
+fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
     let id = AgentId {
         agent_type: agent_type.to_string(),
         parameters,
     };
     let s = id.to_string();
-    let id2 = AgentId::parse(s, TestAgentTypes::new())
-        .await
-        .err()
-        .unwrap();
+    let id2 = AgentId::parse(s, TestAgentTypes::new()).err().unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 
@@ -270,11 +255,14 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
+    fn resolve_wit_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
+        todo!("convert to wit naming, and use find by wit");
+        /*
         self.types
             .get(agent_type)
             .cloned()
             .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
+        */
     }
 }
 

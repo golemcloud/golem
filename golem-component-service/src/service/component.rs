@@ -1122,7 +1122,7 @@ impl ComponentServiceDefault {
         component.metadata = ComponentMetadata::analyse_component(
             &data,
             component.metadata.dynamic_linking().clone(),
-            component.metadata.agent_types().to_vec(),
+            component.metadata.native_agent_types().to_vec(),
         )
         .map_err(ComponentError::ComponentProcessingError)?;
 

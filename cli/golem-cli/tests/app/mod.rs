@@ -1263,6 +1263,72 @@ async fn test_http_api_merging() {
     ]));
 }
 
+#[test]
+async fn test_invoke_wasm_casing() {
+    let mut ctx = TestContext::new();
+    let app_name = "common_dep_plug_errors";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success());
+
+    let component_source_code = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-agent")
+            .join("src")
+            .join("main.ts"),
+    );
+
+    fs::write_str(
+        &component_source_code,
+        indoc! { r#"
+            import { BaseAgent, agent, } from '@golemcloud/golem-ts-sdk';
+
+            type Complex = {
+              oneField: string;
+              anotherField: number;
+            }
+
+            @agent()
+            class LongAgentName extends BaseAgent {
+              constructor(params: Complex) {
+                super();
+              }
+
+              async ask(question: Complex): Promise<Complex> {
+                return {
+                  oneField: "1212",
+                  anotherField: 100
+                };
+              }
+            }
+        "# },
+    )
+    .unwrap(); 
+
+    ctx.start_server();
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            flag::YES,
+            flag::REDEPLOY_ALL,
+            r#"long-agent-name({one-field: "1212", another-field: 100})"#,
+            "ask",
+            r#"{one-field: "1212", another-field: 100}"#,
+        ])
+        .await;
+    assert!(outputs.success());
+}
+
 enum CommandOutput {
     Stdout(String),
     Stderr(String),

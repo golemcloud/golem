@@ -30,7 +30,6 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
-use heck::ToKebabCase;
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
@@ -188,11 +187,11 @@ impl ComponentView {
         let exports = {
             if value.metadata.is_agent() {
                 if show_exports_for_rib {
-                    show_exported_agents(value.metadata.agent_types())
+                    show_exported_agents(value.metadata.native_agent_types())
                 } else {
                     value
                         .metadata
-                        .agent_types()
+                        .wit_agent_types()
                         .iter()
                         .flat_map(|agent| {
                             show_exported_functions(
@@ -259,8 +258,8 @@ pub fn render_type(typ: &AnalysedType) -> String {
             let cases_str = cases
                 .iter()
                 .map(|NameOptionTypePair { name, typ }| match typ {
-                    None => name.to_kebab_case(),
-                    Some(typ) => format!("{}({})", name.to_kebab_case(), render_type(typ)),
+                    None => name.to_string(),
+                    Some(typ) => format!("{}({})", name, render_type(typ)),
                 })
                 .collect::<Vec<String>>()
                 .join(", ");
@@ -283,20 +282,16 @@ pub fn render_type(typ: &AnalysedType) -> String {
             }
         }
         AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        AnalysedType::Enum(TypeEnum { cases, .. }) => format!(
-            "enum {{ {} }}",
-            cases.iter().map(|c| c.to_kebab_case()).join(", ")
-        ),
-        AnalysedType::Flags(TypeFlags { names, .. }) => format!(
-            "flags {{ {} }}",
-            names.iter().map(|n| n.to_kebab_case()).join(", ")
-        ),
+        AnalysedType::Enum(TypeEnum { cases, .. }) => {
+            format!("enum {{ {} }}", cases.iter().map(|c| c).join(", "))
+        }
+        AnalysedType::Flags(TypeFlags { names, .. }) => {
+            format!("flags {{ {} }}", names.iter().map(|n| n).join(", "))
+        }
         AnalysedType::Record(TypeRecord { fields, .. }) => {
             let pairs: Vec<String> = fields
                 .iter()
-                .map(|NameTypePair { name, typ }| {
-                    format!("{}: {}", name.to_kebab_case(), render_type(typ))
-                })
+                .map(|NameTypePair { name, typ }| format!("{}: {}", name, render_type(typ)))
                 .collect();
 
             format!("record {{ {} }}", pairs.join(", "))
@@ -341,7 +336,7 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
         result.push(format!(
             "{}.{}({}) -> {}",
             agent.type_name,
-            method.name.to_kebab_case(),
+            method.name,
             render_data_schema(&method.input_schema),
             render_data_schema(&method.output_schema)
         ));
@@ -366,7 +361,7 @@ fn render_data_schema(schema: &DataSchema) -> String {
             .map(|named_elem| {
                 format!(
                     "{}: {}",
-                    named_elem.name.to_kebab_case(),
+                    named_elem.name,
                     render_element_schema(&named_elem.schema)
                 )
             })
@@ -377,7 +372,7 @@ fn render_data_schema(schema: &DataSchema) -> String {
             .map(|named_elem| {
                 format!(
                     "{}({})",
-                    named_elem.name.to_kebab_case(),
+                    named_elem.name,
                     render_element_schema(&named_elem.schema)
                 )
             })

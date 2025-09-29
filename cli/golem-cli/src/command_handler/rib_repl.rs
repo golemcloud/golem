@@ -109,7 +109,7 @@ impl RibReplHandler {
         // to support creating instances using agent interface names.
         let custom_instance_spec = component
             .metadata
-            .agent_types()
+            .native_agent_types()
             .iter()
             .map(|agent_type| {
                 rib::CustomInstanceSpec::new(

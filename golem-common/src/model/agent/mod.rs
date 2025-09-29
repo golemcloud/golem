@@ -16,6 +16,7 @@ mod conversions;
 
 #[cfg(feature = "agent-extraction")]
 pub mod extraction;
+pub mod wit_naming;
 #[cfg(feature = "protobuf")]
 mod protobuf;
 #[cfg(test)]
@@ -45,8 +46,7 @@ use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValue, Valu
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::future::Future;
-use std::pin::Pin;
+
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.
@@ -698,16 +698,11 @@ pub struct AgentId {
 }
 
 impl AgentId {
-    pub async fn parse(
-        s: impl AsRef<str>,
-        resolver: impl AgentTypeResolver,
-    ) -> Result<Self, String> {
-        Self::parse_and_resolve_type(s, resolver)
-            .await
-            .map(|(agent_id, _)| agent_id)
+    pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
+        Self::parse_and_resolve_wit_type(s, resolver).map(|(agent_id, _)| agent_id)
     }
 
-    pub async fn parse_and_resolve_type(
+    pub fn parse_and_resolve_wit_type(
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<(Self, AgentType), String> {
@@ -715,7 +710,7 @@ impl AgentId {
 
         if let Some((agent_type, param_list)) = s.split_once('(') {
             if let Some(param_list) = param_list.strip_suffix(')') {
-                let agent_type = resolver.resolve_agent_type(agent_type).await?;
+                let agent_type = resolver.resolve_wit_agent_type(agent_type)?;
                 let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
                 Ok((
                     AgentId {
@@ -753,25 +748,13 @@ impl Display for AgentId {
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String>;
-}
-
-#[async_trait]
-impl<F> AgentTypeResolver for F
-where
-    F: for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<AgentType, String>> + 'a + Send>>
-        + Send
-        + Sync,
-{
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        self(agent_type).await
-    }
+    fn resolve_wit_agent_type(&self, agent_type: &str) -> Result<AgentType, String>;
 }
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        let result = self.find_agent_type(agent_type).await?;
+    fn resolve_wit_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
+        let result = self.find_wit_agent_type(agent_type)?;
         result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

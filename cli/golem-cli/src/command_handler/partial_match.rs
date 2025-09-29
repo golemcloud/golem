@@ -179,8 +179,7 @@ impl ErrorHandler {
                             &component,
                             &worker_name_match.worker_name,
                             None,
-                        )
-                        .await?;
+                        )?;
 
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,

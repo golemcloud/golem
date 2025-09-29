@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
 use crate::model::ComponentType;
@@ -32,18 +33,16 @@ use golem_wasm_ast::{
     component::Component,
     IgnoreAllButMetadata,
 };
-use heck::ToKebabCase;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
 pub struct ComponentMetadata {
     data: Arc<ComponentMetadataInnerData>,
-    cache: Arc<Mutex<ComponentMetadataInnerCache>>,
+    cache: Arc<std::sync::Mutex<ComponentMetadataInnerCache>>,
 }
 
 impl ComponentMetadata {
@@ -55,7 +54,7 @@ impl ComponentMetadata {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(Self {
             data: Arc::new(raw.into_metadata(dynamic_linking, agent_types)),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 
@@ -78,7 +77,7 @@ impl ComponentMetadata {
                 dynamic_linking,
                 agent_types,
             }),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         }
     }
 
@@ -110,41 +109,67 @@ impl ComponentMetadata {
         &self.data.dynamic_linking
     }
 
-    pub fn agent_types(&self) -> &[AgentType] {
+    pub fn native_agent_types(&self) -> &[AgentType] {
         &self.data.agent_types
+    }
+
+    pub fn wit_agent_types(&self) -> Vec<AgentType> {
+        let agent_type_names = self.wit_agent_type_names();
+        let mut agent_types = Vec::with_capacity(agent_type_names.len());
+        for agent_type_name in agent_type_names {
+            agent_types.push(self.find_wit_agent_type(&agent_type_name).unwrap().unwrap())
+        }
+        agent_types
+    }
+
+    pub fn wit_agent_type_names(&self) -> Vec<String> {
+        self.native_agent_types()
+            .iter()
+            .map(|agent_type| agent_type.type_name.to_wit_naming())
+            .collect()
     }
 
     pub fn is_agent(&self) -> bool {
         !self.data.agent_types.is_empty()
     }
 
-    pub async fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().await.load_snapshot(&self.data)
+    pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().load_snapshot(&self.data)
     }
 
-    pub async fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().await.save_snapshot(&self.data)
+    pub fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().save_snapshot(&self.data)
     }
 
-    pub async fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().await.find_function(&self.data, name)
+    pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().find_function(&self.data, name)
     }
 
-    pub async fn find_parsed_function(
+    pub fn find_parsed_function(
         &self,
         parsed: &ParsedFunctionName,
     ) -> Result<Option<InvokableFunction>, String> {
         self.cache
             .lock()
-            .await
+            .unwrap()
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub async fn find_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    /// Finds and returns AgentType as it was extracted by the original discovered type name
+    pub fn find_native_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
-            .await
-            .find_agent_type(&self.data, agent_type)
+            .unwrap()
+            .find_native_agent_type(&self.data, agent_type)
+    }
+
+    /// Finds and returns AgentType with named elements converted to be WIT and WAVE compatible (kebab-case)
+    /// by the WIT name of the agent
+    pub fn find_wit_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+        self.cache
+            .lock()
+            .unwrap()
+            .find_wit_agent_type(&self.data, agent_type)
     }
 }
 
@@ -188,7 +213,7 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
         let data = ComponentMetadataInnerData::deserialize(deserializer)?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -204,7 +229,7 @@ impl<Context> Decode<Context> for ComponentMetadata {
         let data = ComponentMetadataInnerData::decode(decoder)?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -216,7 +241,7 @@ impl<'de, Context> BorrowDecode<'de, Context> for ComponentMetadata {
         let data = ComponentMetadataInnerData::borrow_decode(decoder)?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -262,7 +287,7 @@ impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
             ComponentMetadataInnerData::parse_from_json(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -281,7 +306,7 @@ impl poem_openapi::types::ParseFromXML for ComponentMetadata {
             ComponentMetadataInnerData::parse_from_xml(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -300,7 +325,7 @@ impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
             ComponentMetadataInnerData::parse_from_yaml(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -391,11 +416,25 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_native_name(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
             .find(|t| t.type_name == agent_type)
+            .cloned())
+    }
+
+    pub fn find_agent_type_by_wit_name(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
+        Ok(self
+            .agent_types
+            .iter()
+            .find(|t| t.type_name.to_wit_naming() == agent_type)
             .cloned())
     }
 
@@ -502,14 +541,14 @@ impl ComponentMetadataInnerData {
                         let agent = self
                             .agent_types
                             .iter()
-                            .find(|agent| agent.type_name.to_kebab_case() == resource_name);
+                            .find(|agent| agent.type_name.to_wit_naming() == resource_name);
 
                         let method = agent.and_then(|agent| {
                             agent
                                 .methods
                                 .iter()
                                 .find(|method| {
-                                    method.name.to_kebab_case() == parsed.function().function_name()
+                                    method.name.to_wit_naming() == parsed.function().function_name()
                                 })
                                 .cloned()
                         });
@@ -521,7 +560,7 @@ impl ComponentMetadataInnerData {
                             let agent = self
                                 .agent_types
                                 .iter()
-                                .find(|agent| agent.type_name.to_kebab_case() == resource_name);
+                                .find(|agent| agent.type_name.to_wit_naming() == resource_name);
 
                             Ok(agent.map(|agent| {
                                 AgentMethodOrConstructor::Constructor(agent.constructor.clone())
@@ -550,7 +589,10 @@ struct ComponentMetadataInnerCache {
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types: HashMap<String, Result<Option<AgentType>, String>>,
+    // Agent types as they were discovered
+    agent_types_native: HashMap<String, Result<Option<AgentType>, String>>,
+    // Agent types with named elements changed to kebab-case to be compatible with WIT and WAVE
+    agent_types_wit: HashMap<String, Result<Option<AgentType>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -610,16 +652,36 @@ impl ComponentMetadataInnerCache {
         }
     }
 
-    pub fn find_agent_type(
+    /// Finds and returns AgentType as it was extracted by the original discovered type name
+    pub fn find_native_agent_type(
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &str,
     ) -> Result<Option<AgentType>, String> {
-        if let Some(cached) = self.agent_types.get(agent_type) {
+        if let Some(cached) = self.agent_types_native.get(agent_type) {
             cached.clone()
         } else {
-            let result = data.find_agent_type(agent_type);
-            self.agent_types
+            let result = data.find_agent_type_by_native_name(agent_type);
+            self.agent_types_native
+                .insert(agent_type.to_string(), result.clone());
+            result
+        }
+    }
+
+    /// Finds and returns AgentType with named elements converted to be WIT and WAVE compatible (kebab-case)
+    /// by the WIT name of the agent
+    pub fn find_wit_agent_type(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
+        if let Some(cached) = self.agent_types_wit.get(agent_type) {
+            cached.clone()
+        } else {
+            let result = data
+                .find_agent_type_by_wit_name(agent_type)
+                .map(|agent_type| agent_type.to_wit_naming());
+            self.agent_types_wit
                 .insert(agent_type.to_string(), result.clone());
             result
         }
@@ -1050,13 +1112,11 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component_metadata::{
-        ComponentMetadata, ComponentMetadataInnerCache, ComponentMetadataInnerData,
-        DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory, ProducerField, Producers,
-        VersionedName, WasmRpcTarget,
+        ComponentMetadata, ComponentMetadataInnerData, DynamicLinkedInstance, DynamicLinkedWasmRpc,
+        LinearMemory, ProducerField, Producers, VersionedName, WasmRpcTarget,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
         fn from(value: golem_api_grpc::proto::golem::component::VersionedName) -> Self {
@@ -1137,7 +1197,7 @@ mod protobuf {
             let inner_data = ComponentMetadataInnerData::try_from(value)?;
             Ok(Self {
                 data: Arc::new(inner_data),
-                cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+                cache: Arc::default(),
             })
         }
     }

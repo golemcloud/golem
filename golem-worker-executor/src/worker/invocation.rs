@@ -210,7 +210,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
 
     let metadata = component_metadata
         .find_parsed_function(&parsed)
-        .await
         .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| {
             WorkerExecutorError::invalid_request(format!(

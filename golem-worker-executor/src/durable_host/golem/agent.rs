@@ -114,7 +114,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         DurabilityHost::observe_function_call(self, "golem_agent", "parse_agent_id");
 
         let component_metadata = &self.component_metadata().metadata;
-        match AgentId::parse(agent_id, component_metadata).await {
+        match AgentId::parse(agent_id, component_metadata) {
             Ok(agent_id) => Ok(Ok((agent_id.agent_type, agent_id.parameters.into()))),
             Err(error) => Ok(Err(AgentError::InvalidAgentId(error))),
         }
