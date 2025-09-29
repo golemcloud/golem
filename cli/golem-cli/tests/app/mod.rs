@@ -897,9 +897,7 @@ async fn test_ts_code_first_complex() {
 
     ctx.cd(app_name);
 
-    let outputs = ctx
-        .cli([cmd::COMPONENT, cmd::NEW, "ts", "ts:agent"])
-        .await;
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "ts:agent"]).await;
 
     assert!(outputs.success());
 
@@ -931,19 +929,19 @@ async fn test_ts_code_first_complex() {
                 template: ts
         "# },
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         "../../test-components/ts-code-first/components-ts/ts-agent/src/main.ts",
         &component_source_code_main_file,
     )
-        .unwrap();
+    .unwrap();
 
     fs::copy(
         "../../test-components/ts-code-first/components-ts/ts-agent/src/model.ts",
         &component_source_code_model_file,
     )
-        .unwrap();
+    .unwrap();
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
     assert!(outputs.success());
@@ -961,7 +959,7 @@ async fn test_ts_code_first_complex() {
             cmd::INVOKE,
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-void-return",
-            "\"sample\""
+            "\"sample\"",
         ])
         .await;
 
@@ -975,7 +973,7 @@ async fn test_ts_code_first_complex() {
             cmd::INVOKE,
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-no-return",
-            "\"sample\""
+            "\"sample\"",
         ])
         .await;
 
@@ -995,7 +993,7 @@ async fn test_ts_code_first_complex() {
             "{a: some(case1(\"foo\"))}",
             "{a: some(\"foo\")}",
             "some(\"foo\")",
-            "some(case3(\"foo\"))"
+            "some(case3(\"foo\"))",
         ])
         .await;
 
@@ -1027,7 +1025,7 @@ async fn test_ts_code_first_complex() {
             cmd::INVOKE,
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-object-complex-type",
-            argument
+            argument,
         ])
         .await;
 
@@ -1097,7 +1095,7 @@ async fn test_ts_code_first_complex() {
             cmd::INVOKE,
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-boolean",
-            "true"
+            "true",
         ])
         .await;
 
