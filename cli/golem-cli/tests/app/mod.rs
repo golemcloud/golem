@@ -877,8 +877,9 @@ async fn test_ts_counter() {
 }
 
 // A test that covers some complex types and functions of TypeScript code-first components.
-// Only some hand-picked corner cases are added, which was observed during manual testing
-// where failed at golem execution stage (after a successful type extraction)
+// Some of these types or functions failed during the initial stages of code-first release,
+// at golem execution stage (post type extraction).
+// This test serves as a regression test to catch such issues in the future.
 #[test]
 async fn test_ts_code_first_complex() {
     let mut ctx = TestContext::new();
@@ -949,7 +950,25 @@ async fn test_ts_code_first_complex() {
 
     let uuid = Uuid::new_v4().to_string();
 
-    // fun no return
+    // All invokes internally has an RPC call (refer to ts-code-first agent in test-components)
+    // Some of the complex types tested below were observed to fail at the golem execution stage
+    // (and not during type extraction) during manual testing.
+
+    // fun with void return
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-void-return",
+            "\"sample\""
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // fun without return type
     let outputs = ctx
         .cli([
             flag::YES,
@@ -983,6 +1002,20 @@ async fn test_ts_code_first_complex() {
 
     assert!(outputs.success());
 
+    // function with a simple object
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-object-type",
+            r#"{a: "foo", b: 42, c: true}"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
     // function with a very complex object
     let argument = r#"
       {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
@@ -996,6 +1029,216 @@ async fn test_ts_code_first_complex() {
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-object-complex-type",
             argument
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // union type that has anonymous terms
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-union-type",
+            r#"union-type1("foo")"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A complex union type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-union-complex-type",
+            r#"union-complex-type1("foo")"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A number type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-number",
+            "42",
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A string type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-string",
+            r#""foo""#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A boolean type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-boolean",
+            "true"
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A map type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-map",
+            r#"[("foo", 42), ("bar", 42)]"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A tagged union
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-tagged-union",
+            r#"a("foo")"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A simple tuple type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-tuple-type",
+            r#"("foo", 42, true)"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A complex tuple type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-tuple-complex-type",
+            r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A list complex type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-list-complex-type",
+            r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A function with null return
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-null-return",
+            r#""foo""#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A function with undefined return
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-undefined-return",
+            r#""foo""#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A function with result type
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-result-exact",
+            r#"ok("foo")"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A function with (untagged) result-like type with optional ok and error
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-either-optional",
+            r#"{ok: some("foo"), err: some("foo")}"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // An arrow function
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-arrow-sync",
+            r#""foo""#,
         ])
         .await;
 
