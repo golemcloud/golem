@@ -876,7 +876,9 @@ async fn test_ts_counter() {
     assert!(outputs.stdout_contains("- 1"));
 }
 
-// We can expand this to be property based testing in the future
+// A test that covers some complex types and functions of TypeScript code-first components.
+// Only some hand-picked corner cases are added, which was observed during manual testing
+// where failed at golem execution stage (after a successful type extraction)
 #[test]
 async fn test_ts_code_first_complex() {
     let mut ctx = TestContext::new();
@@ -961,7 +963,7 @@ async fn test_ts_code_first_complex() {
 
     assert!(outputs.success());
 
-    // function optional
+    // function optional (that has null, defined as union)
     let outputs = ctx
         .cli([
             flag::YES,
@@ -976,6 +978,24 @@ async fn test_ts_code_first_complex() {
             "{a: some(\"foo\")}",
             "some(\"foo\")",
             "some(case3(\"foo\"))"
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // function with a very complex object
+    let argument = r#"
+      {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
+    "#;
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-object-complex-type",
+            argument
         ])
         .await;
 
