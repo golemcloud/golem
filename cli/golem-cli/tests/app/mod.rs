@@ -882,6 +882,7 @@ async fn test_ts_counter() {
 // Early in the code-first release, some of these cases failed at the Golem execution stage
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
+// we can keep expanding this (with generated inputs) and assert on round trip values
 #[test]
 async fn test_ts_code_first_complex() {
     let mut ctx = TestContext::new();
@@ -951,7 +952,7 @@ async fn test_ts_code_first_complex() {
     assert!(outputs.success());
 
     let uuid = Uuid::new_v4().to_string();
-    
+
     // fun with void return
     let outputs = ctx
         .cli([
@@ -1237,6 +1238,40 @@ async fn test_ts_code_first_complex() {
             &format!("ts:agent/foo-agent(\"{uuid}\")"),
             "fun-arrow-sync",
             r#""foo""#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // A function that takes many inputs
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-all",
+            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
+            r#"union-type1("foo")"#,
+            r#"union-complex-type1("foo")"#,
+            r#"42"#,
+            r#""foo""#,
+            r#"true"#,
+            r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
+            r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
+            r#"("foo", 42, true)"#,
+            r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
+            r#"{a: "foo", b: 42, c: true}"#,
+            r#"okay("foo")"#,
+            r#"{ok: some("foo"), err: some("foo")}"#,
+            r#"some(case1("foo"))"#,
+            r#"{a: some("foo")}"#,
+            r#"{a: some(case1("foo"))}"#,
+            r#"{a: some(case1("foo"))}"#,
+            r#"{a: some("foo")}"#,
+            r#"some("foo")"#,
+            r#"some(case3("foo"))"#,
+            r#"a("foo")"#,
         ])
         .await;
 
