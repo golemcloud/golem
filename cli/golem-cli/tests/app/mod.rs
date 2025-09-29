@@ -876,13 +876,11 @@ async fn test_ts_counter() {
     assert!(outputs.stdout_contains("- 1"));
 }
 
-// Regression test for complex TypeScript code-first components.
-// Each function call is executed via RPC (which uses the same input and output type),
-// and the return type is mostly the input type itself.
+// Invocations on code-first typescript agents, with complex types / functions.
+// Each function call is executed via RPC, and at every stage, mostly return type is same as input type.
 // Early in the code-first release, some of these cases failed at the Golem execution stage
 // (post type extraction). This test ensures such issues are caught automatically
 // and act as a regression-test.
-// we can keep expanding this (with generated inputs) and assert on round trip values
 #[test]
 async fn test_ts_code_first_complex() {
     let mut ctx = TestContext::new();
@@ -949,44 +947,29 @@ async fn test_ts_code_first_complex() {
     let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
     assert!(outputs.success());
 
-    let uuid = Uuid::new_v4().to_string();
+    async fn run_and_assert(ctx: &TestContext, func: &str, args: &[&str]) {
+        let uuid = Uuid::new_v4().to_string();
+
+        let agent_constructor = format!("ts:agent/foo-agent(\"{uuid}\")");
+
+        let mut cmd = vec![flag::YES, cmd::AGENT, cmd::INVOKE, &agent_constructor, func];
+        cmd.extend_from_slice(args);
+
+        let outputs = ctx.cli(cmd).await;
+        assert!(outputs.success(), "function {func} failed");
+    }
 
     // fun with void return
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-void-return",
-            "\"sample\"",
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-void-return", &["\"sample\""]).await;
 
     // fun without return type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-no-return",
-            "\"sample\"",
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-no-return", &["\"sample\""]).await;
 
     // function optional (that has null, defined as union)
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-optional",
+    run_and_assert(
+        &ctx,
+        "fun-optional",
+        &[
             "some(case1(\"foo\"))",
             "{a: some(\"foo\")}",
             "{a: some(case1(\"foo\"))}",
@@ -994,314 +977,128 @@ async fn test_ts_code_first_complex() {
             "{a: some(\"foo\")}",
             "some(\"foo\")",
             "some(case3(\"foo\"))",
-        ])
-        .await;
-
-    assert!(outputs.success());
+        ],
+    )
+    .await;
 
     // function with a simple object
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-object-type",
-            r#"{a: "foo", b: 42, c: true}"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-object-type", &[r#"{a: "foo", b: 42, c: true}"#]).await;
 
     // function with a very complex object
     let argument = r#"
       {a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}
     "#;
 
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-object-complex-type",
-            argument,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-object-complex-type", &[argument]).await;
 
     // union type that has anonymous terms
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-union-type",
-            r#"union-type1("foo")"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-union-type", &[r#"union-type1("foo")"#]).await;
 
     // A complex union type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-union-complex-type",
-            r#"union-complex-type1("foo")"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(
+        &ctx,
+        "fun-union-complex-type",
+        &[r#"union-complex-type1("foo")"#],
+    )
+    .await;
 
     // Union that includes literals and boolean (string literal input)
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-union-with-literals",
-            r#"lit1"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-union-with-literals", &[r#"lit1"#]).await;
 
     // Union that includes literals and boolean (boolean input)
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-union-with-literals",
-            r#"union-with-literals1(true)"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(
+        &ctx,
+        "fun-union-with-literals",
+        &[r#"union-with-literals1(true)"#],
+    )
+    .await;
 
     // A number type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-number",
-            "42",
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-number", &["42"]).await;
 
     // A string type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-string",
-            r#""foo""#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-string", &[r#""foo""#]).await;
 
     // A boolean type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-boolean",
-            "true",
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-boolean", &["true"]).await;
 
     // A map type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-map",
-            r#"[("foo", 42), ("bar", 42)]"#,
-        ])
-        .await;
+    run_and_assert(&ctx, "fun-map", &[r#"[("foo", 42), ("bar", 42)]"#]).await;
 
     assert!(outputs.success());
 
     // A tagged union
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-tagged-union",
-            r#"a("foo")"#,
-        ])
-        .await;
+    run_and_assert(&ctx, "fun-tagged-union", &[r#"a("foo")"#]).await;
 
     assert!(outputs.success());
 
     // A simple tuple type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-tuple-type",
-            r#"("foo", 42, true)"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-tuple-type", &[r#"("foo", 42, true)"#]).await;
 
     // A complex tuple type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-tuple-complex-type",
-            r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(
+        &ctx,
+        "fun-tuple-complex-type",
+        &[r#"("foo", 42, {a: "foo", b: 42, c: true})"#],
+    )
+    .await;
 
     // A list complex type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-list-complex-type",
-            r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(
+        &ctx,
+        "fun-list-complex-type",
+        &[r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#],
+    ).await;
 
     // A function with null return
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-null-return",
-            r#""foo""#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-null-return", &[r#""foo""#]).await;
 
     // A function with undefined return
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-undefined-return",
-            r#""foo""#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-undefined-return", &[r#""foo""#]).await;
 
     // A function with result type
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-result-exact",
-            r#"ok("foo")"#,
-        ])
-        .await;
+    run_and_assert(&ctx, "fun-result-exact", &[r#"ok("foo")"#]).await;
 
-    assert!(outputs.success());
-
-    // A function with (untagged) result-like type with optional ok and error
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-either-optional",
-            r#"{ok: some("foo"), err: some("foo")}"#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    // A function with (untagged) result-like type - but not result
+    run_and_assert(
+        &ctx,
+        "fun-either-optional",
+        &[r#"{ok: some("foo"), err: none}"#],
+    )
+    .await;
 
     // An arrow function
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
-            "fun-arrow-sync",
-            r#""foo""#,
-        ])
-        .await;
-
-    assert!(outputs.success());
+    run_and_assert(&ctx, "fun-arrow-sync", &[r#""foo""#]).await;
 
     // A function that takes many inputs
-    let outputs = ctx
-        .cli([
-            flag::YES,
-            cmd::AGENT,
-            cmd::INVOKE,
-            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+    run_and_assert(
+            &ctx,
             "fun-all",
-            r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
-            r#"union-type1("foo")"#,
-            r#"union-complex-type1("foo")"#,
-            r#"42"#,
-            r#""foo""#,
-            r#"true"#,
-            r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
-            r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
-            r#"("foo", 42, true)"#,
-            r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
-            r#"{a: "foo", b: 42, c: true}"#,
-            r#"okay("foo")"#,
-            r#"{ok: some("foo"), err: some("foo")}"#,
-            r#"some(case1("foo"))"#,
-            r#"{a: some("foo")}"#,
-            r#"{a: some(case1("foo"))}"#,
-            r#"{a: some(case1("foo"))}"#,
-            r#"{a: some("foo")}"#,
-            r#"some("foo")"#,
-            r#"some(case3("foo"))"#,
-            r#"a("foo")"#,
-        ])
+            &[
+                r#"{a: "foo", b: 42, c: true, d: {a: "foo", b: 42, c: true}, e: union-type1("foo"), f: ["foo", "foo", "foo"], g: [{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}], h: ("foo", 42, true), i: ("foo", 42, {a: "foo", b: 42, c: true}), j: [("foo", 42), ("foo", 42), ("foo", 42)], k: {n: 42}}"#,
+                r#"union-type1("foo")"#,
+                r#"union-complex-type1("foo")"#,
+                r#"42"#,
+                r#""foo""#,
+                r#"true"#,
+                r#"[("foo", 42), ("foo", 42), ("foo", 42)]"#,
+                r#"("foo", 42, {a: "foo", b: 42, c: true})"#,
+                r#"("foo", 42, true)"#,
+                r#"[{a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}, {a: "foo", b: 42, c: true}]"#,
+                r#"{a: "foo", b: 42, c: true}"#,
+                r#"okay("foo")"#,
+                r#"{ok: some("foo"), err: some("foo")}"#,
+                r#"some(case1("foo"))"#,
+                r#"{a: some("foo")}"#,
+                r#"{a: some(case1("foo"))}"#,
+                r#"{a: some(case1("foo"))}"#,
+                r#"{a: some("foo")}"#,
+                r#"some("foo")"#,
+                r#"some(case3("foo"))"#,
+                r#"a("foo")"#
+            ],
+        )
         .await;
-
-    assert!(outputs.success());
 }
 
 #[test]
