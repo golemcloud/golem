@@ -158,6 +158,8 @@ services:
       GOLEM__WORKER_GRPC_PORT: ${WORKER_SERVICE_GRPC_PORT}
     volumes:
       - blob_storage:/blob_storage
+    ports:
+      - "${WORKER_SERVICE_CUSTOM_REQUEST_PORT}:${WORKER_SERVICE_CUSTOM_REQUEST_PORT}"
     depends_on:
       postgres:
         condition: service_healthy
