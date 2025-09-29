@@ -24,7 +24,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
-use crate::services::plugins::{PluginsService, PluginsObservations};
+use crate::services::plugins::{PluginsService};
 use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
@@ -65,7 +65,7 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (Arc<dyn PluginsService>, Arc<dyn PluginsObservations>) {
+    ) -> (Arc<dyn PluginsService>, Arc<dyn PluginsService>) {
         let plugins = crate::services::plugins::configured(&golem_config.plugin_service);
         (plugins.clone(), plugins)
     }
@@ -74,7 +74,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
-        plugin_observations: Arc<dyn PluginsObservations>,
+        plugin_observations: Arc<dyn PluginsService>,
         project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(

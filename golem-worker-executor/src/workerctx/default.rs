@@ -46,7 +46,6 @@ use crate::workerctx::{
 };
 use anyhow::Error;
 use async_trait::async_trait;
-use golem_common::base_model::ProjectId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
@@ -58,6 +57,7 @@ use golem_common::model::{
     OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
@@ -348,10 +348,10 @@ impl ExternalOperations<Context> for Context {
 
     async fn record_last_known_limits<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        let project_owner = this.project_service().get_project_owner(project_id).await?;
+        let project_owner = this.project_service().get_project_owner(environment_id).await?;
         this.resource_limits()
             .update_last_known_limits(&project_owner, last_known_limits)
             .await

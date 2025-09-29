@@ -694,7 +694,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),
@@ -1031,7 +1031,7 @@ mod tests {
             worker_name: "inst2".to_string(),
         };
 
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
 
         let p1: PromiseId = PromiseId {
             worker_id: i1.clone(),

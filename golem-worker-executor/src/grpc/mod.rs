@@ -944,8 +944,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid component id"))?;
 
-        let project_id: ProjectId = request
-            .project_id
+        let environment_id: EnvironmentId = request
+            .environment_id
             .and_then(|t| t.try_into().ok())
             .ok_or(WorkerExecutorError::invalid_request("Invalid project id"))?;
 
@@ -957,7 +957,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (new_cursor, workers) = self
             .worker_enumeration_service()
             .get(
-                &project_id,
+                &environment_id,
                 &component_id,
                 filter,
                 request

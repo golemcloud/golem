@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::authorised_grpc_request;
+use golem_service_base::grpc::authorised_grpc_request;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
