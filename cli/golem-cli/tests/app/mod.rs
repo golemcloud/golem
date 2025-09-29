@@ -930,13 +930,13 @@ async fn test_ts_code_first_complex() {
     .unwrap();
 
     fs::copy(
-        "../../test-components/ts-code-first/components-ts/ts-agent/src/main.ts",
+        "test-data/ts-code-first-snippets/main.ts",
         &component_source_code_main_file,
     )
     .unwrap();
 
     fs::copy(
-        "../../test-components/ts-code-first/components-ts/ts-agent/src/model.ts",
+        "test-data/ts-code-first-snippets/model.ts",
         &component_source_code_model_file,
     )
     .unwrap();
