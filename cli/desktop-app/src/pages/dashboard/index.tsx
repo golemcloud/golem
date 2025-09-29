@@ -19,8 +19,8 @@ import {
   Send,
   Loader2,
 } from "lucide-react";
-import { YamlViewerModal } from "@/components/yaml-viewer-modal";
 import { useLogViewer } from "@/contexts/log-viewer-context";
+import { YamlViewerModal } from "@/components/yaml-viewer-modal";
 
 export const Dashboard = () => {
   const { appId } = useParams();
@@ -36,7 +36,6 @@ export const Dashboard = () => {
     clean: false,
   });
   const [isYamlModalOpen, setIsYamlModalOpen] = useState(false);
-  const [yamlContent, setYamlContent] = useState<string>("");
 
   useEffect(() => {
     // If no app ID is in the URL, redirect to home
@@ -233,19 +232,9 @@ export const Dashboard = () => {
       });
   };
 
-  const handleViewYaml = async () => {
+  const handleViewYaml = () => {
     if (!appId) return;
-    try {
-      const yamlContent = await API.manifestService.getAppYamlContent(appId);
-      setYamlContent(yamlContent);
-      setIsYamlModalOpen(true);
-    } catch (error) {
-      toast({
-        title: "Failed to Load YAML",
-        description: String(error),
-        variant: "destructive",
-      });
-    }
+    setIsYamlModalOpen(true);
   };
 
   return (
@@ -343,14 +332,10 @@ export const Dashboard = () => {
         </div>
       </div>
 
-      {/* YAML Viewer Modal */}
       <YamlViewerModal
         isOpen={isYamlModalOpen}
         onOpenChange={setIsYamlModalOpen}
-        title="Application Manifest (golem.yaml)"
-        yamlContent={yamlContent}
-        appId={appId}
-        isAppYaml={true}
+        appId={appId || ""}
       />
     </div>
   );
