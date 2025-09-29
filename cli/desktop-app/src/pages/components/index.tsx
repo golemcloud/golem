@@ -11,10 +11,11 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { API } from "@/service";
-import { ComponentList } from "@/types/component";
+import { ComponentList, UnbuiltComponent } from "@/types/component";
 import { Agent } from "@/types/agent";
 import { LayoutGrid, PlusCircle } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { UnbuiltComponentCard } from "./unbuilt-component-card";
 import { useNavigate, useParams } from "react-router-dom";
 
 /**
@@ -187,6 +188,8 @@ const Components = () => {
   const [filteredComponents, setFilteredComponents] = useState<ComponentMap>(
     {},
   );
+  const [unbuiltComponents, setUnbuiltComponents] = useState<UnbuiltComponent[]>([]);
+  const [filteredUnbuiltComponents, setFilteredUnbuiltComponents] = useState<UnbuiltComponent[]>([]);
   const [agentList, setAgentList] = useState<AgentStatusMap>({});
   const [searchQuery, setSearchQuery] = useState("");
   const { appId } = useParams<{ appId: string }>();
@@ -196,9 +199,16 @@ const Components = () => {
    */
   const fetchComponentsAndMetrics = useCallback(async () => {
     try {
+      // Fetch built components
       const response = await API.componentService.getComponentByIdAsKey(appId!);
       setComponentList(response);
       setFilteredComponents(response);
+
+      // Fetch all unbuilt components from folders
+      const actuallyUnbuilt = await API.componentService.getUnbuiltComponents(appId!);
+
+      setUnbuiltComponents(actuallyUnbuilt);
+      setFilteredUnbuiltComponents(actuallyUnbuilt);
 
       const componentStatus: AgentStatusMap = {};
 
@@ -252,14 +262,17 @@ const Components = () => {
     const timeoutId = setTimeout(() => {
       if (!searchQuery) {
         setFilteredComponents(componentList);
+        setFilteredUnbuiltComponents(unbuiltComponents);
         return;
       }
 
-      // Filter matches where the component name includes the user’s search text
+      const searchLower = searchQuery.toLowerCase();
+
+      // Filter built components
       const filtered = Object.entries(componentList).reduce(
         (acc, [key, component]) => {
           const componentName = component.componentName?.toLowerCase() || "";
-          if (componentName.includes(searchQuery.toLowerCase())) {
+          if (componentName.includes(searchLower)) {
             acc[key] = component;
           }
           return acc;
@@ -267,11 +280,17 @@ const Components = () => {
         {} as ComponentMap,
       );
 
+      // Filter unbuilt components
+      const filteredUnbuilt = unbuiltComponents.filter(comp =>
+        comp.name.toLowerCase().includes(searchLower)
+      );
+
       setFilteredComponents(filtered);
+      setFilteredUnbuiltComponents(filteredUnbuilt);
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [searchQuery, componentList]);
+  }, [searchQuery, componentList, unbuiltComponents]);
 
   /**
    * Memoized empty state component to render when no components are found
@@ -329,10 +348,21 @@ const Components = () => {
         </div>
 
         {/* Main Content: Grid of components or empty state */}
-        {Object.keys(filteredComponents).length === 0 ? (
+        {Object.keys(filteredComponents).length === 0 && filteredUnbuiltComponents.length === 0 ? (
           EmptyState
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 overflow-scroll max-h-[78vh] px-4">
+            {/* Unbuilt components first */}
+            {filteredUnbuiltComponents.map((unbuilt) => (
+              <UnbuiltComponentCard
+                key={unbuilt.name}
+                name={unbuilt.name}
+                appId={appId!}
+                onBuildComplete={fetchComponentsAndMetrics}
+              />
+            ))}
+
+            {/* Built components */}
             {Object.values(filteredComponents).map(data => (
               <ComponentCard
                 key={data.componentId}
