@@ -30,14 +30,14 @@ default_to_workspace = false # by default, we run cargo commands on top level in
 skip_core_tasks = true       # we are not using the predefined cargo-make flows, instead redefine here for more clarity
 
 [env]
-JUNIT_OPTS = "--nocapture --report-time"
-JUNIT_OPTS_WIN = "--report-time"
+JUNIT_OPTS = "--nocapture --report-time --test-threads=1"
+JUNIT_OPTS_WIN = "--nocapture --report-time --test-threads=1"
 AWS_EC2_METADATA_DISABLED = "true"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
 # CARGO_LOG="cargo::core::compiler::fingerprint=trace"
-JUNIT_OPTS = "--nocapture --report-time --format junit --logfile target/report.xml"
+JUNIT_OPTS = "--nocapture --report-time --test-threads=1 --format junit --logfile target/report.xml"
 JUNIT_OPTS_WIN = "--color=never --test-threads=1 --report-time --format junit"
 CI = "true"
 
@@ -642,9 +642,9 @@ dependencies = ["build-bins-all"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests.windows]

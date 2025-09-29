@@ -31,8 +31,10 @@ use test_r::test;
 
 #[test]
 async fn all_wit_types() {
-    let source = test_data_path().join("wit/all-wit-types");
+    let source = test_data_path().join("wit")
+        .join("all-wit-types");
     let source_wit_root = tempdir().unwrap();
+    println!("temp: {:?}", source_wit_root.path());
 
     fs_extra::dir::copy(
         source,
@@ -356,8 +358,9 @@ async fn all_wit_types() {
 
 #[test]
 async fn resource() {
-    let source = test_data_path().join("wit/resources");
+    let source = test_data_path().join("wit").join("resources");
     let source_wit_root = tempdir().unwrap();
+    println!("temp: {:?}", source_wit_root.path());
 
     fs_extra::dir::copy(
         source,
@@ -409,8 +412,9 @@ async fn resource() {
 
 #[test]
 async fn circular_resources() {
-    let source = test_data_path().join("wit/circular-resources");
+    let source = test_data_path().join("wit").join("circular-resources");
     let source_wit_root = tempdir().unwrap();
+    println!("temp: {:?}", source_wit_root.path());
 
     fs_extra::dir::copy(
         source,
@@ -470,8 +474,9 @@ async fn circular_resources() {
 #[test]
 #[ignore] // wit parser currently fails on inline types and resources with `Type not part of an interface`
 async fn inline_resources() {
-    let source = test_data_path().join("wit/inline-resources");
+    let source = test_data_path().join("wit").join("inline-resources");
     let source_wit_root = tempdir().unwrap();
+    println!("temp: {:?}", source_wit_root.path());
 
     fs_extra::dir::copy(
         source,

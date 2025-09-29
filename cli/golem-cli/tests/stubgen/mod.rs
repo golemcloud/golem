@@ -28,8 +28,8 @@ tag_suite!(stub_wasm, uses_cargo);
 
 static TEST_DATA_PATH: &str = "test-data";
 
-pub fn test_data_path() -> &'static Path {
-    Path::new(TEST_DATA_PATH)
+pub fn test_data_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join(TEST_DATA_PATH)
 }
 
 pub fn golem_rust_override() -> RustDependencyOverride {

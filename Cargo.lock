@@ -4224,6 +4224,7 @@ dependencies = [
  "tracing",
  "tracing-log",
  "tracing-subscriber",
+ "unix_path",
  "url",
  "uuid",
  "version-compare",

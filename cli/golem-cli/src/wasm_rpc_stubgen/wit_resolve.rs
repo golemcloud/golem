@@ -1131,8 +1131,10 @@ mod tests {
 
     #[test]
     fn test_exported_functions() {
+        let base_path = PathBuf::from_iter([
+            std::env!("CARGO_MANIFEST_DIR"), "test-data", "wit", "many-ways-to-export"]);
         let resolved =
-            ResolvedWitDir::new(&PathBuf::from("test-data/wit/many-ways-to-export")).unwrap();
+            ResolvedWitDir::new(&base_path).unwrap();
         let mut exports = resolved.exported_functions().unwrap();
         exports.sort();
         assert_eq!(

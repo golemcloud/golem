@@ -35,6 +35,7 @@ use std::str::FromStr;
 use tempfile::TempDir;
 use wit_encoder::{packages_from_parsed, Package, PackageName};
 use wit_parser::Resolve;
+use crate::stubgen::test_data_path;
 
 test_r::enable!();
 
@@ -165,7 +166,8 @@ fn many_ways_to_export_no_collision() {
     assert_has_same_wit_package(
         &PackageName::new("test", "sub", None),
         &dest_wit_root,
-        Path::new("test-data/wit/many-ways-to-export/deps/sub/sub.wit"),
+        test_data_path().join("wit").join("many-ways-to-export")
+           .join("deps").join("sub").as_path(),
     );
 }
 
@@ -567,7 +569,7 @@ fn init_stub(name: &str) -> (TempDir, TempDir) {
     let canonical_source = source.path().canonicalize().unwrap();
 
     fs_extra::dir::copy(
-        Path::new("test-data/wit").join(name),
+        PathBuf::from_iter([env!("CARGO_MANIFEST_DIR"), "test-data", "wit", name]).to_str().unwrap(),
         &canonical_source,
         &CopyOptions::new().content_only(true),
     )
@@ -616,7 +618,10 @@ fn init_caller(name: &str) -> TempDir {
         .disable_cleanup(true)
         .tempdir()
         .unwrap();
-    let source = Path::new("test-data/wit").join(name);
+
+    let source = test_data_path()
+        .join("wit")
+        .join(name);
 
     fs_extra::dir::copy(
         source,

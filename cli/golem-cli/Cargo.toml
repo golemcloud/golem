@@ -105,6 +105,7 @@ toml_edit = { workspace = true }
 tracing = { workspace = true }
 tracing-log = "0.2.0"
 tracing-subscriber = { workspace = true }
+unix_path = "1.0.1"
 url = { workspace = true }
 uuid = { workspace = true }
 version-compare = { workspace = true }

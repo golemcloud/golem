@@ -18,6 +18,7 @@ use std::cmp::PartialEq;
 use std::fs::{Metadata, OpenOptions};
 use std::io::Write;
 use std::path::{Component, Path, PathBuf};
+use unix_path::{PathBuf as UnixPathBuf};
 use std::time::SystemTime;
 use wax::{Glob, LinkBehavior, WalkBehavior};
 
@@ -46,12 +47,17 @@ pub fn copy<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> anyhow::Result<u6
         .context("Failed to create target dir")
         .with_context(context)?;
 
-    let bytes = std::fs::copy(&from, &to).with_context(context)?;
+    let mut from_file = std::fs::File::open(&from).with_context(context)?;
+    let to_file = std::fs::File::create(&to).with_context(context)?;
 
-    std::fs::File::open(&to)
-        .and_then(|to| to.set_modified(SystemTime::now()))
+    let bytes = std::io::copy(&mut from_file, &mut &to_file).with_context(context)?;
+
+    to_file
+        .set_modified(SystemTime::now())
         .context("Failed to update target modification time")
         .with_context(context)?;
+
+    to_file.sync_all().with_context(context)?;
 
     Ok(bytes)
 }
@@ -477,11 +483,11 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
     let glob = glob.as_ref();
     let path = Path::new(glob);
     let mut prefix_path = PathBuf::new();
-    let mut resolved_path = PathBuf::new();
+    let mut resolved_path = UnixPathBuf::new();
     let mut prefix_ended = false;
 
     for component in base_dir.as_ref().components() {
-        prefix_path.push( component );
+        prefix_path.push( component.as_os_str().to_str().unwrap() );
     }
 
     for component in path.components() {
@@ -510,11 +516,11 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
                         );
                     }
                 } else {
-                    prefix_path.push(component);
+                    prefix_path.push( component.as_os_str().to_str().unwrap() );
                 }
             }
             Component::Normal(component) => {
-                resolved_path.push(component);
+                resolved_path.push( component.to_str().unwrap() );
                 prefix_ended = true;
             }
         }
@@ -522,7 +528,7 @@ pub fn resolve_relative_glob<P: AsRef<Path>, S: AsRef<str>>(
 
     Ok((
         prefix_path.clone(),
-        PathExtra::new(resolved_path).to_string()?,
+        PathExtra::new( resolved_path.to_str().unwrap() ).to_string()?,
     ))
 }
 
@@ -561,7 +567,6 @@ mod test {
     use test_r::test;
 
     #[test]
-    #[cfg(not(windows))]
     fn resolve_relative_globs() {
         let base_dir = PathBuf::from("somedir/somewhere");
 
@@ -581,23 +586,11 @@ mod test {
     }
 
     #[test]
-    #[cfg(windows)]
-    fn resolve_relative_globs() {
+    fn resolve_relative_wildcard_glob() {
         let base_dir = PathBuf::from("somedir/somewhere");
-        let expect_base_dir = PathBuf::from("somedir\\somewhere");
 
-        check!(resolve_relative_glob(&base_dir, "").unwrap() == (base_dir.clone(), "".to_string()));
-        check!(
-            resolve_relative_glob(&base_dir, "somepath/a/b/c").unwrap()
-                == (expect_base_dir.clone(), "somepath\\a\\b\\c".to_string())
-        );
-        check!(
-            resolve_relative_glob(&base_dir, "../../target").unwrap()
-                == (expect_base_dir.join("..\\.."), "target".to_string())
-        );
-        check!(
-            resolve_relative_glob(&base_dir, "./.././../../target/a/b/../././c/d/.././..").unwrap()
-                == (expect_base_dir.join("..\\..\\.."), "target\\a".to_string())
-        );
+        let result = resolve_relative_glob(&base_dir, "common-*/golem.yml").unwrap();
+        check!( result.0 == base_dir.clone() );
+        check!( result.1 == "common-*/golem.yml".to_string() );
     }
 }

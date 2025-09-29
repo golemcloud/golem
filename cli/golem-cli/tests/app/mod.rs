@@ -1255,24 +1255,42 @@ impl Drop for TestContext {
 }
 
 impl TestContext {
+    #[cfg(windows)]
+    const GOLEM_EXE_NAME: &'static str = "golem.exe";
+    #[cfg(not(windows))]
+    const GOLEM_EXE_NAME: &'static str = "golem";
+
+    #[cfg(windows)]
+    const GOLEM_CLI_EXE_NAME: &'static str = "golem-cli.exe";
+    #[cfg(not(windows))]
+    const GOLEM_CLI_EXE_NAME: &'static str = "golem-cli";
+
     fn new() -> Self {
         let test_dir = TempDir::new().unwrap();
         let working_dir = test_dir.path().to_path_buf();
+        let target_dir = Path::new( env!("CARGO_MANIFEST_DIR") )
+            .join( ".." ).join( ".." )
+            .join( "target" )
+            .join("debug");
 
         let ctx = Self {
-            golem_path: PathBuf::from("../../target/debug/golem")
+            golem_path: target_dir.join(TestContext::GOLEM_EXE_NAME)
                 .canonicalize()
                 .unwrap_or_else(|_| {
                     panic!(
-                        "golem binary not found in ../../target/debug/golem, with current dir: {:?}",
+                        "golem binary not found in {:?}/{:?}, with current dir: {:?}",
+                        target_dir,
+                        TestContext::GOLEM_EXE_NAME,
                         std::env::current_dir().unwrap()
                     );
                 }),
-            golem_cli_path: PathBuf::from("../../target/debug/golem-cli")
+            golem_cli_path: target_dir.join(TestContext::GOLEM_CLI_EXE_NAME)
                 .canonicalize()
                 .unwrap_or_else(|_| {
                     panic!(
-                        "golem binary not found in ../../target/debug/golem-cli, with current dir: {:?}",
+                        "golem binary not found in {:?}{:?}, with current dir: {:?}",
+                        target_dir,
+                        TestContext::GOLEM_CLI_EXE_NAME,
                         std::env::current_dir().unwrap()
                     );
                 }),
