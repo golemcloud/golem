@@ -877,6 +877,90 @@ async fn test_ts_counter() {
 }
 
 #[test]
+async fn test_ts_code_first_complex() {
+    let mut ctx = TestContext::new();
+
+    let app_name = "ts-code-first";
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "ts", "ts:agent"])
+        .await;
+
+    assert!(outputs.success());
+
+    let component_manifest_path = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("ts-agent")
+            .join("golem.yaml"),
+    );
+
+    let component_source_code_main_file = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("ts-agent")
+            .join("src")
+            .join("main.ts"),
+    );
+
+    let component_source_code_model_file = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("ts-agent")
+            .join("src")
+            .join("model.ts"),
+    );
+
+    fs::write_str(
+        &component_manifest_path,
+        indoc! { r#"
+            components:
+              ts:agent:
+                template: ts
+        "# },
+    )
+        .unwrap();
+
+    fs::copy(
+        "../../test-components/ts-code-first/components-ts/ts-agent/src/main.ts",
+        &component_source_code_main_file,
+    )
+        .unwrap();
+
+    fs::copy(
+        "../../test-components/ts-code-first/components-ts/ts-agent/src/model.ts",
+        &component_source_code_model_file,
+    )
+        .unwrap();
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY]).await;
+    assert!(outputs.success());
+
+    let uuid = Uuid::new_v4().to_string();
+
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-no-return",
+            "\"sample\""
+        ])
+        .await;
+
+    assert!(outputs.success());
+}
+
+#[test]
 async fn test_common_dep_plugs_errors() {
     let mut ctx = TestContext::new();
     let app_name = "common_dep_plug_errors";
