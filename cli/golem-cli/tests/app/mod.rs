@@ -1017,7 +1017,7 @@ async fn test_ts_code_first_complex() {
     run_and_assert(
         &ctx,
         "fun-union-with-only-literals",
-        &["foo"],
+        &["foo", "bar", "baz"],
     )
         .await;
 
