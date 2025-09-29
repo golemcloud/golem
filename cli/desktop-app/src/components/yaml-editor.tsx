@@ -139,7 +139,7 @@ export function YamlEditor({ value, onChange }: YamlEditorProps) {
   };
 
   return (
-    <div className="relative h-[400px] border rounded-md overflow-hidden">
+    <div className="relative h-full border rounded-md overflow-hidden">
       <Editor
         defaultLanguage="yaml"
         value={value}
@@ -148,7 +148,7 @@ export function YamlEditor({ value, onChange }: YamlEditorProps) {
         onMount={handleEditorDidMount}
         options={{
           minimap: { enabled: false },
-          lineNumbers: "off",
+          lineNumbers: "on",
           roundedSelection: false,
           scrollBeyondLastLine: false,
           readOnly: false,
