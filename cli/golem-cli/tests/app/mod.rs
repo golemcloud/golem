@@ -876,10 +876,12 @@ async fn test_ts_counter() {
     assert!(outputs.stdout_contains("- 1"));
 }
 
-// A test that covers some complex types and functions of TypeScript code-first components.
-// Some of these types or functions failed during the initial stages of code-first release,
-// at golem execution stage (post type extraction).
-// This test serves as a regression test to catch such issues in the future.
+// Regression test for complex TypeScript code-first components.
+// Each function call is executed via RPC (which uses the same input and output type),
+// and the return type is mostly the input type itself.
+// Early in the code-first release, some of these cases failed at the Golem execution stage
+// (post type extraction). This test ensures such issues are caught automatically
+// and act as a regression-test.
 #[test]
 async fn test_ts_code_first_complex() {
     let mut ctx = TestContext::new();
@@ -949,11 +951,7 @@ async fn test_ts_code_first_complex() {
     assert!(outputs.success());
 
     let uuid = Uuid::new_v4().to_string();
-
-    // All invokes internally has an RPC call (refer to ts-code-first agent in test-components)
-    // Some of the complex types tested below were observed to fail at the golem execution stage
-    // (and not during type extraction) during manual testing.
-
+    
     // fun with void return
     let outputs = ctx
         .cli([
