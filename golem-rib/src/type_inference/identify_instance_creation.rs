@@ -196,22 +196,21 @@ fn get_instance_creation_details(
                                 format!("{}(", custom_instance_spec.instance_name);
 
                             let mut exprs = vec![Expr::literal(new_worker_name_prefix)];
+                            let parameter_types =
+                                custom_instance_spec.parameter_types_for_instance_creation();
 
-                            if args.len() != custom_instance_spec.parameter_types.len() {
+                            if args.len() != parameter_types.len() {
                                 return Err(format!(
                                     "expected {} arguments, found {}",
-                                    custom_instance_spec.parameter_types.len(),
+                                    parameter_types.len(),
                                     args.len()
                                 ));
                             }
 
-                            let mut args_iter = args
-                                .iter_mut()
-                                .zip(custom_instance_spec.parameter_types)
-                                .peekable();
+                            let mut args_iter = args.iter_mut().zip(parameter_types).peekable();
 
                             while let Some((arg, analysed_type)) = args_iter.next() {
-                                let inferred_type = InferredType::from(&analysed_type);
+                                let inferred_type = InferredType::from(analysed_type);
                                 arg.add_infer_type_mut(inferred_type);
 
                                 match arg {
@@ -228,7 +227,7 @@ fn get_instance_creation_details(
                                     | Expr::Call { .. }
                                     | Expr::GenerateWorkerName { .. }
                                     | Expr::InvokeMethodLazy { .. } => {
-                                        quote_string(&analysed_type, &mut exprs, arg)
+                                        quote_string(analysed_type, &mut exprs, arg)
                                     }
 
                                     // Can't never be a string

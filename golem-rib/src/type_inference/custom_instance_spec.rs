@@ -18,7 +18,8 @@ use golem_wasm_ast::analysis::AnalysedType;
 #[derive(Clone, Debug)]
 pub struct CustomInstanceSpec {
     pub instance_name: String,
-    pub parameter_types: Vec<AnalysedType>,
+    pub parameter_types_for_rib: Vec<AnalysedType>,
+    pub parameter_types_for_instance_creation: Option<Vec<AnalysedType>>,
     pub interface_name: Option<InterfaceName>,
 }
 
@@ -33,13 +34,22 @@ impl CustomInstanceSpec {
     //                    and has to be part of the ComponentDependencies
     pub fn new(
         instance_name: String,
-        parameter_types: Vec<AnalysedType>,
+        parameter_types_for_rib: Vec<AnalysedType>,
+        parameter_types_for_instance_creation: Option<Vec<AnalysedType>>,
         interface_name: Option<InterfaceName>,
     ) -> Self {
         CustomInstanceSpec {
             instance_name,
-            parameter_types,
+            parameter_types_for_rib,
+            parameter_types_for_instance_creation,
             interface_name,
+        }
+    }
+
+    pub fn parameter_types_for_instance_creation(&self) -> &Vec<AnalysedType> {
+        match &self.parameter_types_for_instance_creation {
+            Some(params) => params,
+            None => &self.parameter_types_for_rib,
         }
     }
 }

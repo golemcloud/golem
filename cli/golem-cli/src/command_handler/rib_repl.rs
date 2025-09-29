@@ -28,6 +28,7 @@ use crate::model::{
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::AgentId;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
@@ -115,7 +116,8 @@ impl RibReplHandler {
             .map(|agent_type| {
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
-                    agent_type.constructor.wit_arg_types(),
+                    agent_type.constructor.arg_types(),
+                    Some(agent_type.constructor.arg_types().to_wit_naming()),
                     Some(rib::InterfaceName {
                         name: agent_type.type_name.to_string(),
                         version: None,
