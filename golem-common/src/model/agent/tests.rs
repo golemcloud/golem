@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentType, AgentTypeResolver, BinaryDescriptor, BinaryReference,
     BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
@@ -19,11 +20,28 @@ use crate::model::agent::{
     NamedElementValues, TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::analysed_type::{field, flags, record, u32};
+use golem_wasm_ast::analysis::analysed_type::{field, flags, list, record, u32};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use test_r::test;
+
+#[test]
+fn agent_id_wave_normalization() {
+    {
+        let agent_id = AgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new()).unwrap();
+        assert_eq!(agent_id.to_string(), "agent-7([12,13,14])");
+    }
+
+    {
+        let agent_id = AgentId::parse(
+            r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#,
+            TestAgentTypes::new(),
+        )
+        .unwrap();
+        assert_eq!(agent_id.to_string(), "agent-3(32,{x:12,y:32,properties:{a,b,c}})");
+    }
+}
 
 #[test]
 fn roundtrip_test_1() {
@@ -68,7 +86,7 @@ fn roundtrip_test_3() {
 }
 
 #[test]
-fn roundtrip_test_4() {
+fn roundtrip_test_4_1() {
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -85,7 +103,7 @@ fn roundtrip_test_4() {
 }
 
 #[test]
-fn roundtrip_test_5() {
+fn roundtrip_test_4_2() {
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -106,7 +124,7 @@ fn roundtrip_test_5() {
 }
 
 #[test]
-fn roundtrip_test_6() {
+fn roundtrip_test_5_1() {
     roundtrip_test(
         "agent-5",
         DataValue::Tuple(ElementValues {
@@ -123,7 +141,7 @@ fn roundtrip_test_6() {
 }
 
 #[test]
-fn roundtrip_test_7() {
+fn roundtrip_test_5_2() {
     roundtrip_test(
         "agent-5",
         DataValue::Tuple(ElementValues {
@@ -146,7 +164,7 @@ fn roundtrip_test_7() {
 }
 
 #[test]
-fn roundtrip_test_8() {
+fn roundtrip_test_6() {
     roundtrip_test(
         "agent-6",
         DataValue::Multimodal(NamedElementValues {
@@ -256,13 +274,10 @@ impl TestAgentTypes {
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
     fn resolve_wit_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        todo!("convert to wit naming, and use find by wit");
-        /*
         self.types
             .get(agent_type)
-            .cloned()
+            .map(|agent_type| agent_type.to_wit_naming())
             .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
-        */
     }
 }
 
@@ -412,6 +427,25 @@ fn test_agent_types() -> HashMap<String, AgentType> {
                             }),
                         },
                     ],
+                }),
+            },
+            methods: vec![],
+            dependencies: vec![],
+        },
+        AgentType {
+            type_name: "agent-7".to_string(),
+            description: "".to_string(),
+            constructor: AgentConstructor {
+                name: None,
+                description: "".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "args".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: list(u32()),
+                        }),
+                    }],
                 }),
             },
             methods: vec![],

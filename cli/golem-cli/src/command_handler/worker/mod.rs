@@ -283,7 +283,7 @@ impl WorkerCommandHandler {
             .await?;
 
         // First, validate without the function name
-        let agent_type = self.validate_worker_and_function_names(
+        let agent_id_and_type = self.validate_worker_and_function_names(
             &component,
             &worker_name_match.worker_name,
             None,
@@ -292,9 +292,9 @@ impl WorkerCommandHandler {
         let matched_function_name = fuzzy_match_function_name(
             function_name,
             component.metadata.exports(),
-            agent_type
+            agent_id_and_type
                 .as_ref()
-                .and_then(|a| agent_interface_name(&component, &a.type_name))
+                .and_then(|a| agent_interface_name(&component, &a.1.type_name))
                 .as_deref(),
         );
         let function_name = match matched_function_name {
@@ -321,7 +321,7 @@ impl WorkerCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,
-                        agent_type.as_ref(),
+                        agent_id_and_type.as_ref().map(|a| &a.1),
                     ));
 
                     bail!(NonSuccessfulExit);
@@ -335,7 +335,7 @@ impl WorkerCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,
-                        agent_type.as_ref(),
+                        agent_id_and_type.as_ref().map(|a| &a.1),
                     ));
 
                     bail!(NonSuccessfulExit);
@@ -344,11 +344,23 @@ impl WorkerCommandHandler {
         };
 
         // Re-validate with function-name
-        self.validate_worker_and_function_names(
+        let agent_id_and_type = self.validate_worker_and_function_names(
             &component,
             &worker_name_match.worker_name,
             Some(&function_name),
         )?;
+
+        // Update worker_name with normalized agent id if needed
+        let worker_name_match = {
+            if let Some((agent_id, _)) = agent_id_and_type {
+                WorkerNameMatch {
+                    worker_name: agent_id.0.into(),
+                    ..worker_name_match
+                }
+            } else {
+                worker_name_match
+            }
+        };
 
         if trigger {
             log_action(
@@ -1779,7 +1791,7 @@ impl WorkerCommandHandler {
         component: &Component,
         worker_name: &WorkerName,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<AgentType>> {
+    ) -> anyhow::Result<Option<(WorkerName, AgentType)>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
@@ -1807,7 +1819,7 @@ impl WorkerCommandHandler {
                         if interface == agent_type.type_name
                             && component.component_name.0 == component_name
                         {
-                            return Ok(Some(agent_type));
+                            return Ok(Some((agent_id.to_string().into(), agent_type)));
                         }
                     }
 
@@ -1825,7 +1837,7 @@ impl WorkerCommandHandler {
                     bail!(NonSuccessfulExit);
                 }
 
-                None => Ok(Some(agent_type)),
+                None => Ok(Some((agent_id.to_string().into(), agent_type))),
             },
             Err(err) => {
                 logln("");

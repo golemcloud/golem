@@ -14,13 +14,14 @@
 
 mod conversions;
 
+pub mod compact_value_formatter;
 #[cfg(feature = "agent-extraction")]
 pub mod extraction;
-pub mod wit_naming;
 #[cfg(feature = "protobuf")]
 mod protobuf;
 #[cfg(test)]
 mod tests;
+pub mod wit_naming;
 
 pub mod bindings {
     wasmtime::component::bindgen!({
@@ -35,6 +36,7 @@ pub mod bindings {
     });
 }
 
+use crate::model::agent::compact_value_formatter::ToCompactString;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::model::ComponentId;
 use async_trait::async_trait;
@@ -46,7 +48,6 @@ use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValue, Valu
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.
@@ -742,7 +743,12 @@ impl AgentId {
 
 impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.agent_type, self.parameters)
+        write!(
+            f,
+            "{}({})",
+            self.agent_type,
+            self.parameters.to_compact_string()
+        )
     }
 }
 
