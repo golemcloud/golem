@@ -51,6 +51,7 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
 
         let pool = sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
+            .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await
             .map_err(Error::connection_failure)?;
