@@ -16,7 +16,14 @@ import {
     NumberType,
     StringType,
     BooleanType,
-    MapType, TupleComplexType, TupleType, ListComplexType, ResultLikeWithNoTag, ResultLike, ResultExact,
+    MapType,
+    TupleComplexType,
+    TupleType,
+    ListComplexType,
+    ResultLikeWithNoTag,
+    ResultLike,
+    ResultExact,
+    UnionWithOnlyLiterals,
 } from './model';
 
 
@@ -199,13 +206,17 @@ class FooAgent extends BaseAgent {
     async funObjectType(objectType: ObjectType): Promise<ObjectType> {
         return await this.barAgent.funObjectType(objectType);
     }
-    //
-    // // FIXME: runtime error:
-    // // async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
-    // //     return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
-    // // }
-    //
-    //
+
+
+    async funUnionWithLiterals(unionWithLiterals: UnionWithLiterals): Promise<Types.UnionWithLiterals> {
+        return await this.barAgent.funUnionWithLiterals(unionWithLiterals);
+    }
+
+
+    async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
+        return await this.barAgent.funUnionWithOnlyLiterals(unionWithLiterals);
+    }
+
     async funVoidReturn(text: string): Promise<void> {
         return await this.barAgent.funVoidReturn(text);
     }
@@ -371,6 +382,10 @@ class BarAgent extends BaseAgent {
 
     async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
         return unstructuredText
+    }
+
+    async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
+        return unionWithLiterals;
     }
 
     async funTaggedUnion(taggedUnionType: TaggedUnion): Promise<TaggedUnion> {

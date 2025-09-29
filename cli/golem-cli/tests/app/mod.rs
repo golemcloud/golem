@@ -1059,6 +1059,34 @@ async fn test_ts_code_first_complex() {
 
     assert!(outputs.success());
 
+    // Union that includes literals and boolean (string literal input)
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-union-with-literals",
+            r#"lit1"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
+    // Union that includes literals and boolean (boolean input)
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("ts:agent/foo-agent(\"{uuid}\")"),
+            "fun-union-with-literals",
+            r#"union-with-literals1(true)"#,
+        ])
+        .await;
+
+    assert!(outputs.success());
+
     // A number type
     let outputs = ctx
         .cli([
