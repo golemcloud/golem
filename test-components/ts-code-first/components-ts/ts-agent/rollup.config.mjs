@@ -1,3 +1,3 @@
 import componentRollupConfig from "../../common-ts/rollup.config.component.mjs";
 
-export default componentRollupConfig("my-agent");
+export default componentRollupConfig("ts-agent");

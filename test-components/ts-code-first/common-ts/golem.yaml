@@ -9,6 +9,13 @@
 templates:
   ts:
     build:
+    - command: npx tsc --noEmit false --emitDeclarationOnly --declaration --outFile ../../golem-temp/ts-check/{{ component_name | to_kebab_case }}/main.d.ts
+      sources:
+      - src
+      - ../../common-ts
+      - tsconfig.js
+      targets:
+      - ../../golem-temp/ts-check/{{ component_name | to_kebab_case }}/main.d.ts
     - command: npx --no golem-typegen ../../../components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files ../../../components-ts/{{ component_name | to_kebab_case }}/src/**/*.ts
       dir: ../../golem-temp/ts-metadata/{{ component_name | to_kebab_case }}
       sources:
