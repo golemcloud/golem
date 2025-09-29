@@ -1,7 +1,7 @@
 use crate::services::{HasConfig, HasOplogService};
 use crate::worker::is_worker_error_retriable;
 use async_recursion::async_recursion;
-use golem_common::base_model::{OplogIndex, PluginInstallationId};
+use golem_common::base_model::{OplogIndex};
 use golem_common::model::oplog::{
     OplogEntry, TimestampedUpdateDescription, UpdateDescription, WorkerResourceId,
 };
@@ -686,10 +686,10 @@ mod test {
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::component::ComponentId;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::{
         FailedUpdateRecord, IdempotencyKey,
-        OwnedWorkerId, PluginInstallationId, RetryConfig, ScanCursor,
+        OwnedWorkerId, RetryConfig, ScanCursor,
         SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
@@ -699,6 +699,7 @@ mod test {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::{Arc, RwLock};
     use test_r::test;
+    use golem_common::model::account::AccountId;
 
     #[test]
     async fn empty() {
@@ -995,7 +996,7 @@ mod test {
         pub fn new(
             account_id: AccountId,
             owned_worker_id: OwnedWorkerId,
-            component_version: ComponentVersion,
+            component_version: ComponentRevision,
         ) -> Self {
             let status = WorkerStatusRecord {
                 component_version,
@@ -1338,13 +1339,11 @@ mod test {
     }
 
     impl TestCase {
-        pub fn builder(initial_component_version: ComponentVersion) -> TestCaseBuilder {
-            let project_id = ProjectId::new_v4();
-            let account_id = AccountId {
-                value: "test-account".to_string(),
-            };
+        pub fn builder(initial_component_version: ComponentRevision) -> TestCaseBuilder {
+            let environment_id = EnvironmentId::new_v4();
+            let account_id = AccountId::new_v4();
             let owned_worker_id = OwnedWorkerId::new(
-                &project_id,
+                &environment_id,
                 &WorkerId {
                     component_id: ComponentId::new_v4(),
                     worker_name: "test-worker".to_string(),
