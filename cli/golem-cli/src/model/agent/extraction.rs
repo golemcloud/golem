@@ -41,6 +41,7 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         wasm_path,
         Some(stdout.clone()),
         Some(stderr.clone()),
+        true,
     )
     .await
     .map_err(|err| {
