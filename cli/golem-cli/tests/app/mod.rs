@@ -1014,12 +1014,13 @@ async fn test_ts_code_first_complex() {
     .await;
 
     // Union that has only literals
-    run_and_assert(
-        &ctx,
-        "fun-union-with-only-literals",
-        &["foo", "bar", "baz"],
-    )
-        .await;
+    run_and_assert(&ctx, "fun-union-with-only-literals", &["foo"]).await;
+
+    // Union that has only literals
+    run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
+
+    // Union that has only literals
+    run_and_assert(&ctx, "fun-union-with-only-literals", &["baz"]).await;
 
     // A number type
     run_and_assert(&ctx, "fun-number", &["42"]).await;
