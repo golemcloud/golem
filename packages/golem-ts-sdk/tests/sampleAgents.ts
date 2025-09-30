@@ -33,7 +33,7 @@ import {
 import { languageCodes, mimeTypes, multimodal } from '../src/decorators';
 
 @agent()
-class SimpleAgent extends BaseAgent {
+class FooAgent extends BaseAgent {
   constructor(readonly input: string) {
     super();
     this.input = input;
@@ -118,7 +118,7 @@ class SimpleAgent extends BaseAgent {
     unstructuredText: UnstructuredText,
     unstructuredBinary: UnstructuredBinary,
   ): Promise<void> {
-    const remoteClient = ComplexAgent.get(
+    const remoteClient = BarAgent.get(
       testInterfaceType,
       optionalStringType,
       optionalUnionType,
@@ -161,7 +161,7 @@ export interface CustomData {
 }
 
 @agent('my-complex-agent')
-class ComplexAgent extends BaseAgent {
+class BarAgent extends BaseAgent {
   constructor(
     readonly testInterfaceType: Types.TestInterfaceType,
     readonly optionalStringType: string | null,

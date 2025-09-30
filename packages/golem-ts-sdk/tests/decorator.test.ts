@@ -15,7 +15,7 @@
 import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
-import { ComplexAgentClassName, SimpleAgentClassName } from './testUtils';
+import { BarAgentClassName, FooAgentClassName } from './testUtils';
 import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 
@@ -23,14 +23,14 @@ import * as util from 'node:util';
 // If the sample agents in the set-up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
   const complexAgent: AgentType = Option.getOrThrowWith(
-    AgentTypeRegistry.lookup(ComplexAgentClassName),
-    () => new Error('ComplexAgent not found in AgentTypeRegistry'),
+    AgentTypeRegistry.lookup(BarAgentClassName),
+    () => new Error('BarAgent not found in AgentTypeRegistry'),
   );
 
   const complexAgentConstructor = complexAgent.constructor;
 
   if (!complexAgentConstructor) {
-    throw new Error('ComplexAgent constructor not found');
+    throw new Error('BarAgent constructor not found');
   }
 
   const complexAgentMethod = complexAgent.methods.find(
@@ -38,7 +38,7 @@ describe('Agent decorator should register the agent class and its methods into A
   );
 
   if (!complexAgentMethod) {
-    throw new Error('fun0 method not found in ComplexAgent');
+    throw new Error('fun0 method not found in BarAgent');
   }
 
   it('should handle UnstructuredText in method params', () => {
@@ -546,8 +546,8 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('captures all methods and constructor with correct number of parameters', () => {
     const simpleAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.lookup(SimpleAgentClassName),
-      () => new Error('SimpleAgent not found in AgentTypeRegistry'),
+      AgentTypeRegistry.lookup(FooAgentClassName),
+      () => new Error('FooAgent not found in AgentTypeRegistry'),
     );
 
     expect(complexAgent.methods.length).toEqual(23);
@@ -559,8 +559,8 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should not capture overridden functions in base agents as agent methods', () => {
     const simpleAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.lookup(SimpleAgentClassName),
-      () => new Error('SimpleAgent not found in AgentTypeRegistry'),
+      AgentTypeRegistry.lookup(FooAgentClassName),
+      () => new Error('FooAgent not found in AgentTypeRegistry'),
     );
 
     const forbidden = [
@@ -586,7 +586,7 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
 
   if (!witTypeOpt) {
     throw new Error(
-      `Test failed - ${parameterName} is not of component-model type in getWeather function in ${ComplexAgentClassName.value}`,
+      `Test failed - ${parameterName} is not of component-model type in getWeather function in ${BarAgentClassName.value}`,
     );
   }
 

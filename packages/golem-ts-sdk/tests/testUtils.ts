@@ -23,77 +23,77 @@ import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodPa
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
-export const ComplexAgentClassName = new AgentClassName('ComplexAgent');
+export const BarAgentClassName = new AgentClassName('BarAgent');
 
-export const SimpleAgentClassName = new AgentClassName('SimpleAgent');
+export const FooAgentClassName = new AgentClassName('FooAgent');
 
-export const SimpleAgentName =
-  AgentTypeName.fromAgentClassName(SimpleAgentClassName);
+export const FooAgentName =
+  AgentTypeName.fromAgentClassName(FooAgentClassName);
 
-export const ComplexAgentName = AgentTypeName.fromString('my-complex-agent');
+export const BarAgentName = AgentTypeName.fromString('my-complex-agent');
 
 export function getAll() {
   return TypeMetadata.getAll();
 }
 
 export function getTestInterfaceType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('TestInterfaceType');
+  return fetchTypeFromBarAgent('TestInterfaceType');
 }
 
 export function getTestMapType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('MapType');
+  return fetchTypeFromBarAgent('MapType');
 }
 
 export function getTestObjectType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('ObjectType');
+  return fetchTypeFromBarAgent('ObjectType');
 }
 
 export function getTestListOfObjectType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('ListComplexType');
+  return fetchTypeFromBarAgent('ListComplexType');
 }
 
 export function getUnionType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('UnionType');
+  return fetchTypeFromBarAgent('UnionType');
 }
 
 export function getResultTypeExact(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('ResultTypeExactBoth');
+  return fetchTypeFromBarAgent('ResultTypeExactBoth');
 }
 
 export function getUnionComplexType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('UnionComplexType');
+  return fetchTypeFromBarAgent('UnionComplexType');
 }
 
 export function getTupleType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('TupleType');
+  return fetchTypeFromBarAgent('TupleType');
 }
 
 export function getTupleComplexType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('TupleComplexType');
+  return fetchTypeFromBarAgent('TupleComplexType');
 }
 
 export function getBooleanType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('boolean');
+  return fetchTypeFromBarAgent('boolean');
 }
 
 export function getStringType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('string');
+  return fetchTypeFromBarAgent('string');
 }
 
 export function getNumberType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('number');
+  return fetchTypeFromBarAgent('number');
 }
 
 export function getPromiseType(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('PromiseType');
+  return fetchTypeFromBarAgent('PromiseType');
 }
 
 export function getUnionWithLiterals(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('UnionWithLiterals');
+  return fetchTypeFromBarAgent('UnionWithLiterals');
 }
 
 export function getUnionWithOnlyLiterals(): [AnalysedType, Type.Type] {
-  return fetchTypeFromComplexAgent('UnionWithOnlyLiterals');
+  return fetchTypeFromBarAgent('UnionWithOnlyLiterals');
 }
 
 export function getRecordFieldsFromAnalysedType(
@@ -102,13 +102,13 @@ export function getRecordFieldsFromAnalysedType(
   return analysedType.kind === 'record' ? analysedType.value.fields : undefined;
 }
 
-function fetchTypeFromComplexAgent(
+function fetchTypeFromBarAgent(
   typeNameInTestData: string,
 ): [AnalysedType, Type.Type] {
-  const complexAgentMetadata = TypeMetadata.get('ComplexAgent');
+  const complexAgentMetadata = TypeMetadata.get('BarAgent');
 
   if (!complexAgentMetadata) {
-    throw new Error('Class metadata for ComplexAgent not found');
+    throw new Error('Class metadata for BarAgent not found');
   }
 
   const constructorArg = complexAgentMetadata.constructorArgs.find((arg) => {
@@ -118,7 +118,7 @@ function fetchTypeFromComplexAgent(
 
   if (constructorArg) {
     const analysedType = AgentConstructorParamRegistry.lookupParamType(
-      ComplexAgentClassName,
+      BarAgentClassName,
       constructorArg.name,
     );
 
@@ -133,7 +133,7 @@ function fetchTypeFromComplexAgent(
       Type.getTypeName(method.returnType) === typeNameInTestData
     ) {
       const analysedType = AgentMethodRegistry.lookupReturnType(
-        ComplexAgentClassName,
+        BarAgentClassName,
         name,
       );
 
@@ -147,7 +147,7 @@ function fetchTypeFromComplexAgent(
 
     if (param) {
       const analysedType = AgentMethodParamRegistry.lookupParamType(
-        ComplexAgentClassName,
+        BarAgentClassName,
         name,
         param[0],
       );
