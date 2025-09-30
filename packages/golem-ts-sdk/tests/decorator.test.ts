@@ -16,12 +16,7 @@ import { AgentTypeRegistry } from '../src/internal/registry/agentTypeRegistry';
 import * as Option from '../src/newTypes/option';
 import { expect } from 'vitest';
 import { ComplexAgentClassName, SimpleAgentClassName } from './testUtils';
-import {
-  AgentType,
-  DataSchema,
-  ElementSchema,
-  WitType,
-} from 'golem:agent/common';
+import { AgentType, DataSchema, ElementSchema } from 'golem:agent/common';
 import * as util from 'node:util';
 
 // Test setup ensures loading agents prior to every test
@@ -34,13 +29,21 @@ describe('Agent decorator should register the agent class and its methods into A
 
   const complexAgentConstructor = complexAgent.constructor;
 
+  if (!complexAgentConstructor) {
+    throw new Error('ComplexAgent constructor not found');
+  }
+
   const complexAgentMethod = complexAgent.methods.find(
     (method) => method.name === 'fun0',
   );
 
+  if (!complexAgentMethod) {
+    throw new Error('fun0 method not found in ComplexAgent');
+  }
+
   it('should handle UnstructuredText in method params', () => {
     const elementSchema1 = getElementSchema(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'unstructuredTextWithLanguageCode',
     );
 
@@ -52,7 +55,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'unstructuredText',
     );
 
@@ -86,7 +89,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle UnstructuredBinary in method params', () => {
     const elementSchema1 = getElementSchema(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'unstructuredBinaryWithMimeType',
     );
 
@@ -98,7 +101,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'unstructuredBinary',
     );
 
@@ -132,7 +135,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle `a: string | undefined` in method params', () => {
     const optionalStringInGetWeather = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'optionalStringType',
     );
 
@@ -155,7 +158,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle optional string in method', () => {
     const optionalStringInGetWeather = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'optionalStringType',
     );
 
@@ -177,7 +180,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle tagged unions in method', () => {
-    const wit = getWitType(complexAgentMethod!.inputSchema, 'taggedUnionType');
+    const wit = getWitType(complexAgentMethod.inputSchema, 'taggedUnionType');
 
     const expectedWit = {
       nodes: [
@@ -239,7 +242,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle union with only literals in method', () => {
     const wit = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'unionWithOnlyLiterals',
     );
 
@@ -256,10 +259,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle union with literals in method xxx', () => {
-    const wit = getWitType(
-      complexAgentMethod!.inputSchema,
-      'unionWithLiterals',
-    );
+    const wit = getWitType(complexAgentMethod.inputSchema, 'unionWithLiterals');
 
     const expectedWit = {
       nodes: [
@@ -285,7 +285,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle result type - exact in method', () => {
-    const wit = getWitType(complexAgentMethod!.inputSchema, 'resultTypeExact');
+    const wit = getWitType(complexAgentMethod.inputSchema, 'resultTypeExact');
 
     const expectedWit = {
       nodes: [
@@ -303,7 +303,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle result type with different key names', () => {
     const wit = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'resultTypeNonExact',
     );
 
@@ -323,7 +323,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle result type with different key names for ok and err', () => {
     const wit = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'resultTypeNonExact2',
     );
 
@@ -382,10 +382,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle optional union in method', () => {
-    const wit = getWitType(
-      complexAgentMethod!.inputSchema,
-      'optionalUnionType',
-    );
+    const wit = getWitType(complexAgentMethod.inputSchema, 'optionalUnionType');
 
     const expectedWit = {
       nodes: [
@@ -423,7 +420,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('union with null works', () => {
     const unionWithNullType = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'unionWithNull',
     );
 
@@ -449,7 +446,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with \`a: string | undefined\` works', () => {
     const objectWithUnionWithNull = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'objectWithUnionWithUndefined1',
     );
 
@@ -469,7 +466,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with \`a: string | number | undefined\` works', () => {
     const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'objectWithUnionWithUndefined2',
     );
 
@@ -499,7 +496,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with a?: string | number | undefined works', () => {
     const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'objectWithUnionWithUndefined3',
     );
 
@@ -529,7 +526,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with `a?: string | undefined` works', () => {
     const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod!.inputSchema,
+      complexAgentMethod.inputSchema,
       'objectWithUnionWithUndefined4',
     );
 
@@ -581,35 +578,11 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 });
 
-function getElementSchema(inputSchema: DataSchema, parameterName: string) {
-  const optionalParamInput = inputSchema.val.find(
-    (s) => s[0] === parameterName,
-  );
-
-  if (!optionalParamInput) {
-    throw new Error(
-      `${parameterName} not found in scheme ${util.format(inputSchema)}`,
-    );
-  }
-
-  return optionalParamInput[1];
-}
-
 function getWitType(dataSchema: DataSchema, parameterName: string) {
-  const paramType = dataSchema.val.find((s) => s[0] === parameterName);
-
-  if (!paramType) {
-    throw new Error(
-      `${parameterName} not found in scheme ${util.format(dataSchema)}`,
-    );
-  }
-
-  const paramElementSchema: ElementSchema = paramType[1];
+  const elementSchema = getElementSchema(dataSchema, parameterName);
 
   const witTypeOpt =
-    paramElementSchema.tag === 'component-model'
-      ? paramElementSchema.val
-      : undefined;
+    elementSchema.tag === 'component-model' ? elementSchema.val : undefined;
 
   if (!witTypeOpt) {
     throw new Error(
@@ -618,4 +591,18 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
   }
 
   return witTypeOpt;
+}
+
+function getElementSchema(inputSchema: DataSchema, parameterName: string) {
+  const schema: [string, ElementSchema] | undefined = inputSchema.val.find(
+    ([name]) => name === parameterName,
+  );
+
+  if (!schema) {
+    throw new Error(
+      `${parameterName} not found in scheme ${util.format(inputSchema)}`,
+    );
+  }
+
+  return schema[1];
 }
