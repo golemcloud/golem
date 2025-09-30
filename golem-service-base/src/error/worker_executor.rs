@@ -450,6 +450,9 @@ impl From<WorkerExecutorError> for Status {
                 Self::invalid_argument(format!("Value mismatch: {details}"))
             }
             WorkerExecutorError::Unknown { details } => Self::unknown(details),
+            WorkerExecutorError::PreviousInvocationFailed { .. } => {
+                Self::failed_precondition(format!("{value}"))
+            }
             _ => Self::internal(format!("{value}")),
         }
     }

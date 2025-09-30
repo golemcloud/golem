@@ -61,6 +61,7 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
             PgConnectOptions::from_url(&self.address).map_err(Error::connection_failure)?;
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
+            .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await
             .map_err(Error::connection_failure)

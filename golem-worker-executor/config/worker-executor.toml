@@ -163,6 +163,7 @@ min_delay = "100ms"
 multiplier = 2.0
 
 [rdbms.pool]
+acquire_timeout = "3s"
 eviction_period = "2m"
 eviction_ttl = "10m"
 max_connections = 20
@@ -425,6 +426,7 @@ without_time = false
 # multiplier = 2.0
 # 
 # [rdbms.pool]
+# acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20
@@ -647,6 +649,7 @@ without_time = false
 # multiplier = 2.0
 # 
 # [rdbms.pool]
+# acquire_timeout = "3s"
 # eviction_period = "2m"
 # eviction_ttl = "10m"
 # max_connections = 20

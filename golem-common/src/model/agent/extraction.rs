@@ -31,11 +31,12 @@ const INTERFACE_NAME: &str = "golem:agent/guest";
 const FUNCTION_NAME: &str = "discover-agent-types";
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
-/// If it does not, it fails.
+/// Optionally fails if the component does not implement the agent interfaces, otherwise returns an empty agent type set for such components.
 pub async fn extract_agent_types_with_streams(
     wasm_path: &Path,
     stdout: Option<impl StdoutStream + 'static>,
     stderr: Option<impl StdoutStream + 'static>,
+    fail_on_missing_discover_method: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
     config.async_support(true);
@@ -95,7 +96,16 @@ pub async fn extract_agent_types_with_streams(
     debug!("Instantiating component");
     let instance = linker.instantiate_async(&mut store, &component).await?;
 
-    let func = find_discover_function(&mut store, &instance)?;
+    let func = if let Some(func) = find_discover_function(&mut store, &instance) {
+        func
+    } else if fail_on_missing_discover_method {
+        return Err(anyhow!(
+            "Function {FUNCTION_NAME} not found in interface {INTERFACE_NAME}"
+        ));
+    } else {
+        return Ok(Vec::new());
+    };
+
     let typed_func = func.typed::<(), (
         Result<
             Vec<crate::model::agent::bindings::golem::agent::common::AgentType>,
@@ -120,11 +130,15 @@ pub async fn extract_agent_types_with_streams(
 }
 
 /// Same as extract_agent_types_with_streams, but inherits stdout and stderr from the current process
-pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+pub async fn extract_agent_types(
+    wasm_path: &Path,
+    fail_on_missing_discover_method: bool,
+) -> anyhow::Result<Vec<AgentType>> {
     extract_agent_types_with_streams(
         wasm_path,
         None::<pipe::MemoryOutputPipe>,
         None::<pipe::MemoryOutputPipe>,
+        fail_on_missing_discover_method,
     )
     .await
 }
@@ -174,23 +188,12 @@ pub fn is_agent(
     Ok(false)
 }
 
-fn find_discover_function(
-    mut store: impl AsContextMut,
-    instance: &Instance,
-) -> anyhow::Result<Func> {
-    let (_, exported_instance_id) = instance
-        .get_export(&mut store, None, INTERFACE_NAME)
-        .ok_or_else(|| anyhow!("Interface {INTERFACE_NAME} not found"))?;
-    let (_, func_id) = instance
-        .get_export(&mut store, Some(&exported_instance_id), FUNCTION_NAME)
-        .ok_or_else(|| {
-            anyhow!("Function {FUNCTION_NAME} not found in interface {INTERFACE_NAME}")
-        })?;
-    let func = instance
-        .get_func(&mut store, func_id)
-        .ok_or_else(|| anyhow!("Function {FUNCTION_NAME} not found"))?;
-
-    Ok(func)
+fn find_discover_function(mut store: impl AsContextMut, instance: &Instance) -> Option<Func> {
+    let (_, exported_instance_id) = instance.get_export(&mut store, None, INTERFACE_NAME)?;
+    let (_, func_id) =
+        instance.get_export(&mut store, Some(&exported_instance_id), FUNCTION_NAME)?;
+    let func = instance.get_func(&mut store, func_id)?;
+    Some(func)
 }
 
 #[derive(Clone)]
@@ -271,6 +274,7 @@ fn dynamic_import(
                 ComponentItem::Type(_) => {}
                 ComponentItem::Resource(_resource) => {
                     if &inner_name != "pollable"
+                        && inner_name != "wasi-io-pollable"
                         && &inner_name != "input-stream"
                         && &inner_name != "output-stream"
                     {
@@ -321,3 +325,20 @@ struct FunctionInfo {
 }
 
 struct ResourceEntry;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use assert2::assert;
+    use std::path::PathBuf;
+    use std::str::FromStr;
+    use test_r::test;
+
+    #[test]
+    async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
+        let result =
+            extract_agent_types(&PathBuf::from_str("../test-components/caller.wasm")?, false).await;
+        assert!(let Ok(_) = result);
+        Ok(())
+    }
+}
