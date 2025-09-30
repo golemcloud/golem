@@ -158,11 +158,10 @@ impl WorkerStreamOutput {
         if !self
             .check_already_seen(&mut state, timestamp, "Stream closed")
             .await
+            && !self.options.quiet
         {
-            if !self.options.quiet {
-                let prefix = self.prefix(timestamp, "STREAM");
-                self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
-            }
+            let prefix = self.prefix(timestamp, "STREAM");
+            self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
         }
     }
 
@@ -172,14 +171,13 @@ impl WorkerStreamOutput {
         if !self
             .check_already_seen(&mut state, timestamp, "Stream error")
             .await
+            && !self.options.quiet
         {
-            if !self.options.quiet {
-                let prefix = self.prefix(timestamp, "STREAM");
-                self.colored(
-                    LogLevel::Warn,
-                    &format!("{prefix}Stream failed with error: {error}"),
-                );
-            }
+            let prefix = self.prefix(timestamp, "STREAM");
+            self.colored(
+                LogLevel::Warn,
+                &format!("{prefix}Stream failed with error: {error}"),
+            );
         }
     }
 
@@ -198,14 +196,13 @@ impl WorkerStreamOutput {
                 &format!("{function_name} {idempotency_key} started"),
             )
             .await
+            && !self.options.quiet
         {
-            if !self.options.quiet {
-                let prefix = self.prefix(timestamp, "INVOKE");
-                self.colored(
-                    LogLevel::Trace,
-                    &format!("{prefix}STARTED  {function_name} ({idempotency_key})"),
-                );
-            }
+            let prefix = self.prefix(timestamp, "INVOKE");
+            self.colored(
+                LogLevel::Trace,
+                &format!("{prefix}STARTED  {function_name} ({idempotency_key})"),
+            );
         }
     }
 
@@ -224,14 +221,13 @@ impl WorkerStreamOutput {
                 &format!("{function_name} {idempotency_key} finished"),
             )
             .await
+            && !self.options.quiet
         {
-            if !self.options.quiet {
-                let prefix = self.prefix(timestamp, "INVOKE");
-                self.colored(
-                    LogLevel::Trace,
-                    &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
-                );
-            }
+            let prefix = self.prefix(timestamp, "INVOKE");
+            self.colored(
+                LogLevel::Trace,
+                &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
+            );
         }
     }
 
@@ -245,14 +241,13 @@ impl WorkerStreamOutput {
                 &format!("{number_of_missed_messages} messages missed"),
             )
             .await
+            && !self.options.quiet
         {
-            if !self.options.quiet {
-                let prefix = self.prefix(timestamp, "STREAM");
-                self.colored(
+            let prefix = self.prefix(timestamp, "STREAM");
+            self.colored(
                     LogLevel::Warn,
                     &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed", ),
                 );
-            }
         }
     }
 
