@@ -561,9 +561,9 @@ pub enum GolemCliSubcommand {
         /// Optional script_file to run, when defined the repl will execute the script and exit
         #[clap(long, conflicts_with_all = ["script"])]
         script_file: Option<PathBuf>,
-        /// If true (default), the REPL will stream logs from the invoked agents. Can be controlled with the :logs command in the REPL.
+        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
         #[clap(long)]
-        stream: Option<bool>,
+        disable_stream: bool,
     },
     /// Generate shell completion
     Completion {
