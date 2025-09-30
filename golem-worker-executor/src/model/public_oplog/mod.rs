@@ -1226,10 +1226,6 @@ async fn encode_host_function_request_as_value(
             let payload: SerializableScheduleId = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::api::poll_promise" => {
-            let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "golem::api::resolve_component_id" => {
             let payload: String = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
@@ -1690,11 +1686,6 @@ fn encode_host_function_response_as_value(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: Result<(), SerializableError> =
-                try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
-        "golem::api::poll_promise" => {
-            let payload: Result<Option<Vec<u8>>, SerializableError> =
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
