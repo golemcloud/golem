@@ -681,6 +681,9 @@ pub mod shared_args {
         /// Hide timestamp in stream output
         #[clap(long, short = 'T')]
         pub stream_no_timestamp: bool,
+        /// Only show entries coming from the agent, no output about invocation markers and stream status
+        #[clap(long)]
+        pub quiet: bool,
     }
 
     #[derive(Debug, Args, Clone)]

@@ -333,6 +333,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             Some(StreamArgs {
                 stream_no_log_level: false,
                 stream_no_timestamp: false,
+                quiet: true,
             })
         } else {
             None

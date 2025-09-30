@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
-use crate::model::{Format, WorkerConnectOptions};
+use crate::model::{AgentLogStreamOptions, Format};
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;
@@ -28,7 +28,7 @@ use tokio_tungstenite::tungstenite;
 #[derive(Clone)]
 pub struct WorkerStreamOutput {
     state: Arc<Mutex<WorkerStreamOutputState>>,
-    options: WorkerConnectOptions,
+    options: AgentLogStreamOptions,
     format: Format,
 }
 
@@ -42,7 +42,7 @@ struct WorkerStreamOutputState {
 }
 
 impl WorkerStreamOutput {
-    pub fn new(options: WorkerConnectOptions, format: Format) -> Self {
+    pub fn new(options: AgentLogStreamOptions, format: Format) -> Self {
         WorkerStreamOutput {
             state: Arc::new(Mutex::new(WorkerStreamOutputState {
                 last_stdout_timestamp: Timestamp::now_utc(),
@@ -159,8 +159,10 @@ impl WorkerStreamOutput {
             .check_already_seen(&mut state, timestamp, "Stream closed")
             .await
         {
-            let prefix = self.prefix(timestamp, "STREAM");
-            self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
+            if !self.options.quiet {
+                let prefix = self.prefix(timestamp, "STREAM");
+                self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
+            }
         }
     }
 
@@ -171,11 +173,13 @@ impl WorkerStreamOutput {
             .check_already_seen(&mut state, timestamp, "Stream error")
             .await
         {
-            let prefix = self.prefix(timestamp, "STREAM");
-            self.colored(
-                LogLevel::Warn,
-                &format!("{prefix}Stream failed with error: {error}"),
-            );
+            if !self.options.quiet {
+                let prefix = self.prefix(timestamp, "STREAM");
+                self.colored(
+                    LogLevel::Warn,
+                    &format!("{prefix}Stream failed with error: {error}"),
+                );
+            }
         }
     }
 
@@ -195,11 +199,13 @@ impl WorkerStreamOutput {
             )
             .await
         {
-            let prefix = self.prefix(timestamp, "INVOKE");
-            self.colored(
-                LogLevel::Trace,
-                &format!("{prefix}STARTED  {function_name} ({idempotency_key})"),
-            );
+            if !self.options.quiet {
+                let prefix = self.prefix(timestamp, "INVOKE");
+                self.colored(
+                    LogLevel::Trace,
+                    &format!("{prefix}STARTED  {function_name} ({idempotency_key})"),
+                );
+            }
         }
     }
 
@@ -219,11 +225,13 @@ impl WorkerStreamOutput {
             )
             .await
         {
-            let prefix = self.prefix(timestamp, "INVOKE");
-            self.colored(
-                LogLevel::Trace,
-                &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
-            );
+            if !self.options.quiet {
+                let prefix = self.prefix(timestamp, "INVOKE");
+                self.colored(
+                    LogLevel::Trace,
+                    &format!("{prefix}FINISHED {function_name} ({idempotency_key})",),
+                );
+            }
         }
     }
 
@@ -238,11 +246,13 @@ impl WorkerStreamOutput {
             )
             .await
         {
-            let prefix = self.prefix(timestamp, "STREAM");
-            self.colored(
-                LogLevel::Warn,
-                &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed", ),
-            );
+            if !self.options.quiet {
+                let prefix = self.prefix(timestamp, "STREAM");
+                self.colored(
+                    LogLevel::Warn,
+                    &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed", ),
+                );
+            }
         }
     }
 
