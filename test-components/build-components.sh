@@ -15,7 +15,7 @@ c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
 
 rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability")
-ts_test_apps=("ts-rpc")
+ts_test_apps=("ts-rpc" "agent-constructor-parameter-echo")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
