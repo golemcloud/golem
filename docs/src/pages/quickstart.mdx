@@ -14,19 +14,41 @@ various platforms. Alternatively, you can [build Golem CLI for yourself](/cli/in
 
 #### Precompiled binaries
 
-You can download the full version of `golem` from the following page:
-
-<Cards num={1}>
-  <Card
-    title="Golem CLI Releases"
-    href="https://github.com/golemcloud/golem/releases"
-  />
-</Cards>
-
 There are precompiled binaries of two variants of the CLI here:
 
 - `golem` is the full version of the command line interface, including a locally runnable version of Golem itself.
 - `golem-cli` is a lightweight version of the command line interface, requiring a running Golem cluster
+
+You can download the full version of `golem` from the following page:
+
+<Tabs items={["golem", "golem-cli"]}>
+  <Tabs.Tab>
+  ##### Full version, including a locally executable Golem server
+    | Platform | Link |
+    | -------- | ---- |
+    | Mac ARM64| https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-aarch64-apple-darwin |
+    | Mac x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-x86_64-apple-darwin |
+    | Linux ARM64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-aarch64-unknown-linux-gnu |
+    | Linux x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-x86_64-unknown-linux-gnu |
+
+    <Callout type="info">
+      Windows is not supported for the current version, and expected to be added in Golem 1.3.1.
+    </Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ##### Lightweight client version, to work with an existing Golem cluster
+    | Platform | Link |
+    | -------- | ---- |
+    | Mac ARM64| https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-aarch64-apple-darwin |
+    | Mac x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-x86_64-apple-darwin |
+    | Linux ARM64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-aarch64-unknown-linux-gnu |
+    | Linux x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-x86_64-unknown-linux-gnu |
+
+  <Callout type="info">
+    Windows is not supported for the current version, and expected to be added in Golem 1.3.1.
+  </Callout>
+  </Tabs.Tab>
+</Tabs>
 
 In this documentation we will use the `golem` command in the snippets. The available commands (except the one for starting the local Golem cluster) are the same in both variants.
 

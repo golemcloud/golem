@@ -84,10 +84,26 @@ The script must return an object with at least a `status` and a `body` field:
 { status: 200u64, body: "Hello World" }
 ```
 
-Additionally, this response object can also have a `headers` field, which is a map of header names to values:
+Additionally, this response object can also have a `headers` field, which is a map of header names to values.
+
+For example, it is possible to modify the **response content type** by adding a `Content-Type` header:
 
 ```rib
-{ status: 200u64, body: "Hello World", headers: { "Content-Type": "text/plain" } }
+{ status: 200u64, body: "Hello World", headers: { Content-Type: "text/plain" } }
+```
+
+The next example reads a custom header from the requests, and uses it as another custom header that is added to the response:
+
+```rib
+let customer-id: string = request.headers.X-Customer-ID;
+{
+  status: 200u64,
+  body: "The customer id header was ${customer-id}",
+  headers: {
+    Content-Type: "text/plain",
+    X-Request-Customer-ID: customer-id
+  }
+}
 ```
 
 ##### Example
@@ -110,6 +126,20 @@ httpApi:
               let new-value = agent.increment();
               { status: 200u64, body: { result: "incremented ${name}, new value is ${new-value}" } }
 ```
+
+Note that when the content type header is not specified, the `body` is automatically serialized as JSON and the `Content-Type: application/json` header is added to the response.
+
+##### Non-JSON request or response bodies
+Currently Rib only supports JSON request bodies. The `request.body` field is always a parsed JSON object, allowing access to its fields. Arbitrary payload can be only sent as part of the JSON object, for example by encoding it as a base64 string.
+
+The response body's content type can be customized by adding a `Content-Type` header to the response object, and it also depends on the request's `Accept` header, if any. Depending on the accept and content type headers, different values returned in the response object's `body` field have different outcomes:
+
+- By default, if no `Accept` or `Content-Type` header is present, the resulting content type is `application/json`, and the `body` field can be any structured value, that is going to be serialized as JSON.
+- One exception to the above rule is if the value returned as the response body is an **array of bytes**. In this case the content type is set to `application/octet-stream` and the byte array is sent as-is in the response body.
+- If there is an explicit `Content-Type` header, or if the `Accept` header in the request requires a specific content type, then the following rules apply:
+  - If the content type is `application/json`, then the `body` field can be any structured value, that is going to be serialized as JSON.
+  - If the content type is `text/plain`, then the `body` field must be a string, which is sent as-is in the response body.
+  - If the content type is anything else, then the `body` field must be an array of bytes, which is sent as-is in the response body.
 
 ##### Optional idempotency key script
 In Golem every request is associated with an _idempotency key_. If there is no special idempotency key script provided, then this key is either taken from the `Idempotency-Key` HTTP header, if any, or otherwise a random key is generated for each request.

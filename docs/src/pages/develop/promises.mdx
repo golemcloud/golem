@@ -4,7 +4,7 @@ import {Callout, Tabs} from "nextra/components"
 
 Golem **promises** provide a way for Golem agents to wait for an external condition. The agent creates the promise and somehow sends its identifier to the external system responsible for **completing** the promise. Then the agent can **await** the promise, being suspended until the external system completes the promise using Golem's REST API.
 
-It is also possible to complete a promise from within a Golem agent using the Golem SDK.
+It is also possible to complete a promise from within a Golem agent using the Golem SDK, which is especially useful when used together with [forking](/develop/forking).
 
 When a promise is completed, an arbitrary byte array can be attached to it as a payload; this data is returned to the awaiting worker when it continues execution.
 
@@ -85,6 +85,8 @@ Here's an example that awaits a promise, then decodes the payload from JSON form
     </Tabs.Tab>
 </Tabs>
 
+Note that `awaitPromise` is a **blocking call** that suspends the execution of the agent until the promise is completed by an external caller. The agent is not consuming any resources while waiting.
+
 ### Completing a promise from within an agent
 
 <Tabs items={["TypeScript"]}>
@@ -107,4 +109,4 @@ Here's an example that awaits a promise, then decodes the payload from JSON form
 
 ### Completing a promise from an external source
 
-To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](/rest-api).
+To see how to use the **promise ID** to complete a promise through the external REST API, check [the REST API documentation](/rest-api/worker#complete-a-promise).

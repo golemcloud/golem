@@ -25,8 +25,8 @@ This section describes how various types of the used programming language are ma
         | `"x" \| "y" \| ...` | `enum { x, y, ... }` | `x` | |
         | Other union           | `variant { ... }`        | `case1(value)` | The case names are `case1`, `case2`, etc. For example for `string | number | CustomRecord` there will be `case1`, `case2` and `case3` |
         | tuple           | `tuple<...>`           | `("hello", 1234, true)`                              | |
-        | `T | undefined` | `option<T>`        | `some(value)`, `none`                                | |
-        | `T | null` | `option<T>`        | `some(value)`, `none`                                | |
+        | `T \| undefined` | `option<T>`        | `some(value)`, `none`                                | |
+        | `T \| null` | `option<T>`        | `some(value)`, `none`                                | |
         | `field?: T`     | `option<T>`        | `some(value)`, `none`                                | Optional fields in records are mapped to options |
         | `UInt8Array`  | `list<u8>`             | `[104, 101, 108, 108, 111]`                          | |
         | `Int8Array`   | `list<s8>`             | `[-1, 0, 1]`                                        | |

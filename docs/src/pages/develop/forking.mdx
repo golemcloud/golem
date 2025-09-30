@@ -78,3 +78,67 @@ The following code snippet demonstrates calling `fork` and continuing on two dif
   </Tabs.Tab>
 
 </Tabs>
+
+## Join
+
+Once the agent has been forked, the two agent instances are running simultaneously and independently. [Golem promises](/develop/promises) provide a way to resynchronize the two agents.
+
+The high level idea is the following:
+
+- The original agent creates a Golem promise and stores the resulting `PromiseId` in a variable.
+- Then forks the new agent. Both the new and the old agents have the promise id.
+- When the new agent is done with the work it was forked for, it completes the promise and includes some arbitrary payload it wants to send back to the original agent.
+- The original agent, after doing some additional work in parallel to the forked one, can suspend its execution to wait for the promise to be completed. When the promise is completed, the original agent resumes execution and receives the payload sent by the forked agent.
+
+The following code snippet demonstrates this pattern:
+
+
+<Tabs items={["TypeScript"]}>
+  <Tabs.Tab>
+  ```typescript
+  import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+  import { awaitPromise, completePromise, createPromise, PromiseId, fork, type ForkResult } from "golem:api/host@1.1.7"
+
+  @agent()
+  class ExampleAgent extends BaseAgent {
+    name: string;
+
+    constructor(name: string, mode: "root" | "fork") {
+      super();
+      this.name = name;
+    }
+
+    run() {
+      const promiseId: PromiseId = createPromise();
+
+      switch (fork(`example-agent("${this.name}",fork)`)) {
+        case "original": {
+          const localResult = ...; // ... do some more work;
+
+          const rawForkResult: UInt8Array = awaitPromise(promiseId);
+          const forkResult = JSON.parse(new TextDecoder().decode(rawForkResult));
+
+          // Merge localResult and forkResult and continue running
+          break;
+        }
+        case "forked": {
+          const result = ...; // do some work in parallel to the original agent
+
+          const rawResult: UInt8Array = new TextEncoder().encode(JSON.stringify(result));
+          completePromise(promiseId, rawResult);
+
+          // Stop execution
+          break;
+        }
+      }
+    }
+  }
+  ```
+
+  <Callout type="warning">
+  Note that **Golem Promises** are NOT JavaScript Promises, and the API to create, complete and await them is currently **blocking**.
+  </Callout>
+
+  </Tabs.Tab>
+
+</Tabs>

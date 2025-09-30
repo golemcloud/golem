@@ -1,12 +1,13 @@
 import { Callout } from "nextra/components"
 import { Card, Cards } from "nextra/components"
+import { Tabs } from "nextra/components"
 
 # Golem CLI Introduction
 
 Golem CLI is a command-line interface for interacting with Golem. Golem CLI allows users to upload their components, launch new agents based on these components and call functions on running agents.
 
 ## Golem CLI versions
-There are precompiled binaries of two variants of the CLI here:
+There are precompiled binaries of two variants of the CLI:
 
 - `golem` is the full version of the command line interface, including a locally runnable version of Golem itself.
 - `golem-cli` is a lightweight version of the command line interface, requiring a running Golem cluster.
@@ -24,20 +25,34 @@ There are two ways to install any of the above described versions of Golem CLI:
 
 You can download the precompiled version of `golem` (and `golem-cli`) from the following pages:
 
-<Cards num={1}>
-  <Card
-    title="Golem CLI Releases"
-    href="https://github.com/golemcloud/golem-cli/releases"
-  />
-</Cards>
+<Tabs items={["golem", "golem-cli"]}>
+  <Tabs.Tab>
+  ##### Full version, including a locally executable Golem server
+    | Platform | Link |
+    | -------- | ---- |
+    | Mac ARM64| https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-aarch64-apple-darwin |
+    | Mac x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-x86_64-apple-darwin |
+    | Linux ARM64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-aarch64-unknown-linux-gnu |
+    | Linux x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-x86_64-unknown-linux-gnu |
 
-We provide precompiled binaries for the following platforms:
+    <Callout type="info">
+      Windows is not supported for the current version, and expected to be added in Golem 1.3.1.
+    </Callout>
+  </Tabs.Tab>
+  <Tabs.Tab>
+  ##### Lightweight client version, to work with an existing Golem cluster
+    | Platform | Link |
+    | -------- | ---- |
+    | Mac ARM64| https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-aarch64-apple-darwin |
+    | Mac x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-x86_64-apple-darwin |
+    | Linux ARM64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-aarch64-unknown-linux-gnu |
+    | Linux x86_64 | https://github.com/golemcloud/golem/releases/download/v1.3.0-rc8/golem-cli-x86_64-unknown-linux-gnu |
 
-- Mac arm64
-- Mac x86_64
-- Linux arm64
-- Linux x86_64
-- Windows x86_64
+  <Callout type="info">
+    Windows is not supported for the current version, and expected to be added in Golem 1.3.1.
+  </Callout>
+  </Tabs.Tab>
+</Tabs>
 
 <Callout type="info">
   Some platforms may prevent downloaded binaries from running by default. You may need to
