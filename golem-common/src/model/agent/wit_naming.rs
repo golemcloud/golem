@@ -58,7 +58,7 @@ where
     T: ToWitNaming,
 {
     fn to_wit_naming(&self) -> Self {
-        self.into_iter().map(|t| t.to_wit_naming()).collect()
+        self.iter().map(|t| t.to_wit_naming()).collect()
     }
 }
 
@@ -205,7 +205,7 @@ impl ToWitNaming for AnalysedType {
             AnalysedType::Handle(handle) => AnalysedType::Handle(TypeHandle {
                 name: handle.name.to_wit_naming(),
                 owner: handle.owner.to_wit_naming(),
-                resource_id: handle.resource_id.clone(),
+                resource_id: handle.resource_id,
                 mode: handle.mode.clone(),
             }),
             AnalysedType::Str(_)
