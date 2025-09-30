@@ -1,5 +1,27 @@
 # golem-app-manifest-header
 
+httpApi:
+  definitions:
+    component-name-api:
+      version: '1'
+      routes:
+        - method: GET
+          path: /v1/research?{topic}
+          binding:
+            type: default
+            __cn__: componentname
+            response: |
+              let agent = research-agent();
+              let result = agent.research(request.query.topic);
+              {status: 200, body: result, headers: {ContentType: "text/plain"}}
+
+  ## Uncomment this to enable deployment of the http api
+  # deployments:
+  #   local:
+  #   - host: localhost:9006
+  #     definitions:
+  #     - component-name-api
+
 components:
   componentname:
     template: ts
@@ -149,27 +171,5 @@ dependencies:
     ## Tavily
     # - type: wasm
     #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.5/golem_web_search_tavily-dev.wasm
-
-httpApi:
-  definitions:
-    componentname-api:
-      version: '1'
-      routes:
-      - method: GET
-        path: /v1/research?{topic}
-        binding:
-          type: default
-          __cn__: componentname
-          response: |
-            let agent = research-agent();
-            let result = agent.research(request.query.topic);
-            {status: 200, body: result, headers: {ContentType: "text/plain"}}
-
-  ## Uncomment this to enable deployment of the http api
-  # deployments:
-  #   local:
-  #   - host: localhost:9006
-  #     definitions:
-  #     - componentname-api
 
 # golem-app-manifest-component-hints
