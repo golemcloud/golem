@@ -169,6 +169,7 @@ pub struct ComponentView {
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
+    pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
@@ -218,6 +219,7 @@ impl ComponentView {
             created_at: value.created_at,
             project_id: value.project_id,
             exports,
+            agent_types: value.metadata.native_agent_types().to_vec(),
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
