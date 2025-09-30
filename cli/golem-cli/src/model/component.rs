@@ -187,7 +187,7 @@ impl ComponentView {
         let exports = {
             if value.metadata.is_agent() {
                 if show_exports_for_rib {
-                    show_exported_agents(value.metadata.native_agent_types())
+                    show_exported_agents(&value.metadata.wit_agent_types())
                 } else {
                     value
                         .metadata
