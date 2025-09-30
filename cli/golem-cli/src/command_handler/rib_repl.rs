@@ -115,7 +115,7 @@ impl RibReplHandler {
             .map(|agent_type| {
                 rib::CustomInstanceSpec::new(
                     agent_type.type_name.to_string(),
-                    agent_type.constructor.wit_arg_types(),
+                    agent_type.constructor.arg_types(),
                     Some(rib::InterfaceName {
                         name: agent_type.type_name.to_string(),
                         version: None,
