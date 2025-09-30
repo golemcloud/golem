@@ -2412,6 +2412,8 @@ struct PrivateDurableWorkerState {
     /// The current config vars of the worker, taking into account component version, etc.
     wasi_config_vars: RwLock<BTreeMap<String, String>>,
 
+    // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
+    promise_backed_pollables: RwLock<HashSet<u32>>
 }
 
 impl PrivateDurableWorkerState {
@@ -2499,7 +2501,8 @@ impl PrivateDurableWorkerState {
             created_by,
             initial_wasi_config_vars,
             wasi_config_vars: RwLock::new(wasi_config_vars),
-            shard_service
+            shard_service,
+            promise_backed_pollables: RwLock::new(HashSet::new())
         }
     }
 

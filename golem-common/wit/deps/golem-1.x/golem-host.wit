@@ -178,7 +178,7 @@ interface host {
         forked
     }
 
-    resource promise-result {
+    resource get-promise-result {
       /// Returns a pollable that can be used to wait for the promise to become ready.j
       subscribe: func() -> pollable;
       /// Poll the result of the promise, returning none if it is not yet ready.
@@ -189,7 +189,7 @@ interface host {
     create-promise: func() -> promise-id;
 
     /// Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
-    await-promise: func(promise-id: promise-id) -> promise-result;
+    get-promise: func(promise-id: promise-id) -> get-promise-result;
 
     /// Completes the given promise with the given payload. Returns true if the promise was completed, false
     /// if the promise was already completed. The payload is passed to the agent that is awaiting the promise.

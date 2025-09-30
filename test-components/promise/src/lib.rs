@@ -12,11 +12,13 @@ impl Guest for Component {
     }
 
     fn await_(id: PromiseId) -> Vec<u8> {
-        await_promise(&id)
+        let promise = get_promise(&id);
+        promise.subscribe().block();
+        promise.get().unwrap()
     }
 
     fn poll(id: PromiseId) -> Option<Vec<u8>> {
-        poll_promise(&id)
+        get_promise(&id).get()
     }
 }
 

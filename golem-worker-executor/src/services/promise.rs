@@ -34,7 +34,7 @@ use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tracing::debug;
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct PromiseHandle {
     state: Arc<Mutex<Option<Vec<u8>>>>,
     notify: Arc<Notify>,
