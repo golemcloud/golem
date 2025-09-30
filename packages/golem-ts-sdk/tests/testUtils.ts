@@ -27,8 +27,7 @@ export const BarAgentClassName = new AgentClassName('BarAgent');
 
 export const FooAgentClassName = new AgentClassName('FooAgent');
 
-export const FooAgentName =
-  AgentTypeName.fromAgentClassName(FooAgentClassName);
+export const FooAgentName = AgentTypeName.fromAgentClassName(FooAgentClassName);
 
 export const BarAgentName = AgentTypeName.fromString('my-complex-agent');
 
