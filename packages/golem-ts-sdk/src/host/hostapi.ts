@@ -66,15 +66,17 @@ export {
   WorkerAnyFilter,
   WorkerMetadata,
   RevertWorkerTarget,
-  ForkResult
+  ForkResult,
 } from 'golem:api/host@1.1.7';
 
 export function createGolemPromise(): PromiseId {
-  return createPromise()
+  return createPromise();
 }
 
-export async function awaitGolemPromise(promiseId: PromiseId): Promise<Uint8Array> {
+export async function awaitGolemPromise(
+  promiseId: PromiseId,
+): Promise<Uint8Array> {
   const promise = getPromise(promiseId);
   await promise.subscribe().promise();
-  return promise.get()!
+  return promise.get()!;
 }
