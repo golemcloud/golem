@@ -17,18 +17,13 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    fork_worker_response, invoke_and_await_typed_response, invoke_response,
-    launch_new_worker_response, resume_worker_response, revert_worker_response,
-    update_worker_response, worker_error, ForkWorkerRequest, InvokeAndAwaitRequest,
-    InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest,
-    LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
-    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError,
+    complete_promise_response, fork_worker_response, invoke_and_await_typed_response, invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response, update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError
 };
-use golem_api_grpc::proto::golem::worker::{InvokeParameters, UpdateMode};
+use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, RetryConfig, WorkerId};
+use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::{Value, ValueAndType, WitValue};
@@ -100,6 +95,8 @@ pub trait WorkerProxy: Send + Sync {
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError>;
+
+    async fn complete_promise(&self, promise_id: PromiseId, data: Vec<u8>) -> Result<bool, WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -514,4 +511,32 @@ impl WorkerProxy for RemoteWorkerProxy {
             )),
         }
     }
+
+    async fn complete_promise(&self, promise_id: PromiseId, data: Vec<u8>) -> Result<bool, WorkerProxyError> {
+        let response: CompletePromiseResponse = self
+            .client
+            .call("complete_promise", move |client| {
+                Box::pin(client.complete_promise(authorised_grpc_request(
+                    CompletePromiseRequest {
+                        worker_id: Some(promise_id.worker_id.clone().into()),
+                        complete_parameters: Some(CompleteParameters {
+                            oplog_idx: promise_id.oplog_idx.into(),
+                            data: data.clone()
+                        }),
+                    },
+                    &self.access_token,
+                )))
+            })
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(complete_promise_response::Result::Success(success)) => Ok(success),
+            Some(complete_promise_response::Result::Error(error)) => Err(error.into()),
+            None => Err(WorkerProxyError::InternalError(
+                WorkerExecutorError::unknown("Empty response through the worker API".to_string()),
+            )),
+        }
+    }
+
 }

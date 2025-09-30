@@ -28,11 +28,7 @@ use crate::services::events::{Event, EventsSubscription};
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefault};
 use crate::services::{
-    All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
-    HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService, HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog, HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -1787,6 +1783,7 @@ impl RunningWorker {
             parent.resource_limits(),
             parent.project_service(),
             parent.agent_types(),
+            parent.shard_service()
         )
         .await?;
 

@@ -674,6 +674,7 @@ impl WorkerCtx for TestWorkerCtx {
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>
     ) -> Result<Self, WorkerExecutorError> {
         let oplog = Arc::new(TestOplog::new(
             owned_worker_id.clone(),
@@ -706,6 +707,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_fork,
             project_service,
             agent_types_service,
+            shard_service
         )
         .await?;
         Ok(Self { durable_ctx })

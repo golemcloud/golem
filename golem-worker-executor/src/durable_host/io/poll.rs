@@ -20,6 +20,8 @@ use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
+use crate::durable_host::golem::v1x::PromiseResultEntry;
+use tracing::debug;
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
@@ -65,6 +67,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         .await?;
 
         let result = if durability.is_live() {
+            // check if all pollables are promise backed. In this case we can suspend immediately
+            {
+                let all_pollables_are_promises = {
+                    let table = self.table();
+                    in_.iter().all(|handle| {
+                        table
+                            .get_any(handle.rep())
+                            .map(|any| any.downcast_ref::<PromiseResultEntry>().is_some())
+                            .unwrap_or(false)
+                    })
+                };
+
+                if all_pollables_are_promises {
+                    debug!("Suspending worker until a promise gets completed");
+                    return Err(InterruptKind::Suspend.into())
+                }
+            }
+
             let count = in_.len();
             let result = Host::poll(&mut self.as_wasi_view().0, in_).await;
             if is_suspend_for_sleep(&result).is_none() {

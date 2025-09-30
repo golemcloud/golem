@@ -5,6 +5,7 @@ package golem:api@1.1.7;
 interface host {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
     use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, worker-id};
+    use wasi:io/poll@0.2.3.{pollable};
 
     /// An index into the persistent log storing all performed operations of a worker
     type oplog-index = u64;
@@ -177,23 +178,22 @@ interface host {
         forked
     }
 
+    resource promise-result {
+      /// Returns a pollable that can be used to wait for the promise to become ready.j
+      subscribe: func() -> pollable;
+      /// Poll the result of the promise, returning none if it is not yet ready.
+      get: func() -> option<list<u8>>;
+    }
+
     /// Create a new promise
     create-promise: func() -> promise-id;
 
-    /// Suspends execution until the given promise gets completed, and returns the payload passed to
-    /// the promise completion.
-    await-promise: func(promise-id: promise-id) -> list<u8>;
-
-    /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
-    /// it returns the payload passed to the promise completion.
-    poll-promise: func(promise-id: promise-id) -> option<list<u8>>;
+    /// Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
+    await-promise: func(promise-id: promise-id) -> promise-result;
 
     /// Completes the given promise with the given payload. Returns true if the promise was completed, false
-    /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+    /// if the promise was already completed. The payload is passed to the agent that is awaiting the promise.
     complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool;
-
-    /// Deletes the given promise
-    delete-promise: func(promise-id: promise-id);
 
     /// Returns the current position in the persistent op log
     get-oplog-index: func() -> oplog-index;
