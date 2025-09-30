@@ -16,8 +16,9 @@ use crate::model::agent::wit::AgentWrapperGeneratorContext;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
     to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
 };
@@ -846,7 +847,7 @@ fn build_data_value(
             for named_element_schema in elements {
                 let case_name = named_element_schema
                     .name
-                    .to_kebab_case()
+                    .to_wit_naming()
                     .to_upper_camel_case();
                 writeln!(
                     result,
@@ -894,7 +895,7 @@ fn write_builder(
             writeln!(result, "{indent}  match {access} {{")?;
 
             for (case_idx, case) in variant.cases.iter().enumerate() {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
                 match &case.typ {
                     Some(_) => {
                         writeln!(
@@ -915,7 +916,7 @@ fn write_builder(
             writeln!(result, "{indent}  match {access} {{")?;
 
             for case in &variant.cases {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
                 match &case.typ {
                     Some(_) => {
                         writeln!(
@@ -1202,7 +1203,7 @@ fn extract_data_value(
             writeln!(result, "{indent}values.map(pair => {{")?;
             writeln!(result, "{indent}  match pair.0 {{")?;
             for element in elements {
-                let case_name = element.name.to_kebab_case().to_upper_camel_case();
+                let case_name = element.name.to_wit_naming().to_upper_camel_case();
                 writeln!(result, "{indent}    \"{}\" => {{", element.name)?;
                 match &element.schema {
                     ElementSchema::ComponentModel(schema) => {
@@ -1279,7 +1280,7 @@ fn extract_wit_value(
             writeln!(result, "{indent}  match idx {{")?;
 
             for (idx, case) in variant.cases.iter().enumerate() {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
 
                 writeln!(result, "{indent}    {idx} => {{")?;
                 if let Some(inner_type) = &case.typ {
