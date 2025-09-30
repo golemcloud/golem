@@ -283,10 +283,10 @@ pub fn render_type(typ: &AnalysedType) -> String {
         }
         AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
         AnalysedType::Enum(TypeEnum { cases, .. }) => {
-            format!("enum {{ {} }}", cases.iter().map(|c| c).join(", "))
+            format!("enum {{ {} }}", cases.iter().join(", "))
         }
         AnalysedType::Flags(TypeFlags { names, .. }) => {
-            format!("flags {{ {} }}", names.iter().map(|n| n).join(", "))
+            format!("flags {{ {} }}", names.iter().join(", "))
         }
         AnalysedType::Record(TypeRecord { fields, .. }) => {
             let pairs: Vec<String> = fields

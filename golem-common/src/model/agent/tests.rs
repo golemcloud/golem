@@ -29,7 +29,8 @@ use test_r::test;
 #[test]
 fn agent_id_wave_normalization() {
     {
-        let agent_id = AgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new()).unwrap();
+        let agent_id =
+            AgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new()).unwrap();
         assert_eq!(agent_id.to_string(), "agent-7([12,13,14])");
     }
 
@@ -39,7 +40,10 @@ fn agent_id_wave_normalization() {
             TestAgentTypes::new(),
         )
         .unwrap();
-        assert_eq!(agent_id.to_string(), "agent-3(32,{x:12,y:32,properties:{a,b,c}})");
+        assert_eq!(
+            agent_id.to_string(),
+            "agent-3(32,{x:12,y:32,properties:{a,b,c}})"
+        );
     }
 }
 
