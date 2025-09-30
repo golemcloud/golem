@@ -109,6 +109,7 @@ declare module 'golem:graph/schema@1.0.0' {
   export type VertexLabelSchema = {
     label: string;
     properties: PropertyDefinition[];
+    /** Container/collection this label maps to (for container-based systems) */
     container?: string;
   };
   /**
@@ -118,7 +119,12 @@ declare module 'golem:graph/schema@1.0.0' {
     label: string;
     properties: PropertyDefinition[];
     fromLabels?: string[];
+    /** Allowed source vertex labels */
     toLabels?: string[];
+    /**
+     * Allowed target vertex labels
+     * Container/collection this label maps to (for container-based systems)
+     */
     container?: string;
   };
   /**
@@ -127,17 +133,23 @@ declare module 'golem:graph/schema@1.0.0' {
   export type IndexDefinition = {
     name: string;
     label: string;
+    /** Vertex or edge label */
     properties: string[];
+    /** Properties to index */
     indexType: IndexType;
     unique: boolean;
+    /** Container/collection this index applies to */
     container?: string;
   };
   /**
    * Definition for an edge type in a structural graph database.
    */
   export type EdgeTypeDefinition = {
+    /** The name of the edge collection/table. */
     collection: string;
+    /** The names of vertex collections/tables that can be at the 'from' end of an edge. */
     fromCollections: string[];
+    /** The names of vertex collections/tables that can be at the 'to' end of an edge. */
     toCollections: string[];
   };
   /**

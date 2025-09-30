@@ -45,16 +45,22 @@ declare module 'wasi:blobstore/types' {
    * information about a container
    */
   export type ContainerMetadata = {
+    /** the container's name */
     name: ContainerName;
+    /** date and time container was created */
     createdAt: Timestamp;
   };
   /**
    * information about an object
    */
   export type ObjectMetadata = {
+    /** the object's name */
     name: ObjectName;
+    /** the object's parent container */
     container: ContainerName;
+    /** date and time the object was created */
     createdAt: Timestamp;
+    /** size of the object, in bytes */
     size: ObjectSize;
   };
   /**

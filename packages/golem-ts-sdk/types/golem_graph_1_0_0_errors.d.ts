@@ -7,10 +7,13 @@ declare module 'golem:graph/errors@1.0.0' {
   /**
    * Comprehensive error types that can represent failures across different graph databases
    */
-  export type GraphError = {
+  export type GraphError = 
+  /** Feature/operation not supported by current provider */
+  {
     tag: 'unsupported-operation'
     val: string
   } |
+  /** Connection and authentication errors */
   {
     tag: 'connection-failed'
     val: string
@@ -23,6 +26,7 @@ declare module 'golem:graph/errors@1.0.0' {
     tag: 'authorization-failed'
     val: string
   } |
+  /** Data and schema errors */
   {
     tag: 'element-not-found'
     val: ElementId
@@ -47,6 +51,7 @@ declare module 'golem:graph/errors@1.0.0' {
     tag: 'invalid-query'
     val: string
   } |
+  /** Transaction errors */
   {
     tag: 'transaction-failed'
     val: string
@@ -60,6 +65,7 @@ declare module 'golem:graph/errors@1.0.0' {
   {
     tag: 'deadlock-detected'
   } |
+  /** System errors */
   {
     tag: 'timeout'
   } |

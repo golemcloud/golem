@@ -64,7 +64,8 @@ declare module 'golem:rpc/types@0.2.2' {
   export type NodeIndex = number;
   export type ResourceId = bigint;
   export type ResourceMode = "owned" | "borrowed";
-  export type WitTypeNode = {
+  export type WitTypeNode = 
+  {
     tag: 'record-type'
     val: [string, NodeIndex][]
   } |
@@ -150,7 +151,8 @@ declare module 'golem:rpc/types@0.2.2' {
   export type Uri = {
     value: string;
   };
-  export type WitNode = {
+  export type WitNode = 
+  {
     tag: 'record-value'
     val: NodeIndex[]
   } |
@@ -245,7 +247,8 @@ declare module 'golem:rpc/types@0.2.2' {
     value: WitValue;
     typ: WitType;
   };
-  export type RpcError = {
+  export type RpcError = 
+  {
     tag: 'protocol-error'
     val: string
   } |

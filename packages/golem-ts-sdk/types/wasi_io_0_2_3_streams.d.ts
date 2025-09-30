@@ -206,10 +206,22 @@ declare module 'wasi:io/streams@0.2.3' {
   /**
    * An error for input-stream and output-stream operations.
    */
-  export type StreamError = {
+  export type StreamError = 
+  /**
+   * The last operation (a write or flush) failed before completion.
+   * More information is available in the `error` payload.
+   * After this, the stream will be closed. All future operations return
+   * `stream-error::closed`.
+   */
+  {
     tag: 'last-operation-failed'
     val: Error
   } |
+  /**
+   * The stream is closed: no more input will be accepted by the
+   * stream. A closed output-stream will return this error on all
+   * future operations.
+   */
   {
     tag: 'closed'
   };

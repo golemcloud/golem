@@ -64,7 +64,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
   export type Uuid = golemRdbms001Types.Uuid;
   export type IpAddress = golemRdbms001Types.IpAddress;
   export type MacAddress = golemRdbms001Types.MacAddress;
-  export type Error = {
+  export type Error = 
+  {
     tag: 'connection-failure'
     val: string
   } |
@@ -89,7 +90,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
     days: number;
     microseconds: bigint;
   };
-  export type Int4bound = {
+  export type Int4bound = 
+  {
     tag: 'included'
     val: number
   } |
@@ -100,7 +102,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
   {
     tag: 'unbounded'
   };
-  export type Int8bound = {
+  export type Int8bound = 
+  {
     tag: 'included'
     val: bigint
   } |
@@ -111,7 +114,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
   {
     tag: 'unbounded'
   };
-  export type Numbound = {
+  export type Numbound = 
+  {
     tag: 'included'
     val: string
   } |
@@ -122,7 +126,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
   {
     tag: 'unbounded'
   };
-  export type Tsbound = {
+  export type Tsbound = 
+  {
     tag: 'included'
     val: Timestamp
   } |
@@ -133,7 +138,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
   {
     tag: 'unbounded'
   };
-  export type Tstzbound = {
+  export type Tstzbound = 
+  {
     tag: 'included'
     val: Timestamptz
   } |
@@ -144,7 +150,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
   {
     tag: 'unbounded'
   };
-  export type Datebound = {
+  export type Datebound = 
+  {
     tag: 'included'
     val: Date
   } |
@@ -194,7 +201,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
     name: string;
     value: LazyDbValue;
   };
-  export type ValueBound = {
+  export type ValueBound = 
+  {
     tag: 'included'
     val: LazyDbValue
   } |
@@ -213,7 +221,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
     name: string;
     value: ValuesRange;
   };
-  export type DbValue = {
+  export type DbValue = 
+  {
     tag: 'character'
     val: number
   } |
@@ -392,7 +401,8 @@ declare module 'golem:rdbms/postgres@0.0.1' {
     name: string;
     baseType: LazyDbColumnType;
   };
-  export type DbColumnType = {
+  export type DbColumnType = 
+  {
     tag: 'character'
   } |
   {

@@ -5,7 +5,8 @@ declare module 'golem:search/types@1.0.0' {
   /**
    * Common structured errors for search operations
    */
-  export type SearchError = {
+  export type SearchError = 
+  {
     tag: 'index-not-found'
   } |
   {

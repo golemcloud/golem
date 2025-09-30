@@ -49,7 +49,8 @@ declare module 'golem:exec/types@1.0.0' {
   /**
    * Execution error types
    */
-  export type Error = {
+  export type Error = 
+  {
     tag: 'unsupported-language'
   } |
   {

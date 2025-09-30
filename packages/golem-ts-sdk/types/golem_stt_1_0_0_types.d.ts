@@ -1,5 +1,6 @@
 declare module 'golem:stt/types@1.0.0' {
-  export type SttError = {
+  export type SttError = 
+  {
     tag: 'invalid-audio'
     val: string
   } |
