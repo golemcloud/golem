@@ -38,6 +38,7 @@ use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
@@ -58,7 +59,6 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_worker_executor::services::shard::ShardService;
 
 pub struct TestWorkerCtx {
     pub durable_ctx: DurableWorkerCtx<TestWorkerCtx>,
@@ -99,7 +99,7 @@ impl WorkerCtx for TestWorkerCtx {
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        shard_service: Arc<dyn ShardService>
+        shard_service: Arc<dyn ShardService>,
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -126,7 +126,7 @@ impl WorkerCtx for TestWorkerCtx {
             worker_fork,
             project_service,
             agent_types_service,
-            shard_service
+            shard_service,
         )
         .await?;
         Ok(Self { durable_ctx })

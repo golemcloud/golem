@@ -7,7 +7,9 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
 };
 use golem_common::base_model::OplogIndex;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, PromiseId, WorkerId};
+use golem_common::model::{
+    ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, PromiseId, WorkerId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
@@ -223,7 +225,11 @@ impl WorkerProxy for TestWorkerProxy {
         }
     }
 
-    async fn complete_promise(&self, _promise_id: PromiseId, _data: Vec<u8>) -> Result<bool, WorkerProxyError> {
+    async fn complete_promise(
+        &self,
+        _promise_id: PromiseId,
+        _data: Vec<u8>,
+    ) -> Result<bool, WorkerProxyError> {
         unimplemented!()
     }
 }

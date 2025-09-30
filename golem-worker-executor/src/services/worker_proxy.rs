@@ -17,13 +17,21 @@ use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response, fork_worker_response, invoke_and_await_typed_response, invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response, update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse, ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse, WorkerError
+    complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
+    invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response,
+    update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse,
+    ForkWorkerRequest, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse, InvokeRequest,
+    InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse, ResumeWorkerRequest,
+    ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse, UpdateWorkerRequest,
+    UpdateWorkerResponse, WorkerError,
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
+use golem_common::model::{
+    ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId,
+};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm_rpc::{Value, ValueAndType, WitValue};
@@ -96,7 +104,11 @@ pub trait WorkerProxy: Send + Sync {
         target: RevertWorkerTarget,
     ) -> Result<(), WorkerProxyError>;
 
-    async fn complete_promise(&self, promise_id: PromiseId, data: Vec<u8>) -> Result<bool, WorkerProxyError>;
+    async fn complete_promise(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerProxyError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
@@ -512,7 +524,11 @@ impl WorkerProxy for RemoteWorkerProxy {
         }
     }
 
-    async fn complete_promise(&self, promise_id: PromiseId, data: Vec<u8>) -> Result<bool, WorkerProxyError> {
+    async fn complete_promise(
+        &self,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> Result<bool, WorkerProxyError> {
         let response: CompletePromiseResponse = self
             .client
             .call("complete_promise", move |client| {
@@ -521,7 +537,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         worker_id: Some(promise_id.worker_id.clone().into()),
                         complete_parameters: Some(CompleteParameters {
                             oplog_idx: promise_id.oplog_idx.into(),
-                            data: data.clone()
+                            data: data.clone(),
                         }),
                     },
                     &self.access_token,
@@ -538,5 +554,4 @@ impl WorkerProxy for RemoteWorkerProxy {
             )),
         }
     }
-
 }

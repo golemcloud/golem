@@ -18,17 +18,19 @@ use crate::get_oplog_entry;
 use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
-use crate::preview2::{golem_api_1_x, Pollable};
 use crate::preview2::golem_api_1_x::host::{
-    ForkResult, GetWorkers, Host, HostGetWorkers, HostGetPromiseResult, WorkerAnyFilter
+    ForkResult, GetWorkers, Host, HostGetPromiseResult, HostGetWorkers, WorkerAnyFilter,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
 };
+use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
+use crate::services::promise::PromiseHandle;
 use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
+use async_trait::async_trait;
 use bincode::de::Decoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
@@ -43,8 +45,6 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{subscribe, IoView};
-use async_trait::async_trait;
-use crate::services::promise::PromiseHandle;
 
 impl<Ctx: WorkerCtx> HostGetWorkers for DurableWorkerCtx<Ctx> {
     async fn new(
@@ -144,7 +144,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        let handle = self.public_state.promise_service.poll(promise_id.into())
+        let handle = self
+            .public_state
+            .promise_service
+            .poll(promise_id.into())
             .await
             .map_err(|e| anyhow::anyhow!("poll error: {e:?}"))?;
         let entry = GetPromiseResultEntry::new(handle);
@@ -169,28 +172,28 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             // A promise must be completed on instance that is owning the agent that orignally created here.
             let worker_id = &promise_id.worker_id;
 
-            let is_local_worker = match self.state.shard_service.check_worker(&worker_id) {
+            let is_local_worker = match self.state.shard_service.check_worker(worker_id) {
                 Ok(()) => true,
                 Err(WorkerExecutorError::InvalidShardId { .. }) => false,
                 Err(other) => Err(other)?,
             };
 
             let promise_completion_result = if is_local_worker {
-                self
-                    .public_state
+                self.public_state
                     .promise_service
                     .complete(promise_id.clone(), data)
                     .await?
             } else {
                 // talk to the executor that actually owns the promise
-                self
-                    .state
+                self.state
                     .worker_proxy
                     .complete_promise(promise_id.clone(), data)
                     .await?
             };
 
-            durability.persist(self, promise_id, Ok(promise_completion_result)).await
+            durability
+                .persist(self, promise_id, Ok(promise_completion_result))
+                .await
         } else {
             durability.replay(self).await
         }
@@ -815,14 +818,19 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl <Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
     async fn subscribe(
         &mut self,
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Resource<Pollable>> {
         self.observe_function_call("golem::api::promise-result", "subscribe");
+        let handle = self.table().get(&resource).unwrap().handle.clone();
         let dyn_pollable = subscribe(self.table(), resource, None)?;
-        self.state.promise_backed_pollables.write().unwrap().insert(dyn_pollable.rep());
+        self.state
+            .promise_backed_pollables
+            .write()
+            .await
+            .insert(dyn_pollable.rep(), handle);
         Ok(dyn_pollable)
     }
 
@@ -1299,6 +1307,6 @@ impl GetPromiseResultEntry {
 #[async_trait]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
-        self.handle.ready().await
+        self.handle.await_ready().await
     }
 }

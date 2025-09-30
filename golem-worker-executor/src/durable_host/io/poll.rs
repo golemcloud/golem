@@ -18,9 +18,9 @@ use crate::workerctx::WorkerCtx;
 use chrono::{Duration, Utc};
 use golem_common::model::oplog::DurableFunctionType;
 use golem_service_base::error::worker_executor::InterruptKind;
+use tracing::debug;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::io::poll::{Host, HostPollable, Pollable};
-use tracing::debug;
 
 impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
     async fn ready(&mut self, self_: Resource<Pollable>) -> anyhow::Result<bool> {
@@ -59,11 +59,24 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
         // check if all pollables are promise backed. In this case we can suspend immediately
         {
-            let state = self.state.promise_backed_pollables.read().unwrap();
-            let all_pollables_are_promises = in_.iter().all(|handle| state.contains(&handle.rep()));
-            if all_pollables_are_promises {
+            let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
+            let mut fully_blocked_on_golem_promises = true;
+
+            for res in &in_ {
+                if !fully_blocked_on_golem_promises {
+                    break;
+                }
+
+                if let Some(promise_handle) = promise_backed_pollables.get(&res.rep()) {
+                    fully_blocked_on_golem_promises &= !promise_handle.is_ready().await;
+                } else {
+                    fully_blocked_on_golem_promises = false;
+                }
+            }
+
+            if fully_blocked_on_golem_promises {
                 debug!("Suspending worker until a promise gets completed");
-                return Err(InterruptKind::Suspend.into())
+                return Err(InterruptKind::Suspend.into());
             }
         }
 

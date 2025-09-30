@@ -25,9 +25,9 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
-use std::collections::{HashMap};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
@@ -57,11 +57,14 @@ impl PromiseHandle {
         self.state.lock().await.clone()
     }
 
-    pub async fn ready(&self) {
-        if self.state.lock().await.is_some() {
-            return;
+    pub async fn is_ready(&self) -> bool {
+        self.state.lock().await.is_some()
+    }
+
+    pub async fn await_ready(&self) {
+        if !self.is_ready().await {
+            self.notify.notified().await;
         }
-        self.notify.notified().await;
     }
 }
 
@@ -158,7 +161,7 @@ impl PromiseRegistry {
 pub struct DefaultPromiseService<Ctx: WorkerCtx> {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     services: All<Ctx>,
-    registry: Mutex<PromiseRegistry>
+    registry: Mutex<PromiseRegistry>,
 }
 
 impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
@@ -169,7 +172,7 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
         Self {
             key_value_storage,
             services,
-            registry: Mutex::new(PromiseRegistry::new())
+            registry: Mutex::new(PromiseRegistry::new()),
         }
     }
 
@@ -225,7 +228,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         }
 
         if !self.exists(&promise_id).await {
-           return  Err(WorkerExecutorError::PromiseNotFound { promise_id })
+            return Err(WorkerExecutorError::PromiseNotFound { promise_id });
         }
 
         let handle = {
@@ -242,9 +245,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
                 &get_promise_result_redis_key(&promise_id),
             )
             .await
-            .unwrap_or_else(|err| {
-                panic!("failed to get promise {promise_id} from Redis: {err}")
-            })
+            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from Redis: {err}"))
         {
             handle.complete(data).await;
         }
