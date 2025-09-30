@@ -4779,8 +4779,7 @@ mod tests {
 
         let custom_spec1 = CustomInstanceSpec {
             instance_name: "weather-agent".to_string(),
-            parameter_types_for_rib: weather_agent_constructor_param_types,
-            parameter_types_for_instance_creation: None,
+            parameter_types: weather_agent_constructor_param_types,
             interface_name: Some(InterfaceName {
                 name: "weather-agent".to_string(),
                 version: None,
@@ -4789,8 +4788,7 @@ mod tests {
 
         let custom_spec2 = CustomInstanceSpec {
             instance_name: "assistant-agent".to_string(),
-            parameter_types_for_rib: vec![str()],
-            parameter_types_for_instance_creation: None,
+            parameter_types: vec![str()],
             interface_name: Some(InterfaceName {
                 name: "assistant-agent".to_string(),
                 version: None,

@@ -64,7 +64,7 @@ pub struct AgentConstructor {
 }
 
 impl AgentConstructor {
-    pub fn arg_types(&self) -> Vec<AnalysedType> {
+    pub fn wit_arg_types(&self) -> Vec<AnalysedType> {
         match &self.input_schema {
             DataSchema::Tuple(element_schemas) => element_schemas
                 .elements

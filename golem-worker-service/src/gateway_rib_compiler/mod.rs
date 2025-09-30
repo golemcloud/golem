@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::AgentType;
 use golem_wasm_ast::analysis::AnalysedExport;
 use golem_wasm_rpc::IntoValue;
@@ -73,10 +72,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
             for agent_type in agent_types {
                 custom_instance_spec.push(rib::CustomInstanceSpec {
                     instance_name: agent_type.type_name.clone(),
-                    parameter_types_for_rib: agent_type.constructor.arg_types(),
-                    parameter_types_for_instance_creation: Some(
-                        agent_type.constructor.arg_types().to_wit_naming(),
-                    ),
+                    parameter_types: agent_type.constructor.wit_arg_types(),
                     interface_name: Some(InterfaceName {
                         name: agent_type.type_name,
                         version: None,

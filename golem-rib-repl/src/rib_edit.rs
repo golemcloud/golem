@@ -222,7 +222,7 @@ impl RibEdit {
             let name_with_paren = format!("{custom_instance_name}(");
 
             if word == name_with_paren {
-                let param_types = &custom_instance.parameter_types_for_rib;
+                let param_types = &custom_instance.parameter_types;
 
                 let args = param_types
                     .iter()
