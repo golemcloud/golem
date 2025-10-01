@@ -57,6 +57,7 @@ import { AnalysedType } from './internal/mapping/types/AnalysedType';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
 import { Result } from 'golem:rpc/types@0.2.2';
+import { serializeUnstructuredBinary, serializeUnstructuredText } from './internal/mapping/values/unstructured';
 
 type TsType = Type.Type;
 
@@ -766,7 +767,7 @@ function getAgentInternal(
             val: getDataValueFromReturnValueWit(returnValue.val),
           };
         case 'unstructured-text':
-          const unstructuredText = getDataValueFromUnstructuredText(result);
+          const unstructuredText = serializeUnstructuredText(result);
           const unstructuredTextValue: DataValue = {
             tag: 'tuple',
             val: [unstructuredText],
@@ -780,7 +781,7 @@ function getAgentInternal(
           return dataValueResultText;
 
         case 'unstructured-binary':
-          const unstructuredBinary = getDataValueFromUnstructuredBinary(result);
+          const unstructuredBinary = serializeUnstructuredBinary(result);
           const unstructuredBinaryValue: DataValue = {
             tag: 'tuple',
             val: [unstructuredBinary],
@@ -795,163 +796,4 @@ function getAgentInternal(
       }
     },
   };
-}
-
-export function getDataValueFromUnstructuredBinary(value: any): ElementValue {
-  if (typeof value === 'object') {
-    const keys = Object.keys(value);
-
-    if (!keys.includes('tag')) {
-      throw new Error(
-        `Unable to cast value ${util.format(
-          value,
-        )} to UnstructuredBinary. Missing 'tag' property.`,
-      );
-    }
-
-    const tag = value['tag'];
-
-    if (typeof tag === 'string' && tag === 'url') {
-      if (keys.includes('val')) {
-        const binaryReference: BinaryReference = {
-          tag: 'url',
-          val: value['val'],
-        };
-
-        return {
-          tag: 'unstructured-binary',
-          val: binaryReference,
-        };
-      } else {
-        throw new Error(
-          `Unable to cast value ${util.format(
-            value,
-          )} to UnstructuredBinary. Missing 'val' property for tag 'url'.`,
-        );
-      }
-    }
-
-    if (typeof tag === 'string' && tag === 'inline') {
-      if (keys.includes('val') && keys.includes('mimeType')) {
-        const binaryReference: BinaryReference = {
-          tag: 'inline',
-          val: {
-            data: value['val'],
-            binaryType: {
-              mimeType: value['mimeType'],
-            },
-          },
-        };
-
-        return {
-          tag: 'unstructured-binary',
-          val: binaryReference,
-        };
-      } else {
-        throw new Error(
-          `Unable to cast value ${util.format(
-            value,
-          )} to UnstructuredBinary. Missing 'val' property for tag 'inline'.`,
-        );
-      }
-    }
-
-    throw new Error(
-      `Unable to cast value ${util.format(
-        value,
-      )} to UnstructuredBinary. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
-    );
-  }
-
-  throw new Error(
-    `Unable to cast value ${util.format(
-      value,
-    )} to UnstructuredBinary. Expected an object with 'tag' and 'val' properties.`,
-  );
-}
-
-export function getDataValueFromUnstructuredText(value: any): ElementValue {
-  if (typeof value === 'object') {
-    const keys = Object.keys(value);
-
-    if (!keys.includes('tag')) {
-      throw new Error(
-        `Unable to cast value ${util.format(
-          value,
-        )} to UnstructuredText. Missing 'tag' property.`,
-      );
-    }
-
-    const tag = value['tag'];
-
-    if (typeof tag === 'string' && tag === 'url') {
-      if (keys.includes('val')) {
-        const textReference: TextReference = {
-          tag: 'url',
-          val: value['val'],
-        };
-
-        return {
-          tag: 'unstructured-text',
-          val: textReference,
-        };
-      } else {
-        throw new Error(
-          `Unable to cast value ${util.format(
-            value,
-          )} to UnstructuredText. Missing 'val' property for tag 'url'.`,
-        );
-      }
-    }
-
-    if (typeof tag === 'string' && tag === 'inline') {
-      if (keys.includes('val')) {
-        if (keys.includes('languageCode')) {
-          const textReference: TextReference = {
-            tag: 'inline',
-            val: {
-              data: value['val'],
-              textType: {
-                languageCode: value['languageCode'],
-              },
-            },
-          };
-
-          return {
-            tag: 'unstructured-text',
-            val: textReference,
-          };
-        } else {
-          const textReference: TextReference = {
-            tag: 'inline',
-            val: {
-              data: value['val'],
-            },
-          };
-          return {
-            tag: 'unstructured-text',
-            val: textReference,
-          };
-        }
-      } else {
-        throw new Error(
-          `Unable to cast value ${util.format(
-            value,
-          )} to UnstructuredText. Missing 'val' property for tag 'inline'.`,
-        );
-      }
-    }
-
-    throw new Error(
-      `Unable to cast value ${util.format(
-        value,
-      )} to UnstructuredText. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
-    );
-  }
-
-  throw new Error(
-    `Unable to cast value ${util.format(
-      value,
-    )} to UnstructuredText. Expected an object with 'tag' and 'val' properties.`,
-  );
 }
