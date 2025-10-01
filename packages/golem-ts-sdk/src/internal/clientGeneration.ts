@@ -174,7 +174,7 @@ function getMethodProxy(
           })()
         : rpcResult.val;
 
-    if (!returnTypeAnalysed) {
+    if (!returnTypeAnalysed || returnTypeAnalysed.tag !== 'analysed') {
       throw new Error(
         `Return type of method ${String(prop)}  not supported in remote calls`,
       );
