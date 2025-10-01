@@ -97,7 +97,7 @@ export const UnstructuredText = {
    */
   fromInline<LC extends LanguageCode[] = []>(
     data: string,
-    languageCode?: string,
+    languageCode?: LC[number],
   ): UnstructuredText<LC> {
     return {
       tag: 'inline',
