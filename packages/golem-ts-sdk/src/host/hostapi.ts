@@ -12,70 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { PromiseId, createPromise, getPromise } from 'golem:api/host@1.1.7';
+import { PromiseId, getPromise } from 'golem:api/host@1.1.7';
 
 // reexport golem host api
-export {
-  getOplogIndex,
-  setOplogIndex,
-  oplogCommit,
-  markBeginOperation,
-  markEndOperation,
-  getRetryPolicy,
-  setRetryPolicy,
-  getOplogPersistenceLevel,
-  setOplogPersistenceLevel,
-  getIdempotenceMode,
-  setIdempotenceMode,
-  generateIdempotencyKey,
-  updateWorker,
-  getSelfMetadata,
-  getWorkerMetadata,
-  forkWorker,
-  revertWorker,
-  resolveComponentId,
-  resolveWorkerId,
-  resolveWorkerIdStrict,
-  fork,
-  GetWorkers,
-  Duration,
-  ComponentId,
-  Uuid,
-  ValueAndType,
-  WorkerId,
-  Pollable,
-  OplogIndex,
-  PromiseId,
-  ComponentVersion,
-  AccountId,
-  ProjectId,
-  RetryPolicy,
-  PersistenceLevel,
-  UpdateMode,
-  FilterComparator,
-  StringFilterComparator,
-  WorkerStatus,
-  WorkerNameFilter,
-  WorkerStatusFilter,
-  WorkerVersionFilter,
-  WorkerCreatedAtFilter,
-  WorkerEnvFilter,
-  WorkerWasiConfigVarsFilter,
-  WorkerPropertyFilter,
-  WorkerAllFilter,
-  WorkerAnyFilter,
-  WorkerMetadata,
-  RevertWorkerTarget,
-  ForkResult,
-} from 'golem:api/host@1.1.7';
+export * from 'golem:api/host@1.1.7';
 
-export function createGolemPromise(): PromiseId {
-  return createPromise();
-}
-
-export async function awaitGolemPromise(
-  promiseId: PromiseId,
-): Promise<Uint8Array> {
+export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
   const promise = getPromise(promiseId);
   await promise.subscribe().promise();
   return promise.get()!;
