@@ -579,7 +579,7 @@ pub struct AgentLogStreamOptions {
     pub show_timestamp: bool,
     pub show_level: bool,
     /// Only show entries coming from the agent, no output about invocation markers and stream status
-    pub quiet: bool,
+    pub logs_only: bool,
 }
 
 impl From<StreamArgs> for AgentLogStreamOptions {
@@ -588,7 +588,7 @@ impl From<StreamArgs> for AgentLogStreamOptions {
             colors: SHOULD_COLORIZE.should_colorize(),
             show_timestamp: !args.stream_no_timestamp,
             show_level: !args.stream_no_log_level,
-            quiet: args.quiet,
+            logs_only: args.logs_only,
         }
     }
 }

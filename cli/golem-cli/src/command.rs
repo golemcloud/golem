@@ -683,7 +683,7 @@ pub mod shared_args {
         pub stream_no_timestamp: bool,
         /// Only show entries coming from the agent, no output about invocation markers and stream status
         #[clap(long)]
-        pub quiet: bool,
+        pub logs_only: bool,
     }
 
     #[derive(Debug, Args, Clone)]

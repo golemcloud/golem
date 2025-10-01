@@ -158,7 +158,7 @@ impl WorkerStreamOutput {
         if !self
             .check_already_seen(&mut state, timestamp, "Stream closed")
             .await
-            && !self.options.quiet
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "STREAM");
             self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
@@ -171,7 +171,7 @@ impl WorkerStreamOutput {
         if !self
             .check_already_seen(&mut state, timestamp, "Stream error")
             .await
-            && !self.options.quiet
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "STREAM");
             self.colored(
@@ -196,7 +196,7 @@ impl WorkerStreamOutput {
                 &format!("{function_name} {idempotency_key} started"),
             )
             .await
-            && !self.options.quiet
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "INVOKE");
             self.colored(
@@ -221,7 +221,7 @@ impl WorkerStreamOutput {
                 &format!("{function_name} {idempotency_key} finished"),
             )
             .await
-            && !self.options.quiet
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "INVOKE");
             self.colored(
@@ -241,7 +241,7 @@ impl WorkerStreamOutput {
                 &format!("{number_of_missed_messages} messages missed"),
             )
             .await
-            && !self.options.quiet
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "STREAM");
             self.colored(
