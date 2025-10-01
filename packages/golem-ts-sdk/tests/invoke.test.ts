@@ -233,7 +233,7 @@ test('BarAgent can be successfully initiated', () => {
       fc.oneof(fc.string(), fc.constant(null)),
       fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(BarAgentClassName);
+        overrideSelfMetadataImpl(BarAgentCustomClassName);
 
         const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
 
