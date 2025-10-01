@@ -78,12 +78,14 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
     }
 
     case 'union': {
-      const types = json.types.map(buildTypeFromJSON);
+      const unionElems = json.types.map(buildTypeFromJSON);
+      const unionTypeParams = json.typeParams.map(buildTypeFromJSON);
       return {
         kind: 'union',
         name: json.name,
-        unionTypes: types,
+        unionTypes: unionElems,
         optional: json.optional,
+        typeParams: unionTypeParams,
       };
     }
 
@@ -118,7 +120,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         name: json.name,
         properties: props,
         optional: json.optional,
-        typeArgs: json.typeArgs.map((arg) => buildTypeFromJSON(arg)),
+        typeParams: json.typeParams.map((arg) => buildTypeFromJSON(arg)),
       };
     }
 
@@ -136,7 +138,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         name: json.name,
         properties: props,
         optional: json.optional,
-        typeArgs: json.typeArgs.map((arg) => buildTypeFromJSON(arg)),
+        typeParams: json.typeParams.map((arg) => buildTypeFromJSON(arg)),
       };
     }
 

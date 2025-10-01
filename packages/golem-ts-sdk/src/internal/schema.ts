@@ -421,9 +421,13 @@ function handleUndefinedReturnType(
 
 
 export function getLanguageCodes(type: Type.Type): Either.Either<string[], string> {
+
+  console.log(type.name);
+  console.log(type.kind);
+
   if (type.name === 'UnstructuredText' && type.kind === 'object') {
 
-    const parameterTypes: Type.Type[] = type.typeArgs ?? [];
+    const parameterTypes: Type.Type[] = type.typeParams ?? [];
 
     if (parameterTypes.length !== 1) {
       return Either.right([]);

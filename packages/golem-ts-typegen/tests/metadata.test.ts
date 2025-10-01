@@ -29,6 +29,7 @@ import {
   getLiterallyObjectType,
   getRecursiveType,
   getObjectWithTypeParameter,
+  getUnionWithTypeParameter,
 } from "./util.js";
 
 import { Type } from "@golemcloud/golem-ts-types-core";
@@ -103,11 +104,29 @@ describe("golem-ts-typegen can work correctly read types from .metadata director
   it("track object with type parameter", () => {
     const classType = getObjectWithTypeParameter();
 
-    const typeArgs = classType.kind === "object" ? classType.typeArgs : [];
+    const typeArgs = classType.kind === "object" ? classType.typeParams : [];
 
     expect(typeArgs).toHaveLength(1);
 
     const tupleType = typeArgs[0];
+    const tupleArgs = tupleType.kind === "tuple" ? tupleType.elements : [];
+
+    const args = tupleArgs.map((tupleArg) => {
+      return tupleArg.kind === "literal" ? tupleArg.literalValue : null;
+    });
+
+    expect(args).toEqual(["en", "de"]);
+  });
+
+  it("track union with type parameter", () => {
+    const classType = getUnionWithTypeParameter();
+
+    const typeArgs = classType.kind === "union" ? classType.typeParams : [];
+
+    expect(typeArgs).toHaveLength(1);
+
+    const tupleType = typeArgs[0];
+    console.log(tupleType);
     const tupleArgs = tupleType.kind === "tuple" ? tupleType.elements : [];
 
     const args = tupleArgs.map((tupleArg) => {

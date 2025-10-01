@@ -27,7 +27,7 @@ export type LiteTypeJSON =
       elements: LiteTypeJSON[];
       optional: boolean;
     }
-  | { kind: 'union'; name?: string; types: LiteTypeJSON[]; optional: boolean }
+  | { kind: 'union'; name?: string; types: LiteTypeJSON[]; typeParams: LiteTypeJSON[], optional: boolean }
   | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
   | {
       kind: 'object';
@@ -37,7 +37,7 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
-      typeArgs: LiteTypeJSON[];
+      typeParams: LiteTypeJSON[];
       optional: boolean;
     }
   | {
@@ -58,7 +58,7 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
-      typeArgs: LiteTypeJSON[];
+      typeParams: LiteTypeJSON[];
       optional: boolean;
     }
   | {

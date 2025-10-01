@@ -299,6 +299,10 @@ function getTypeFromTsMorphInternal(
   }
 
   if (type.isUnion()) {
+    const args = tsMorphType
+      .getAliasTypeArguments()
+      .map((arg) => getTypeFromTsMorph(arg, false));
+
     const unionTypes = type
       .getUnionTypes()
       .map((t) => getTypeFromTsMorphInternal(t, false, new Set(visitedTypes)));
@@ -308,6 +312,7 @@ function getTypeFromTsMorphInternal(
       name: aliasName,
       unionTypes,
       optional: isOptional,
+      typeParams: args,
     };
   }
 
@@ -326,7 +331,7 @@ function getTypeFromTsMorphInternal(
       name: aliasName ?? rawName,
       properties: propertiesAsSymbols(type, visitedTypes),
       optional: isOptional,
-      typeArgs: type
+      typeParams: type
         .getAliasTypeArguments()
         .map((arg) => getTypeFromTsMorph(arg, false)),
     };
@@ -337,11 +342,13 @@ function getTypeFromTsMorphInternal(
       .getAliasTypeArguments()
       .map((arg) => getTypeFromTsMorph(arg, false));
 
+    console.log(`Object type parameters ${aliasName ?? rawName}:`, args);
+
     return {
       kind: "object",
       name: aliasName,
       properties: propertiesAsSymbols(type, visitedTypes),
-      typeArgs: args,
+      typeParams: args,
       optional: isOptional,
     };
   }
