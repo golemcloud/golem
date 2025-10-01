@@ -249,6 +249,7 @@ dependencies = [
 [[package]]
 name = "reqwest"
 version = "0.12.15"
+source = "git+https://github.com/zivergetech/reqwest?branch=update-july-2025#9e0c586a3f2fc2f9fe32ddf46c2a49152777693b"
 dependencies = [
  "base64",
  "bytes",

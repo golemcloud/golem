@@ -1,11 +1,11 @@
-package golem:api@1.1.6;
+package golem:api@1.1.7;
 
 /// Host interface for enumerating and searching for worker oplogs
 interface oplog {
-    use wasi:clocks/wall-clock@0.2.0.{datetime};
-    use golem:rpc/types@0.2.0.{wit-value};
+    use wasi:clocks/wall-clock@0.2.3.{datetime};
+    use golem:rpc/types@0.2.2.{wit-value};
 
-    use host.{account-id, component-version, oplog-index, retry-policy, uuid, worker-id};
+    use host.{account-id, component-version, oplog-index, persistence-level, project-id, retry-policy, uuid, worker-id};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
@@ -25,7 +25,8 @@ interface oplog {
         /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
         /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
         /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
-        write-remote-batched(option<oplog-index>)
+        write-remote-batched(option<oplog-index>),
+        write-remote-transaction(option<oplog-index>)
     }
 
     record plugin-installation-description {
@@ -41,7 +42,8 @@ interface oplog {
         component-version: component-version,
         args: list<string>,
         env: list<tuple<string, string>>,
-        account-id: account-id,
+        created-by: account-id,
+        project-id: project-id,
         parent: option<worker-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
@@ -89,7 +91,7 @@ interface oplog {
 
     record exported-function-completed-parameters {
         timestamp: datetime,
-        response: wit-value,
+        response: option<wit-value>,
         consumed-fuel: s64
     }
 
@@ -170,19 +172,16 @@ interface oplog {
 
     record create-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id
+        resource-id: worker-resource-id,
+        name: string,
+        owner: string
     }
 
     record drop-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id
-    }
-
-    record describe-resource-parameters {
-        timestamp: datetime,
         resource-id: worker-resource-id,
-        resource-name: string,
-        resource-params: list<wit-value>
+        name: string,
+        owner: string
     }
 
     enum log-level {
@@ -244,6 +243,21 @@ interface oplog {
         value: attribute-value
     }
 
+    record change-persistence-level-parameters {
+        timestamp: datetime,
+        persistence-level: persistence-level
+    }
+
+    record begin-remote-transaction-parameters {
+        timestamp: datetime,
+        transaction-id: string
+    }
+
+    record remote-transaction-parameters {
+        timestamp: datetime,
+        begin-index: oplog-index
+    }
+
     variant oplog-entry {
         /// The initial worker oplog entry
         create(create-parameters),
@@ -299,8 +313,6 @@ interface oplog {
         create-resource(create-resource-parameters),
         /// Dropped a resource instance
         drop-resource(drop-resource-parameters),
-        /// Adds additional information for a created resource instance
-        describe-resource(describe-resource-parameters),
         /// The worker emitted a log message
         log(log-parameters),
         /// The worker's has been restarted, forgetting all its history
@@ -319,6 +331,18 @@ interface oplog {
         finish-span(finish-span-parameters),
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
+        /// Change the current persistence level
+        change-persistence-level(change-persistence-level-parameters),
+        /// Begins a transaction operation
+        begin-remote-transaction(begin-remote-transaction-parameters),
+        /// Pre-Commit of the transaction, indicating that the transaction will be committed
+        pre-commit-remote-transaction(remote-transaction-parameters),
+        /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+        pre-rollback-remote-transaction(remote-transaction-parameters),
+        /// Committed transaction operation, indicating that the transaction was committed
+        committed-remote-transaction(remote-transaction-parameters),
+        /// Rolled back transaction operation, indicating that the transaction was rolled back
+        rolled-back-remote-transaction(remote-transaction-parameters)
     }
 
     resource get-oplog {
