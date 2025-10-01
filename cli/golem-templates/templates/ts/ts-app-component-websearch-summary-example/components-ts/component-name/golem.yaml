@@ -5,15 +5,15 @@ httpApi:
     component-name-api:
       version: '1'
       routes:
-      - method: GET
-        path: /v1/research?{topic}
-        binding:
-          type: default
-          __cn__: componentname
-          response: |
-            let agent = research-agent();
-            let result = agent.research(request.query.topic);
-            {status: 200, body: result, headers: {ContentType: "text/plain"}}
+        - method: GET
+          path: /v1/research?{topic}
+          binding:
+            type: default
+            __cn__: componentname
+            response: |
+              let agent = research-agent();
+              let result = agent.research(request.query.topic);
+              {status: 200, body: result, headers: {ContentType: "text/plain"}}
 
   ## Uncomment this to enable deployment of the http api
   # deployments:

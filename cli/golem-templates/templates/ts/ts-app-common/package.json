@@ -19,6 +19,6 @@
     "rollup": "^4.50.1",
     "tslib": "^2.8.1",
     "typescript": "^5.9.2",
-    "@golemcloud/golem-ts-typegen": "0.0.29"
+    "@golemcloud/golem-ts-typegen": "0.0.31"
   }
 }
