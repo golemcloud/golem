@@ -385,24 +385,7 @@ function convertToElementSchema(
       parameterName,
     );
 
-    const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
-
-    const parameterMetadata = methodMetadata?.get(methodName);
-
-    const languageCodes = parameterMetadata?.get(parameterName)?.languageCode;
-
-    const elementSchema: ElementSchema = languageCodes
-      ? {
-          tag: 'unstructured-text',
-          val: {
-            restrictions: languageCodes.map((code) => ({
-              languageCode: code,
-            })),
-          },
-        }
-      : { tag: 'unstructured-text', val: {} };
-
-    return Either.right(elementSchema);
+    return getElementSchemaForUnstructuredText(parameterType);
   }
 
   if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
@@ -490,16 +473,17 @@ function getElementSchemaForUnstructuredText(
     return Either.left(`Failed to get language code: ${languageCodes.val}`);
   }
 
-  const elementSchema: ElementSchema = languageCodes
-    ? {
-        tag: 'unstructured-text',
-        val: {
-          restrictions: languageCodes.val.map((code) => ({
-            languageCode: code,
-          })),
-        },
-      }
-    : { tag: 'unstructured-text', val: {} };
+  const elementSchema: ElementSchema =
+    languageCodes.val.length > 0
+      ? {
+          tag: 'unstructured-text',
+          val: {
+            restrictions: languageCodes.val.map((code) => ({
+              languageCode: code,
+            })),
+          },
+        }
+      : { tag: 'unstructured-text', val: {} };
 
   return Either.right(elementSchema);
 }

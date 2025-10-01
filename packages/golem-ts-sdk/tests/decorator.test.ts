@@ -27,35 +27,35 @@ describe('Agent decorator should register the agent class and its methods into A
     () => new Error('BarAgent not found in AgentTypeRegistry'),
   );
 
-  const complexAgentConstructor = complexAgent.constructor;
+  const barAgentConstructor = complexAgent.constructor;
 
-  if (!complexAgentConstructor) {
+  if (!barAgentConstructor) {
     throw new Error('BarAgent constructor not found');
   }
 
-  const complexAgentMethod = complexAgent.methods.find(
+  const barAgentMethod = complexAgent.methods.find(
     (method) => method.name === 'fun0',
   );
 
-  if (!complexAgentMethod) {
+  if (!barAgentMethod) {
     throw new Error('fun0 method not found in BarAgent');
   }
 
   it('should handle UnstructuredText in method params', () => {
     const elementSchema1 = getElementSchema(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'unstructuredTextWithLanguageCode',
     );
 
     const expected = {
       tag: 'unstructured-text',
-      val: { restrictions: [{ languageCode: 'en' }] },
+      val: { restrictions: [{ languageCode: 'en' }, { languageCode: 'de' }] },
     };
 
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'unstructuredText',
     );
 
@@ -66,19 +66,19 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle UnstructuredText in constructor params', () => {
     const elementSchema1 = getElementSchema(
-      complexAgentConstructor!.inputSchema,
+      barAgentConstructor.inputSchema,
       'unstructuredTextWithLanguageCode',
     );
 
     const expected = {
       tag: 'unstructured-text',
-      val: { restrictions: [{ languageCode: 'en' }] },
+      val: { restrictions: [{ languageCode: 'en' }, { languageCode: 'de' }] },
     };
 
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentConstructor!.inputSchema,
+      barAgentConstructor.inputSchema,
       'unstructuredText',
     );
 
@@ -89,7 +89,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle UnstructuredBinary in method params', () => {
     const elementSchema1 = getElementSchema(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'unstructuredBinaryWithMimeType',
     );
 
@@ -101,7 +101,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'unstructuredBinary',
     );
 
@@ -112,7 +112,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle UnstructuredBinary in constructor params', () => {
     const elementSchema1 = getElementSchema(
-      complexAgentConstructor!.inputSchema,
+      barAgentConstructor.inputSchema,
       'unstructuredBinaryWithMimeType',
     );
 
@@ -124,7 +124,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(elementSchema1).toEqual(expected);
 
     const elementSchema2 = getElementSchema(
-      complexAgentConstructor!.inputSchema,
+      barAgentConstructor.inputSchema,
       'unstructuredBinary',
     );
 
@@ -135,7 +135,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle `a: string | undefined` in method params', () => {
     const optionalStringInGetWeather = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'optionalStringType',
     );
 
@@ -158,7 +158,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle optional string in method', () => {
     const optionalStringInGetWeather = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'optionalStringType',
     );
 
@@ -180,7 +180,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle tagged unions in method', () => {
-    const wit = getWitType(complexAgentMethod.inputSchema, 'taggedUnionType');
+    const wit = getWitType(barAgentMethod.inputSchema, 'taggedUnionType');
 
     const expectedWit = {
       nodes: [
@@ -241,10 +241,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle union with only literals in method', () => {
-    const wit = getWitType(
-      complexAgentMethod.inputSchema,
-      'unionWithOnlyLiterals',
-    );
+    const wit = getWitType(barAgentMethod.inputSchema, 'unionWithOnlyLiterals');
 
     const expectedWit = {
       nodes: [
@@ -259,7 +256,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle union with literals in method xxx', () => {
-    const wit = getWitType(complexAgentMethod.inputSchema, 'unionWithLiterals');
+    const wit = getWitType(barAgentMethod.inputSchema, 'unionWithLiterals');
 
     const expectedWit = {
       nodes: [
@@ -285,7 +282,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle result type - exact in method', () => {
-    const wit = getWitType(complexAgentMethod.inputSchema, 'resultTypeExact');
+    const wit = getWitType(barAgentMethod.inputSchema, 'resultTypeExact');
 
     const expectedWit = {
       nodes: [
@@ -302,10 +299,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle result type with different key names', () => {
-    const wit = getWitType(
-      complexAgentMethod.inputSchema,
-      'resultTypeNonExact',
-    );
+    const wit = getWitType(barAgentMethod.inputSchema, 'resultTypeNonExact');
 
     const expectedWit = {
       nodes: [
@@ -322,10 +316,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle result type with different key names for ok and err', () => {
-    const wit = getWitType(
-      complexAgentMethod.inputSchema,
-      'resultTypeNonExact2',
-    );
+    const wit = getWitType(barAgentMethod.inputSchema, 'resultTypeNonExact2');
 
     const expectedWit = {
       nodes: [
@@ -343,7 +334,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should handle union with null in constructor', () => {
     const wit = getWitType(
-      complexAgentConstructor.inputSchema,
+      barAgentConstructor.inputSchema,
       'optionalUnionType',
     );
 
@@ -382,7 +373,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('should handle optional union in method', () => {
-    const wit = getWitType(complexAgentMethod.inputSchema, 'optionalUnionType');
+    const wit = getWitType(barAgentMethod.inputSchema, 'optionalUnionType');
 
     const expectedWit = {
       nodes: [
@@ -420,7 +411,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('union with null works', () => {
     const unionWithNullType = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'unionWithNull',
     );
 
@@ -446,7 +437,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with \`a: string | undefined\` works', () => {
     const objectWithUnionWithNull = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'objectWithUnionWithUndefined1',
     );
 
@@ -466,7 +457,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with \`a: string | number | undefined\` works', () => {
     const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'objectWithUnionWithUndefined2',
     );
 
@@ -496,7 +487,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with a?: string | number | undefined works', () => {
     const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'objectWithUnionWithUndefined3',
     );
 
@@ -526,7 +517,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('object with `a?: string | undefined` works', () => {
     const objectWithUnionWithNull2 = getWitType(
-      complexAgentMethod.inputSchema,
+      barAgentMethod.inputSchema,
       'objectWithUnionWithUndefined4',
     );
 
