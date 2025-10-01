@@ -15,8 +15,7 @@
 import { AgentType, DataValue, AgentError } from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { MethodParams, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { Type } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
@@ -33,7 +32,6 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getSelfMetadata } from 'golem:api/host@1.1.7';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
-import { AgentTypeName } from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
@@ -42,8 +40,6 @@ import { UnstructuredBinary } from './newTypes/binaryInput';
 import { AnalysedType } from './internal/mapping/types/AnalysedType';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
-
-type TsType = Type.Type;
 
 /**
  *
@@ -54,8 +50,9 @@ type TsType = Type.Type;
  *
  * Only a class that extends `BaseAgent` can be decorated with `@agent()`.
  *
- * ### Naming
- * By default, the agent name is the kebab-case of the class name.
+ * ### Naming of agents
+ * By default, the agent name is the class name. When using the agent through
+ * Golem's CLI, these names are converted to kebab-case.
  *
  * Example:
  * ```ts
@@ -164,19 +161,17 @@ export function agent(customName?: string) {
     }
     const methods = methodSchemaEither.val;
 
-    const agentTypeName = customName
-      ? AgentTypeName.fromString(customName)
-      : AgentTypeName.fromAgentClassName(agentClassName);
+    const agentTypeName = customName || agentClassName.value;
 
     if (AgentInitiatorRegistry.exists(agentTypeName)) {
       throw new Error(
-        `Agent name conflict: Another agent with the name "${agentTypeName.value}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
+        `Agent name conflict: Another agent with the name "${agentTypeName}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
       );
     }
 
     const agentTypeDescription =
       AgentConstructorRegistry.lookup(agentClassName)?.description ??
-      `Constructs the agent ${agentTypeName.value}`;
+      `Constructs the agent ${agentTypeName}`;
 
     const constructorParameterNames = classMetadata.constructorArgs
       .map((arg) => arg.name)
@@ -189,7 +184,7 @@ export function agent(customName?: string) {
       defaultPromptHint;
 
     const agentType: AgentType = {
-      typeName: agentTypeName.value,
+      typeName: agentTypeName,
       description: agentTypeDescription,
       constructor: {
         name: agentClassName.value,
@@ -228,7 +223,10 @@ export function agent(customName?: string) {
     (ctor as any).get = getRemoteClient(ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (agentName: string, constructorInput: DataValue) => {
+      initiate: (
+        agentClassName: AgentClassName,
+        constructorInput: DataValue,
+      ) => {
         const deserializedConstructorArgs = deserializeDataValue(
           constructorInput,
           constructorParamTypes,
@@ -238,9 +236,9 @@ export function agent(customName?: string) {
 
         const containerName = getSelfMetadata().workerId.workerName;
 
-        if (!containerName.startsWith(agentName)) {
+        if (!containerName.startsWith(agentClassName.asWit)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentName}", but got "${containerName}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentClassName.asWit}", but got "${containerName}"`,
           );
 
           return {

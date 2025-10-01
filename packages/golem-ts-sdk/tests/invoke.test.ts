@@ -21,9 +21,8 @@ import { expect, it } from 'vitest';
 import * as GolemApiHostModule from 'golem:api/host@1.1.7';
 import {
   ComplexAgentClassName,
-  ComplexAgentName,
   SimpleAgentClassName,
-  SimpleAgentName,
+  CustomComplexAgentTypeName,
 } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
@@ -53,6 +52,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
+import { AgentClassName } from '../src';
 
 test('SimpleAgent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -89,7 +89,7 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         resultTypeNonExact,
         resultTypeNonExact2,
       ) => {
-        overrideSelfMetadataImpl(SimpleAgentName.value);
+        overrideSelfMetadataImpl(SimpleAgentClassName);
 
         const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
 
@@ -236,7 +236,7 @@ test('ComplexAgent can be successfully initiated', () => {
       fc.oneof(fc.string(), fc.constant(null)),
       fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(ComplexAgentName.value);
+        overrideSelfMetadataImpl(CustomComplexAgentTypeName);
 
         const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
 
@@ -304,12 +304,12 @@ test('ComplexAgent can be successfully initiated', () => {
         };
 
         const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(ComplexAgentName),
+          AgentInitiatorRegistry.lookup(CustomComplexAgentTypeName.value),
           () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
         );
 
         const result = agentInitiator.initiate(
-          ComplexAgentName.value,
+          CustomComplexAgentTypeName,
           dataValue,
         );
 
@@ -353,12 +353,12 @@ function initiateSimpleAgent(
   };
 
   const agentInitiator = Option.getOrThrowWith(
-    AgentInitiatorRegistry.lookup(SimpleAgentName),
+    AgentInitiatorRegistry.lookup(SimpleAgentClassName.value),
     () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
   );
 
   const result = agentInitiator.initiate(
-    SimpleAgentName.value,
+    SimpleAgentClassName,
     constructorParams,
   );
 
@@ -427,7 +427,7 @@ function testInvoke(
   });
 }
 
-function overrideSelfMetadataImpl(agentName: string) {
+function overrideSelfMetadataImpl(agentClassName: AgentClassName) {
   vi.spyOn(GolemApiHostModule, 'getSelfMetadata').mockImplementation(() => ({
     workerId: {
       componentId: {
@@ -436,7 +436,7 @@ function overrideSelfMetadataImpl(agentName: string) {
           lowBits: 99n,
         },
       },
-      workerName: agentName,
+      workerName: agentClassName.asWit,
     },
     args: [],
     env: [],

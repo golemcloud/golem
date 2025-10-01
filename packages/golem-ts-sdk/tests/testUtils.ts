@@ -18,19 +18,17 @@ import {
   NameTypePair,
 } from '../src/internal/mapping/types/AnalysedType';
 import { AgentClassName } from '../src';
-import { AgentTypeName } from '../src/newTypes/agentTypeName';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
 export const ComplexAgentClassName = new AgentClassName('ComplexAgent');
 
+export const CustomComplexAgentTypeName = new AgentClassName(
+  'my-complex-agent',
+);
+
 export const SimpleAgentClassName = new AgentClassName('SimpleAgent');
-
-export const SimpleAgentName =
-  AgentTypeName.fromAgentClassName(SimpleAgentClassName);
-
-export const ComplexAgentName = AgentTypeName.fromString('my-complex-agent');
 
 export function getAll() {
   return TypeMetadata.getAll();

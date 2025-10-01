@@ -15,10 +15,11 @@
 import { ResolvedAgent } from './resolvedAgent';
 import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentError, DataValue } from 'golem:agent/common';
+import { AgentClassName } from '../newTypes/agentClassName';
 
 /**
  * AgentInitiator is the canonical interface for instantiating agents.
- * The exported component uses AgentInitiator, and so is remoteClients and localClients.
+ * The exported component uses AgentInitiator, and so are remoteClients and localClients.
  * AgentInitiator is internal to the SDK, and is not meant to be used by the user directly.
  *
  * Any agent creation in SDK goes through `AgentInitiator`
@@ -31,12 +32,12 @@ export type AgentInitiator = {
   /**
    * Initiates the creation of an agent.
    *
-   * @param agentName - The name of the agent to instantiate.
+   * @param agentClassName - The name of the agent class to instantiate.
    * @param constructorParams - Constructor arguments for the agent, encoded as `WitValue`s.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
   initiate(
-    agentName: string,
+    agentClassName: AgentClassName,
     constructorParams: DataValue,
   ): Result<ResolvedAgent, AgentError>;
 };

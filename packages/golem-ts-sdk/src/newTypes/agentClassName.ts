@@ -12,10 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { convertTypeNameToKebab } from '../internal/mapping/types/string-format';
+
 export class AgentClassName {
   readonly value: string;
+  readonly asWit: string;
 
   constructor(agentClassName: string) {
     this.value = agentClassName;
+    let wit = convertTypeNameToKebab(agentClassName);
+    if (!wit) {
+      throw new Error(`Unsupported agent class name: ${agentClassName}`);
+    }
+    this.asWit = wit;
   }
 }
