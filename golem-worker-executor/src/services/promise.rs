@@ -28,7 +28,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::sync::RwLock;
@@ -36,35 +36,49 @@ use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct PromiseHandle {
-    state: Arc<Mutex<Option<Vec<u8>>>>,
-    notify: Arc<Notify>,
+    inner: Arc<PromiseHandleInner>,
+}
+
+#[derive(Debug)]
+pub struct PromiseHandleInner {
+    notify: Notify,
+    state: Mutex<Option<Vec<u8>>>,
 }
 
 impl PromiseHandle {
     fn new() -> Self {
         Self {
-            state: Arc::new(Mutex::new(None)),
-            notify: Arc::new(Notify::new()),
+            inner: Arc::new(PromiseHandleInner {
+                notify: Notify::new(),
+                state: Mutex::new(None),
+            }),
         }
     }
 
-    async fn complete(&self, data: Vec<u8>) {
-        *self.state.lock().await = Some(data);
-        self.notify.notify_waiters();
-    }
-
-    pub async fn get(&self) -> Option<Vec<u8>> {
-        self.state.lock().await.clone()
+    pub fn downgrade(&self) -> Weak<PromiseHandleInner> {
+        Arc::downgrade(&self.inner)
     }
 
     pub async fn is_ready(&self) -> bool {
-        self.state.lock().await.is_some()
+        self.inner.state.lock().await.is_some()
     }
 
     pub async fn await_ready(&self) {
-        if !self.is_ready().await {
-            self.notify.notified().await;
+        if self.is_ready().await {
+            return;
         }
+        self.inner.notify.notified().await;
+    }
+
+    pub async fn get(&self) -> Option<Vec<u8>> {
+        let state = self.inner.state.lock().await;
+        state.clone()
+    }
+
+    pub async fn complete(&self, data: Vec<u8>) {
+        let mut state = self.inner.state.lock().await;
+        *state = Some(data);
+        self.inner.notify.notify_waiters();
     }
 }
 
@@ -82,7 +96,8 @@ pub trait PromiseService: Send + Sync {
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    async fn delete(&self, promise_id: PromiseId);
+    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
+    async fn cleanup(&self);
 }
 
 pub struct LazyPromiseService(RwLock<Option<Box<dyn PromiseService>>>);
@@ -124,14 +139,15 @@ impl PromiseService for LazyPromiseService {
         lock.as_ref().unwrap().complete(promise_id, data).await
     }
 
-    async fn delete(&self, promise_id: PromiseId) {
+    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
+    async fn cleanup(&self) {
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().delete(promise_id).await
+        lock.as_ref().unwrap().cleanup().await
     }
 }
 
 struct PromiseRegistry {
-    handles: HashMap<PromiseId, PromiseHandle>,
+    handles: HashMap<PromiseId, Weak<PromiseHandleInner>>,
 }
 
 impl PromiseRegistry {
@@ -141,20 +157,37 @@ impl PromiseRegistry {
         }
     }
 
-    fn get_or_insert(&mut self, id: &PromiseId) -> PromiseHandle {
-        self.handles
-            .entry(id.clone())
-            .or_insert_with(PromiseHandle::new)
-            .clone()
+    fn get(&mut self, id: &PromiseId) -> Option<PromiseHandle> {
+        if let Some(weak) = self.handles.get(id) {
+            if let Some(inner) = weak.upgrade() {
+                return Some(PromiseHandle { inner });
+            }
+        };
+        None
     }
 
-    async fn complete(&mut self, id: &PromiseId, data: Vec<u8>) -> Option<()> {
-        if let Some(handle) = self.handles.get(id) {
-            handle.complete(data).await;
-            Some(())
-        } else {
-            None
+    fn get_or_insert(&mut self, id: &PromiseId) -> PromiseHandle {
+        self.get(id).unwrap_or_else(|| {
+            let handle = PromiseHandle::new();
+            self.handles.insert(id.clone(), handle.downgrade());
+            handle
+        })
+    }
+
+    async fn complete(&mut self, id: &PromiseId, data: Vec<u8>) {
+        if let Some(weak) = self.handles.get(id) {
+            if let Some(inner) = weak.upgrade() {
+                tokio::spawn(async move {
+                    let mut state = inner.state.lock().await;
+                    *state = Some(data.clone());
+                    inner.notify.notify_waiters();
+                });
+            }
         }
+    }
+
+    pub fn cleanup(&mut self) {
+        self.handles.retain(|_, weak| weak.strong_count() > 0);
     }
 }
 
@@ -223,7 +256,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
 
     async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
         // Fast path: check local registry first
-        if let Some(handle) = self.registry.lock().await.handles.get(&promise_id) {
+        if let Some(handle) = self.registry.lock().await.get(&promise_id) {
             return Ok(handle.clone());
         }
 
@@ -331,16 +364,8 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
         Ok(written)
     }
 
-    async fn delete(&self, promise_id: PromiseId) {
-        let key1 = get_promise_redis_key(&promise_id);
-        let key2 = get_promise_result_redis_key(&promise_id);
-        self.key_value_storage
-            .with("promise", "delete")
-            .del_many(KeyValueStorageNamespace::Promise, vec![key1, key2])
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to delete promise {promise_id} from Redis: {err}")
-            });
+    async fn cleanup(&self) {
+        self.registry.lock().await.cleanup();
     }
 }
 
@@ -403,7 +428,5 @@ impl PromiseService for PromiseServiceMock {
         Ok(true)
     }
 
-    async fn delete(&self, _promise_id: PromiseId) {
-        unimplemented!()
-    }
+    async fn cleanup(&self) {}
 }

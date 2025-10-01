@@ -34,6 +34,7 @@ pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
+use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
@@ -52,7 +53,7 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::plugins::Plugins;
 use crate::services::projects::ProjectService;
-use crate::services::promise::{PromiseHandle, PromiseService};
+use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
@@ -2413,7 +2414,9 @@ struct PrivateDurableWorkerState {
     wasi_config_vars: RwLock<BTreeMap<String, String>>,
 
     // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
-    promise_backed_pollables: TRwLock<HashMap<u32, PromiseHandle>>,
+    promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
+    // Map from resource_id to the dyn_pollables that wrap it
+    promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2503,6 +2506,7 @@ impl PrivateDurableWorkerState {
             wasi_config_vars: RwLock::new(wasi_config_vars),
             shard_service,
             promise_backed_pollables: TRwLock::new(HashMap::new()),
+            promise_dyn_pollables: TRwLock::new(HashMap::new()),
         }
     }
 

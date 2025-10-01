@@ -58,27 +58,30 @@ impl<Ctx: WorkerCtx> HostPollable for DurableWorkerCtx<Ctx> {
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     async fn poll(&mut self, in_: Vec<Resource<Pollable>>) -> anyhow::Result<Vec<u32>> {
         // check if all pollables are promise backed. In this case we can suspend immediately
-        {
+        // This check only needs to be done in live mode, as we will never even persist the oplog entry for polling
+        // if we suspended in the last pass. Doing it this way also prevents us from initializing the promises until we are actually in live mode.
+        if self.durable_execution_state().is_live {
             let promise_backed_pollables = self.state.promise_backed_pollables.read().await;
-            let mut fully_blocked_on_golem_promises = true;
+            let mut all_blocked = true;
 
             for res in &in_ {
-                if !fully_blocked_on_golem_promises {
-                    break;
-                }
-
                 if let Some(promise_handle) = promise_backed_pollables.get(&res.rep()) {
-                    fully_blocked_on_golem_promises &= !promise_handle.is_ready().await;
+                    let ready = promise_handle.get_handle().await.is_ready().await;
+                    if ready {
+                        all_blocked = false;
+                        break;
+                    }
                 } else {
-                    fully_blocked_on_golem_promises = false;
+                    all_blocked = false;
+                    break;
                 }
             }
 
-            if fully_blocked_on_golem_promises {
+            if all_blocked {
                 debug!("Suspending worker until a promise gets completed");
                 return Err(InterruptKind::Suspend.into());
             }
-        }
+        };
 
         let durability = Durability::<Vec<u32>, SerializableError>::new(
             self,

@@ -26,7 +26,7 @@ use crate::preview2::golem_api_1_x::oplog::{
 };
 use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
-use crate::services::promise::PromiseHandle;
+use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -40,7 +40,9 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::{ComponentId, ComponentVersion, OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::OnceCell;
 use tracing::debug;
 use uuid::Uuid;
 use wasmtime::component::Resource;
@@ -144,13 +146,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             ));
         }
 
-        let handle = self
-            .public_state
-            .promise_service
-            .poll(promise_id.into())
-            .await
-            .map_err(|e| anyhow::anyhow!("poll error: {e:?}"))?;
-        let entry = GetPromiseResultEntry::new(handle);
+        let entry =
+            GetPromiseResultEntry::new(promise_id.into(), self.state.promise_service.clone());
         Ok(self.table().push(entry)?)
     }
 
@@ -824,13 +821,23 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
         resource: Resource<GetPromiseResultEntry>,
     ) -> anyhow::Result<Resource<Pollable>> {
         self.observe_function_call("golem::api::promise-result", "subscribe");
-        let handle = self.table().get(&resource).unwrap().handle.clone();
+        let handle = self.table().get(&resource).unwrap().clone();
+
+        let resource_rep = resource.rep();
         let dyn_pollable = subscribe(self.table(), resource, None)?;
         self.state
             .promise_backed_pollables
             .write()
             .await
             .insert(dyn_pollable.rep(), handle);
+        self.state
+            .promise_dyn_pollables
+            .write()
+            .await
+            .entry(resource_rep)
+            .or_default()
+            .insert(dyn_pollable.rep());
+
         Ok(dyn_pollable)
     }
 
@@ -848,16 +855,39 @@ impl<Ctx: WorkerCtx> HostGetPromiseResult for DurableWorkerCtx<Ctx> {
 
         if durability.is_live() {
             let entry = self.table().get(&resource)?;
-            let result = entry.handle.get().await;
+            let result = entry.get_handle().await.get().await;
             durability.persist(self, (), Ok(result)).await
         } else {
             durability.replay(self).await
         }
     }
 
-    async fn drop(&mut self, rep: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
+    async fn drop(&mut self, resource: Resource<GetPromiseResultEntry>) -> anyhow::Result<()> {
         self.observe_function_call("golem::api::promise-result", "drop");
-        let _ = self.table().delete(rep)?;
+        let resource_rep = resource.rep();
+        let _ = self.table().delete(resource)?;
+
+        // This is optional because the entry is only created if we actually turn the GetPromiseResultEntry into a Pollable
+        let dyn_pollable_reps = self
+            .state
+            .promise_dyn_pollables
+            .write()
+            .await
+            .remove(&resource_rep);
+
+        if let Some(set) = dyn_pollable_reps {
+            for dyn_pollable_rep in set {
+                let _ = self
+                    .state
+                    .promise_backed_pollables
+                    .write()
+                    .await
+                    .remove(&dyn_pollable_rep);
+            }
+        };
+
+        self.state.promise_service.cleanup().await;
+
         Ok(())
     }
 }
@@ -1293,20 +1323,37 @@ impl<Context> Decode<Context> for ForkResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone)]
 pub struct GetPromiseResultEntry {
-    handle: PromiseHandle,
+    promise_id: PromiseId,
+    promise_service: Arc<dyn PromiseService>,
+    handle: Arc<OnceCell<PromiseHandle>>,
 }
 
 impl GetPromiseResultEntry {
-    pub fn new(handle: PromiseHandle) -> Self {
-        Self { handle }
+    pub fn new(promise_id: PromiseId, promise_service: Arc<dyn PromiseService>) -> Self {
+        Self {
+            promise_id,
+            promise_service,
+            handle: Arc::new(OnceCell::new()),
+        }
+    }
+
+    pub async fn get_handle(&self) -> &PromiseHandle {
+        self.handle
+            .get_or_init(|| async {
+                self.promise_service
+                    .poll(self.promise_id.clone())
+                    .await
+                    .expect("Failed constructing backing promise handle")
+            })
+            .await
     }
 }
 
 #[async_trait]
 impl wasmtime_wasi::p2::Pollable for GetPromiseResultEntry {
     async fn ready(&mut self) {
-        self.handle.await_ready().await
+        self.get_handle().await.await_ready().await
     }
 }
