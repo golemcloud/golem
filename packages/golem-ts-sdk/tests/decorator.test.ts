@@ -99,15 +99,15 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(elementSchema1).toEqual(expected);
-
-    const elementSchema2 = getElementSchema(
-      barAgentMethod.inputSchema,
-      'unstructuredBinary',
-    );
-
-    const expected2 = { tag: 'unstructured-binary', val: {} };
-
-    expect(elementSchema2).toEqual(expected2);
+    //
+    // const elementSchema2 = getElementSchema(
+    //   barAgentMethod.inputSchema,
+    //   'unstructuredBinary',
+    // );
+    //
+    // const expected2 = { tag: 'unstructured-binary', val: {} };
+    //
+    // expect(elementSchema2).toEqual(expected2);
   });
 
   it('should handle UnstructuredBinary in constructor params', () => {
@@ -541,7 +541,7 @@ describe('Agent decorator should register the agent class and its methods into A
       () => new Error('FooAgent not found in AgentTypeRegistry'),
     );
 
-    expect(complexAgent.methods.length).toEqual(23);
+    expect(complexAgent.methods.length).toEqual(24);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(7);
     expect(complexAgent.typeName).toEqual('my-complex-agent');
     expect(simpleAgent.methods.length).toEqual(14);

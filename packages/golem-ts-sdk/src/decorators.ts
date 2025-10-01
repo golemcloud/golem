@@ -26,6 +26,7 @@ import {
   getAgentMethodSchema,
   getConstructorDataSchema,
   getLanguageCodes,
+  getMimeTypes,
 } from './internal/schema';
 import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
@@ -472,82 +473,6 @@ export function multimodal() {
   };
 }
 
-/*
- * Associates a list of **MIME types** with a parameter in either constructor or method.
- * mimeTypes is valid only when the type is `UnstructuredBinary`.
- *
- * To specify the languageCodes as restrictions to `UnstructuredText` parameters,
- * use the decorator as follows:
- *
- * Example:
- *
- * ```ts
- * class FileAgent extends BaseAgent {
- *   constructor(@mimeTypes(["application/pdf", "image/png"]) fileContent: UnstructuredBinary) {}
- *   ..
- * }
- *
- * ```
- *
- * The same can be applied to method parameters too.
- *
- * @param mimeTypes A list of MIME types (e.g., "text/plain", "application/json").
- */
-export function mimeTypes(mimeTypes: string[]) {
-  return function (
-    target: Object,
-    propertyKey: string | symbol | undefined, // method name if its part of method or undefined if its constructor
-    parameterIndex: number, // parameter index
-  ) {
-    if (propertyKey === undefined) {
-      const agentClassName = new AgentClassName((target as Function).name);
-
-      const classMetadata = TypeMetadata.get(agentClassName.value);
-
-      const constructorInfo = classMetadata?.constructorArgs;
-
-      if (!constructorInfo) {
-        throw new Error(
-          `Constructor metadata not found for agent ${agentClassName}. Ensure the constructor exists and is not private/protected.`,
-        );
-      }
-
-      const paramName = constructorInfo[parameterIndex].name;
-
-      AgentConstructorParamRegistry.setMimeTypes(
-        agentClassName,
-        paramName,
-        mimeTypes,
-      );
-    } else {
-      const agentClassName = new AgentClassName(target.constructor.name);
-
-      const classMetadata = TypeMetadata.get(agentClassName.value);
-
-      const methodName = String(propertyKey);
-
-      const methodInfo = classMetadata?.methods.get(methodName);
-
-      if (!methodInfo) {
-        throw new Error(
-          `Method ${methodName} not found in metadata for agent ${agentClassName}. Ensure the method exists and is not private/protected.`,
-        );
-      }
-
-      const paramName = Array.from(methodInfo.methodParams).map(
-        (paramType) => paramType[0],
-      )[parameterIndex];
-
-      AgentMethodParamRegistry.setMimeTypes(
-        agentClassName,
-        methodName,
-        paramName,
-        mimeTypes,
-      );
-    }
-  };
-}
-
 /**
  * Associates a **prompt** with a method or constructor of an agent
  *
@@ -690,8 +615,20 @@ export function deserializeDataValue(
             }
 
           case 'unstructured-binary':
+            const [binaryType] = paramTypes[idx][1];
+
             const binaryRef = elem.val;
-            return UnstructuredBinary.fromDataValue(binaryRef);
+
+            const mimeTypes: Either.Either<string[], string> =
+              getMimeTypes(binaryType);
+
+            if (Either.isLeft(mimeTypes)) {
+              throw new Error(
+                `Failed to get mime types for parameter ${paramTypes[idx][0]}: ${mimeTypes.val}`,
+              );
+            }
+
+            return UnstructuredBinary.fromDataValue(binaryRef, mimeTypes.val);
 
           case 'component-model':
             const paramType = paramTypes[idx][1];
@@ -740,8 +677,29 @@ export function deserializeDataValue(
             return UnstructuredText.fromDataValue(textRef, languageCodes.val);
 
           case 'unstructured-binary':
+            const binaryTypeWithName = paramTypes.find(
+              ([paramName]) => paramName === name,
+            );
+
+            if (!binaryTypeWithName) {
+              throw new Error(
+                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+              );
+            }
+
+            const [binaryType] = binaryTypeWithName[1];
+
             const binaryRef = elem.val;
-            return UnstructuredBinary.fromDataValue(binaryRef);
+
+            const mimeTypes = getMimeTypes(binaryType);
+
+            if (Either.isLeft(mimeTypes)) {
+              throw new Error(
+                `Failed to get mime types for parameter ${name}: ${mimeTypes.val}`,
+              );
+            }
+
+            return UnstructuredBinary.fromDataValue(binaryRef, mimeTypes.val);
 
           case 'component-model':
             const witValue = elem.val;

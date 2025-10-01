@@ -60,12 +60,7 @@ export function getConstructorDataSchema(
           );
         }
 
-        const result: [string, ElementSchema] = [
-          paramInfo.name,
-          elementSchema.val,
-        ];
-
-        return Either.right(result);
+        return Either.right([paramInfo.name, elementSchema.val]);
       }
 
       if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
@@ -74,24 +69,15 @@ export function getConstructorDataSchema(
           paramInfo.name,
         );
 
-        const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
+        const elementSchema = getElementSchemaForUnstructuredBinary(paramType);
 
-        const mimeTypes = metadata?.get(paramInfo.name)?.mimeTypes;
+        if (Either.isLeft(elementSchema)) {
+          return Either.left(
+            `Failed to get element schema for unstructured-binary parameter ${paramInfo.name}: ${elementSchema.val}`,
+          );
+        }
 
-        const elementSchema: ElementSchema = mimeTypes
-          ? {
-              tag: 'unstructured-binary',
-              val: {
-                restrictions: mimeTypes.map((mimeType) => ({
-                  mimeType: mimeType,
-                })),
-              },
-            }
-          : { tag: 'unstructured-binary', val: {} };
-
-        const result: [string, ElementSchema] = [paramInfo.name, elementSchema];
-
-        return Either.right(result);
+        return Either.right([paramInfo.name, elementSchema.val]);
       }
 
       const witType = WitType.fromTsType(
@@ -293,7 +279,6 @@ export function buildOutputSchema(
   returnType: Type.Type,
 ): Either.Either<[Option.Option<AnalysedType>, DataSchema], string> {
   const undefinedSchema = handleUndefinedReturnType(returnType);
-
   if (Option.isSome(undefinedSchema)) {
     return Either.right([
       Option.some(tuple(undefined, 'undefined', [])),
@@ -301,45 +286,22 @@ export function buildOutputSchema(
     ]);
   }
 
-  if (
-    returnType.kind === 'promise' &&
-    returnType.element.name === 'UnstructuredText'
-  ) {
-    const elementSchema = getElementSchemaForUnstructuredText(
-      returnType.element,
-    );
-
-    if (Either.isLeft(elementSchema)) {
-      return Either.left(
-        `Failed to get element schema for unstructured-text return type: ${elementSchema.val}`,
-      );
-    }
-
-    return Either.right([
-      Option.none(),
-      {
-        tag: 'tuple',
-        val: [['return-value', elementSchema.val]],
-      },
-    ]);
+  const unstructuredText = handleUnstructuredCase(
+    returnType,
+    'UnstructuredText',
+    getElementSchemaForUnstructuredText,
+  );
+  if (Either.isRight(unstructuredText)) {
+    return unstructuredText;
   }
 
-  if (returnType.name === 'UnstructuredText') {
-    const elementSchema = getElementSchemaForUnstructuredText(returnType);
-
-    if (Either.isLeft(elementSchema)) {
-      return Either.left(
-        `Failed to get element schema for unstructured-text return type: ${elementSchema.val}`,
-      );
-    }
-
-    return Either.right([
-      Option.none(),
-      {
-        tag: 'tuple',
-        val: [['return-value', elementSchema.val]],
-      },
-    ]);
+  const unstructuredBinary = handleUnstructuredCase(
+    returnType,
+    'UnstructuredBinary',
+    getElementSchemaForUnstructuredBinary,
+  );
+  if (Either.isRight(unstructuredBinary)) {
+    return unstructuredBinary;
   }
 
   const schema: Either.Either<
@@ -358,15 +320,42 @@ export function buildOutputSchema(
     ];
   });
 
-  return Either.map(schema, (result) => {
-    return [
-      result[0],
-      {
-        tag: 'tuple',
-        val: [['return-value', result[1]]],
-      },
-    ];
-  });
+  return Either.map(schema, (result) => [
+    result[0],
+    { tag: 'tuple', val: [['return-value', result[1]]] },
+  ]);
+}
+
+function handleUnstructuredCase(
+  returnType: Type.Type,
+  typeName: string,
+  getElementSchema: (t: Type.Type) => Either.Either<ElementSchema, string>,
+): Either.Either<[Option.Option<AnalysedType>, DataSchema], string> {
+  const target =
+    returnType.kind === 'promise' && returnType.element.name === typeName
+      ? returnType.element
+      : returnType.name === typeName
+        ? returnType
+        : null;
+
+  if (!target) {
+    return Either.left('not-special-case');
+  }
+
+  const elementSchema = getElementSchema(target);
+  if (Either.isLeft(elementSchema)) {
+    return Either.left(
+      `Failed to get element schema for ${typeName} return type: ${elementSchema.val}`,
+    );
+  }
+
+  return Either.right([
+    Option.none(),
+    {
+      tag: 'tuple',
+      val: [['return-value', elementSchema.val]],
+    },
+  ]);
 }
 
 function convertToElementSchema(
@@ -395,24 +384,7 @@ function convertToElementSchema(
       parameterName,
     );
 
-    const methodMetadata = AgentMethodParamRegistry.lookup(agentClassName);
-
-    const parameterMetadata = methodMetadata?.get(methodName);
-
-    const mimeTypes = parameterMetadata?.get(parameterName)?.mimeTypes;
-
-    const elementSchema: ElementSchema = mimeTypes
-      ? {
-          tag: 'unstructured-binary',
-          val: {
-            restrictions: mimeTypes.map((mimeType) => ({
-              mimeType: mimeType,
-            })),
-          },
-        }
-      : { tag: 'unstructured-binary', val: {} };
-
-    return Either.right(elementSchema);
+    return getElementSchemaForUnstructuredBinary(parameterType);
   }
 
   return Either.map(WitType.fromTsType(parameterType, scope), (typeInfo) => {
@@ -464,6 +436,30 @@ function handleUndefinedReturnType(
   }
 }
 
+function getElementSchemaForUnstructuredBinary(
+  paramType: Type.Type,
+): Either.Either<ElementSchema, string> {
+  const mimeTypes = getMimeTypes(paramType);
+
+  if (Either.isLeft(mimeTypes)) {
+    return Either.left(`Failed to get mime types: ${mimeTypes.val}`);
+  }
+
+  const elementSchema: ElementSchema =
+    mimeTypes.val.length > 0
+      ? {
+          tag: 'unstructured-binary',
+          val: {
+            restrictions: mimeTypes.val.map((type) => ({
+              mimeType: type,
+            })),
+          },
+        }
+      : { tag: 'unstructured-binary', val: {} };
+
+  return Either.right(elementSchema);
+}
+
 function getElementSchemaForUnstructuredText(
   paramType: Type.Type,
 ): Either.Either<ElementSchema, string> {
@@ -486,6 +482,41 @@ function getElementSchemaForUnstructuredText(
       : { tag: 'unstructured-text', val: {} };
 
   return Either.right(elementSchema);
+}
+
+export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
+  if (type.name === 'UnstructuredBinary' && type.kind === 'union') {
+    const parameterTypes: Type.Type[] = type.typeParams ?? [];
+
+    if (parameterTypes.length !== 1) {
+      return Either.right([]);
+    }
+
+    const paramType: Type.Type = parameterTypes[0];
+
+    if (paramType.kind === 'tuple') {
+      const elem = paramType.elements;
+
+      return Either.all(
+        elem.map((v) => {
+          if (v.kind === 'literal') {
+            if (!v.literalValue) {
+              return Either.left('mime type literal has no value');
+            }
+            return Either.right(v.literalValue);
+          } else {
+            return Either.left('mime type is not a literal');
+          }
+        }),
+      );
+    } else {
+      return Either.left('unknown parameter type for UnstructuredBinary');
+    }
+  }
+
+  return Either.left(
+    `Type mismatch. Expected UnstructuredBinary, Found ${type.name}`,
+  );
 }
 
 export function getLanguageCodes(

@@ -40,7 +40,10 @@ export type UnstructuredBinary<MT extends MimeType[] = []> =
     };
 
 export const UnstructuredBinary = {
-  fromDataValue<MT extends string[] = []>(dataValue: BinaryReference, allowedMimeTypes: string[]): UnstructuredBinary<MT> {
+  fromDataValue<MT extends string[] = []>(
+    dataValue: BinaryReference,
+    allowedMimeTypes: string[],
+  ): UnstructuredBinary<MT> {
     if (dataValue.tag === 'url') {
       return {
         tag: 'url',
@@ -49,8 +52,6 @@ export const UnstructuredBinary = {
     }
 
     if (allowedMimeTypes.length > 0) {
-
-
       if (!allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)) {
         throw new Error(
           `Language code ${dataValue.val.binaryType.mimeType} is not allowed. Allowed codes: ${allowedMimeTypes.join(', ')}`,
@@ -89,7 +90,10 @@ export const UnstructuredBinary = {
    * @param data
    * @param mimeType
    */
-  fromInline(data: Uint8Array, mimeType?: string): UnstructuredBinary {
+  fromInline<MT extends MimeType[] = []>(
+    data: Uint8Array,
+    mimeType?: MT[number],
+  ): UnstructuredBinary<MT> {
     return {
       tag: 'inline',
       val: data,

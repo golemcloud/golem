@@ -30,7 +30,7 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { mimeTypes, multimodal } from '../src/decorators';
+import { multimodal } from '../src/decorators';
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -167,15 +167,12 @@ class BarAgent extends BaseAgent {
     readonly testInterfaceType: Types.TestInterfaceType,
     readonly optionalStringType: string | null,
     readonly optionalUnionType: UnionType | null,
-
     readonly unstructuredText: UnstructuredText,
-
     readonly unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
-
     readonly unstructuredBinary: UnstructuredBinary,
-
-    @mimeTypes(['application/json'])
-    readonly unstructuredBinaryWithMimeType: UnstructuredBinary,
+    readonly unstructuredBinaryWithMimeType: UnstructuredBinary<
+      ['application/json']
+    >,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;
@@ -215,9 +212,7 @@ class BarAgent extends BaseAgent {
     unstructuredText: UnstructuredText,
     unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
     unstructuredBinary: UnstructuredBinary,
-
-    @mimeTypes(['application/json'])
-    unstructuredBinaryWithMimeType: UnstructuredBinary,
+    unstructuredBinaryWithMimeType: UnstructuredBinary<['application/json']>,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }
@@ -286,6 +281,10 @@ class BarAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
+  async fun19(text: string): Promise<UnstructuredBinary> {
+    throw new Error('Unimplemented');
+  }
+
   async fun1(text: string): Promise<EitherX> {
     return { ok: 'hello' };
   }
@@ -297,23 +296,23 @@ class BarAgent extends BaseAgent {
     };
   }
 
-  async fun19(text: string): Promise<EitherZ> {
+  async fun20(text: string): Promise<EitherZ> {
     return {
       tag: 'okay',
       val: 'hello',
     };
   }
 
-  async fun20(text: string) {
+  async fun21(text: string) {
     console.log('Hello World');
   }
 
-  fun21 = (text: string) => {
+  fun22 = (text: string) => {
     console.log('Hello World');
   };
 
   @multimodal()
-  async fun22(text: [string]): Promise<string> {
+  async fun23(text: [string]): Promise<string> {
     return this.getId().value;
   }
 }
