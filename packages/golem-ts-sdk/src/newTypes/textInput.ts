@@ -106,23 +106,3 @@ export const UnstructuredText = {
     };
   },
 };
-
-export const TextSchema = {
-  fromLanguageCode(languageCodes?: string[]): ElementSchema {
-    if (languageCodes) {
-      return {
-        tag: 'unstructured-text',
-        val: {
-          restrictions: languageCodes.map((code) => {
-            return { languageCode: code };
-          }),
-        },
-      };
-    }
-
-    return {
-      tag: 'unstructured-text',
-      val: {},
-    };
-  },
-};

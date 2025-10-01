@@ -14,11 +14,7 @@
 
 import { AgentClassName } from '../../newTypes/agentClassName';
 import { AnalysedType } from '../mapping/types/AnalysedType';
-import {
-  BinaryDescriptor,
-  DataSchema,
-  TextDescriptor,
-} from 'golem:agent/common';
+import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;

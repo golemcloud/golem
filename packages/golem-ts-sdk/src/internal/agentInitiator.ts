@@ -17,15 +17,15 @@ import { Result } from 'golem:rpc/types@0.2.2';
 import { AgentError, DataValue } from 'golem:agent/common';
 
 /**
- * AgentInitiator is the canonical interface for instantiating agents.
- * The exported component uses AgentInitiator, and so is remoteClients and localClients.
- * AgentInitiator is internal to the SDK, and is not meant to be used by the user directly.
+ * Any agent creation in SDK across any boundaries goes through `AgentInitiator`
  *
- * Any agent creation in SDK goes through `AgentInitiator`
+ * AgentInitiator is the canonical interface for instantiating agents.
+ * The exported component uses AgentInitiator, and so is remoteClients.
+ * AgentInitiator is internal to the SDK, and should not be exposed to end users.
  *
  * An AgentInitiator returns is `ResolvedAgent`, which encapsulates:
- * - The original instance of the user's agent (not the agent resource instance. agent-resource instance map is in `agents` dictionary in `src/index.ts`)
- * - But most importantly, an instance of `AgentInternal`, useful for invoking dynamic methods on the agent
+ * - The original instance of the user's agent (the instance of the user's class)
+ * - And most importantly, an instance of `AgentInternal`, useful for invoking dynamic methods on the agent
  */
 export type AgentInitiator = {
   /**

@@ -12,10 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { AgentType, DataValue, AgentError } from 'golem:agent/common';
+import {
+  AgentType,
+  DataValue,
+  AgentError,
+  ElementValue,
+  TextReference,
+  BinaryReference,
+  BinarySource,
+} from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { MethodParams, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import {
+  ClassMetadata,
+  MethodParams,
+  TypeMetadata,
+} from '@golemcloud/golem-ts-types-core';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
@@ -44,6 +56,7 @@ import { UnstructuredBinary } from './newTypes/binaryInput';
 import { AnalysedType } from './internal/mapping/types/AnalysedType';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
+import { Result } from 'golem:rpc/types@0.2.2';
 
 type TsType = Type.Type;
 
@@ -261,158 +274,13 @@ export function agent(customName?: string) {
 
         (instance as BaseAgent).getId = () => uniqueAgentId;
 
-        const agentInternal: AgentInternal = {
-          getId: () => {
-            return uniqueAgentId;
-          },
-          getParameters(): DataValue {
-            return constructorInput;
-          },
-          getAgentType: () => {
-            const agentType = AgentTypeRegistry.lookup(agentClassName);
-
-            if (Option.isNone(agentType)) {
-              throw new Error(
-                `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
-              );
-            }
-
-            return agentType.val;
-          },
-          loadSnapshot(bytes: Uint8Array): Promise<void> {
-            return (instance as BaseAgent).loadSnapshot(bytes);
-          },
-          saveSnapshot(): Promise<Uint8Array> {
-            return (instance as BaseAgent).saveSnapshot();
-          },
-          invoke: async (methodName, methodArgs) => {
-            const fn = instance[methodName];
-            if (!fn)
-              throw new Error(
-                `Method ${methodName} not found on agent ${agentClassName}`,
-              );
-
-            const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
-
-            if (Option.isNone(agentTypeOpt)) {
-              const error: AgentError = {
-                tag: 'invalid-method',
-                val: `Agent type ${agentClassName} not found in registry.`,
-              };
-              return {
-                tag: 'err',
-                val: error,
-              };
-            }
-
-            const agentType = agentTypeOpt.val;
-
-            const methodInfo = classMetadata.methods.get(methodName);
-
-            if (!methodInfo) {
-              const error: AgentError = {
-                tag: 'invalid-method',
-                val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
-              };
-              return {
-                tag: 'err',
-                val: error,
-              };
-            }
-
-            const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
-              agentClassName,
-              methodName,
-            );
-
-            const methodParams = TypeMetadata.get(
-              agentClassName.value,
-            )?.methods.get(methodName)?.methodParams;
-
-            if (!methodParams) {
-              const error: AgentError = {
-                tag: 'invalid-method',
-                val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName}.`,
-              };
-              return {
-                tag: 'err',
-                val: error,
-              };
-            }
-
-            const paramTypes = Array.from(methodParams.entries()).map(
-              (param) => {
-                return [
-                  param[0],
-                  [
-                    param[1],
-                    Option.fromNullable(
-                      AgentMethodParamRegistry.lookupParamType(
-                        agentClassName,
-                        methodName,
-                        param[0],
-                      ),
-                    ),
-                  ],
-                ] as [string, [Type.Type, Option.Option<AnalysedType>]];
-              },
-            );
-
-            const convertedArgs = deserializeDataValue(methodArgs, paramTypes);
-
-            const result = await fn.apply(instance, convertedArgs);
-
-            const methodDef = agentType.methods.find(
-              (m) => m.name === methodName,
-            );
-
-            if (!methodDef) {
-              const error: AgentError = {
-                tag: 'invalid-method',
-                val: `Method ${methodName} not found in agent type ${agentClassName}`,
-              };
-
-              return {
-                tag: 'err',
-                val: error,
-              };
-            }
-
-            if (!returnTypeAnalysed || returnTypeAnalysed.tag !== 'analysed') {
-              const error: AgentError = {
-                tag: 'invalid-type',
-                val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
-              };
-
-              return {
-                tag: 'err',
-                val: error,
-              };
-            }
-
-            const returnValue = WitValue.fromTsValue(
-              result,
-              returnTypeAnalysed.val,
-            );
-
-            if (Either.isLeft(returnValue)) {
-              const agentError: AgentError = {
-                tag: 'invalid-type',
-                val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
-              };
-
-              return {
-                tag: 'err',
-                val: agentError,
-              };
-            }
-
-            return {
-              tag: 'ok',
-              val: getDataValueFromReturnValueWit(returnValue.val),
-            };
-          },
-        };
+        const agentInternal = getAgentInternal(
+          instance,
+          agentClassName,
+          classMetadata,
+          uniqueAgentId,
+          constructorInput,
+        );
 
         return {
           tag: 'ok',
@@ -740,5 +608,351 @@ export function getDataValueFromReturnValueWit(
         val: witValue,
       },
     ],
+  };
+}
+
+export function getDataValueFromUnstructuredBinary(value: any): ElementValue {
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+
+    if (!keys.includes('tag')) {
+      throw new Error(
+        `Unable to cast value ${util.format(
+          value,
+        )} to UnstructuredBinary. Missing 'tag' property.`,
+      );
+    }
+
+    const tag = value['tag'];
+
+    if (typeof tag === 'string' && tag === 'url') {
+      if (keys.includes('val')) {
+        const binaryReference: BinaryReference = {
+          tag: 'url',
+          val: value['val'],
+        };
+
+        return {
+          tag: 'unstructured-binary',
+          val: binaryReference,
+        };
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            value,
+          )} to UnstructuredBinary. Missing 'val' property for tag 'url'.`,
+        );
+      }
+    }
+
+    if (typeof tag === 'string' && tag === 'inline') {
+      if (keys.includes('val') && keys.includes('mimeType')) {
+        const binaryReference: BinaryReference = {
+          tag: 'inline',
+          val: {
+            data: value['val'],
+            binaryType: {
+              mimeType: value['mimeType'],
+            },
+          },
+        };
+
+        return {
+          tag: 'unstructured-binary',
+          val: binaryReference,
+        };
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            value,
+          )} to UnstructuredBinary. Missing 'val' property for tag 'inline'.`,
+        );
+      }
+    }
+
+    throw new Error(
+      `Unable to cast value ${util.format(
+        value,
+      )} to UnstructuredBinary. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
+    );
+  }
+
+  throw new Error(
+    `Unable to cast value ${util.format(
+      value,
+    )} to UnstructuredBinary. Expected an object with 'tag' and 'val' properties.`,
+  );
+}
+
+export function getDataValueFromUnstructuredText(value: any): ElementValue {
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+
+    if (!keys.includes('tag')) {
+      throw new Error(
+        `Unable to cast value ${util.format(
+          value,
+        )} to UnstructuredText. Missing 'tag' property.`,
+      );
+    }
+
+    const tag = value['tag'];
+
+    if (typeof tag === 'string' && tag === 'url') {
+      if (keys.includes('val')) {
+        const textReference: TextReference = {
+          tag: 'url',
+          val: value['val'],
+        };
+
+        return {
+          tag: 'unstructured-text',
+          val: textReference,
+        };
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            value,
+          )} to UnstructuredText. Missing 'val' property for tag 'url'.`,
+        );
+      }
+    }
+
+    if (typeof tag === 'string' && tag === 'inline') {
+      if (keys.includes('val')) {
+        if (keys.includes('languageCode')) {
+          const textReference: TextReference = {
+            tag: 'inline',
+            val: {
+              data: value['val'],
+              textType: {
+                languageCode: value['languageCode'],
+              },
+            },
+          };
+
+          return {
+            tag: 'unstructured-text',
+            val: textReference,
+          };
+        } else {
+          const textReference: TextReference = {
+            tag: 'inline',
+            val: {
+              data: value['val'],
+            },
+          };
+          return {
+            tag: 'unstructured-text',
+            val: textReference,
+          };
+        }
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            value,
+          )} to UnstructuredText. Missing 'val' property for tag 'inline'.`,
+        );
+      }
+    }
+
+    throw new Error(
+      `Unable to cast value ${util.format(
+        value,
+      )} to UnstructuredText. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
+    );
+  }
+
+  throw new Error(
+    `Unable to cast value ${util.format(
+      value,
+    )} to UnstructuredText. Expected an object with 'tag' and 'val' properties.`,
+  );
+}
+
+function getAgentInternal(
+  agentInstance: any,
+  agentClassName: AgentClassName,
+  classMetadata: ClassMetadata,
+  uniqueAgentId: AgentId,
+  constructorInput: DataValue,
+): AgentInternal {
+  return {
+    getId: () => {
+      return uniqueAgentId;
+    },
+    getParameters(): DataValue {
+      return constructorInput;
+    },
+    getAgentType: () => {
+      const agentType = AgentTypeRegistry.lookup(agentClassName);
+
+      if (Option.isNone(agentType)) {
+        throw new Error(
+          `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
+        );
+      }
+
+      return agentType.val;
+    },
+    loadSnapshot(bytes: Uint8Array): Promise<void> {
+      return (agentInstance as BaseAgent).loadSnapshot(bytes);
+    },
+    saveSnapshot(): Promise<Uint8Array> {
+      return (agentInstance as BaseAgent).saveSnapshot();
+    },
+    invoke: async (methodName, methodArgs) => {
+      const fn = agentInstance[methodName];
+      if (!fn)
+        throw new Error(
+          `Method ${methodName} not found on agent ${agentClassName}`,
+        );
+
+      const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
+
+      if (Option.isNone(agentTypeOpt)) {
+        const error: AgentError = {
+          tag: 'invalid-method',
+          val: `Agent type ${agentClassName} not found in registry.`,
+        };
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
+
+      const agentType = agentTypeOpt.val;
+
+      const methodInfo = classMetadata.methods.get(methodName);
+
+      if (!methodInfo) {
+        const error: AgentError = {
+          tag: 'invalid-method',
+          val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
+        };
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
+
+      const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
+        agentClassName,
+        methodName,
+      );
+
+      const methodParams = TypeMetadata.get(agentClassName.value)?.methods.get(
+        methodName,
+      )?.methodParams;
+
+      if (!methodParams) {
+        const error: AgentError = {
+          tag: 'invalid-method',
+          val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName}.`,
+        };
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
+
+      const paramTypes = Array.from(methodParams.entries()).map((param) => {
+        return [
+          param[0],
+          [
+            param[1],
+            Option.fromNullable(
+              AgentMethodParamRegistry.lookupParamType(
+                agentClassName,
+                methodName,
+                param[0],
+              ),
+            ),
+          ],
+        ] as [string, [Type.Type, Option.Option<AnalysedType>]];
+      });
+
+      const convertedArgs = deserializeDataValue(methodArgs, paramTypes);
+
+      const result = await fn.apply(agentInstance, convertedArgs);
+
+      const methodDef = agentType.methods.find((m) => m.name === methodName);
+
+      if (!methodDef) {
+        const error: AgentError = {
+          tag: 'invalid-method',
+          val: `Method ${methodName} not found in agent type ${agentClassName}`,
+        };
+
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
+
+      if (!returnTypeAnalysed) {
+        const error: AgentError = {
+          tag: 'invalid-type',
+          val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
+        };
+
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
+
+      switch (returnTypeAnalysed.tag) {
+        case 'analysed':
+          const returnValue = WitValue.fromTsValue(
+            result,
+            returnTypeAnalysed.val,
+          );
+
+          if (Either.isLeft(returnValue)) {
+            const agentError: AgentError = {
+              tag: 'invalid-type',
+              val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
+            };
+
+            return {
+              tag: 'err',
+              val: agentError,
+            };
+          }
+
+          return {
+            tag: 'ok',
+            val: getDataValueFromReturnValueWit(returnValue.val),
+          };
+        case 'unstructured-text':
+          const unstructuredText = getDataValueFromUnstructuredText(result);
+          const unstructuredTextValue: DataValue = {
+            tag: 'tuple',
+            val: [unstructuredText],
+          };
+
+          const dataValueResultText: Result<DataValue, AgentError> = {
+            tag: 'ok',
+            val: unstructuredTextValue,
+          };
+
+          return dataValueResultText;
+
+        case 'unstructured-binary':
+          const unstructuredBinary = getDataValueFromUnstructuredBinary(result);
+          const unstructuredBinaryValue: DataValue = {
+            tag: 'tuple',
+            val: [unstructuredBinary],
+          };
+
+          const dataValueResult: Result<DataValue, AgentError> = {
+            tag: 'ok',
+            val: unstructuredBinaryValue,
+          };
+
+          return dataValueResult;
+      }
+    },
   };
 }
