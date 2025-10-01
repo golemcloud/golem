@@ -49,7 +49,50 @@ pub struct ApplicationContext {
     component_generated_base_wit_deps: HashMap<AppComponentName, WitDepsResolver>,
     selected_component_names: BTreeSet<AppComponentName>,
     remote_components: RemoteComponents,
+    pub tools_with_ensured_common_deps: ToolsWithEnsuredCommonDeps,
+}
+
+pub struct ToolsWithEnsuredCommonDeps {
     tools_with_ensured_common_deps: tokio::sync::RwLock<HashSet<String>>,
+}
+
+impl Default for ToolsWithEnsuredCommonDeps {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ToolsWithEnsuredCommonDeps {
+    pub fn new() -> ToolsWithEnsuredCommonDeps {
+        ToolsWithEnsuredCommonDeps {
+            tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashSet::new()),
+        }
+    }
+
+    pub async fn ensure_common_deps_for_tool_once(
+        &self,
+        tool: &str,
+        ensure: impl AsyncFnOnce() -> anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        if self
+            .tools_with_ensured_common_deps
+            .read()
+            .await
+            .contains(tool)
+        {
+            return Ok(());
+        }
+
+        let mut lock = self.tools_with_ensured_common_deps.write().await;
+
+        let result = ensure().await;
+
+        if result.is_ok() {
+            lock.insert(tool.to_string());
+        }
+
+        result
+    }
 }
 
 pub struct ApplicationPreloadResult {
@@ -81,7 +124,7 @@ impl ApplicationContext {
         }
     }
 
-    pub fn new(
+    pub async fn new(
         available_profiles: &BTreeSet<ProfileName>,
         source_mode: ApplicationSourceMode,
         config: ApplicationConfig,
@@ -93,29 +136,7 @@ impl ApplicationContext {
 
         let ctx = to_anyhow(
             "Failed to load application manifest, see problems above",
-            app_and_calling_working_dir.and_then(|(application, calling_working_dir)| {
-                ResolvedWitApplication::new(&application, config.build_profile.as_ref()).map({
-                    let temp_dir = application.temp_dir();
-                    let offline = config.offline;
-                    move |wit| ApplicationContext {
-                        loaded_with_warnings: false,
-                        config,
-                        application,
-                        wit,
-                        calling_working_dir,
-                        component_stub_defs: HashMap::new(),
-                        common_wit_deps: OnceLock::new(),
-                        component_generated_base_wit_deps: HashMap::new(),
-                        selected_component_names: BTreeSet::new(),
-                        remote_components: RemoteComponents::new(
-                            file_download_client,
-                            temp_dir,
-                            offline,
-                        ),
-                        tools_with_ensured_common_deps: tokio::sync::RwLock::new(HashSet::new()),
-                    }
-                })
-            }),
+            Self::create_context(app_and_calling_working_dir, config, file_download_client).await,
             Some(|mut app_ctx| {
                 app_ctx.loaded_with_warnings = true;
                 app_ctx
@@ -129,6 +150,55 @@ impl ApplicationContext {
         }
 
         Ok(Some(ctx))
+    }
+
+    async fn create_context(
+        app_and_calling_working_dir: ValidatedResult<(Application, PathBuf)>,
+        config: ApplicationConfig,
+        file_download_client: reqwest::Client,
+    ) -> ValidatedResult<ApplicationContext> {
+        let mut result = ValidatedResult::Ok(());
+
+        let (r, v) = result.merge_and_get(app_and_calling_working_dir);
+        result = r;
+        if let Some((application, calling_working_dir)) = v {
+            let tools_with_ensured_common_deps = ToolsWithEnsuredCommonDeps::new();
+            let wit_result = ResolvedWitApplication::new(
+                &application,
+                config.build_profile.as_ref(),
+                &tools_with_ensured_common_deps,
+            )
+            .await;
+
+            let (r, v) = result.merge_and_get(wit_result);
+            result = r;
+            if let Some(wit) = v {
+                let temp_dir = application.temp_dir();
+                let offline = config.offline;
+                let ctx = ApplicationContext {
+                    loaded_with_warnings: false,
+                    config,
+                    application,
+                    wit,
+                    calling_working_dir,
+                    component_stub_defs: HashMap::new(),
+                    common_wit_deps: OnceLock::new(),
+                    component_generated_base_wit_deps: HashMap::new(),
+                    selected_component_names: BTreeSet::new(),
+                    remote_components: RemoteComponents::new(
+                        file_download_client,
+                        temp_dir,
+                        offline,
+                    ),
+                    tools_with_ensured_common_deps,
+                };
+                ValidatedResult::Ok(ctx)
+            } else {
+                result.expect_error()
+            }
+        } else {
+            result.expect_error()
+        }
     }
 
     fn validate_build_profile(&self) -> anyhow::Result<()> {
@@ -160,10 +230,16 @@ impl ApplicationContext {
         self.config.build_profile.as_ref()
     }
 
-    pub fn update_wit_context(&mut self) -> anyhow::Result<()> {
+    pub async fn update_wit_context(&mut self) -> anyhow::Result<()> {
         to_anyhow(
             "Failed to update application wit context, see problems above",
-            ResolvedWitApplication::new(&self.application, self.build_profile()).map(|wit| {
+            ResolvedWitApplication::new(
+                &self.application,
+                self.build_profile(),
+                &self.tools_with_ensured_common_deps,
+            )
+            .await
+            .map(|wit| {
                 self.wit = wit;
             }),
             None,
@@ -638,31 +714,6 @@ impl ApplicationContext {
         // TODO: build profiles?
 
         Ok(())
-    }
-
-    pub async fn ensure_common_deps_for_tool_once(
-        &self,
-        tool: &str,
-        ensure: impl AsyncFnOnce() -> anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        if self
-            .tools_with_ensured_common_deps
-            .read()
-            .await
-            .contains(tool)
-        {
-            return Ok(());
-        }
-
-        let mut lock = self.tools_with_ensured_common_deps.write().await;
-
-        let result = ensure().await;
-
-        if result.is_ok() {
-            lock.insert(tool.to_string());
-        }
-
-        result
     }
 }
 

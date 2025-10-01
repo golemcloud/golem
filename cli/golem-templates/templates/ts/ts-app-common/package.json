@@ -7,7 +7,7 @@
     "components-ts/*/*"
   ],
   "dependencies": {
-    "@golemcloud/golem-ts-sdk": "0.0.31"
+    "@golemcloud/golem-ts-sdk": "file:///Users/vigoo/projects/golem/golem-agentic/golem-ts-agentic/packages/golem-ts-sdk"
   },
   "devDependencies": {
     "@rollup/plugin-alias": "^5.1.1",

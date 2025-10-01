@@ -66,7 +66,6 @@ run_task = [
         "wit-wasm-rpc",
         "wit-golem-common",
         "wit-golem-cli",
-        "wit-template-golem-agent-ts",
         "wit-test-components",
         "wit-golem-templates",
         "wit-sdks",
@@ -131,13 +130,6 @@ cp wit/deps/golem-1.x cli/golem-cli/wit/deps
 cp wit/deps/golem-rpc cli/golem-cli/wit/deps
 cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
-"""
-
-[tasks.wit-template-golem-agent-ts]
-private = true
-script_runner = "@duckscript"
-script = """
-glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
 """
 
 [tasks.wit-test-components]
@@ -1070,19 +1062,6 @@ description = "Serve the schema.golem.cloud directory locally to help testing th
 install_crate = "miniserve"
 command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
-
-## Agent template management
-[tasks.rebuild-ts-agent-template]
-description = "Rebuilds the TypeScript agent template WASM"
-script_runner = "@duckscript"
-script = '''
-cd cli/template-golem-agent-ts
-exec --fail-on-error npm update
-exec --fail-on-error npm install
-exec --fail-on-error npm run generate
-exec --fail-on-error npm run build
-cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
-'''
 
 ## Cleanup
 [tasks.clear-v8]
