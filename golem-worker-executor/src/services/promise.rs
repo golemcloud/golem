@@ -14,7 +14,6 @@
 
 use super::All;
 use crate::metrics::promises::record_promise_created;
-use crate::services::worker_proxy::WorkerProxyError;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
@@ -26,20 +25,70 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{OwnedWorkerId, PromiseId, WorkerId, WorkerStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use std::collections::HashMap;
 #[cfg(test)]
 use std::collections::HashSet;
-use std::sync::Arc;
-#[cfg(test)]
+use std::sync::{Arc, Weak};
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::sync::RwLock;
 use tracing::debug;
+
+#[derive(Debug, Clone)]
+pub struct PromiseHandle {
+    inner: Arc<PromiseHandleInner>,
+}
+
+#[derive(Debug)]
+pub struct PromiseHandleInner {
+    notify: Notify,
+    state: Mutex<Option<Vec<u8>>>,
+}
+
+impl PromiseHandle {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(PromiseHandleInner {
+                notify: Notify::new(),
+                state: Mutex::new(None),
+            }),
+        }
+    }
+
+    pub fn downgrade(&self) -> Weak<PromiseHandleInner> {
+        Arc::downgrade(&self.inner)
+    }
+
+    pub async fn is_ready(&self) -> bool {
+        self.inner.state.lock().await.is_some()
+    }
+
+    pub async fn await_ready(&self) {
+        if self.is_ready().await {
+            return;
+        }
+        self.inner.notify.notified().await;
+    }
+
+    pub async fn get(&self) -> Option<Vec<u8>> {
+        let state = self.inner.state.lock().await;
+        state.clone()
+    }
+
+    pub async fn complete(&self, data: Vec<u8>) {
+        let mut state = self.inner.state.lock().await;
+        *state = Some(data);
+        self.inner.notify.notify_waiters();
+    }
+}
 
 /// Service implementing creation, completion and polling of promises
 #[async_trait]
 pub trait PromiseService: Send + Sync {
+    /// poll and complete for a given promise must be called on the same
     async fn create(&self, worker_id: &WorkerId, oplog_idx: OplogIndex) -> PromiseId;
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError>;
+    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError>;
 
     async fn complete(
         &self,
@@ -47,7 +96,8 @@ pub trait PromiseService: Send + Sync {
         data: Vec<u8>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    async fn delete(&self, promise_id: PromiseId);
+    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
+    async fn cleanup(&self);
 }
 
 pub struct LazyPromiseService(RwLock<Option<Box<dyn PromiseService>>>);
@@ -75,7 +125,7 @@ impl PromiseService for LazyPromiseService {
         lock.as_ref().unwrap().create(worker_id, oplog_idx).await
     }
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
+    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
         let lock = self.0.read().await;
         lock.as_ref().unwrap().poll(promise_id).await
     }
@@ -89,16 +139,62 @@ impl PromiseService for LazyPromiseService {
         lock.as_ref().unwrap().complete(promise_id, data).await
     }
 
-    async fn delete(&self, promise_id: PromiseId) {
+    // Hint the promise service that a promise might be dropped, making sure it collects any dangling references
+    async fn cleanup(&self) {
         let lock = self.0.read().await;
-        lock.as_ref().unwrap().delete(promise_id).await
+        lock.as_ref().unwrap().cleanup().await
     }
 }
 
-#[derive(Clone)]
+struct PromiseRegistry {
+    handles: HashMap<PromiseId, Weak<PromiseHandleInner>>,
+}
+
+impl PromiseRegistry {
+    fn new() -> Self {
+        Self {
+            handles: HashMap::new(),
+        }
+    }
+
+    fn get(&mut self, id: &PromiseId) -> Option<PromiseHandle> {
+        if let Some(weak) = self.handles.get(id) {
+            if let Some(inner) = weak.upgrade() {
+                return Some(PromiseHandle { inner });
+            }
+        };
+        None
+    }
+
+    fn get_or_insert(&mut self, id: &PromiseId) -> PromiseHandle {
+        self.get(id).unwrap_or_else(|| {
+            let handle = PromiseHandle::new();
+            self.handles.insert(id.clone(), handle.downgrade());
+            handle
+        })
+    }
+
+    async fn complete(&mut self, id: &PromiseId, data: Vec<u8>) {
+        if let Some(weak) = self.handles.get(id) {
+            if let Some(inner) = weak.upgrade() {
+                tokio::spawn(async move {
+                    let mut state = inner.state.lock().await;
+                    *state = Some(data.clone());
+                    inner.notify.notify_waiters();
+                });
+            }
+        }
+    }
+
+    pub fn cleanup(&mut self) {
+        self.handles.retain(|_, weak| weak.strong_count() > 0);
+    }
+}
+
 pub struct DefaultPromiseService<Ctx: WorkerCtx> {
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,
     services: All<Ctx>,
+    registry: Mutex<PromiseRegistry>,
 }
 
 impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
@@ -109,6 +205,7 @@ impl<Ctx: WorkerCtx> DefaultPromiseService<Ctx> {
         Self {
             key_value_storage,
             services,
+            registry: Mutex::new(PromiseRegistry::new()),
         }
     }
 
@@ -147,30 +244,46 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
         record_promise_created();
+
+        // start tracking the promise locally so poll does not need to go to redis
+        {
+            let mut reg = self.registry.lock().await;
+            reg.get_or_insert(&promise_id);
+        };
+
         promise_id
     }
 
-    async fn poll(&self, promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
-        if !self.exists(&promise_id).await {
-            Err(WorkerExecutorError::PromiseNotFound { promise_id })
-        } else {
-            let response: Option<RedisPromiseState> = self
-                .key_value_storage
-                .with_entity("promise", "poll", "promise")
-                .get(
-                    KeyValueStorageNamespace::Promise,
-                    &get_promise_result_redis_key(&promise_id),
-                )
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("failed to get promise {promise_id} from Redis: {err}")
-                });
-
-            match response {
-                Some(RedisPromiseState::Complete(data)) => Ok(Some(data)),
-                _ => Ok(None),
-            }
+    async fn poll(&self, promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
+        // Fast path: check local registry first
+        if let Some(handle) = self.registry.lock().await.get(&promise_id) {
+            return Ok(handle.clone());
         }
+
+        if !self.exists(&promise_id).await {
+            return Err(WorkerExecutorError::PromiseNotFound { promise_id });
+        }
+
+        let handle = {
+            let mut reg = self.registry.lock().await;
+            reg.get_or_insert(&promise_id)
+        };
+
+        // Check if already completed in Redis
+        if let Some(RedisPromiseState::Complete(data)) = self
+            .key_value_storage
+            .with_entity("promise", "poll", "promise")
+            .get(
+                KeyValueStorageNamespace::Promise,
+                &get_promise_result_redis_key(&promise_id),
+            )
+            .await
+            .unwrap_or_else(|err| panic!("failed to get promise {promise_id} from Redis: {err}"))
+        {
+            handle.complete(data).await;
+        }
+
+        Ok(handle)
     }
 
     async fn complete(
@@ -195,87 +308,64 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             .await
             .unwrap_or_else(|err| panic!("failed to set promise {promise_id} in Redis: {err}"));
 
+        // Also wake any in-memory handle, ensuring that still running workers that wait on the pollable can continue
+        {
+            let mut reg = self.registry.lock().await;
+            reg.complete(&promise_id, data.clone()).await;
+        }
+
         // Wake up the worker that owns the promise, ensuring that it resumes its work.
         // We do this unconditionally here as the only reason complete will be called again during replay is if we managed to write
         // the result to redis, but failed before the worker could persist the result.
         {
             let worker_id = promise_id.worker_id.clone();
 
-            let is_local_worker = match self.services.shard_service.check_worker(&worker_id) {
-                Ok(()) => true,
-                Err(WorkerExecutorError::InvalidShardId { .. }) => false,
-                Err(other) => return Err(other),
+            let component_metdata = self
+                .services
+                .component_service
+                .get_metadata(&worker_id.component_id, None)
+                .await?;
+
+            let owned_worker_id = OwnedWorkerId {
+                project_id: component_metdata.owner.project_id,
+                worker_id,
             };
 
-            if is_local_worker {
-                let component_metdata = self
-                    .services
-                    .component_service
-                    .get_metadata(&worker_id.component_id, None)
-                    .await?;
-                let owned_worker_id = OwnedWorkerId {
-                    project_id: component_metdata.owner.project_id,
-                    worker_id,
-                };
+            let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+                .await?
+                .ok_or(WorkerExecutorError::worker_not_found(
+                    owned_worker_id.worker_id(),
+                ))?;
 
-                let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-                    .await?
-                    .ok_or(WorkerExecutorError::worker_not_found(
-                        owned_worker_id.worker_id(),
-                    ))?;
+            let should_activate = match &metadata.last_known_status.status {
+                WorkerStatus::Interrupted
+                | WorkerStatus::Running
+                | WorkerStatus::Suspended
+                | WorkerStatus::Retrying => true,
+                WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
+            };
 
-                let should_activate = match &metadata.last_known_status.status {
-                    WorkerStatus::Interrupted
-                    | WorkerStatus::Running
-                    | WorkerStatus::Suspended
-                    | WorkerStatus::Retrying => true,
-                    WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
-                };
-
-                if should_activate {
-                    Worker::get_or_create_running(
-                        &self.services,
-                        &component_metdata.owner.account_id,
-                        &owned_worker_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                    )
-                    .await?;
-                }
-            } else {
-                let resume_result = self
-                    .services
-                    .worker_proxy
-                    .resume(&promise_id.worker_id, false)
-                    .await;
-                match resume_result {
-                    // InvalidRequest will be returned if the worker is already running or failed, we are fine with those
-                    Ok(_)
-                    | Err(WorkerProxyError::InternalError(WorkerExecutorError::InvalidRequest {
-                        ..
-                    })) => {}
-                    Err(other) => Err(other)?,
-                }
+            if should_activate {
+                Worker::get_or_create_running(
+                    &self.services,
+                    &component_metdata.owner.account_id,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                )
+                .await?;
             }
         }
 
         Ok(written)
     }
 
-    async fn delete(&self, promise_id: PromiseId) {
-        let key1 = get_promise_redis_key(&promise_id);
-        let key2 = get_promise_result_redis_key(&promise_id);
-        self.key_value_storage
-            .with("promise", "delete")
-            .del_many(KeyValueStorageNamespace::Promise, vec![key1, key2])
-            .await
-            .unwrap_or_else(|err| {
-                panic!("failed to delete promise {promise_id} from Redis: {err}")
-            });
+    async fn cleanup(&self) {
+        self.registry.lock().await.cleanup();
     }
 }
 
@@ -325,7 +415,7 @@ impl PromiseService for PromiseServiceMock {
         unimplemented!()
     }
 
-    async fn poll(&self, _promise_id: PromiseId) -> Result<Option<Vec<u8>>, WorkerExecutorError> {
+    async fn poll(&self, _promise_id: PromiseId) -> Result<PromiseHandle, WorkerExecutorError> {
         unimplemented!()
     }
 
@@ -338,7 +428,5 @@ impl PromiseService for PromiseServiceMock {
         Ok(true)
     }
 
-    async fn delete(&self, _promise_id: PromiseId) {
-        unimplemented!()
-    }
+    async fn cleanup(&self) {}
 }

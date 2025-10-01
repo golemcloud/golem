@@ -343,6 +343,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .as_ref()
             .ok_or(WorkerExecutorError::invalid_request("promise_id not found"))?;
 
+        let owned_worker_id = extract_owned_worker_id(
+            &(&request, promise_id.clone()),
+            |(_, r)| &r.worker_id,
+            |(r, _)| &r.project_id,
+        )?;
+
+        self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
         let data = request.data;
 
         let promise_id: common_model::PromiseId = promise_id
