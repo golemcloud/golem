@@ -3,8 +3,11 @@ import {
   agent,
   prompt,
   description,
+  PromiseId,
+  createPromise,
+  awaitPromise,
+  completePromise
 } from '@golemcloud/golem-ts-sdk';
-import { createPromise, awaitPromise, completePromise, PromiseId } from 'golem:api/host@1.1.7';
 
 type WorkflowId = string;
 
@@ -30,7 +33,7 @@ class ApprovalWorkflow extends BaseAgent {
     await approver.requestApproval(this.workflowId, approvalPromiseId);
 
     // 2. Pause here until promise is completed
-    const resultBytes = awaitPromise(approvalPromiseId);
+    const resultBytes = await awaitPromise(approvalPromiseId);
     const result = new TextDecoder().decode(resultBytes);
 
     // 3. Continue based on human input

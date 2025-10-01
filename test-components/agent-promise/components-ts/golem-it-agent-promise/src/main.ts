@@ -2,8 +2,8 @@ import {
     BaseAgent,
     agent,
     PromiseId,
-    createGolemPromise,
-    awaitGolemPromise
+    createPromise,
+    awaitPromise
 } from '@golemcloud/golem-ts-sdk';
 
 @agent()
@@ -17,11 +17,11 @@ class PromiseAgent extends BaseAgent {
     }
 
     async getPromise(): Promise<PromiseId> {
-        return createGolemPromise()
+        return createPromise()
     }
 
     async awaitPromise(id: PromiseId): Promise<string> {
-      const resultBytes = await awaitGolemPromise(id)
+      const resultBytes = await awaitPromise(id)
       return new TextDecoder().decode(resultBytes)
     }
 }
