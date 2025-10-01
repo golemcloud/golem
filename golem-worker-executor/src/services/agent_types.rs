@@ -294,7 +294,7 @@ mod local {
                 .flat_map(|component| {
                     component
                         .metadata
-                        .native_agent_types()
+                        .agent_types()
                         .iter()
                         .map(|agent_type| RegisteredAgentType {
                             agent_type: agent_type.clone(),

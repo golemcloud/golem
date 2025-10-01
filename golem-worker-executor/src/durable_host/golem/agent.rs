@@ -94,10 +94,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = AgentId {
-                        agent_type: agent_type_name,
-                        parameters: input,
-                    };
+                    let agent_id = AgentId::new(agent_type_name, input);
                     Ok(Ok(agent_id.to_string()))
                 }
                 Err(err) => Ok(Err(AgentError::InvalidInput(err))),

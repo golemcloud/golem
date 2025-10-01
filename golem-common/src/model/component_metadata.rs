@@ -109,24 +109,8 @@ impl ComponentMetadata {
         &self.data.dynamic_linking
     }
 
-    pub fn native_agent_types(&self) -> &[AgentType] {
+    pub fn agent_types(&self) -> &[AgentType] {
         &self.data.agent_types
-    }
-
-    pub fn wit_agent_types(&self) -> Vec<AgentType> {
-        let agent_type_names = self.wit_agent_type_names();
-        let mut agent_types = Vec::with_capacity(agent_type_names.len());
-        for agent_type_name in agent_type_names {
-            agent_types.push(self.find_wit_agent_type(&agent_type_name).unwrap().unwrap())
-        }
-        agent_types
-    }
-
-    pub fn wit_agent_type_names(&self) -> Vec<String> {
-        self.native_agent_types()
-            .iter()
-            .map(|agent_type| agent_type.type_name.to_wit_naming())
-            .collect()
     }
 
     pub fn is_agent(&self) -> bool {
@@ -155,21 +139,21 @@ impl ComponentMetadata {
             .find_parsed_function(&self.data, parsed)
     }
 
-    /// Finds and returns AgentType as it was extracted by the original discovered type name
-    pub fn find_native_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
             .unwrap()
-            .find_native_agent_type(&self.data, agent_type)
+            .find_agent_type_by_name(&self.data, agent_type)
     }
 
-    /// Finds and returns AgentType with named elements converted to be WIT and WAVE compatible (kebab-case)
-    /// by the WIT name of the agent
-    pub fn find_wit_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
             .unwrap()
-            .find_wit_agent_type(&self.data, agent_type)
+            .find_agent_type_by_wrapper_name(&self.data, agent_type)
     }
 }
 
@@ -416,10 +400,7 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type_by_native_name(
-        &self,
-        agent_type: &str,
-    ) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
@@ -427,7 +408,7 @@ impl ComponentMetadataInnerData {
             .cloned())
     }
 
-    pub fn find_agent_type_by_wit_name(
+    pub fn find_agent_type_by_wrapper_name(
         &self,
         agent_type: &str,
     ) -> Result<Option<AgentType>, String> {
@@ -589,10 +570,8 @@ struct ComponentMetadataInnerCache {
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    // Agent types as they were discovered
-    agent_types_native: HashMap<String, Result<Option<AgentType>, String>>,
-    // Agent types with named elements changed to kebab-case to be compatible with WIT and WAVE
-    agent_types_wit: HashMap<String, Result<Option<AgentType>, String>>,
+    agent_types_by_type_name: HashMap<String, Result<Option<AgentType>, String>>,
+    agent_types_by_wrapper_type_name: HashMap<String, Result<Option<AgentType>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -652,36 +631,31 @@ impl ComponentMetadataInnerCache {
         }
     }
 
-    /// Finds and returns AgentType as it was extracted by the original discovered type name
-    pub fn find_native_agent_type(
+    pub fn find_agent_type_by_name(
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &str,
     ) -> Result<Option<AgentType>, String> {
-        if let Some(cached) = self.agent_types_native.get(agent_type) {
+        if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {
-            let result = data.find_agent_type_by_native_name(agent_type);
-            self.agent_types_native
+            let result = data.find_agent_type_by_name(agent_type);
+            self.agent_types_by_type_name
                 .insert(agent_type.to_string(), result.clone());
             result
         }
     }
 
-    /// Finds and returns AgentType with named elements converted to be WIT and WAVE compatible (kebab-case)
-    /// by the WIT name of the agent
-    pub fn find_wit_agent_type(
+    pub fn find_agent_type_by_wrapper_name(
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &str,
     ) -> Result<Option<AgentType>, String> {
-        if let Some(cached) = self.agent_types_wit.get(agent_type) {
+        if let Some(cached) = self.agent_types_by_wrapper_type_name.get(agent_type) {
             cached.clone()
         } else {
-            let result = data
-                .find_agent_type_by_wit_name(agent_type)
-                .map(|agent_type| agent_type.to_wit_naming());
-            self.agent_types_wit
+            let result = data.find_agent_type_by_wrapper_name(agent_type);
+            self.agent_types_by_wrapper_type_name
                 .insert(agent_type.to_string(), result.clone());
             result
         }

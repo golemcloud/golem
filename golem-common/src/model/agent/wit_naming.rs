@@ -65,7 +65,7 @@ where
 impl ToWitNaming for AgentType {
     fn to_wit_naming(&self) -> Self {
         Self {
-            type_name: self.type_name.to_wit_naming(),
+            type_name: self.type_name.clone(),
             description: self.description.clone(),
             constructor: self.constructor.to_wit_naming(),
             methods: self.methods.to_wit_naming(),

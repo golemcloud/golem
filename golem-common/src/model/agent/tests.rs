@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{
     AgentConstructor, AgentId, AgentType, AgentTypeResolver, BinaryDescriptor, BinaryReference,
     BinarySource, BinaryType, ComponentModelElementSchema, DataSchema, DataValue, ElementSchema,
@@ -243,10 +242,7 @@ fn invalid_text_url() {
 }
 
 fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = AgentId {
-        agent_type: agent_type.to_string(),
-        parameters,
-    };
+    let id = AgentId::new(agent_type.to_string(), parameters);
     let s = id.to_string();
     println!("{s}");
     let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
@@ -254,10 +250,7 @@ fn roundtrip_test(agent_type: &str, parameters: DataValue) {
 }
 
 fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = AgentId {
-        agent_type: agent_type.to_string(),
-        parameters,
-    };
+    let id = AgentId::new(agent_type.to_string(), parameters);
     let s = id.to_string();
     let id2 = AgentId::parse(s, TestAgentTypes::new()).err().unwrap();
     assert_eq!(id2, expected_failure.to_string());
@@ -277,10 +270,10 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    fn resolve_wit_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
-            .map(|agent_type| agent_type.to_wit_naming())
+            .map(|agent_type| agent_type.clone())
             .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
     }
 }

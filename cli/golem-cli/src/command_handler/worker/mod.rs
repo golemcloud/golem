@@ -294,7 +294,7 @@ impl WorkerCommandHandler {
             component.metadata.exports(),
             agent_id_and_type
                 .as_ref()
-                .and_then(|a| agent_interface_name(&component, &a.1.type_name))
+                .and_then(|a| agent_interface_name(&component, &a.1.wrapper_type_name()))
                 .as_deref(),
         );
         let function_name = match matched_function_name {
@@ -1791,12 +1791,12 @@ impl WorkerCommandHandler {
         component: &Component,
         worker_name: &WorkerName,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<(WorkerName, AgentType)>> {
+    ) -> anyhow::Result<Option<(WorkerName, AgentType)>> { //TODO: do we need the whole AgentType?
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
-        match AgentId::parse_and_resolve_wit_type(&worker_name.0, &component.metadata) {
+        match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata) {
             Ok((agent_id, agent_type)) => match function_name {
                 Some(function_name) => {
                     if let Some((namespace, package, interface)) = component
@@ -1816,7 +1816,7 @@ impl WorkerCommandHandler {
                         })
                     {
                         let component_name = format!("{namespace}:{package}");
-                        if interface == agent_type.type_name
+                        if interface == agent_type.wrapper_type_name()
                             && component.component_name.0 == component_name
                         {
                             return Ok(Some((agent_id.to_string().into(), agent_type)));
@@ -1849,7 +1849,7 @@ impl WorkerCommandHandler {
                 log_text_view(&AvailableAgentConstructorsHelp {
                     component_name: component.component_name.0.clone(),
                     constructors: show_exported_agent_constructors(
-                        &component.metadata.wit_agent_types(),
+                        &component.metadata.agent_types(),
                     ),
                 });
 

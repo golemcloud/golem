@@ -20,6 +20,7 @@ use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
 };
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
@@ -188,17 +189,24 @@ impl ComponentView {
         let exports = {
             if value.metadata.is_agent() {
                 if show_exports_for_rib {
-                    show_exported_agents(&value.metadata.wit_agent_types())
+                    let agent_types = value
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .map(|a| a.to_wit_naming())
+                        .collect::<Vec<_>>();
+
+                    show_exported_agents(&agent_types)
                 } else {
                     value
                         .metadata
-                        .wit_agent_types()
+                        .agent_types()
                         .iter()
                         .flat_map(|agent| {
                             show_exported_functions(
                                 value.metadata.exports(),
                                 true,
-                                agent_interface_name(&value, &agent.type_name).as_deref(),
+                                agent_interface_name(&value, &agent.wrapper_type_name()).as_deref(),
                             )
                         })
                         .collect()
@@ -219,7 +227,7 @@ impl ComponentView {
             created_at: value.created_at,
             project_id: value.project_id,
             exports,
-            agent_types: value.metadata.native_agent_types().to_vec(),
+            agent_types: value.metadata.agent_types().to_vec(),
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
@@ -337,7 +345,7 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     for method in &agent.methods {
         result.push(format!(
             "{}.{}({}) -> {}",
-            agent.type_name,
+            agent.wrapper_type_name(),
             method.name,
             render_data_schema(&method.input_schema),
             render_data_schema(&method.output_schema)
@@ -350,8 +358,8 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
 fn render_agent_constructor(agent: &AgentType) -> String {
     format!(
         "{}({}) agent constructor",
-        agent.type_name,
-        render_data_schema(&agent.constructor.input_schema)
+        agent.wrapper_type_name(),
+        render_data_schema(&agent.constructor.input_schema.to_wit_naming())
     )
 }
 
