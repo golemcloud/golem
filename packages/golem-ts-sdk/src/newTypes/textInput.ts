@@ -21,22 +21,25 @@ import { ElementSchema, TextReference } from 'golem:agent/common';
  *
  * ```ts
  * const urlText: UnstructuredText = UnstructuredText.fromUrl("https://example.com");
- * const inlineText: UnstructuredText = UnstructuredText.fromInline("Hello, world!", "en");
+ * const inlineText: UnstructuredText = UnstructuredText.fromInline("Hello, world!", ['en']);
  * ```
  */
-export type UnstructuredText =
+type LanguageCode = string;
+
+export type UnstructuredText<LC extends LanguageCode[] = []> =
   | {
-      tag: 'url';
-      val: string;
-    }
+  tag: 'url';
+  val: string;
+}
   | {
-      tag: 'inline';
-      val: string;
-      languageCode?: string;
-    };
+  tag: 'inline';
+  val: string;
+  languageCode?: LC;
+};
 
 export const UnstructuredText = {
-  fromDataValue(dataValue: TextReference): UnstructuredText {
+  fromDataValue<LC extends string[] = []>(dataValue: TextReference, allowedCodes: string[]): UnstructuredText<LC> {
+
     if (dataValue.tag === 'url') {
       return {
         tag: 'url',
@@ -44,10 +47,20 @@ export const UnstructuredText = {
       };
     }
 
+    if (allowedCodes.length > 0) {
+      if (!dataValue.val.textType) {
+        throw new Error(`Language code is required. Allowed codes: ${allowedCodes.join(', ')}`);
+      }
+
+      if (!allowedCodes.includes(dataValue.val.textType.languageCode)) {
+        throw new Error(`Language code ${dataValue.val.textType.languageCode} is not allowed. Allowed codes: ${allowedCodes.join(', ')}`);
+      }
+    }
+
     return {
       tag: 'inline',
       val: dataValue.val.data,
-      languageCode: dataValue.val.textType?.languageCode,
+      languageCode: allowedCodes as unknown as LC,
     };
   },
 
@@ -71,8 +84,7 @@ export const UnstructuredText = {
    * @param languageCode - The language code
    * @returns A `TextInput` object with `languageCode` set to `'en'`.
    */
-  fromInline(data: string, languageCode?: string): UnstructuredText {
-    languageCode = languageCode ? languageCode : 'en';
+  fromInline<LC extends LanguageCode[] = []>(data: string, languageCode?: LC): UnstructuredText<LC> {
     return {
       tag: 'inline',
       val: data,
@@ -100,3 +112,4 @@ export const TextSchema = {
     };
   },
 };
+

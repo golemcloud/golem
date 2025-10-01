@@ -106,6 +106,10 @@ export function getRecursiveType(): Type.Type {
   return fetchType("RecursiveType");
 }
 
+export function getObjectWithTypeParameter(): Type.Type {
+  return fetchType("ObjectWithTypeParameter");
+}
+
 // Fetch a type by its name from the loaded metadata (loaded by setup module)
 function fetchType(typeNameInTestData: string): Type.Type {
   const classMetadata = Array.from(getAll()).map(([_, v]) => v);

@@ -37,6 +37,7 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
+      typeArgs: LiteTypeJSON[];
       optional: boolean;
     }
   | {
@@ -57,6 +58,7 @@ export type LiteTypeJSON =
         type: LiteTypeJSON;
         optional?: boolean;
       }>;
+      typeArgs: LiteTypeJSON[];
       optional: boolean;
     }
   | {

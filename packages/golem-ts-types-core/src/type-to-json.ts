@@ -80,6 +80,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
         name: type.name,
         properties: props,
         optional: type.optional,
+        typeArgs: type.typeArgs.map(buildJSONFromType),
       };
 
     case 'class':
@@ -118,6 +119,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
         name: type.name,
         properties: interfaceProps,
         optional: type.optional,
+        typeArgs: type.typeArgs.map(buildJSONFromType),
       };
 
     case 'promise':

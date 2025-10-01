@@ -118,6 +118,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         name: json.name,
         properties: props,
         optional: json.optional,
+        typeArgs: json.typeArgs.map((arg) => buildTypeFromJSON(arg)),
       };
     }
 
@@ -135,6 +136,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         name: json.name,
         properties: props,
         optional: json.optional,
+        typeArgs: json.typeArgs.map((arg) => buildTypeFromJSON(arg)),
       };
     }
 

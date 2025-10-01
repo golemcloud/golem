@@ -28,6 +28,7 @@ import {
   getClassType,
   getLiterallyObjectType,
   getRecursiveType,
+  getObjectWithTypeParameter,
 } from "./util.js";
 
 import { Type } from "@golemcloud/golem-ts-types-core";
@@ -90,12 +91,29 @@ describe("golem-ts-typegen can work correctly read types from .metadata director
   });
 
   it("track Object type", () => {
-    const classType = getLiterallyObjectType();
-    expect(classType.kind).toEqual("others");
+    const literallyObjectType = getLiterallyObjectType();
+    expect(literallyObjectType.kind).toEqual("others");
   });
 
   it("track recursive type", () => {
-    const classType = getRecursiveType();
-    expect(classType.kind).toEqual("object");
+    const recursiveType = getRecursiveType();
+    expect(recursiveType.kind).toEqual("object");
+  });
+
+  it("track object with type parameter", () => {
+    const classType = getObjectWithTypeParameter();
+
+    const typeArgs = classType.kind === "object" ? classType.typeArgs : [];
+
+    expect(typeArgs).toHaveLength(1);
+
+    const tupleType = typeArgs[0];
+    const tupleArgs = tupleType.kind === "tuple" ? tupleType.elements : [];
+
+    const args = tupleArgs.map((tupleArg) => {
+      return tupleArg.kind === "literal" ? tupleArg.literalValue : null;
+    });
+
+    expect(args).toEqual(["en", "de"]);
   });
 });

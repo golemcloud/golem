@@ -42,7 +42,17 @@ export function getTypeFromTsMorph(
   isOptional: boolean,
 ): Type.Type {
   try {
-    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+    if (tsMorphType.getTypeArguments().length > 0) {
+      // console.log(
+      //   `Type has type arguments: ${tsMorphType.getText()} with type arguments: ${tsMorphType
+      //     .getTypeArguments()
+      //     .map((t) => t.getText())
+      //     .join(", ")}`,
+      // );
+    }
+
+    const type = getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
+    return type;
   } catch (e) {
     if (e instanceof Error) {
       let error = e.message;
@@ -316,14 +326,22 @@ function getTypeFromTsMorphInternal(
       name: aliasName ?? rawName,
       properties: propertiesAsSymbols(type, visitedTypes),
       optional: isOptional,
+      typeArgs: type
+        .getAliasTypeArguments()
+        .map((arg) => getTypeFromTsMorph(arg, false)),
     };
   }
 
   if (type.isObject()) {
+    const args = tsMorphType
+      .getAliasTypeArguments()
+      .map((arg) => getTypeFromTsMorph(arg, false));
+
     return {
       kind: "object",
       name: aliasName,
       properties: propertiesAsSymbols(type, visitedTypes),
+      typeArgs: args,
       optional: isOptional,
     };
   }
@@ -346,6 +364,13 @@ function getTypeFromTsMorphInternal(
 
   if (type.isString()) {
     return { kind: "string", name: aliasName, optional: isOptional };
+  }
+
+  if (type.getTypeArguments().length === 1) {
+    console.log(JSON.stringify(type.getTypeArguments()));
+    throw new Error(
+      `Unhandled type with single type argument: ${type.getText()}`,
+    );
   }
 
   return {

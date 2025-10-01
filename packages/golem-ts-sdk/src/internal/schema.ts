@@ -52,15 +52,19 @@ export function getConstructorDataSchema(
           paramInfo.name,
         );
 
-        const metadata = AgentConstructorParamRegistry.lookup(agentClassName);
+        const languageCodes =
+          getLanguageCodes(paramType);
 
-        const languageCodes = metadata?.get(paramInfo.name)?.languageCodes;
+        if (Either.isLeft(languageCodes)) {
+          return Either.left(`Failed to get language codes for parameter ${paramInfo.name}: ${languageCodes.val}`);
+        }
+
 
         const elementSchema: ElementSchema = languageCodes
           ? {
               tag: 'unstructured-text',
               val: {
-                restrictions: languageCodes.map((code) => ({
+                restrictions: languageCodes.val.map((code) => ({
                   languageCode: code,
                 })),
               },
@@ -413,4 +417,43 @@ function handleUndefinedReturnType(
     default:
       return Option.none();
   }
+}
+
+
+export function getLanguageCodes(type: Type.Type): Either.Either<string[], string> {
+  if (type.name === 'UnstructuredText' && type.kind === 'object') {
+
+    const parameterTypes: Type.Type[] = type.typeArgs ?? [];
+
+    if (parameterTypes.length !== 1) {
+      return Either.right([]);
+    }
+
+    const paramType: Type.Type = parameterTypes[0];
+
+    if (paramType.kind ===  'tuple') {
+      const elem = paramType.elements;
+
+      return Either.all(elem.map((v) => {
+        if (v.kind === 'literal') {
+
+          if (!v.literalValue) {
+            return Either.left('language code literal has no value');
+          }
+          return Either.right(v.literalValue);
+        }
+        else {
+          return Either.left('language code is not a literal');
+        }
+      }))
+
+    } else {
+      return Either.left('unknown parameter type for UnstructuredText');
+    }
+
+  }
+
+
+  return Either.left(`Type mismatch. Expected UnstructuredText, Found ${type.name}`);
+
 }

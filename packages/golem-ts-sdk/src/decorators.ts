@@ -24,7 +24,7 @@ import * as WitValue from './internal/mapping/values/WitValue';
 import * as Either from './newTypes/either';
 import {
   getAgentMethodSchema,
-  getConstructorDataSchema,
+  getConstructorDataSchema, getLanguageCodes,
 } from './internal/schema';
 import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
@@ -204,17 +204,17 @@ export function agent(customName?: string) {
     AgentTypeRegistry.register(agentClassName, agentType);
 
     const constructorParamTypes:
-      | [string, Option.Option<AnalysedType>][]
+      | [string, [Type.Type, Option.Option<AnalysedType>]][]
       | undefined = TypeMetadata.get(agentClassName.value)?.constructorArgs.map(
       (arg) => {
         return [
           arg.name,
-          Option.fromNullable(
+          [arg.type, Option.fromNullable(
             AgentConstructorParamRegistry.lookupParamType(
               agentClassName,
               arg.name,
             ),
-          ),
+          )],
         ];
       },
     );
@@ -339,14 +339,14 @@ export function agent(customName?: string) {
               (param) => {
                 return [
                   param[0],
-                  Option.fromNullable(
+                  [param[1], Option.fromNullable(
                     AgentMethodParamRegistry.lookupParamType(
                       agentClassName,
                       methodName,
                       param[0],
                     ),
-                  ),
-                ] as [string, Option.Option<AnalysedType>];
+                  )],
+                ] as [string, [Type.Type, Option.Option<AnalysedType>]];
               },
             );
 
@@ -728,7 +728,7 @@ export function description(description: string) {
 
 export function deserializeDataValue(
   dataValue: DataValue,
-  paramTypes: [string, Option.Option<AnalysedType>][],
+  paramTypes: [string, [TsType, Option.Option<AnalysedType>]][],
 ): any[] {
   switch (dataValue.tag) {
     case 'tuple':
@@ -737,24 +737,40 @@ export function deserializeDataValue(
       return elements.map((elem, idx) => {
         switch (elem.tag) {
           case 'unstructured-text':
-            const textRef = elem.val;
-            return UnstructuredText.fromDataValue(textRef);
+            const [type] = paramTypes[idx][1];
+
+            if (type.name === 'UnstructuredText') {
+              const textRef = elem.val;
+
+              const languageCodes: Either.Either<string[], string> =
+                getLanguageCodes(type);
+
+              if (Either.isLeft(languageCodes)) {
+                throw new Error(
+                  `Failed to get language codes for parameter ${paramTypes[idx][0]}: ${languageCodes.val}`,
+                );
+              }
+              return UnstructuredText.fromDataValue(textRef, languageCodes.val);
+            } else {
+              throw new Error('Type mismatch: expected UnstructuredText type.');
+            }
 
           case 'unstructured-binary':
             const binaryRef = elem.val;
             return UnstructuredBinary.fromDataValue(binaryRef);
 
           case 'component-model':
-            const param = paramTypes[idx][1];
+            const paramType = paramTypes[idx][1];
+            const analysedType = paramType[1];
 
-            if (Option.isNone(param)) {
+            if (Option.isNone(analysedType)) {
               throw new Error(
                 `Internal error: Unknown parameter type for ${util.format(Value.fromWitValue(elem.val))} at index ${idx}`,
               );
             }
 
             const witValue = elem.val;
-            return WitValue.toTsValue(witValue, param.val);
+            return WitValue.toTsValue(witValue, analysedType.val);
         }
       });
 
@@ -764,8 +780,30 @@ export function deserializeDataValue(
       return multiModalElements.map(([name, elem]) => {
         switch (elem.tag) {
           case 'unstructured-text':
+
+            const nameAndType =
+              paramTypes.find(([paramName]) => paramName === name);
+
+            if (!nameAndType) {
+              throw new Error(
+                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+              );
+            }
+
+            const [type] = nameAndType[1];
+
             const textRef = elem.val;
-            return UnstructuredText.fromDataValue(textRef);
+
+            const languageCodes: Either.Either<string[], string> =
+              getLanguageCodes(type);
+
+            if (Either.isLeft(languageCodes)) {
+              throw new Error(
+                `Failed to get language codes for parameter ${name}: ${languageCodes.val}`,
+              );
+            }
+
+            return UnstructuredText.fromDataValue(textRef, languageCodes.val);
 
           case 'unstructured-binary':
             const binaryRef = elem.val;
@@ -783,14 +821,15 @@ export function deserializeDataValue(
             }
 
             const paramType = param[1];
+            const analysedType = paramType[1];
 
-            if (Option.isNone(paramType)) {
+            if (Option.isNone(analysedType)) {
               throw new Error(
                 `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
               );
             }
 
-            return WitValue.toTsValue(witValue, paramType.val);
+            return WitValue.toTsValue(witValue, analysedType.val);
         }
       });
   }
@@ -811,3 +850,4 @@ export function getDataValueFromReturnValueWit(
     ],
   };
 }
+

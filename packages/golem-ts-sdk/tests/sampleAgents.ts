@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, BaseAgent, UnstructuredBinary, UnstructuredText } from '../src';
+import {
+  agent,
+  BaseAgent,
+  UnstructuredBinary,
+  UnstructuredText,
+} from '../src';
 import * as Types from './testTypes';
 import {
   EitherX,
@@ -213,10 +218,7 @@ class BarAgent extends BaseAgent {
     resultTypeNonExact: ResultTypeNonExact,
     resultTypeNonExact2: ResultTypeNonExact2,
     unstructuredText: UnstructuredText,
-
-    @languageCodes(['en'])
-    unstructuredTextWithLanguageCode: UnstructuredText,
-
+    unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
     unstructuredBinary: UnstructuredBinary,
 
     @mimeTypes(['application/json'])

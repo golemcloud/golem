@@ -366,12 +366,22 @@ function testInvoke(
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
 ) {
-  const returnTypeInfo = AgentMethodRegistry.lookupReturnType(
+
+
+  const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
+    methodName,
+  )?.returnType;
+
+  if (!returnType) {
+    throw new Error(`Method ${methodName} not found in metadata`);
+  }
+
+  const returnTypeAnalysedType = AgentMethodRegistry.lookupReturnType(
     FooAgentClassName,
     methodName,
   );
 
-  if (!returnTypeInfo) {
+  if (!returnTypeAnalysedType) {
     throw new Error(`Method ${methodName} not found in metadata`);
   }
 
@@ -411,7 +421,7 @@ function testInvoke(
           })();
 
     const result = deserializeDataValue(resultDataValue, [
-      ['return-value', Option.some(returnTypeInfo)],
+      ['return-value', [returnType, Option.some(returnTypeAnalysedType)]],
     ])[0];
 
     expect(result).toEqual(expectedOutput);

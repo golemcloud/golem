@@ -25,12 +25,19 @@ export type Type =
   | { kind: 'null'; name?: string; element: Type; optional: boolean }
   | { kind: 'tuple'; name?: string; elements: Type[]; optional: boolean }
   | { kind: 'union'; name?: string; unionTypes: Type[]; optional: boolean }
-  | { kind: 'object'; name?: string; properties: Symbol[]; optional: boolean }
+  | {
+      kind: 'object';
+      name?: string;
+      properties: Symbol[];
+      typeArgs: Type[];
+      optional: boolean;
+    }
   | { kind: 'class'; name?: string; properties: Symbol[]; optional: boolean }
   | {
       kind: 'interface';
       name?: string;
       properties: Symbol[];
+      typeArgs: Type[];
       optional: boolean;
     }
   | { kind: 'promise'; name?: string; element: Type; optional: boolean }
