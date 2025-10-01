@@ -277,11 +277,11 @@ class BarAgent extends BaseAgent {
     throw new Error('Unimplemented');
   }
 
-  async fun18(text: string): Promise<UnstructuredText> {
+  async fun18(text: string): Promise<UnstructuredText<['en', 'de']>> {
     throw new Error('Unimplemented');
   }
 
-  async fun19(text: string): Promise<UnstructuredBinary> {
+  async fun19(text: string): Promise<UnstructuredBinary<['application/json']>> {
     throw new Error('Unimplemented');
   }
 

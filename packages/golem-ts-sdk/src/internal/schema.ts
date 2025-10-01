@@ -180,12 +180,14 @@ export function getAgentMethodSchema(
 
       const [analysedType, outputSchema] = outputSchemaEither.val;
 
+      // analysed-type exists for all types except unstructured types and binary
       if (Option.isSome(analysedType)) {
         AgentMethodRegistry.setReturnType(agentClassName, methodName, {
           tag: 'analysed',
           val: analysedType.val,
         });
       } else {
+        // Special handling for unstructured types to set metadata in the param registry
         switch (outputSchema.tag) {
           case 'tuple':
             const value = outputSchema.val[0][1];
