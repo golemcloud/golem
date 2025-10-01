@@ -353,7 +353,7 @@ impl WorkerCommandHandler {
         let worker_name_match = {
             if let Some(agent_id) = agent_id {
                 WorkerNameMatch {
-                    worker_name: agent_id.wrapper_agent_type().into(),
+                    worker_name: agent_id.to_string().into(),
                     ..worker_name_match
                 }
             } else {
