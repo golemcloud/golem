@@ -650,14 +650,11 @@ fn convert_request_value_and_type_to_oplog_payload(
         "wall_clock::now" => Ok(empty_payload()),
         "wall_clock::resolution" => Ok(empty_payload()),
         "golem::api::create_promise" => Ok(empty_payload()),
-        "golem::api::delete_promise" => {
-            let payload = PromiseId::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
         "golem::api::complete_promise" => {
             let payload = PromiseId::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
+        "golem::api::get-promise-result::get" => Ok(empty_payload()),
         "golem::api::update-worker" => {
             let payload: UpdateWorkerInfo = UpdateWorkerInfo::from_value(&value_and_type.value)?;
 
@@ -789,10 +786,6 @@ fn convert_request_value_and_type_to_oplog_payload(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload = SerializableScheduleId::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
-        "golem::api::poll_promise" => {
-            let payload = PromiseId::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_component_id" => {
@@ -964,21 +957,18 @@ fn convert_response_value_and_type_to_oplog_payload(
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem_delete_promise" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
         "golem::api::create_promise" => {
             let payload: Result<PromiseId, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem::api::delete_promise" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
         "golem::api::complete_promise" => {
             let payload: Result<bool, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::get-promise-result::get" => {
+            let payload: Result<Vec<u8>, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
@@ -1139,11 +1129,6 @@ fn convert_response_value_and_type_to_oplog_payload(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
-        "golem::api::poll_promise" => {
-            let payload: Result<Option<Vec<u8>>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_component_id" => {

@@ -12,18 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{flaky, inherit_test_dep, test, timeout};
-
-use assert2::check;
-
-use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use tracing::Instrument;
-
 use crate::Tracing;
+use assert2::check;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
@@ -32,18 +22,26 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
-    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
 };
+use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use test_r::{flaky, inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::log::info;
+use tracing::Instrument;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -1692,4 +1690,79 @@ async fn resolve_components_from_name(deps: &EnvBasedTestDependencies, _tracing:
                 Value::Option(None),
             ])
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn agent_promise_await(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.clone().into_admin().await;
+
+    let component_id = admin
+        .component("golem_it_agent_promise")
+        .unique()
+        .store()
+        .await;
+
+    let worker_name = "promise-agent(\"name\")";
+    let worker = admin.start_worker(&component_id, worker_name).await;
+
+    let mut result = admin
+        .invoke_and_await(
+            &worker,
+            "golem-it:agent-promise/promise-agent.{get-promise}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    assert!(result.len() == 1);
+
+    let promise_id = ValueAndType::new(result.swap_remove(0), PromiseId::get_type());
+
+    let task = {
+        let executor_clone = admin.clone();
+        let worker_clone = worker.clone();
+        let promise_id_clone = promise_id.clone();
+        tokio::spawn(
+            async move {
+                executor_clone
+                    .invoke_and_await(
+                        &worker_clone,
+                        "golem-it:agent-promise/promise-agent.{await-promise}",
+                        vec![promise_id_clone],
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+
+    admin
+        .wait_for_status(&worker, WorkerStatus::Suspended, Duration::from_secs(10))
+        .await;
+
+    admin
+        .deps
+        .worker_service()
+        .complete_promise(
+            &admin.token,
+            PromiseId {
+                worker_id: WorkerId {
+                    component_id,
+                    worker_name: worker_name.to_string(),
+                },
+                oplog_idx: OplogIndex::from_u64(34),
+            },
+            b"hello".to_vec(),
+        )
+        .await
+        .unwrap();
+
+    let result = task.await.unwrap();
+    check!(result == Ok(vec![Value::String("hello".to_string())]));
+
+    Ok(())
 }
