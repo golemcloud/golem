@@ -71,7 +71,7 @@ If a promise is no longer used, it has to be deleted with:
 
 ### Awaiting a promise
 
-To await a promise, use the `awaitPromise` functions, which returns the promise result as a byte array payload.
+To await a promise, use the async `awaitPromise` function, which returns the promise result as a byte array payload.
 Here's an example that awaits a promise, then decodes the payload from JSON format:
 
 <Tabs items={["TypeScript"]}>
@@ -79,13 +79,13 @@ Here's an example that awaits a promise, then decodes the payload from JSON form
     ```typescript
     import { awaitPromise, PromiseId } from "@golemcloud/golem-ts-sdk"
 
-    const byteArrayPayload: Uint8Array = awaitPromise(promiseId)
+    const byteArrayPayload: Uint8Array = await awaitPromise(promiseId)
     const payload = JSON.parse(new TextDecoder().decode(byteArrayPayload))
     ```
     </Tabs.Tab>
 </Tabs>
 
-Note that `awaitPromise` is a **blocking call** that suspends the execution of the agent until the promise is completed by an external caller. The agent is not consuming any resources while waiting.
+Note that if an agent is only **awaiting** Golem promises (one or more), the agent gets suspended and is not going to consume any resources while waiting.
 
 ### Completing a promise from within an agent
 

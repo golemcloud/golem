@@ -108,14 +108,14 @@ The following code snippet demonstrates this pattern:
       this.name = name;
     }
 
-    run() {
+    async run() {
       const promiseId: PromiseId = createPromise();
 
       switch (fork(`example-agent("${this.name}",fork)`)) {
         case "original": {
           const localResult = ...; // ... do some more work;
 
-          const rawForkResult: UInt8Array = awaitPromise(promiseId);
+          const rawForkResult: UInt8Array = await awaitPromise(promiseId);
           const forkResult = JSON.parse(new TextDecoder().decode(rawForkResult));
 
           // Merge localResult and forkResult and continue running
