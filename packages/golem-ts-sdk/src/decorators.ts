@@ -24,7 +24,8 @@ import * as WitValue from './internal/mapping/values/WitValue';
 import * as Either from './newTypes/either';
 import {
   getAgentMethodSchema,
-  getConstructorDataSchema, getLanguageCodes,
+  getConstructorDataSchema,
+  getLanguageCodes,
 } from './internal/schema';
 import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
@@ -209,12 +210,15 @@ export function agent(customName?: string) {
       (arg) => {
         return [
           arg.name,
-          [arg.type, Option.fromNullable(
-            AgentConstructorParamRegistry.lookupParamType(
-              agentClassName,
-              arg.name,
+          [
+            arg.type,
+            Option.fromNullable(
+              AgentConstructorParamRegistry.lookupParamType(
+                agentClassName,
+                arg.name,
+              ),
             ),
-          )],
+          ],
         ];
       },
     );
@@ -339,13 +343,16 @@ export function agent(customName?: string) {
               (param) => {
                 return [
                   param[0],
-                  [param[1], Option.fromNullable(
-                    AgentMethodParamRegistry.lookupParamType(
-                      agentClassName,
-                      methodName,
-                      param[0],
+                  [
+                    param[1],
+                    Option.fromNullable(
+                      AgentMethodParamRegistry.lookupParamType(
+                        agentClassName,
+                        methodName,
+                        param[0],
+                      ),
                     ),
-                  )],
+                  ],
                 ] as [string, [Type.Type, Option.Option<AnalysedType>]];
               },
             );
@@ -780,9 +787,9 @@ export function deserializeDataValue(
       return multiModalElements.map(([name, elem]) => {
         switch (elem.tag) {
           case 'unstructured-text':
-
-            const nameAndType =
-              paramTypes.find(([paramName]) => paramName === name);
+            const nameAndType = paramTypes.find(
+              ([paramName]) => paramName === name,
+            );
 
             if (!nameAndType) {
               throw new Error(
@@ -850,4 +857,3 @@ export function getDataValueFromReturnValueWit(
     ],
   };
 }
-

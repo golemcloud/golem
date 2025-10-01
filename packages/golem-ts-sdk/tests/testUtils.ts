@@ -137,7 +137,9 @@ function fetchTypeFromBarAgent(
       );
 
       if (!returnType || returnType.tag !== 'analysed') {
-        throw new Error(`Return type ${returnType?.tag} not supported in test data`);
+        throw new Error(
+          `Return type ${returnType?.tag} not supported in test data`,
+        );
       }
 
       return [returnType.val, method.returnType];

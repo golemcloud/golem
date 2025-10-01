@@ -366,8 +366,6 @@ function testInvoke(
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
 ) {
-
-
   const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
     methodName,
   )?.returnType;
