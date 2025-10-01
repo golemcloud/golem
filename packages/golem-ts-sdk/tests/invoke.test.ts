@@ -381,8 +381,8 @@ function testInvoke(
     methodName,
   );
 
-  if (!returnTypeAnalysedType) {
-    throw new Error(`Method ${methodName} not found in metadata`);
+  if (!returnTypeAnalysedType || returnTypeAnalysedType.tag !== 'analysed') {
+    throw new Error(`Unsupported return type for method ${methodName}`);
   }
 
   const witValues = parameterAndValue.map(([paramName, value]) => {
@@ -421,7 +421,7 @@ function testInvoke(
           })();
 
     const result = deserializeDataValue(resultDataValue, [
-      ['return-value', [returnType, Option.some(returnTypeAnalysedType)]],
+      ['return-value', [returnType, Option.some(returnTypeAnalysedType.val)]],
     ])[0];
 
     expect(result).toEqual(expectedOutput);

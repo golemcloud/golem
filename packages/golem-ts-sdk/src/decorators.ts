@@ -370,7 +370,7 @@ export function agent(customName?: string) {
               };
             }
 
-            if (!returnTypeAnalysed) {
+            if (!returnTypeAnalysed || returnTypeAnalysed.tag !== 'analysed') {
               const error: AgentError = {
                 tag: 'invalid-type',
                 val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
@@ -384,7 +384,7 @@ export function agent(customName?: string) {
 
             const returnValue = WitValue.fromTsValue(
               result,
-              returnTypeAnalysed,
+              returnTypeAnalysed.val,
             );
 
             if (Either.isLeft(returnValue)) {

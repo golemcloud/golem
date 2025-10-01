@@ -52,26 +52,13 @@ export function getConstructorDataSchema(
           paramInfo.name,
         );
 
-        const languageCodes =
-          getLanguageCodes(paramType);
+        const elementSchema = getElementSchemaForUnstructuredText(paramType);
 
-        if (Either.isLeft(languageCodes)) {
-          return Either.left(`Failed to get language codes for parameter ${paramInfo.name}: ${languageCodes.val}`);
+        if (Either.isLeft(elementSchema)) {
+          return Either.left(`Failed to get element schema for unstructured-text parameter ${paramInfo.name}: ${elementSchema.val}`);
         }
 
-
-        const elementSchema: ElementSchema = languageCodes
-          ? {
-              tag: 'unstructured-text',
-              val: {
-                restrictions: languageCodes.val.map((code) => ({
-                  languageCode: code,
-                })),
-              },
-            }
-          : { tag: 'unstructured-text', val: {} };
-
-        const result: [string, ElementSchema] = [paramInfo.name, elementSchema];
+        const result: [string, ElementSchema] = [paramInfo.name, elementSchema.val];
 
         return Either.right(result);
       }
@@ -190,23 +177,53 @@ export function getAgentMethodSchema(
       const inputSchema = inputSchemaEither.val;
 
       const outputSchemaEither: Either.Either<
-        [AnalysedType, DataSchema],
+        [Option.Option<AnalysedType>, DataSchema],
         string
       > = buildOutputSchema(returnType);
 
       if (Either.isLeft(outputSchemaEither)) {
         return Either.left(
-          `Failed to construct output schema for method ${methodName}: ${outputSchemaEither.val}.`,
+          `Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${outputSchemaEither.val}.`,
         );
       }
 
       const [analysedType, outputSchema] = outputSchemaEither.val;
 
-      AgentMethodRegistry.setReturnType(
-        agentClassName,
-        methodName,
-        analysedType,
-      );
+      if (Option.isSome(analysedType)) {
+        AgentMethodRegistry.setReturnType(
+          agentClassName,
+          methodName,
+          {tag: 'analysed', val: analysedType.val},
+        );
+      } else {
+        switch (outputSchema.tag) {
+          case "tuple":
+            const value = outputSchema.val[0][1];
+
+            switch(value.tag) {
+              case "component-model":
+                break;
+              case "unstructured-text":
+                AgentMethodRegistry.setReturnType(
+                  agentClassName,
+                  methodName,
+                  {tag: 'unstructured-text', val: value.val},
+                );
+                break;
+              case "unstructured-binary":
+                AgentMethodRegistry.setReturnType(
+                  agentClassName,
+                  methodName,
+                  {tag: 'unstructured-binary', val: value.val},
+                );
+                break;
+            }
+            break;
+
+          case "multimodal":
+            break;
+        }
+      }
 
       return Either.right({
         name: methodName,
@@ -272,23 +289,56 @@ export function buildMethodInputSchema(
 
 export function buildOutputSchema(
   returnType: Type.Type,
-): Either.Either<[AnalysedType, DataSchema], string> {
+): Either.Either<[Option.Option<AnalysedType>, DataSchema], string> {
   const undefinedSchema = handleUndefinedReturnType(returnType);
 
   if (Option.isSome(undefinedSchema)) {
     return Either.right([
-      tuple(undefined, 'undefined', []),
+      Option.some(tuple(undefined, 'undefined', [])),
       undefinedSchema.val,
     ]);
   }
 
-  const schema: Either.Either<[AnalysedType, ElementSchema], string> =
+  if (returnType.kind === 'promise' && returnType.element.name === 'UnstructuredText') {
+    const elementSchema = getElementSchemaForUnstructuredText(returnType.element);
+
+    if (Either.isLeft(elementSchema)) {
+      return Either.left(`Failed to get element schema for unstructured-text return type: ${elementSchema.val}`);
+    }
+
+    return Either.right([
+      Option.none(),
+      {
+        tag: 'tuple',
+        val: [['return-value', elementSchema.val]],
+      },
+    ]);
+  }
+
+  if (returnType.name === 'UnstructuredText') {
+    const elementSchema = getElementSchemaForUnstructuredText(returnType);
+
+    if (Either.isLeft(elementSchema)) {
+      return Either.left(`Failed to get element schema for unstructured-text return type: ${elementSchema.val}`);
+    }
+
+    return Either.right([
+      Option.none(),
+      {
+        tag: 'tuple',
+        val: [['return-value', elementSchema.val]],
+      },
+    ]);
+  }
+
+
+  const schema: Either.Either<[Option.Option<AnalysedType>, ElementSchema], string> =
     Either.map(WitType.fromTsType(returnType, Option.none()), (typeInfo) => {
       const witType = typeInfo[0];
       const analysedType = typeInfo[1];
 
       return [
-        analysedType,
+        Option.some(analysedType),
         {
           tag: 'component-model',
           val: witType,
@@ -417,6 +467,28 @@ function handleUndefinedReturnType(
     default:
       return Option.none();
   }
+}
+
+function getElementSchemaForUnstructuredText(paramType: Type.Type): Either.Either<ElementSchema, string> {
+  const languageCodes =
+    getLanguageCodes(paramType);
+
+  if (Either.isLeft(languageCodes)) {
+    return Either.left(`Failed to get language code: ${languageCodes.val}`);
+  }
+
+  const elementSchema: ElementSchema = languageCodes
+    ? {
+      tag: 'unstructured-text',
+      val: {
+        restrictions: languageCodes.val.map((code) => ({
+          languageCode: code,
+        })),
+      },
+    }
+    : { tag: 'unstructured-text', val: {} };
+
+  return Either.right(elementSchema);
 }
 
 

@@ -14,6 +14,7 @@
 
 import { AgentClassName } from '../../newTypes/agentClassName';
 import { AnalysedType } from '../mapping/types/AnalysedType';
+import { BinaryDescriptor, DataSchema, TextDescriptor } from 'golem:agent/common';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
@@ -26,10 +27,12 @@ const agentMethodRegistry = new Map<
       prompt?: string;
       description?: string;
       multimodal?: boolean;
-      returnType?: AnalysedType;
+      returnType?: ReturnTypeInfo;
     }
   >
 >();
+
+export type ReturnTypeInfo = {tag: 'analysed', val: AnalysedType } | {tag: 'unstructured-text', val: TextDescriptor} | {tag: 'unstructured-binary', val: BinaryDescriptor};
 
 export const AgentMethodRegistry = {
   ensureMeta(agentClassName: AgentClassName, method: string) {
@@ -49,7 +52,7 @@ export const AgentMethodRegistry = {
   lookupReturnType(
     agentClassName: AgentClassName,
     agentMethodName: string,
-  ): AnalysedType | undefined {
+  ): ReturnTypeInfo | undefined {
     const classMeta = agentMethodRegistry.get(agentClassName.value);
     return classMeta?.get(agentMethodName)?.returnType;
   },
@@ -73,7 +76,7 @@ export const AgentMethodRegistry = {
   setReturnType(
     agentClassName: AgentClassName,
     method: string,
-    returnType: AnalysedType,
+    returnType: ReturnTypeInfo
   ) {
     AgentMethodRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodRegistry.get(agentClassName.value)!;

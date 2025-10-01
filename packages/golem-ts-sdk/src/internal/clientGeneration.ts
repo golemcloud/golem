@@ -174,13 +174,13 @@ function getMethodProxy(
           })()
         : rpcResult.val;
 
-    if (!returnTypeAnalysed) {
+    if (!returnTypeAnalysed || returnTypeAnalysed.tag !== 'analysed') {
       throw new Error(
-        `Return type for method ${String(prop)} not found in metadata`,
+        `Return type of method ${String(prop)}  not supported in remote calls`,
       );
     }
 
-    return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed);
+    return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed.val);
   }
 
   async function invokeFireAndForget(...fnArgs: any[]) {

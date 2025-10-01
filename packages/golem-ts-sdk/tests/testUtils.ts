@@ -131,12 +131,16 @@ function fetchTypeFromBarAgent(
       method.returnType &&
       Type.getTypeName(method.returnType) === typeNameInTestData
     ) {
-      const analysedType = AgentMethodRegistry.lookupReturnType(
+      const returnType = AgentMethodRegistry.lookupReturnType(
         BarAgentClassName,
         name,
       );
 
-      return [analysedType!, method.returnType];
+      if (!returnType || returnType.tag !== 'analysed') {
+        throw new Error(`Return type ${returnType?.tag} not supported in test data`);
+      }
+
+      return [returnType.val, method.returnType];
     }
 
     const param = Array.from(method.methodParams.entries()).find(([_, t]) => {
