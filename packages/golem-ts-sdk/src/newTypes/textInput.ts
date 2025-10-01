@@ -34,7 +34,7 @@ export type UnstructuredText<LC extends LanguageCode[] = []> =
   | {
       tag: 'inline';
       val: string;
-      languageCode?: LC;
+      languageCode?: LC[number];
     };
 
 export const UnstructuredText = {
@@ -61,12 +61,17 @@ export const UnstructuredText = {
           `Language code ${dataValue.val.textType.languageCode} is not allowed. Allowed codes: ${allowedCodes.join(', ')}`,
         );
       }
+
+      return {
+        tag: 'inline',
+        val: dataValue.val.data,
+        languageCode: dataValue.val.textType.languageCode,
+      };
     }
 
     return {
       tag: 'inline',
       val: dataValue.val.data,
-      languageCode: allowedCodes as unknown as LC,
     };
   },
 
@@ -92,7 +97,7 @@ export const UnstructuredText = {
    */
   fromInline<LC extends LanguageCode[] = []>(
     data: string,
-    languageCode?: LC,
+    languageCode?: string,
   ): UnstructuredText<LC> {
     return {
       tag: 'inline',

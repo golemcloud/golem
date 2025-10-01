@@ -27,7 +27,13 @@ export type LiteTypeJSON =
       elements: LiteTypeJSON[];
       optional: boolean;
     }
-  | { kind: 'union'; name?: string; types: LiteTypeJSON[]; typeParams: LiteTypeJSON[], optional: boolean }
+  | {
+      kind: 'union';
+      name?: string;
+      types: LiteTypeJSON[];
+      typeParams: LiteTypeJSON[];
+      optional: boolean;
+    }
   | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
   | {
       kind: 'object';

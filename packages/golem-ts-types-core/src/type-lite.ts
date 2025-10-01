@@ -24,7 +24,13 @@ export type Type =
   | { kind: 'array'; name?: string; element: Type; optional: boolean }
   | { kind: 'null'; name?: string; element: Type; optional: boolean }
   | { kind: 'tuple'; name?: string; elements: Type[]; optional: boolean }
-  | { kind: 'union'; name?: string; unionTypes: Type[]; typeParams: Type[], optional: boolean }
+  | {
+      kind: 'union';
+      name?: string;
+      unionTypes: Type[];
+      typeParams: Type[];
+      optional: boolean;
+    }
   | {
       kind: 'object';
       name?: string;
