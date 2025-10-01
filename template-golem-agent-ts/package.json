@@ -1,7 +1,7 @@
 {
   "name": "app",
   "dependencies": {
-    "@golemcloud/golem-ts-sdk": "file://../packages/golem-ts-sdk"
+    "@golemcloud/golem-ts-sdk": "file:../packages/golem-ts-sdk"
   },
   "scripts": {
     "generate": "wasm-rquickjs generate-wrapper-crate --wit ../../wit --output dist/wrapper --world agent-guest --js-modules '@golemcloud/golem-ts-sdk=node_modules/@golemcloud/golem-ts-sdk/dist/index.mjs' --js-modules 'user=@composition'",

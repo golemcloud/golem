@@ -212,6 +212,12 @@ importers:
         specifier: ^3.2.4
         version: 3.2.4(@types/node@24.3.1)
 
+  template-golem-agent-ts:
+    dependencies:
+      '@golemcloud/golem-ts-sdk':
+        specifier: file:../packages/golem-ts-sdk
+        version: file:packages/golem-ts-sdk
+
 packages:
 
   '@babel/code-frame@7.27.1':
@@ -415,6 +421,9 @@ packages:
   '@eslint/plugin-kit@0.3.5':
     resolution: {integrity: sha512-Z5kJ+wU3oA7MMIqVR9tyZRtjYPr4OC004Q4Rw7pgOKUOKkJfZ3O24nz3WYfGRpMDNmcOi3TwQOmgm7B7Tpii0w==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+
+  '@golemcloud/golem-ts-sdk@file:packages/golem-ts-sdk':
+    resolution: {directory: packages/golem-ts-sdk, type: directory}
 
   '@humanfs/core@0.19.1':
     resolution: {integrity: sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA==}
@@ -1562,6 +1571,10 @@ snapshots:
     dependencies:
       '@eslint/core': 0.15.2
       levn: 0.4.1
+
+  '@golemcloud/golem-ts-sdk@file:packages/golem-ts-sdk':
+    dependencies:
+      '@golemcloud/golem-ts-types-core': link:packages/golem-ts-types-core
 
   '@humanfs/core@0.19.1': {}
 
