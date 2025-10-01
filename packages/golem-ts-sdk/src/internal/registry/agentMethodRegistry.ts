@@ -36,6 +36,8 @@ const agentMethodRegistry = new Map<
   >
 >();
 
+// For all types except unstructured-*, `AnalysedType` has the max details.
+// There is no AnalysedType for unstructured-text/binary
 export type ReturnTypeInfo =
   | { tag: 'analysed'; val: AnalysedType }
   | { tag: 'unstructured-text'; val: TextDescriptor }
