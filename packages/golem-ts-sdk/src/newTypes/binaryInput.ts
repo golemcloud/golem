@@ -26,7 +26,9 @@ import { ElementSchema, BinaryReference } from 'golem:agent/common';
  * );
  * ```
  */
-export type UnstructuredBinary =
+type MimeType = string;
+
+export type UnstructuredBinary<MT extends MimeType[] = []> =
   | {
       tag: 'url';
       val: string;
@@ -34,11 +36,11 @@ export type UnstructuredBinary =
   | {
       tag: 'inline';
       val: Uint8Array;
-      mimeType?: string;
+      mimeType?: MT[number];
     };
 
 export const UnstructuredBinary = {
-  fromDataValue(dataValue: BinaryReference): UnstructuredBinary {
+  fromDataValue<MT extends string[] = []>(dataValue: BinaryReference, allowedMimeTypes: string[]): UnstructuredBinary<MT> {
     if (dataValue.tag === 'url') {
       return {
         tag: 'url',
@@ -46,10 +48,25 @@ export const UnstructuredBinary = {
       };
     }
 
+    if (allowedMimeTypes.length > 0) {
+
+
+      if (!allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)) {
+        throw new Error(
+          `Language code ${dataValue.val.binaryType.mimeType} is not allowed. Allowed codes: ${allowedMimeTypes.join(', ')}`,
+        );
+      }
+
+      return {
+        tag: 'inline',
+        val: dataValue.val.data,
+        mimeType: dataValue.val.binaryType.mimeType,
+      };
+    }
+
     return {
       tag: 'inline',
       val: dataValue.val.data,
-      mimeType: dataValue.val.binaryType?.mimeType,
     };
   },
 

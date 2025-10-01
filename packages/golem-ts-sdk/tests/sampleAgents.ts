@@ -30,7 +30,7 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { languageCodes, mimeTypes, multimodal } from '../src/decorators';
+import { mimeTypes, multimodal } from '../src/decorators';
 
 @agent()
 class FooAgent extends BaseAgent {

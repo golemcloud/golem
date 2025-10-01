@@ -28,7 +28,6 @@ export {
   prompt,
   description,
   agent,
-  languageCodes,
   mimeTypes,
   multimodal,
 } from './decorators';
