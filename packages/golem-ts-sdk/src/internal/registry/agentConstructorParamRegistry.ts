@@ -51,6 +51,15 @@ export const AgentConstructorParamRegistry = {
     paramName: string,
   ): AnalysedType | undefined {
     const classMeta = agentConstructorParamRegistry.get(agentClassName.value);
+    if (!classMeta) {
+      return undefined;
+    }
+    if (!classMeta.has(paramName)) {
+      return undefined;
+    }
+    if (!classMeta.get(paramName)?.analysedType) {
+      return undefined;
+    }
     return classMeta?.get(paramName)?.analysedType;
   },
 

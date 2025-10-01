@@ -17,12 +17,12 @@ import * as Either from '../src/newTypes/either';
 import { deserializeDataValue } from '../src/decorators';
 import * as Option from '../src/newTypes/option';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
-import { expect, it } from 'vitest';
+import { expect } from 'vitest';
 import * as GolemApiHostModule from 'golem:api/host@1.1.7';
 import {
-  ComplexAgentClassName,
-  SimpleAgentClassName,
-  CustomComplexAgentTypeName,
+  BarAgentClassName,
+  BarAgentCustomClassName,
+  FooAgentClassName,
 } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
@@ -34,9 +34,6 @@ import {
   objectWithUnionWithUndefined4Arb,
   resultTypeExactArb,
   resultTypeNonExact2Arb,
-  resultTypeNonExact3Arb,
-  resultTypeNonExact4Arb,
-  resultTypeNonExact5Arb,
   resultTypeNonExactArb,
   stringOrNumberOrNull,
   stringOrUndefined,
@@ -54,7 +51,7 @@ import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodPa
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 import { AgentClassName } from '../src';
 
-test('SimpleAgent can be successfully initiated and all of its methods can be invoked', () => {
+test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
     fc.property(
       fc.string(),
@@ -89,15 +86,15 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
         resultTypeNonExact,
         resultTypeNonExact2,
       ) => {
-        overrideSelfMetadataImpl(SimpleAgentClassName);
+        overrideSelfMetadataImpl(FooAgentClassName);
 
-        const typeRegistry = TypeMetadata.get(SimpleAgentClassName.value);
+        const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
 
         if (!typeRegistry) {
-          throw new Error('SimpleAgent type metadata not found');
+          throw new Error('FooAgent type metadata not found');
         }
 
-        const resolvedAgent = initiateSimpleAgent(arbString, typeRegistry);
+        const resolvedAgent = initiateFooAgent(arbString, typeRegistry);
 
         testInvoke(
           'fun1',
@@ -229,36 +226,36 @@ test('SimpleAgent can be successfully initiated and all of its methods can be in
   );
 });
 
-test('ComplexAgent can be successfully initiated', () => {
+test('BarAgent can be successfully initiated', () => {
   fc.assert(
     fc.property(
       interfaceArb,
       fc.oneof(fc.string(), fc.constant(null)),
       fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(CustomComplexAgentTypeName);
+        overrideSelfMetadataImpl(BarAgentClassName);
 
-        const typeRegistry = TypeMetadata.get(ComplexAgentClassName.value);
+        const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
 
         if (!typeRegistry) {
-          throw new Error('ComplexAgent type metadata not found');
+          throw new Error('BarAgent type metadata not found');
         }
 
         // TestInterfaceType
         const arg0 = AgentConstructorParamRegistry.lookupParamType(
-          ComplexAgentClassName,
+          BarAgentClassName,
           typeRegistry.constructorArgs[0].name,
         );
 
         // string | null
         const arg1 = AgentConstructorParamRegistry.lookupParamType(
-          ComplexAgentClassName,
+          BarAgentClassName,
           typeRegistry.constructorArgs[1].name,
         );
 
         // UnionType | null
         const arg2 = AgentConstructorParamRegistry.lookupParamType(
-          ComplexAgentClassName,
+          BarAgentClassName,
           typeRegistry.constructorArgs[2].name,
         );
 
@@ -304,14 +301,11 @@ test('ComplexAgent can be successfully initiated', () => {
         };
 
         const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(CustomComplexAgentTypeName.value),
-          () => new Error('ComplexAgent not found in AgentInitiatorRegistry'),
+          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
+          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(
-          CustomComplexAgentTypeName,
-          dataValue,
-        );
+        const result = agentInitiator.initiate(BarAgentCustomClassName, dataValue);
 
         expect(result.tag).toEqual('ok');
       },
@@ -319,7 +313,7 @@ test('ComplexAgent can be successfully initiated', () => {
   );
 });
 
-function initiateSimpleAgent(
+function initiateFooAgent(
   constructorParamString: string,
   simpleAgentClassMeta: ClassMetadata,
 ) {
@@ -327,13 +321,13 @@ function initiateSimpleAgent(
 
   const constructorParamAnalysedType =
     AgentConstructorParamRegistry.lookupParamType(
-      SimpleAgentClassName,
+      FooAgentClassName,
       constructorInfo.name,
     );
 
   if (!constructorParamAnalysedType) {
     throw new Error(
-      `Constructor parameter type for SimpleAgent constructor parameter ${constructorInfo.name} not found in metadata.`,
+      `Constructor parameter type for FooAgent constructor parameter ${constructorInfo.name} not found in metadata.`,
     );
   }
 
@@ -353,14 +347,11 @@ function initiateSimpleAgent(
   };
 
   const agentInitiator = Option.getOrThrowWith(
-    AgentInitiatorRegistry.lookup(SimpleAgentClassName.value),
-    () => new Error('SimpleAgent not found in AgentInitiatorRegistry'),
+    AgentInitiatorRegistry.lookup(FooAgentClassName.value),
+    () => new Error('FooAgent not found in AgentInitiatorRegistry'),
   );
 
-  const result = agentInitiator.initiate(
-    SimpleAgentClassName,
-    constructorParams,
-  );
+  const result = agentInitiator.initiate(FooAgentClassName, constructorParams);
 
   if (result.tag !== 'ok') {
     throw new Error('Agent initiation failed');
@@ -376,7 +367,7 @@ function testInvoke(
   expectedOutput: any,
 ) {
   const returnTypeInfo = AgentMethodRegistry.lookupReturnType(
-    SimpleAgentClassName,
+    FooAgentClassName,
     methodName,
   );
 
@@ -386,7 +377,7 @@ function testInvoke(
 
   const witValues = parameterAndValue.map(([paramName, value]) => {
     const paramAnalysedType = AgentMethodParamRegistry.lookupParamType(
-      SimpleAgentClassName,
+      FooAgentClassName,
       methodName,
       paramName,
     );

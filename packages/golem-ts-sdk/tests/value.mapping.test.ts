@@ -26,7 +26,6 @@ import {
   getUnionWithOnlyLiterals,
   getUnionWithLiterals,
   getResultTypeExact,
-  CustomComplexAgentTypeName,
 } from './testUtils';
 
 import { TestInterfaceType } from './testTypes';
