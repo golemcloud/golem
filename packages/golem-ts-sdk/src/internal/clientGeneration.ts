@@ -180,7 +180,6 @@ function getMethodProxy(
       );
     }
 
-
     return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed.val);
   }
 
