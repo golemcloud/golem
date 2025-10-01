@@ -116,6 +116,7 @@ class FooAgent extends BaseAgent {
     optionalStringType: string | null,
     optionalUnionType: UnionType | null,
     unstructuredText: UnstructuredText,
+    unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
     unstructuredBinary: UnstructuredBinary,
   ): Promise<void> {
     const remoteClient = BarAgent.get(
@@ -123,7 +124,7 @@ class FooAgent extends BaseAgent {
       optionalStringType,
       optionalUnionType,
       unstructuredText,
-      unstructuredText,
+      unstructuredTextWithLanguageCode,
       unstructuredBinary,
       unstructuredBinary,
     );
@@ -169,8 +170,7 @@ class BarAgent extends BaseAgent {
 
     readonly unstructuredText: UnstructuredText,
 
-    @languageCodes(['en'])
-    readonly unstructuredTextWithLanguageCode: UnstructuredText,
+    readonly unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
 
     readonly unstructuredBinary: UnstructuredBinary,
 
