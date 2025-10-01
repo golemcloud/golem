@@ -12,22 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  AgentType,
-  DataValue,
-  AgentError,
-  ElementValue,
-  TextReference,
-  BinaryReference,
-  BinarySource,
-} from 'golem:agent/common';
+import { AgentType, DataValue, AgentError } from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import {
-  ClassMetadata,
-  MethodParams,
-  TypeMetadata,
-} from '@golemcloud/golem-ts-types-core';
+import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
@@ -57,7 +45,10 @@ import { AnalysedType } from './internal/mapping/types/AnalysedType';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
 import { Result } from 'golem:rpc/types@0.2.2';
-import { serializeUnstructuredBinary, serializeUnstructuredText } from './internal/mapping/values/unstructured';
+import {
+  serializeUnstructuredBinary,
+  serializeUnstructuredText,
+} from './internal/mapping/values/unstructured';
 
 type TsType = Type.Type;
 

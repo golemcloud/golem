@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { BinaryReference, ElementValue, TextReference } from 'golem:agent/common';
+import {
+  BinaryReference,
+  ElementValue,
+  TextReference,
+} from 'golem:agent/common';
 import util from 'node:util';
 
 export function serializeUnstructuredBinary(value: any): ElementValue {

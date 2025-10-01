@@ -120,7 +120,7 @@ function getMethodProxy(
     methodName,
   );
 
-  function encodeArgs(fnArgs: any[]) {
+  function serializeArgs(fnArgs: any[]): WitValue.WitValue[] {
     const parameterWitValuesEither = Either.all(
       fnArgs.map((fnArg, index) => {
         const param = paramInfo[index];
@@ -147,7 +147,7 @@ function getMethodProxy(
   }
 
   async function invokeAndAwait(...fnArgs: any[]) {
-    const parameterWitValues = encodeArgs(fnArgs);
+    const parameterWitValues = serializeArgs(fnArgs);
     const wasmRpc = new WasmRpc(workerId);
 
     const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(
@@ -174,23 +174,24 @@ function getMethodProxy(
           })()
         : rpcResult.val;
 
-    if (!returnTypeAnalysed || returnTypeAnalysed.tag !== 'analysed') {
+    if (!returnTypeAnalysed) {
       throw new Error(
         `Return type of method ${String(prop)}  not supported in remote calls`,
       );
     }
 
+
     return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed.val);
   }
 
   async function invokeFireAndForget(...fnArgs: any[]) {
-    const parameterWitValues = encodeArgs(fnArgs);
+    const parameterWitValues = serializeArgs(fnArgs);
     const wasmRpc = new WasmRpc(workerId);
     wasmRpc.invoke(functionName, parameterWitValues);
   }
 
   async function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
-    const parameterWitValues = encodeArgs(fnArgs);
+    const parameterWitValues = serializeArgs(fnArgs);
     const wasmRpc = new WasmRpc(workerId);
     wasmRpc.scheduleInvocation(ts, functionName, parameterWitValues);
   }
