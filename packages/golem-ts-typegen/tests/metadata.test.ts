@@ -126,7 +126,6 @@ describe("golem-ts-typegen can work correctly read types from .metadata director
     expect(typeArgs).toHaveLength(1);
 
     const tupleType = typeArgs[0];
-    console.log(tupleType);
     const tupleArgs = tupleType.kind === "tuple" ? tupleType.elements : [];
 
     const args = tupleArgs.map((tupleArg) => {

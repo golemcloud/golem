@@ -42,17 +42,7 @@ export function getTypeFromTsMorph(
   isOptional: boolean,
 ): Type.Type {
   try {
-    if (tsMorphType.getTypeArguments().length > 0) {
-      // console.log(
-      //   `Type has type arguments: ${tsMorphType.getText()} with type arguments: ${tsMorphType
-      //     .getTypeArguments()
-      //     .map((t) => t.getText())
-      //     .join(", ")}`,
-      // );
-    }
-
-    const type = getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
-    return type;
+    return getTypeFromTsMorphInternal(tsMorphType, isOptional, new Set());
   } catch (e) {
     if (e instanceof Error) {
       let error = e.message;
@@ -342,8 +332,6 @@ function getTypeFromTsMorphInternal(
       .getAliasTypeArguments()
       .map((arg) => getTypeFromTsMorph(arg, false));
 
-    console.log(`Object type parameters ${aliasName ?? rawName}:`, args);
-
     return {
       kind: "object",
       name: aliasName,
@@ -374,7 +362,6 @@ function getTypeFromTsMorphInternal(
   }
 
   if (type.getTypeArguments().length === 1) {
-    console.log(JSON.stringify(type.getTypeArguments()));
     throw new Error(
       `Unhandled type with single type argument: ${type.getText()}`,
     );

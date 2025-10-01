@@ -826,5 +826,5 @@ function filterUndefinedTypes(
     return Either.right(alternateTypes[0]);
   }
 
-  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional  });
+  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: [] });
 }
