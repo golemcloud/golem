@@ -268,7 +268,6 @@ impl ToCompactString for NamedElementValues {
 
 impl ToCompactString for NamedElementValue {
     fn to_compact_string(&self) -> String {
-        // TODO: recheck this, Display uses this
         format!("{}({})", self.name, self.value.to_compact_string())
     }
 }

@@ -172,7 +172,7 @@ impl ErrorHandler {
                     )
                     .await
                 {
-                    let agent_id_and_type = self
+                    let agent_id = self
                         .ctx
                         .worker_handler()
                         .validate_worker_and_function_names(
@@ -183,7 +183,7 @@ impl ErrorHandler {
 
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,
-                        agent_id_and_type.as_ref().map(|a| &a.1),
+                        agent_id.as_ref(),
                     ));
                     logln("");
                 }

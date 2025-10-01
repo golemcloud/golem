@@ -23,7 +23,7 @@ use crate::model::text::fmt::{
 };
 use cli_table::Table;
 use colored::Colorize;
-use golem_common::model::agent::AgentType;
+use golem_common::model::agent::AgentId;
 use golem_wasm_ast::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
@@ -200,16 +200,18 @@ pub struct AvailableFunctionNamesHelp {
 }
 
 impl AvailableFunctionNamesHelp {
-    pub fn new(component: &Component, agent_type: Option<&AgentType>) -> Self {
+    pub fn new(component: &Component, agent_id: Option<&AgentId>) -> Self {
         AvailableFunctionNamesHelp {
             component_name: component.component_name.0.clone(),
-            agent_name: agent_type.as_ref().map(|a| a.type_name.clone()),
+            agent_name: agent_id
+                .as_ref()
+                .map(|a| a.wrapper_agent_type().to_string()),
             function_names: show_exported_functions(
                 component.metadata.exports(),
                 false,
-                agent_type
-                    .and_then(|agent_type| {
-                        agent_interface_name(component, agent_type.type_name.as_str())
+                agent_id
+                    .and_then(|agent_id| {
+                        agent_interface_name(component, agent_id.wrapper_agent_type())
                     })
                     .as_deref(),
             ),
