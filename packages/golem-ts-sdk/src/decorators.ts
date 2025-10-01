@@ -266,7 +266,7 @@ export function agent(customName?: string) {
 
             if (Option.isNone(agentType)) {
               throw new Error(
-                `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
+                `Failed to find agent type for ${agentClassName.value}. Ensure it is decorated with @agent() and registered properly.`,
               );
             }
 
@@ -282,7 +282,7 @@ export function agent(customName?: string) {
             const fn = instance[methodName];
             if (!fn)
               throw new Error(
-                `Method ${methodName} not found on agent ${agentClassName}`,
+                `Method ${methodName} not found on agent ${agentClassName.value}`,
               );
 
             const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
@@ -290,7 +290,7 @@ export function agent(customName?: string) {
             if (Option.isNone(agentTypeOpt)) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Agent type ${agentClassName} not found in registry.`,
+                val: `Agent type ${agentClassName.value} not found in registry.`,
               };
               return {
                 tag: 'err',
@@ -305,7 +305,7 @@ export function agent(customName?: string) {
             if (!methodInfo) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
+                val: `Method ${methodName} not found in metadata for agent ${agentClassName.value}.`,
               };
               return {
                 tag: 'err',
@@ -325,7 +325,7 @@ export function agent(customName?: string) {
             if (!methodParams) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName}.`,
+                val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName.value}.`,
               };
               return {
                 tag: 'err',
@@ -359,7 +359,7 @@ export function agent(customName?: string) {
             if (!methodDef) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Method ${methodName} not found in agent type ${agentClassName}`,
+                val: `Method ${methodName} not found in agent type ${agentClassName.value}`,
               };
 
               return {
@@ -371,7 +371,7 @@ export function agent(customName?: string) {
             if (!returnTypeAnalysed) {
               const error: AgentError = {
                 tag: 'invalid-type',
-                val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
+                val: `Return type of method ${methodName} in agent ${agentClassName.value} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
               };
 
               return {
