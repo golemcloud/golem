@@ -28,7 +28,12 @@ import {
 } from 'golem:agent/host';
 import { AgentTypeName } from '../newTypes/agentTypeName';
 import { AgentClassName } from '../newTypes/agentClassName';
-import { DataValue, ElementValue } from 'golem:agent/common';
+import {
+  BinaryReference,
+  DataValue,
+  ElementValue,
+  TextReference,
+} from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
 import * as util from 'node:util';
 import { RemoteMethod } from '../baseAgent';
@@ -36,6 +41,10 @@ import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { deserialize } from './mapping/values/deserializer';
+import {
+  castTsValueToBinaryReference,
+  castTsValueToTextReference,
+} from './mapping/values/unstructured';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -248,15 +257,45 @@ function getWorkerId(
   const constructorParamWitValuesResult: Either.Either<ElementValue[], string> =
     Either.all(
       constructorArgs.map((arg, index) => {
-        const typ = constructorParamTypes[index];
-        return Either.map(WitValue.fromTsValue(arg, typ), (witValue) => {
-          let elementValue: ElementValue = {
-            tag: 'component-model',
-            val: witValue,
-          };
+        const typeInfoInternal = constructorParamTypes[index];
 
-          return elementValue;
-        });
+        switch (typeInfoInternal.tag) {
+          case 'analysed':
+            return Either.map(
+              WitValue.fromTsValue(arg, typeInfoInternal.val),
+              (witValue) => {
+                let elementValue: ElementValue = {
+                  tag: 'component-model',
+                  val: witValue,
+                };
+
+                return elementValue;
+              },
+            );
+          case 'unstructured-text':
+            const textReference: TextReference =
+              castTsValueToTextReference(arg);
+
+            const elementValue: Either.Either<ElementValue, string> =
+              Either.right({
+                tag: 'unstructured-text',
+                val: textReference,
+              });
+
+            return elementValue;
+
+          case 'unstructured-binary':
+            const binaryReference: BinaryReference =
+              castTsValueToBinaryReference(arg);
+
+            const elementValueBinary: Either.Either<ElementValue, string> =
+              Either.right({
+                tag: 'unstructured-binary',
+                val: binaryReference,
+              });
+
+            return elementValueBinary;
+        }
       }),
     );
 

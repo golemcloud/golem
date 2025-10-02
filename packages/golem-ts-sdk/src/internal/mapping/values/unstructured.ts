@@ -114,27 +114,6 @@ export function serializeTextReferenceToValue(tsValue: any): Value {
   }
 }
 
-export function convertBinaryReferenceToElementValue(
-  tsValue: any,
-): ElementValue {
-  const binaryReference: BinaryReference =
-    castTsValueToBinaryReference(tsValue);
-
-  return {
-    tag: 'unstructured-binary',
-    val: binaryReference,
-  };
-}
-
-export function convertTextReferenceToElementValue(value: any): ElementValue {
-  const textReference: TextReference = castTsValueToTextReference(value);
-
-  return {
-    tag: 'unstructured-text',
-    val: textReference,
-  };
-}
-
 export function castTsValueToBinaryReference(tsValue: any): BinaryReference {
   if (typeof tsValue === 'object') {
     const keys = Object.keys(tsValue);

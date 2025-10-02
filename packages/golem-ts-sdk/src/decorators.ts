@@ -44,11 +44,11 @@ import { UnstructuredBinary } from './newTypes/binaryInput';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
 import { Result } from 'golem:rpc/types@0.2.2';
+import { TypeInfoInternal } from './internal/registry/typeInfoInternal';
 import {
   convertBinaryReferenceToElementValue,
   convertTextReferenceToElementValue,
-} from './internal/mapping/values/unstructured';
-import { TypeInfoInternal } from './internal/registry/typeInfoInternal';
+} from './internal/mapping/values/elementValue';
 
 type TsType = Type.Type;
 
@@ -214,11 +214,10 @@ export function agent(customName?: string) {
       | [string, [TsType, TypeInfoInternal]][]
       | undefined = TypeMetadata.get(agentClassName.value)?.constructorArgs.map(
       (arg) => {
-
         const typeInfo = AgentConstructorParamRegistry.getParamType(
-            agentClassName,
-            arg.name,
-          );
+          agentClassName,
+          arg.name,
+        );
 
         if (!typeInfo) {
           throw new Error(
@@ -226,13 +225,7 @@ export function agent(customName?: string) {
           );
         }
 
-        return [
-          arg.name,
-          [
-            arg.type,
-            typeInfo,
-          ],
-        ];
+        return [arg.name, [arg.type, typeInfo]];
       },
     );
 
@@ -702,15 +695,6 @@ function getAgentInternal(
         methodParamTypes,
       );
 
-      console.log(
-        'fish ' +
-          JSON.stringify(methodArgs) +
-          ' ' +
-          JSON.stringify(methodParamTypes),
-      );
-
-      console.log(JSON.stringify(deserializedArgs));
-
       const methodResult = await agentMethod.apply(
         agentInstance,
         deserializedArgs,
@@ -775,6 +759,7 @@ function getAgentInternal(
         case 'unstructured-text':
           const unstructuredText =
             convertTextReferenceToElementValue(methodResult);
+
           const unstructuredTextValue: DataValue = {
             tag: 'tuple',
             val: [unstructuredText],

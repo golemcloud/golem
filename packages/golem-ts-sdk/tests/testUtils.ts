@@ -31,10 +31,6 @@ export const FooAgentName = AgentTypeName.fromAgentClassName(FooAgentClassName);
 
 export const BarAgentName = AgentTypeName.fromString('my-complex-agent');
 
-export function getAll() {
-  return TypeMetadata.getAll();
-}
-
 export function getTestInterfaceType(): [AnalysedType, Type.Type] {
   return fetchTypeFromBarAgent('TestInterfaceType');
 }
@@ -104,7 +100,7 @@ export function getRecordFieldsFromAnalysedType(
 function fetchTypeFromBarAgent(
   typeNameInTestData: string,
 ): [AnalysedType, Type.Type] {
-  const complexAgentMetadata = TypeMetadata.get('BarAgent');
+  const complexAgentMetadata = TypeMetadata.get(BarAgentClassName.value);
 
   if (!complexAgentMetadata) {
     throw new Error('Class metadata for BarAgent not found');
@@ -116,12 +112,18 @@ function fetchTypeFromBarAgent(
   });
 
   if (constructorArg) {
-    const analysedType = AgentConstructorParamRegistry.getParamType(
+    const typeInfo = AgentConstructorParamRegistry.getParamType(
       BarAgentClassName,
       constructorArg.name,
     );
 
-    return [analysedType!, constructorArg.type];
+    if (!typeInfo || typeInfo.tag !== 'analysed') {
+      throw new Error(
+        `Test failure: Unsupported type for constructor parameter ${constructorArg.name}`,
+      );
+    }
+
+    return [typeInfo.val, constructorArg.type];
   }
 
   const methods = Array.from(complexAgentMetadata.methods);
@@ -159,7 +161,7 @@ function fetchTypeFromBarAgent(
 
       if (!typeInfo || typeInfo.tag !== 'analysed') {
         throw new Error(
-          `Unsupported type for parameter ${param[0]} in method ${name}`,
+          `Test failure: Unsupported type for parameter ${param[0]} in method ${name}`,
         );
       }
 
@@ -167,6 +169,6 @@ function fetchTypeFromBarAgent(
     }
   }
   throw new Error(
-    `Unresolved type ${typeNameInTestData}. Make sure \`${BarAgentClassName.value}\` use ${typeNameInTestData}`,
+    `Test failure: Unresolved type ${typeNameInTestData}. Make sure \`${BarAgentClassName.value}\` use ${typeNameInTestData}`,
   );
 }

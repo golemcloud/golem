@@ -54,6 +54,7 @@ import {
 } from '../src/internal/mapping/values/unstructured';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 import { deserializeDataValue } from '../src/decorators';
+import { convertTsValueToElementValue } from '../src/internal/mapping/values/elementValue';
 
 test('something x y z ', () => {
   overrideSelfMetadataImpl(FooAgentName.value);
@@ -140,124 +141,124 @@ test('An agent can be successfully initiated and all of its methods can be invok
           'Weather in ' + arbString + ' is sunny!',
         );
 
-        // testInvoke(
-        //   'fun2',
-        //   [
-        //     [
-        //       'param',
-        //       {
-        //         value: number,
-        //         data: arbString,
-        //       },
-        //     ],
-        //   ],
-        //   resolvedAgent,
-        //   `Weather in ${arbString} is sunny!`,
-        // );
-        //
-        // testInvoke(
-        //   'fun3',
-        //   [
-        //     [
-        //       'param',
-        //       {
-        //         data: arbString,
-        //         value: number,
-        //       },
-        //     ],
-        //   ],
-        //   resolvedAgent,
-        //   `Weather in ${arbString} is sunny!`,
-        // );
-        //
-        // testInvoke(
-        //   'fun4',
-        //   [
-        //     [
-        //       'param',
-        //       {
-        //         data: arbString,
-        //         value: number,
-        //       },
-        //     ],
-        //   ],
-        //   resolvedAgent,
-        //   undefined,
-        // );
-        //
-        // testInvoke(
-        //   'fun5',
-        //   [['param', arbString]],
-        //   resolvedAgent,
-        //   `Weather in ${arbString} is sunny!`,
-        // );
-        //
-        // testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined);
-        //
-        // testInvoke(
-        //   'fun7',
-        //   [
-        //     ['param1', stringOrNumberOrNull],
-        //     ['param2', objectWithUnionWithUndefined1],
-        //     ['param3', objectWithUnionWithUndefined2],
-        //     ['param4', objectWithUnionWithUndefined3],
-        //     ['param5', objectWithUnionWithUndefined4],
-        //     ['param6', stringOrUndefined],
-        //     ['param7', unionOrUndefined],
-        //   ],
-        //   resolvedAgent,
-        //   {
-        //     param1: stringOrNumberOrNull,
-        //     param2: objectWithUnionWithUndefined1.a,
-        //     param3: objectWithUnionWithUndefined2.a,
-        //     param4: objectWithUnionWithUndefined3.a,
-        //     param5: objectWithUnionWithUndefined4.a,
-        //     param6: stringOrUndefined,
-        //     param7: unionOrUndefined,
-        //   },
-        // );
-        //
-        // testInvoke(
-        //   'fun8',
-        //   [['a', unionWithLiterals]],
-        //   resolvedAgent,
-        //   unionWithLiterals,
-        // );
-        //
-        // testInvoke(
-        //   'fun9',
-        //   [['param', taggedUnion]],
-        //   resolvedAgent,
-        //   taggedUnion,
-        // );
-        //
-        // testInvoke(
-        //   'fun10',
-        //   [['param', unionWithOnlyLiterals]],
-        //   resolvedAgent,
-        //   unionWithOnlyLiterals,
-        // );
-        //
-        // testInvoke(
-        //   'fun11',
-        //   [['param', resultTypeExactBoth]],
-        //   resolvedAgent,
-        //   resultTypeExactBoth,
-        // );
-        //
-        // testInvoke(
-        //   'fun12',
-        //   [['param', resultTypeNonExact]],
-        //   resolvedAgent,
-        //   resultTypeNonExact,
-        // );
-        //
-        // testInvoke(
-        //   'fun13',
-        //   [['param', resultTypeNonExact2]],
-        //   resolvedAgent,
-        //   resultTypeNonExact2,
-        // );
+        testInvoke(
+          'fun2',
+          [
+            [
+              'param',
+              {
+                value: number,
+                data: arbString,
+              },
+            ],
+          ],
+          resolvedAgent,
+          `Weather in ${arbString} is sunny!`,
+        );
+
+        testInvoke(
+          'fun3',
+          [
+            [
+              'param',
+              {
+                data: arbString,
+                value: number,
+              },
+            ],
+          ],
+          resolvedAgent,
+          `Weather in ${arbString} is sunny!`,
+        );
+
+        testInvoke(
+          'fun4',
+          [
+            [
+              'param',
+              {
+                data: arbString,
+                value: number,
+              },
+            ],
+          ],
+          resolvedAgent,
+          undefined,
+        );
+
+        testInvoke(
+          'fun5',
+          [['param', arbString]],
+          resolvedAgent,
+          `Weather in ${arbString} is sunny!`,
+        );
+
+        testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined);
+
+        testInvoke(
+          'fun7',
+          [
+            ['param1', stringOrNumberOrNull],
+            ['param2', objectWithUnionWithUndefined1],
+            ['param3', objectWithUnionWithUndefined2],
+            ['param4', objectWithUnionWithUndefined3],
+            ['param5', objectWithUnionWithUndefined4],
+            ['param6', stringOrUndefined],
+            ['param7', unionOrUndefined],
+          ],
+          resolvedAgent,
+          {
+            param1: stringOrNumberOrNull,
+            param2: objectWithUnionWithUndefined1.a,
+            param3: objectWithUnionWithUndefined2.a,
+            param4: objectWithUnionWithUndefined3.a,
+            param5: objectWithUnionWithUndefined4.a,
+            param6: stringOrUndefined,
+            param7: unionOrUndefined,
+          },
+        );
+
+        testInvoke(
+          'fun8',
+          [['a', unionWithLiterals]],
+          resolvedAgent,
+          unionWithLiterals,
+        );
+
+        testInvoke(
+          'fun9',
+          [['param', taggedUnion]],
+          resolvedAgent,
+          taggedUnion,
+        );
+
+        testInvoke(
+          'fun10',
+          [['param', unionWithOnlyLiterals]],
+          resolvedAgent,
+          unionWithOnlyLiterals,
+        );
+
+        testInvoke(
+          'fun11',
+          [['param', resultTypeExactBoth]],
+          resolvedAgent,
+          resultTypeExactBoth,
+        );
+
+        testInvoke(
+          'fun12',
+          [['param', resultTypeNonExact]],
+          resolvedAgent,
+          resultTypeNonExact,
+        );
+
+        testInvoke(
+          'fun13',
+          [['param', resultTypeNonExact2]],
+          resolvedAgent,
+          resultTypeNonExact2,
+        );
       },
     ),
   );
@@ -296,8 +297,17 @@ test('BarAgent can be successfully initiated', () => {
           typeRegistry.constructorArgs[2].name,
         );
 
-        if (!arg0 || !arg1 || !arg2 || arg0.tag !== "analysed" || arg1.tag !== "analysed" || arg2.tag !== "analysed") {
-          throw new Error('Test failure: unresolved type in BarAgent constructor');
+        if (
+          !arg0 ||
+          !arg1 ||
+          !arg2 ||
+          arg0.tag !== 'analysed' ||
+          arg1.tag !== 'analysed' ||
+          arg2.tag !== 'analysed'
+        ) {
+          throw new Error(
+            'Test failure: unresolved type in BarAgent constructor',
+          );
         }
 
         const interfaceWit = Either.getOrThrowWith(
@@ -351,36 +361,34 @@ test('BarAgent can be successfully initiated', () => {
 });
 
 function initiateFooAgent(
-  constructorParamString: string,
+  constructorParam: string,
   simpleAgentClassMeta: ClassMetadata,
 ) {
   const constructorInfo = simpleAgentClassMeta.constructorArgs[0];
 
-  const constructorParamAnalysedType =
+  const constructorParamTypeInfoInternal =
     AgentConstructorParamRegistry.getParamType(
       FooAgentClassName,
       constructorInfo.name,
     );
 
-  if (!constructorParamAnalysedType) {
+  if (!constructorParamTypeInfoInternal) {
     throw new Error(
-      `Test failure: unresolved type for ${constructorParamString} in ${FooAgentClassName.value}`,
+      `Test failure: unresolved type for ${constructorParam} in ${FooAgentClassName.value}`,
     );
   }
 
-  const witValue = Either.getOrThrowWith(
-    WitValue.fromTsValue(constructorParamString, constructorParamAnalysedType),
+  const elementValue = Either.getOrThrowWith(
+    convertTsValueToElementValue(
+      constructorParam,
+      constructorParamTypeInfoInternal,
+    ),
     (error) => new Error(error),
   );
 
   const constructorParams: DataValue = {
     tag: 'tuple',
-    val: [
-      {
-        tag: 'component-model',
-        val: witValue,
-      },
-    ],
+    val: [elementValue],
   };
 
   const agentInitiator = Option.getOrThrowWith(
@@ -408,8 +416,6 @@ function testInvoke(
   // data matches exact.
   const dataValue = createInputDataValue(parameterNameAndValues, methodName);
 
-  console.log('input   ' + JSON.stringify(dataValue));
-
   resolvedAgent.invoke(methodName, dataValue).then((invokeResult) => {
     const resultDataValue =
       invokeResult.tag === 'ok'
@@ -417,8 +423,6 @@ function testInvoke(
         : (() => {
             throw new Error(util.format(invokeResult.val));
           })();
-
-    console.log('invoke result ' + JSON.stringify(resultDataValue));
 
     // Unless it is an RPC call, we don't really need to deserialize the result
     // But to ensure the data-value returned above corresponds to the original input
@@ -499,19 +503,33 @@ function deserializeReturnValue(methodName: string, returnValue: DataValue) {
     throw new Error(`Unsupported return type for method ${methodName}`);
   }
 
-
   switch (returnTypeAnalysedType.tag) {
-    case "analysed":
+    case 'analysed':
       return deserializeDataValue(returnValue, [
-        ['return-value', [returnType, {tag: 'analysed', val: returnTypeAnalysedType.val }]],
+        [
+          'return-value',
+          [returnType, { tag: 'analysed', val: returnTypeAnalysedType.val }],
+        ],
       ])[0];
-    case "unstructured-text":
+    case 'unstructured-text':
       return deserializeDataValue(returnValue, [
-        ['return-value', [returnType, {tag: 'unstructured-text', val: returnTypeAnalysedType.val}]],
+        [
+          'return-value',
+          [
+            returnType,
+            { tag: 'unstructured-text', val: returnTypeAnalysedType.val },
+          ],
+        ],
       ])[0];
-    case "unstructured-binary":
+    case 'unstructured-binary':
       return deserializeDataValue(returnValue, [
-        ['return-value', [returnType, {tag: 'unstructured-binary', val: returnTypeAnalysedType.val}]],
+        [
+          'return-value',
+          [
+            returnType,
+            { tag: 'unstructured-binary', val: returnTypeAnalysedType.val },
+          ],
+        ],
       ])[0];
   }
 }

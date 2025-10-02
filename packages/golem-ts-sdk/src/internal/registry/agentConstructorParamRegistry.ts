@@ -60,5 +60,4 @@ export const AgentConstructorParamRegistry = {
     const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
     classMeta.get(paramName)!.typeInfo = typeInfo;
   },
-
 };

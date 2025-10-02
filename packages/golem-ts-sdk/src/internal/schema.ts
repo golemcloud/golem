@@ -61,11 +61,10 @@ export function getConstructorDataSchema(
           );
         }
 
-        AgentConstructorParamRegistry.setType(
-          agentClassName,
-          paramInfo.name,
-          { tag: 'unstructured-text', val: textDescriptor.val },
-        );
+        AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
+          tag: 'unstructured-text',
+          val: textDescriptor.val,
+        });
 
         const elementSchema: ElementSchema = {
           tag: 'unstructured-text',
@@ -76,7 +75,6 @@ export function getConstructorDataSchema(
       }
 
       if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
-
         const binaryDescriptor = getBinaryDescriptor(paramType);
 
         if (Either.isLeft(binaryDescriptor)) {
@@ -85,12 +83,10 @@ export function getConstructorDataSchema(
           );
         }
 
-        AgentConstructorParamRegistry.setType(
-          agentClassName,
-          paramInfo.name,
-          { tag: 'unstructured-binary', val: binaryDescriptor.val },
-        );
-
+        AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
+          tag: 'unstructured-binary',
+          val: binaryDescriptor.val,
+        });
 
         const elementSchema: ElementSchema = {
           tag: 'unstructured-binary',
@@ -115,11 +111,10 @@ export function getConstructorDataSchema(
         const witType = typeInfo[0];
         const analysedType = typeInfo[1];
 
-        AgentConstructorParamRegistry.setType(
-          agentClassName,
-          paramInfo.name,
-          {tag: 'analysed', val: analysedType},
-        );
+        AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
+          tag: 'analysed',
+          val: analysedType,
+        });
 
         const elementSchema: ElementSchema = {
           tag: 'component-model',
