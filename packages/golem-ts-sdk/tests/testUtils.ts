@@ -116,7 +116,7 @@ function fetchTypeFromBarAgent(
   });
 
   if (constructorArg) {
-    const analysedType = AgentConstructorParamRegistry.lookupParamType(
+    const analysedType = AgentConstructorParamRegistry.getParamType(
       BarAgentClassName,
       constructorArg.name,
     );
@@ -151,14 +151,22 @@ function fetchTypeFromBarAgent(
     });
 
     if (param) {
-      const analysedType = AgentMethodParamRegistry.lookupParamType(
+      const typeInfo = AgentMethodParamRegistry.getParamType(
         BarAgentClassName,
         name,
         param[0],
       );
 
-      return [analysedType!, param[1]];
+      if (!typeInfo || typeInfo.tag !== 'analysed') {
+        throw new Error(
+          `Unsupported type for parameter ${param[0]} in method ${name}`,
+        );
+      }
+
+      return [typeInfo.val, param[1]];
     }
   }
-  throw new Error(`Unresolved type ${typeNameInTestData}. Make sure \`${BarAgentClassName.value}\` use ${typeNameInTestData}`);
+  throw new Error(
+    `Unresolved type ${typeNameInTestData}. Make sure \`${BarAgentClassName.value}\` use ${typeNameInTestData}`,
+  );
 }

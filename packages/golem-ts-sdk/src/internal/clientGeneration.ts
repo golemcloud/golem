@@ -124,20 +124,20 @@ function getMethodProxy(
     const parameterWitValuesEither = Either.all(
       fnArgs.map((fnArg, index) => {
         const param = paramInfo[index];
-        const analysedType = AgentMethodParamRegistry.lookupParamType(
+        const typeInfo = AgentMethodParamRegistry.getParamType(
           agentClassName,
           methodName,
           param[0],
         );
-        if (!analysedType) {
+        if (!typeInfo || typeInfo.tag !== 'analysed') {
           throw new Error(
-            `Unresolved type for parameter ${param[0]} in method ${String(
+            `Unsupported type for parameter ${param[0]} in method ${String(
               prop,
             )}`,
           );
         }
 
-        return WitValue.fromTsValue(fnArg, analysedType);
+        return WitValue.fromTsValue(fnArg, typeInfo.val);
       }),
     );
     if (Either.isLeft(parameterWitValuesEither)) {
@@ -232,7 +232,7 @@ function getWorkerId(
   const constructorParamInfo = classMetadata.constructorArgs;
 
   const constructorParamTypes = constructorParamInfo.map((param) => {
-    const analysedType = AgentConstructorParamRegistry.lookupParamType(
+    const analysedType = AgentConstructorParamRegistry.getParamType(
       agentClassName,
       param.name,
     );

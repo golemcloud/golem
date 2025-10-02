@@ -15,7 +15,7 @@
 import { AgentType, DataValue, AgentError } from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { Type } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
@@ -41,14 +41,14 @@ import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRe
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
 import { UnstructuredText } from './newTypes/textInput';
 import { UnstructuredBinary } from './newTypes/binaryInput';
-import { AnalysedType } from './internal/mapping/types/AnalysedType';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
 import { Result } from 'golem:rpc/types@0.2.2';
 import {
-  serializeUnstructuredBinary,
-  serializeUnstructuredText,
+  convertBinaryReferenceToElementValue,
+  convertTextReferenceToElementValue,
 } from './internal/mapping/values/unstructured';
+import { TypeInfoInternal } from './internal/registry/typeInfoInternal';
 
 type TsType = Type.Type;
 
@@ -211,19 +211,26 @@ export function agent(customName?: string) {
     AgentTypeRegistry.register(agentClassName, agentType);
 
     const constructorParamTypes:
-      | [string, [Type.Type, Option.Option<AnalysedType>]][]
+      | [string, [TsType, TypeInfoInternal]][]
       | undefined = TypeMetadata.get(agentClassName.value)?.constructorArgs.map(
       (arg) => {
+
+        const typeInfo = AgentConstructorParamRegistry.getParamType(
+            agentClassName,
+            arg.name,
+          );
+
+        if (!typeInfo) {
+          throw new Error(
+            `Unsupported type for constructor parameter ${arg.name} in agent ${agentClassName}`,
+          );
+        }
+
         return [
           arg.name,
           [
             arg.type,
-            Option.fromNullable(
-              AgentConstructorParamRegistry.lookupParamType(
-                agentClassName,
-                arg.name,
-              ),
-            ),
+            typeInfo,
           ],
         ];
       },
@@ -269,7 +276,6 @@ export function agent(customName?: string) {
         const agentInternal = getAgentInternal(
           instance,
           agentClassName,
-          classMetadata,
           uniqueAgentId,
           constructorInput,
         );
@@ -447,7 +453,7 @@ export function description(description: string) {
 
 export function deserializeDataValue(
   dataValue: DataValue,
-  paramTypes: [string, [TsType, Option.Option<AnalysedType>]][],
+  paramTypes: [string, [TsType, TypeInfoInternal]][],
 ): any[] {
   switch (dataValue.tag) {
     case 'tuple':
@@ -492,16 +498,16 @@ export function deserializeDataValue(
 
           case 'component-model':
             const paramType = paramTypes[idx][1];
-            const analysedType = paramType[1];
+            const typeInfo = paramType[1];
 
-            if (Option.isNone(analysedType)) {
+            if (typeInfo.tag !== 'analysed') {
               throw new Error(
                 `Internal error: Unknown parameter type for ${util.format(Value.fromWitValue(elem.val))} at index ${idx}`,
               );
             }
 
             const witValue = elem.val;
-            return WitValue.toTsValue(witValue, analysedType.val);
+            return WitValue.toTsValue(witValue, typeInfo.val);
         }
       });
 
@@ -573,15 +579,15 @@ export function deserializeDataValue(
             }
 
             const paramType = param[1];
-            const analysedType = paramType[1];
+            const typeInfo = paramType[1];
 
-            if (Option.isNone(analysedType)) {
+            if (typeInfo.tag !== 'analysed') {
               throw new Error(
                 `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
               );
             }
 
-            return WitValue.toTsValue(witValue, analysedType.val);
+            return WitValue.toTsValue(witValue, typeInfo.val);
         }
       });
   }
@@ -604,7 +610,6 @@ export function getDataValueFromReturnValueWit(
 function getAgentInternal(
   agentInstance: any,
   agentClassName: AgentClassName,
-  classMetadata: ClassMetadata,
   uniqueAgentId: AgentId,
   constructorInput: DataValue,
 ): AgentInternal {
@@ -653,19 +658,6 @@ function getAgentInternal(
         };
       }
 
-      const agentMethodDetails = classMetadata.methods.get(methodName);
-
-      if (!agentMethodDetails) {
-        const error: AgentError = {
-          tag: 'invalid-method',
-          val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
-        };
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
       const methodParams = TypeMetadata.get(agentClassName.value)?.methods.get(
         methodName,
       )?.methodParams;
@@ -681,31 +673,54 @@ function getAgentInternal(
         };
       }
 
-      const paramTypes = Array.from(methodParams.entries()).map((param) => {
-        return [
-          param[0],
-          [
-            param[1],
-            Option.fromNullable(
-              AgentMethodParamRegistry.lookupParamType(
-                agentClassName,
-                methodName,
-                param[0],
-              ),
-            ),
-          ],
-        ] as [string, [Type.Type, Option.Option<AnalysedType>]];
-      });
+      const methodParamTypes = Array.from(methodParams.entries()).map(
+        (param) => {
+          const paramName = param[0];
+          const paramType = param[1];
 
-      const deserializedArgs = deserializeDataValue(methodArgs, paramTypes);
+          const paramTypeInfo = AgentMethodParamRegistry.getParamType(
+            agentClassName,
+            methodName,
+            paramName,
+          );
 
-      const result = await agentMethod.apply(agentInstance, deserializedArgs);
+          if (!paramTypeInfo) {
+            throw new Error(
+              `Unsupported type for parameter ${paramName} in method ${methodName} of agent ${agentClassName}`,
+            );
+          }
 
-      const methodDef = agentTypeOpt.val.methods.find(
+          return [paramName, [paramType, paramTypeInfo]] as [
+            string,
+            [TsType, TypeInfoInternal],
+          ];
+        },
+      );
+
+      const deserializedArgs = deserializeDataValue(
+        methodArgs,
+        methodParamTypes,
+      );
+
+      console.log(
+        'fish ' +
+          JSON.stringify(methodArgs) +
+          ' ' +
+          JSON.stringify(methodParamTypes),
+      );
+
+      console.log(JSON.stringify(deserializedArgs));
+
+      const methodResult = await agentMethod.apply(
+        agentInstance,
+        deserializedArgs,
+      );
+
+      const methodSignature = agentTypeOpt.val.methods.find(
         (m) => m.name === methodName,
       );
 
-      if (!methodDef) {
+      if (!methodSignature) {
         const error: AgentError = {
           tag: 'invalid-method',
           val: `Method ${methodName} not found in agent type ${agentClassName}`,
@@ -737,7 +752,7 @@ function getAgentInternal(
       switch (returnTypeAnalysed.tag) {
         case 'analysed':
           const returnValue = WitValue.fromTsValue(
-            result,
+            methodResult,
             returnTypeAnalysed.val,
           );
 
@@ -758,7 +773,8 @@ function getAgentInternal(
             val: getDataValueFromReturnValueWit(returnValue.val),
           };
         case 'unstructured-text':
-          const unstructuredText = serializeUnstructuredText(result);
+          const unstructuredText =
+            convertTextReferenceToElementValue(methodResult);
           const unstructuredTextValue: DataValue = {
             tag: 'tuple',
             val: [unstructuredText],
@@ -772,7 +788,8 @@ function getAgentInternal(
           return dataValueResultText;
 
         case 'unstructured-binary':
-          const unstructuredBinary = serializeUnstructuredBinary(result);
+          const unstructuredBinary =
+            convertBinaryReferenceToElementValue(methodResult);
           const unstructuredBinaryValue: DataValue = {
             tag: 'tuple',
             val: [unstructuredBinary],

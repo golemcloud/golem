@@ -13,8 +13,7 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
-import { AnalysedType } from '../mapping/types/AnalysedType';
-import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
+import { TypeInfoInternal } from './typeInfoInternal';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
@@ -27,17 +26,10 @@ const agentMethodRegistry = new Map<
       prompt?: string;
       description?: string;
       multimodal?: boolean;
-      returnType?: ReturnTypeInfo;
+      returnType?: TypeInfoInternal;
     }
   >
 >();
-
-// For all types except unstructured-*, `AnalysedType` has the max details.
-// There is no AnalysedType for unstructured-text/binary
-export type ReturnTypeInfo =
-  | { tag: 'analysed'; val: AnalysedType }
-  | { tag: 'unstructured-text'; val: TextDescriptor }
-  | { tag: 'unstructured-binary'; val: BinaryDescriptor };
 
 export const AgentMethodRegistry = {
   ensureMeta(agentClassName: AgentClassName, method: string) {
@@ -57,7 +49,7 @@ export const AgentMethodRegistry = {
   lookupReturnType(
     agentClassName: AgentClassName,
     agentMethodName: string,
-  ): ReturnTypeInfo | undefined {
+  ): TypeInfoInternal | undefined {
     const classMeta = agentMethodRegistry.get(agentClassName.value);
     return classMeta?.get(agentMethodName)?.returnType;
   },
@@ -81,7 +73,7 @@ export const AgentMethodRegistry = {
   setReturnType(
     agentClassName: AgentClassName,
     method: string,
-    returnType: ReturnTypeInfo,
+    returnType: TypeInfoInternal,
   ) {
     AgentMethodRegistry.ensureMeta(agentClassName, method);
     const classMeta = agentMethodRegistry.get(agentClassName.value)!;

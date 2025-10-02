@@ -15,7 +15,13 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from '../newTypes/either';
 import * as Option from '../newTypes/option';
-import { AgentMethod, DataSchema, ElementSchema } from 'golem:agent/common';
+import {
+  AgentMethod,
+  BinaryDescriptor,
+  DataSchema,
+  ElementSchema,
+  TextDescriptor,
+} from 'golem:agent/common';
 import * as WitType from './mapping/types/WitType';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
@@ -47,37 +53,51 @@ export function getConstructorDataSchema(
       const paramTypeName = paramType.name;
 
       if (paramTypeName && paramTypeName === 'UnstructuredText') {
-        AgentConstructorParamRegistry.setIfNotExists(
-          agentClassName,
-          paramInfo.name,
-        );
+        const textDescriptor = getTextDescriptor(paramType);
 
-        const elementSchema = getElementSchemaForUnstructuredText(paramType);
-
-        if (Either.isLeft(elementSchema)) {
+        if (Either.isLeft(textDescriptor)) {
           return Either.left(
-            `Failed to get element schema for unstructured-text parameter ${paramInfo.name}: ${elementSchema.val}`,
+            `Failed to get text descriptor for unstructured-text parameter ${paramInfo.name}: ${textDescriptor.val}`,
           );
         }
 
-        return Either.right([paramInfo.name, elementSchema.val]);
+        AgentConstructorParamRegistry.setType(
+          agentClassName,
+          paramInfo.name,
+          { tag: 'unstructured-text', val: textDescriptor.val },
+        );
+
+        const elementSchema: ElementSchema = {
+          tag: 'unstructured-text',
+          val: textDescriptor.val,
+        };
+
+        return Either.right([paramInfo.name, elementSchema]);
       }
 
       if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
-        AgentConstructorParamRegistry.setIfNotExists(
-          agentClassName,
-          paramInfo.name,
-        );
 
-        const elementSchema = getElementSchemaForUnstructuredBinary(paramType);
+        const binaryDescriptor = getBinaryDescriptor(paramType);
 
-        if (Either.isLeft(elementSchema)) {
+        if (Either.isLeft(binaryDescriptor)) {
           return Either.left(
-            `Failed to get element schema for unstructured-binary parameter ${paramInfo.name}: ${elementSchema.val}`,
+            `Failed to get binary descriptor for unstructured-binary parameter ${paramInfo.name}: ${binaryDescriptor.val}`,
           );
         }
 
-        return Either.right([paramInfo.name, elementSchema.val]);
+        AgentConstructorParamRegistry.setType(
+          agentClassName,
+          paramInfo.name,
+          { tag: 'unstructured-binary', val: binaryDescriptor.val },
+        );
+
+
+        const elementSchema: ElementSchema = {
+          tag: 'unstructured-binary',
+          val: binaryDescriptor.val,
+        };
+
+        return Either.right([paramInfo.name, elementSchema]);
       }
 
       const witType = WitType.fromTsType(
@@ -95,10 +115,10 @@ export function getConstructorDataSchema(
         const witType = typeInfo[0];
         const analysedType = typeInfo[1];
 
-        AgentConstructorParamRegistry.setAnalysedType(
+        AgentConstructorParamRegistry.setType(
           agentClassName,
           paramInfo.name,
-          analysedType,
+          {tag: 'analysed', val: analysedType},
         );
 
         const elementSchema: ElementSchema = {
@@ -291,7 +311,11 @@ export function buildOutputSchema(
   const unstructuredText = handleUnstructuredCase(
     returnType,
     'UnstructuredText',
-    getElementSchemaForUnstructuredText,
+    (t) =>
+      Either.map(getTextDescriptor(t), (desc) => ({
+        tag: 'unstructured-text',
+        val: desc,
+      })),
   );
   if (Either.isRight(unstructuredText)) {
     return unstructuredText;
@@ -300,8 +324,13 @@ export function buildOutputSchema(
   const unstructuredBinary = handleUnstructuredCase(
     returnType,
     'UnstructuredBinary',
-    getElementSchemaForUnstructuredBinary,
+    (t) =>
+      Either.map(getBinaryDescriptor(t), (desc) => ({
+        tag: 'unstructured-binary',
+        val: desc,
+      })),
   );
+
   if (Either.isRight(unstructuredBinary)) {
     return unstructuredBinary;
   }
@@ -370,34 +399,62 @@ function convertToElementSchema(
   const paramTypeName = parameterType.name;
 
   if (paramTypeName && paramTypeName === 'UnstructuredText') {
-    AgentMethodParamRegistry.ensureMeta(
+    const textDecritptor = getTextDescriptor(parameterType);
+
+    if (Either.isLeft(textDecritptor)) {
+      return Either.left(
+        `Failed to get text descriptor for unstructured-text parameter ${parameterName}: ${textDecritptor.val}`,
+      );
+    }
+
+    AgentMethodParamRegistry.setType(
       agentClassName,
       methodName,
       parameterName,
+      { tag: 'unstructured-text', val: textDecritptor.val },
     );
 
-    return getElementSchemaForUnstructuredText(parameterType);
+    const elementSchema: ElementSchema = {
+      tag: 'unstructured-text',
+      val: textDecritptor.val,
+    };
+
+    return Either.right(elementSchema);
   }
 
   if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
-    AgentMethodParamRegistry.ensureMeta(
+    const binaryDescriptor = getBinaryDescriptor(parameterType);
+
+    if (Either.isLeft(binaryDescriptor)) {
+      return Either.left(
+        `Failed to get binary descriptor for unstructured-binary parameter ${parameterName}: ${binaryDescriptor.val}`,
+      );
+    }
+
+    AgentMethodParamRegistry.setType(
       agentClassName,
       methodName,
       parameterName,
+      { tag: 'unstructured-binary', val: binaryDescriptor.val },
     );
 
-    return getElementSchemaForUnstructuredBinary(parameterType);
+    const elementSchema: ElementSchema = {
+      tag: 'unstructured-binary',
+      val: binaryDescriptor.val,
+    };
+
+    return Either.right(elementSchema);
   }
 
   return Either.map(WitType.fromTsType(parameterType, scope), (typeInfo) => {
     const witType = typeInfo[0];
     const analysedType = typeInfo[1];
 
-    AgentMethodParamRegistry.setAnalysedType(
+    AgentMethodParamRegistry.setType(
       agentClassName,
       methodName,
       parameterName,
-      analysedType,
+      { tag: 'analysed', val: analysedType },
     );
 
     return {
@@ -438,52 +495,46 @@ function handleUndefinedReturnType(
   }
 }
 
-function getElementSchemaForUnstructuredBinary(
+function getBinaryDescriptor(
   paramType: Type.Type,
-): Either.Either<ElementSchema, string> {
+): Either.Either<BinaryDescriptor, string> {
   const mimeTypes = getMimeTypes(paramType);
 
   if (Either.isLeft(mimeTypes)) {
     return Either.left(`Failed to get mime types: ${mimeTypes.val}`);
   }
 
-  const elementSchema: ElementSchema =
+  const binaryDescriptor =
     mimeTypes.val.length > 0
       ? {
-          tag: 'unstructured-binary',
-          val: {
-            restrictions: mimeTypes.val.map((type) => ({
-              mimeType: type,
-            })),
-          },
+          restrictions: mimeTypes.val.map((type) => ({
+            mimeType: type,
+          })),
         }
-      : { tag: 'unstructured-binary', val: {} };
+      : {};
 
-  return Either.right(elementSchema);
+  return Either.right(binaryDescriptor);
 }
 
-function getElementSchemaForUnstructuredText(
+function getTextDescriptor(
   paramType: Type.Type,
-): Either.Either<ElementSchema, string> {
+): Either.Either<TextDescriptor, string> {
   const languageCodes = getLanguageCodes(paramType);
 
   if (Either.isLeft(languageCodes)) {
     return Either.left(`Failed to get language code: ${languageCodes.val}`);
   }
 
-  const elementSchema: ElementSchema =
+  const textDescriptor: TextDescriptor =
     languageCodes.val.length > 0
       ? {
-          tag: 'unstructured-text',
-          val: {
-            restrictions: languageCodes.val.map((code) => ({
-              languageCode: code,
-            })),
-          },
+          restrictions: languageCodes.val.map((code) => ({
+            languageCode: code,
+          })),
         }
-      : { tag: 'unstructured-text', val: {} };
+      : {};
 
-  return Either.right(elementSchema);
+  return Either.right(textDescriptor);
 }
 
 export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {

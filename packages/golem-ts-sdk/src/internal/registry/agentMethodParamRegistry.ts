@@ -14,7 +14,7 @@
 
 import { AgentClassName } from '../../newTypes/agentClassName';
 import { AnalysedType } from '../mapping/types/AnalysedType';
-import * as Option from '../../newTypes/option';
+import { TypeInfoInternal } from './typeInfoInternal';
 
 type AgentClassNameString = string;
 type AgentMethodNameString = string;
@@ -27,9 +27,7 @@ const agentMethodParamRegistry = new Map<
     Map<
       AgentMethodParamNameString,
       {
-        analysedType?: AnalysedType;
-        languageCode?: string[];
-        mimeTypes?: string[];
+        typeInfo?: TypeInfoInternal;
       }
     >
   >
@@ -56,42 +54,24 @@ export const AgentMethodParamRegistry = {
     }
   },
 
-  lookup(agentClassName: AgentClassName) {
+  get(agentClassName: AgentClassName) {
     return agentMethodParamRegistry.get(agentClassName.value);
   },
 
-  lookupParamType(
+  getParamType(
     agentClassName: AgentClassName,
     agentMethodName: string,
     paramName: string,
-  ): AnalysedType | undefined {
+  ): TypeInfoInternal | undefined {
     const classMeta = agentMethodParamRegistry.get(agentClassName.value);
-    return classMeta?.get(agentMethodName)?.get(paramName)?.analysedType;
+    return classMeta?.get(agentMethodName)?.get(paramName)?.typeInfo;
   },
 
-  paramTypes(
-    agentClassName: AgentClassName,
-    agentMethodName: string,
-  ): [string, Option.Option<AnalysedType>][] {
-    const classMeta = agentMethodParamRegistry.get(agentClassName.value);
-    if (!classMeta) {
-      return [];
-    }
-    const methodMeta = classMeta.get(agentMethodName);
-    if (!methodMeta) {
-      return [];
-    }
-    return Array.from(methodMeta.entries()).map(([paramName, meta]) => [
-      paramName,
-      Option.fromNullable(meta.analysedType),
-    ]);
-  },
-
-  setLanguageCodes(
+  setType(
     agentClassName: AgentClassName,
     agentMethodName: string,
     paramName: string,
-    languageCodes: string[],
+    typeInfo: TypeInfoInternal,
   ) {
     AgentMethodParamRegistry.ensureMeta(
       agentClassName,
@@ -100,38 +80,6 @@ export const AgentMethodParamRegistry = {
     );
     const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
     const methodMeta = classMeta.get(agentMethodName)!;
-    methodMeta.get(paramName)!.languageCode = languageCodes;
-  },
-
-  setAnalysedType(
-    agentClassName: AgentClassName,
-    agentMethodName: string,
-    paramName: string,
-    analysedType: AnalysedType,
-  ) {
-    AgentMethodParamRegistry.ensureMeta(
-      agentClassName,
-      agentMethodName,
-      paramName,
-    );
-    const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
-    const methodMeta = classMeta.get(agentMethodName)!;
-    methodMeta.get(paramName)!.analysedType = analysedType;
-  },
-
-  setMimeTypes(
-    agentClassName: AgentClassName,
-    agentMethodName: string,
-    paramName: string,
-    mimeTypes: string[],
-  ) {
-    AgentMethodParamRegistry.ensureMeta(
-      agentClassName,
-      agentMethodName,
-      paramName,
-    );
-    const classMeta = agentMethodParamRegistry.get(agentClassName.value)!;
-    const methodMeta = classMeta.get(agentMethodName)!;
-    methodMeta.get(paramName)!.mimeTypes = mimeTypes;
+    methodMeta.get(paramName)!.typeInfo = typeInfo;
   },
 };

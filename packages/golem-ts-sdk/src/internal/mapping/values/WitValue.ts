@@ -18,6 +18,10 @@ import * as Value from './Value';
 import { AnalysedType } from '../types/AnalysedType';
 import { serialize } from './serializer';
 import { deserialize } from './deserializer';
+import {
+  serializeBinaryReferenceToValue,
+  serializeTextReferenceToValue,
+} from './unstructured';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';
 
@@ -34,6 +38,18 @@ export const toTsValue = (
   witValue: WitValue,
   expectedType: AnalysedType,
 ): any => {
-  const value = Value.fromWitValue(witValue);
+  const value: Value.Value = Value.fromWitValue(witValue);
   return deserialize(value, expectedType);
+};
+
+export const fromTsValueTextReference = (tsValue: any): WitValue => {
+  const value = serializeTextReferenceToValue(tsValue);
+
+  return Value.toWitValue(value);
+};
+
+export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
+  const value = serializeBinaryReferenceToValue(tsValue);
+
+  return Value.toWitValue(value);
 };

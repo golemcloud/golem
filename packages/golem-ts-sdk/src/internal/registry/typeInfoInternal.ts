@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { Type } from '@golemcloud/golem-ts-types-core';
-import { ElementSchema } from 'golem:agent/common';
+import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
 import { AnalysedType } from '../mapping/types/AnalysedType';
 
-export type TypeInfo =
-  | { tag: 'analysed-type'; typeInfo: AnalysedType }
-  | { tag: 'ts-type'; typeInfo: Type.Type }
-  | { tag: 'wit-type'; typeInfo: ElementSchema };
+// For all types except unstructured-*, `AnalysedType` has the max details.
+// There is no AnalysedType for unstructured-text/binary
+export type TypeInfoInternal =
+  | { tag: 'analysed'; val: AnalysedType }
+  | { tag: 'unstructured-text'; val: TextDescriptor }
+  | { tag: 'unstructured-binary'; val: BinaryDescriptor };

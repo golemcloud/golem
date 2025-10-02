@@ -17,37 +17,148 @@ import {
   ElementValue,
   TextReference,
 } from 'golem:agent/common';
+
 import util from 'node:util';
 
-export function serializeUnstructuredBinary(value: any): ElementValue {
-  if (typeof value === 'object') {
-    const keys = Object.keys(value);
+import { Value } from './Value';
+import { UnstructuredText } from '../../../newTypes/textInput';
+
+export function serializeBinaryReferenceToValue(tsValue: any): Value {
+  const binaryReference = castTsValueToBinaryReference(tsValue);
+
+  switch (binaryReference.tag) {
+    case 'url':
+      return {
+        kind: 'variant',
+        caseIdx: 0,
+        caseValue: { kind: 'string', value: binaryReference.val },
+      };
+
+    case 'inline':
+      return {
+        kind: 'variant',
+        caseIdx: 1,
+        caseValue: {
+          kind: 'record',
+          value: [
+            {
+              kind: 'list',
+              value: Array.from(binaryReference.val.data).map((b) => ({
+                kind: 'u8',
+                value: b,
+              })),
+            },
+            {
+              kind: 'record',
+              value: [
+                {
+                  kind: 'string',
+                  value: binaryReference.val.binaryType.mimeType,
+                },
+              ],
+            },
+          ],
+        },
+      };
+  }
+}
+
+export function serializeTextReferenceToValue(tsValue: any): Value {
+  const textReference: TextReference = castTsValueToTextReference(tsValue);
+
+  switch (textReference.tag) {
+    case 'url':
+      return {
+        kind: 'variant',
+        caseIdx: 0,
+        caseValue: { kind: 'string', value: textReference.val },
+      };
+
+    case 'inline':
+      if (textReference.val.textType) {
+        return {
+          kind: 'variant',
+          caseIdx: 1,
+          caseValue: {
+            kind: 'record',
+            value: [
+              { kind: 'string', value: textReference.val.data },
+              {
+                kind: 'option',
+                value: {
+                  kind: 'record',
+                  value: [
+                    {
+                      kind: 'string',
+                      value: textReference.val.textType.languageCode,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        };
+      }
+
+      return {
+        kind: 'variant',
+        caseIdx: 1,
+        caseValue: {
+          kind: 'record',
+          value: [
+            { kind: 'string', value: textReference.val.data },
+            { kind: 'option' },
+          ],
+        },
+      };
+  }
+}
+
+export function convertBinaryReferenceToElementValue(
+  tsValue: any,
+): ElementValue {
+  const binaryReference: BinaryReference =
+    castTsValueToBinaryReference(tsValue);
+
+  return {
+    tag: 'unstructured-binary',
+    val: binaryReference,
+  };
+}
+
+export function convertTextReferenceToElementValue(value: any): ElementValue {
+  const textReference: TextReference = castTsValueToTextReference(value);
+
+  return {
+    tag: 'unstructured-text',
+    val: textReference,
+  };
+}
+
+export function castTsValueToBinaryReference(tsValue: any): BinaryReference {
+  if (typeof tsValue === 'object') {
+    const keys = Object.keys(tsValue);
 
     if (!keys.includes('tag')) {
       throw new Error(
         `Unable to cast value ${util.format(
-          value,
+          tsValue,
         )} to UnstructuredBinary. Missing 'tag' property.`,
       );
     }
 
-    const tag = value['tag'];
+    const tag = tsValue['tag'];
 
     if (typeof tag === 'string' && tag === 'url') {
       if (keys.includes('val')) {
-        const binaryReference: BinaryReference = {
-          tag: 'url',
-          val: value['val'],
-        };
-
         return {
-          tag: 'unstructured-binary',
-          val: binaryReference,
+          tag: 'url',
+          val: tsValue['val'],
         };
       } else {
         throw new Error(
           `Unable to cast value ${util.format(
-            value,
+            tsValue,
           )} to UnstructuredBinary. Missing 'val' property for tag 'url'.`,
         );
       }
@@ -55,24 +166,19 @@ export function serializeUnstructuredBinary(value: any): ElementValue {
 
     if (typeof tag === 'string' && tag === 'inline') {
       if (keys.includes('val') && keys.includes('mimeType')) {
-        const binaryReference: BinaryReference = {
+        return {
           tag: 'inline',
           val: {
-            data: value['val'],
+            data: tsValue['val'],
             binaryType: {
-              mimeType: value['mimeType'],
+              mimeType: tsValue['mimeType'],
             },
           },
-        };
-
-        return {
-          tag: 'unstructured-binary',
-          val: binaryReference,
         };
       } else {
         throw new Error(
           `Unable to cast value ${util.format(
-            value,
+            tsValue,
           )} to UnstructuredBinary. Missing 'val' property for tag 'inline'.`,
         );
       }
@@ -80,19 +186,19 @@ export function serializeUnstructuredBinary(value: any): ElementValue {
 
     throw new Error(
       `Unable to cast value ${util.format(
-        value,
+        tsValue,
       )} to UnstructuredBinary. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
     );
   }
 
   throw new Error(
     `Unable to cast value ${util.format(
-      value,
+      tsValue,
     )} to UnstructuredBinary. Expected an object with 'tag' and 'val' properties.`,
   );
 }
 
-export function serializeUnstructuredText(value: any): ElementValue {
+export function castTsValueToTextReference(value: any): TextReference {
   if (typeof value === 'object') {
     const keys = Object.keys(value);
 
@@ -108,14 +214,9 @@ export function serializeUnstructuredText(value: any): ElementValue {
 
     if (typeof tag === 'string' && tag === 'url') {
       if (keys.includes('val')) {
-        const textReference: TextReference = {
+        return {
           tag: 'url',
           val: value['val'],
-        };
-
-        return {
-          tag: 'unstructured-text',
-          val: textReference,
         };
       } else {
         throw new Error(
@@ -129,7 +230,7 @@ export function serializeUnstructuredText(value: any): ElementValue {
     if (typeof tag === 'string' && tag === 'inline') {
       if (keys.includes('val')) {
         if (keys.includes('languageCode')) {
-          const textReference: TextReference = {
+          return {
             tag: 'inline',
             val: {
               data: value['val'],
@@ -138,21 +239,12 @@ export function serializeUnstructuredText(value: any): ElementValue {
               },
             },
           };
-
-          return {
-            tag: 'unstructured-text',
-            val: textReference,
-          };
         } else {
-          const textReference: TextReference = {
+          return {
             tag: 'inline',
             val: {
               data: value['val'],
             },
-          };
-          return {
-            tag: 'unstructured-text',
-            val: textReference,
           };
         }
       } else {

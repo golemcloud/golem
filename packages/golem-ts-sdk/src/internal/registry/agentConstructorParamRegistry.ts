@@ -13,8 +13,7 @@
 // limitations under the License.
 
 import { AgentClassName } from '../../newTypes/agentClassName';
-import { AnalysedType } from '../mapping/types/AnalysedType';
-import * as Option from '../../newTypes/option';
+import { TypeInfoInternal } from './typeInfoInternal';
 
 type AgentClassNameString = string;
 type ParamName = string;
@@ -24,9 +23,7 @@ const agentConstructorParamRegistry = new Map<
   Map<
     ParamName,
     {
-      languageCodes?: string[];
-      mimeTypes?: string[];
-      analysedType?: AnalysedType;
+      typeInfo?: TypeInfoInternal;
     }
   >
 >();
@@ -42,62 +39,26 @@ export const AgentConstructorParamRegistry = {
     }
   },
 
-  lookup(agentClassName: AgentClassName) {
+  get(agentClassName: AgentClassName) {
     return agentConstructorParamRegistry.get(agentClassName.value);
   },
 
-  lookupParamType(
+  getParamType(
     agentClassName: AgentClassName,
     paramName: string,
-  ): AnalysedType | undefined {
+  ): TypeInfoInternal | undefined {
     const classMeta = agentConstructorParamRegistry.get(agentClassName.value);
-    return classMeta?.get(paramName)?.analysedType;
+    return classMeta?.get(paramName)?.typeInfo;
   },
 
-  constructorParams(
-    agentClassName: AgentClassName,
-  ): [string, Option.Option<AnalysedType>][] {
-    const classMeta = agentConstructorParamRegistry.get(agentClassName.value);
-    if (!classMeta) {
-      return [];
-    }
-    return Array.from(classMeta.entries()).map(([paramName, meta]) => [
-      paramName,
-      Option.fromNullable(meta.analysedType),
-    ]);
-  },
-
-  setLanguageCodes(
+  setType(
     agentClassName: AgentClassName,
     paramName: string,
-    languageCodes: string[],
+    typeInfo: TypeInfoInternal,
   ) {
     AgentConstructorParamRegistry.ensureMeta(agentClassName, paramName);
     const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
-    classMeta.get(paramName)!.languageCodes = languageCodes;
+    classMeta.get(paramName)!.typeInfo = typeInfo;
   },
 
-  setIfNotExists(agentClassName: AgentClassName, param: string) {
-    AgentConstructorParamRegistry.ensureMeta(agentClassName, param);
-  },
-
-  setAnalysedType(
-    agentClassName: AgentClassName,
-    paramName: string,
-    analysedType: AnalysedType,
-  ) {
-    AgentConstructorParamRegistry.ensureMeta(agentClassName, paramName);
-    const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
-    classMeta.get(paramName)!.analysedType = analysedType;
-  },
-
-  setMimeTypes(
-    agentClassName: AgentClassName,
-    paramName: string,
-    mimeTypes: string[],
-  ) {
-    AgentConstructorParamRegistry.ensureMeta(agentClassName, paramName);
-    const classMeta = agentConstructorParamRegistry.get(agentClassName.value)!;
-    classMeta.get(paramName)!.mimeTypes = mimeTypes;
-  },
 };

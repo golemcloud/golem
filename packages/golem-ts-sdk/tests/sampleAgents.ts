@@ -137,7 +137,6 @@ class FooAgent extends BaseAgent {
       { seconds: 50000n, nanoseconds: 0 },
       'foo',
     );
-
   }
 
   async fun15(param: UnstructuredText): Promise<UnstructuredText> {
