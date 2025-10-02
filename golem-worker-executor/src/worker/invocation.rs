@@ -25,7 +25,6 @@ use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm_rpc::Value;
-use heck::ToKebabCase;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error, Instrument};
 use wasmtime::component::{Func, Val};

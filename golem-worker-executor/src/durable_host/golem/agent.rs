@@ -18,8 +18,8 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::agent::bindings::golem::agent::common::AgentError;
 use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
-use golem_common::model::agent::{AgentId, RegisteredAgentType};
 use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{AgentId, RegisteredAgentType};
 use golem_common::model::oplog::DurableFunctionType;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
