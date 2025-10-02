@@ -14,7 +14,7 @@
 
 use crate::command::shared_args::{DeployArgs, StreamArgs};
 use crate::command_handler::Handlers;
-use crate::context::Context;
+use crate::context::{Context, RibReplState};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{logln, set_log_output, Output};
@@ -25,9 +25,10 @@ use crate::model::{
     ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
     WorkerName,
 };
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
+use golem_common::model::agent::AgentId;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
@@ -122,10 +123,10 @@ impl RibReplHandler {
             .iter()
             .map(|agent_type| {
                 rib::CustomInstanceSpec::new(
-                    agent_type.type_name.to_string(),
+                    agent_type.wrapper_type_name(),
                     agent_type.constructor.wit_arg_types(),
                     Some(rib::InterfaceName {
-                        name: agent_type.type_name.to_string(),
+                        name: agent_type.wrapper_type_name(),
                         version: None,
                     }),
                 )
@@ -133,12 +134,15 @@ impl RibReplHandler {
             .collect::<Vec<_>>();
 
         self.ctx
-            .set_rib_repl_dependencies(ReplComponentDependencies {
-                component_dependencies: vec![ComponentDependency::new(
-                    component_dependency_key,
-                    component.metadata.exports().to_vec(),
-                )],
-                custom_instance_spec,
+            .set_rib_repl_state(RibReplState {
+                dependencies: ReplComponentDependencies {
+                    component_dependencies: vec![ComponentDependency::new(
+                        component_dependency_key,
+                        component.metadata.exports().to_vec(),
+                    )],
+                    custom_instance_spec,
+                },
+                component_metadata: component.metadata.clone(),
             })
             .await;
 
@@ -305,7 +309,13 @@ impl WorkerFunctionInvoke for RibReplHandler {
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let worker_name = WorkerName::from(worker_name);
+        let worker_name: WorkerName = AgentId::parse(
+            worker_name,
+            &self.ctx.get_rib_repl_component_metadata().await,
+        )
+        .map_err(|err| anyhow!(err))?
+        .to_string()
+        .into();
 
         let component = self
             .ctx
@@ -313,9 +323,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .component(
                 None,
                 component_id.into(),
-                Some(ComponentVersionSelection::ByWorkerName(&WorkerName(
-                    worker_name.to_string(),
-                ))),
+                Some(ComponentVersionSelection::ByWorkerName(&worker_name)),
             )
             .await?;
 

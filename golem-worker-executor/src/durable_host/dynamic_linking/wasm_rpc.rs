@@ -244,7 +244,7 @@ async fn dynamic_function_call<
                 .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
-            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
@@ -327,7 +327,7 @@ async fn dynamic_function_call<
                 .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
-            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
@@ -416,7 +416,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -467,7 +466,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -515,7 +513,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -574,7 +571,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(

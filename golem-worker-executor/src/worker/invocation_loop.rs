@@ -583,8 +583,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         let function_results = component_metadata
             .metadata
-            .find_function(&full_function_name)
-            .await;
+            .find_function(&full_function_name);
 
         match function_results {
             Ok(Some(invokable_function)) => {
@@ -734,7 +733,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         };
         let component_metadata = self.store.data().component_metadata().metadata.clone();
 
-        match component_metadata.save_snapshot().await {
+        match component_metadata.save_snapshot() {
             Ok(Some(save_snapshot)) => {
                 self.store.data_mut().begin_call_snapshotting_function();
 

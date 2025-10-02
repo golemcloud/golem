@@ -608,7 +608,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .metadata
                             .clone();
 
-                        let failed = match component_metadata.load_snapshot().await {
+                        let failed = match component_metadata.load_snapshot() {
                             Ok(Some(load_snapshot)) => {
                                 let idempotency_key = IdempotencyKey::fresh();
                                 store
@@ -1644,7 +1644,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 match component_metadata
                                     .metadata
                                     .find_function(&full_function_name)
-                                    .await
                                 {
                                     Ok(value) => {
                                         if let Some(value) = value {

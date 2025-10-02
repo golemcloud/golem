@@ -52,6 +52,7 @@ mod cmd {
     pub static NEW: &str = "new";
     pub static PLUGIN: &str = "plugin";
     pub static REGISTER: &str = "register";
+    pub static REPL: &str = "repl";
     pub static TEMPLATES: &str = "templates";
 }
 
@@ -59,6 +60,8 @@ mod flag {
     pub static DEV_MODE: &str = "--dev-mode";
     pub static FORCE_BUILD: &str = "--force-build";
     pub static REDEPLOY_ALL: &str = "--redeploy-all";
+    pub static SCRIPT: &str = "--script";
+    pub static FORMAT: &str = "--format";
     pub static SHOW_SENSITIVE: &str = "--show-sensitive";
     pub static YES: &str = "--yes";
 }
@@ -1344,7 +1347,7 @@ async fn test_http_api_merging() {
             .join("golem.yaml"),
     );
 
-    // Add mergable definitions and deployments to both components
+    // Add mergeable definitions and deployments to both components
     fs::write_str(
         &component1_manifest_path,
         indoc! { r#"
@@ -1495,6 +1498,92 @@ async fn test_http_api_merging() {
         "API def-a/0.0.1 deployed at localhost:9006",
         "API def-b/0.0.2 deployed at localhost:9006"
     ]));
+}
+
+#[test]
+async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
+    let mut ctx = TestContext::new();
+    let app_name = "common_dep_plug_errors";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
+    assert!(outputs.success());
+
+    let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
+    assert!(outputs.success());
+
+    let component_source_code = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-agent")
+            .join("src")
+            .join("main.ts"),
+    );
+
+    fs::write_str(
+        &component_source_code,
+        indoc! { r#"
+            import { BaseAgent, agent, } from '@golemcloud/golem-ts-sdk';
+
+            type Complex = {
+              oneField: string;
+              anotherField: number;
+            }
+
+            @agent()
+            class LongAgentName extends BaseAgent {
+              params: Complex;
+              constructor(params: Complex) {
+                super();
+                this.params = params;
+              }
+
+              async ask(question: Complex): Promise<[Complex, Complex]> {
+                return [this.params, question];
+              }
+            }
+        "# },
+    )
+    .unwrap();
+
+    ctx.start_server();
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            flag::YES,
+            flag::REDEPLOY_ALL,
+            r#"long-agent-name({one-field: "1212", another-field: 100})"#,
+            "ask",
+            r#"{one-field: "1", another-field: 2}"#,
+        ])
+        .await;
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains_ordered([
+        r#"long-agent-name({one-field:"1212",another-field:100})"#,
+        r#"({one-field: "1212", another-field: 100}, {one-field: "1", another-field: 2})"#,
+    ]));
+
+    let outputs = ctx
+        .cli([
+            cmd::REPL,
+            flag::FORMAT,
+            "json",
+            flag::SCRIPT,
+            r#"
+                let x = long-agent-name({one-field: "1212", another-field: 100});
+                x.ask({one-field: "1", another-field: 2}) 
+            "#,
+        ])
+        .await;
+    assert!(outputs.success());
+    assert!(outputs.stdout_contains(
+        r#"{"another-field":100.0,"one-field":"1212"},{"another-field":2.0,"one-field":"1"}"#
+    ));
 }
 
 enum CommandOutput {
