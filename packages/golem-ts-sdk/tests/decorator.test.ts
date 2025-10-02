@@ -90,7 +90,7 @@ describe('Agent decorator should register the agent class and its methods into A
   it('should handle UnstructuredBinary in method params', () => {
     const elementSchema1 = getElementSchema(
       barAgentMethod.inputSchema,
-      'unstructuredBinaryWithMimeType',
+      'unstructuredBinary',
     );
 
     const expected = {
@@ -99,21 +99,12 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(elementSchema1).toEqual(expected);
-
-    const elementSchema2 = getElementSchema(
-      barAgentMethod.inputSchema,
-      'unstructuredBinary',
-    );
-
-    const expected2 = { tag: 'unstructured-binary', val: {} };
-
-    expect(elementSchema2).toEqual(expected2);
   });
 
   it('should handle UnstructuredBinary in constructor params', () => {
     const elementSchema1 = getElementSchema(
       barAgentConstructor.inputSchema,
-      'unstructuredBinaryWithMimeType',
+      'unstructuredBinary',
     );
 
     const expected = {
@@ -122,15 +113,6 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(elementSchema1).toEqual(expected);
-
-    const elementSchema2 = getElementSchema(
-      barAgentConstructor.inputSchema,
-      'unstructuredBinary',
-    );
-
-    const expected2 = { tag: 'unstructured-binary', val: {} };
-
-    expect(elementSchema2).toEqual(expected2);
   });
 
   it('should handle `a: string | undefined` in method params', () => {
@@ -542,9 +524,9 @@ describe('Agent decorator should register the agent class and its methods into A
     );
 
     expect(complexAgent.methods.length).toEqual(24);
-    expect(complexAgent.constructor.inputSchema.val.length).toEqual(7);
+    expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(complexAgent.typeName).toEqual('my-complex-agent');
-    expect(simpleAgent.methods.length).toEqual(16);
+    expect(simpleAgent.methods.length).toEqual(17);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 

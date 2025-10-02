@@ -29,7 +29,7 @@ import * as Either from '../newTypes/either';
  */
 type MimeType = string;
 
-export type UnstructuredBinary<MT extends MimeType[] = []> =
+export type UnstructuredBinary<MT extends MimeType[]> =
   | {
       tag: 'url';
       val: string;
@@ -79,7 +79,7 @@ export const UnstructuredBinary = {
    *
    * @param urlValue
    */
-  fromUrl(urlValue: string): UnstructuredBinary {
+  fromUrl(urlValue: string): UnstructuredBinary<[]> {
     return {
       tag: 'url',
       val: urlValue,

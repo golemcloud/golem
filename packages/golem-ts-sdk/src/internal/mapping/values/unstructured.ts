@@ -12,16 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  BinaryReference,
-  ElementValue,
-  TextReference,
-} from 'golem:agent/common';
+import { BinaryReference, TextReference } from 'golem:agent/common';
 
 import util from 'node:util';
 
 import { Value } from './Value';
-import { UnstructuredText } from '../../../newTypes/textInput';
 
 export function serializeBinaryReferenceToValue(tsValue: any): Value {
   const binaryReference = castTsValueToBinaryReference(tsValue);

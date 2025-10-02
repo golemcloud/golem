@@ -40,7 +40,7 @@ import {
   ResultTypeInvalid3,
 } from './testTypes';
 
-import { AgentClassName, UnstructuredText } from '../src';
+import { AgentClassName, UnstructuredBinary, UnstructuredText } from '../src';
 
 export const stringOrNull = fc.oneof(fc.string(), fc.constant(null));
 
@@ -107,6 +107,17 @@ export const unstructuredTextWithLCArb: Arbitrary<
     tag: fc.constant('inline'),
     val: fc.string(),
     languageCode: fc.oneof(fc.constant('en'), fc.constant('de')),
+  }),
+);
+
+export const unstructuredBinaryWithMimeTypeArb: Arbitrary<
+  UnstructuredBinary<['application/json']>
+> = fc.oneof(
+  fc.record({ tag: fc.constant('url'), val: fc.string() }),
+  fc.record({
+    tag: fc.constant('inline'),
+    val: fc.uint8Array({ minLength: 0, maxLength: 100 }),
+    mimeType: fc.constant('application/json'),
   }),
 );
 

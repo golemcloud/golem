@@ -819,6 +819,7 @@ function getAgentInternal(
         case 'unstructured-binary':
           const unstructuredBinary =
             convertBinaryReferenceToElementValue(methodResult);
+
           const unstructuredBinaryValue: DataValue = {
             tag: 'tuple',
             val: [unstructuredBinary],

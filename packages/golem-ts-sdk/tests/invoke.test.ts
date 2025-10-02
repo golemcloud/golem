@@ -41,6 +41,7 @@ import {
   unionArb,
   unionWithLiteralArb,
   unionWithOnlyLiteralsArb,
+  unstructuredBinaryWithMimeTypeArb,
   unstructuredTextArb,
   unstructuredTextWithLCArb,
 } from './arbitraries';
@@ -79,6 +80,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
       resultTypeNonExact2Arb,
       unstructuredTextArb,
       unstructuredTextWithLCArb,
+      unstructuredBinaryWithMimeTypeArb,
       (
         arbString,
         number,
@@ -97,6 +99,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
         resultTypeNonExact2,
         unstructuredText,
         unstructuredTextWithLC,
+        unstructuredBinaryWithMimeType,
       ) => {
         overrideSelfMetadataImpl(FooAgentName.value);
 
@@ -261,6 +264,14 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', unstructuredTextWithLC]],
           resolvedAgent,
           unstructuredTextWithLC,
+        );
+
+        // Invoking with unstructured binary with mime type
+        testInvoke(
+          'fun17',
+          [['param', unstructuredBinaryWithMimeType]],
+          resolvedAgent,
+          unstructuredBinaryWithMimeType,
         );
       },
     ),

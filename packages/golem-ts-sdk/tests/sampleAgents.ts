@@ -117,7 +117,7 @@ class FooAgent extends BaseAgent {
     optionalUnionType: UnionType | null,
     unstructuredText: UnstructuredText,
     unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
-    unstructuredBinary: UnstructuredBinary,
+    unstructuredBinary: UnstructuredBinary<['application/json']>,
   ): Promise<void> {
     const remoteClient = BarAgent.get(
       testInterfaceType,
@@ -125,7 +125,6 @@ class FooAgent extends BaseAgent {
       optionalUnionType,
       unstructuredText,
       unstructuredTextWithLanguageCode,
-      unstructuredBinary,
       unstructuredBinary,
     );
 
@@ -146,6 +145,12 @@ class FooAgent extends BaseAgent {
   async fun16(
     param: UnstructuredText<['en', 'de']>,
   ): Promise<UnstructuredText<['en', 'de']>> {
+    return param;
+  }
+
+  async fun17(
+    param: UnstructuredBinary<['application/json']>,
+  ): Promise<UnstructuredBinary<['application/json']>> {
     return param;
   }
 
@@ -179,10 +184,7 @@ class BarAgent extends BaseAgent {
     readonly optionalUnionType: UnionType | null,
     readonly unstructuredText: UnstructuredText,
     readonly unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
-    readonly unstructuredBinary: UnstructuredBinary,
-    readonly unstructuredBinaryWithMimeType: UnstructuredBinary<
-      ['application/json']
-    >,
+    readonly unstructuredBinary: UnstructuredBinary<['application/json']>,
   ) {
     super();
     this.testInterfaceType = testInterfaceType;
@@ -221,7 +223,7 @@ class BarAgent extends BaseAgent {
     resultTypeNonExact2: ResultTypeNonExact2,
     unstructuredText: UnstructuredText,
     unstructuredTextWithLanguageCode: UnstructuredText<['en', 'de']>,
-    unstructuredBinary: UnstructuredBinary,
+    unstructuredBinary: UnstructuredBinary<['application/json']>,
     unstructuredBinaryWithMimeType: UnstructuredBinary<['application/json']>,
   ): Types.PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
