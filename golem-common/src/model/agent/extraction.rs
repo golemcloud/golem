@@ -277,6 +277,8 @@ fn dynamic_import(
                         && inner_name != "wasi-io-pollable"
                         && &inner_name != "input-stream"
                         && &inner_name != "output-stream"
+                        && &inner_name != "incoming-value-async-body"
+                        && &inner_name != "outgoing-value-body-async"
                     {
                         // TODO: figure out how to do this properly
                         instance.resource(

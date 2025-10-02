@@ -410,11 +410,13 @@ impl Context {
         &self,
     ) -> anyhow::Result<tokio::sync::RwLockWriteGuard<'_, ApplicationContextState>> {
         let mut state = self.app_context_state.write().await;
-        state.init(
-            &self.available_profile_names,
-            &self.app_context_config,
-            self.file_download_client.clone(),
-        )?;
+        state
+            .init(
+                &self.available_profile_names,
+                &self.app_context_config,
+                self.file_download_client.clone(),
+            )
+            .await?;
         Ok(state)
     }
 
@@ -776,7 +778,7 @@ impl ApplicationContextState {
         }
     }
 
-    fn init(
+    async fn init(
         &mut self,
         available_profile_names: &BTreeSet<ProfileName>,
         config: &ApplicationContextConfig,
@@ -810,6 +812,7 @@ impl ApplicationContextState {
                 app_config,
                 file_download_client,
             )
+            .await
             .map_err(Arc::new),
         );
 
