@@ -20,7 +20,6 @@ import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
 import { makeAgentId, parseAgentId } from 'golem:agent/host';
-import { AgentClassName } from './newTypes/agentClassName';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
@@ -83,10 +82,7 @@ async function initialize(
     );
   }
 
-  const initiateResult = initiator.val.initiate(
-    new AgentClassName(agentTypeName),
-    input,
-  );
+  const initiateResult = initiator.val.initiate(input);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
@@ -179,10 +175,7 @@ async function load(bytes: Uint8Array): Promise<void> {
     throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.val.initiate(
-    new AgentClassName(agentTypeName),
-    agentParameters,
-  );
+  const initiateResult = initiator.val.initiate(agentParameters);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

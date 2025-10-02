@@ -29,7 +29,6 @@ describe('AgentType look up', () => {
 
     const FailingAgentInitiator: AgentInitiator = {
       initiate: (
-        _agentName: AgentClassName,
         _constructorParams: DataValue,
       ): Result<ResolvedAgent, AgentError> => {
         return {
@@ -42,10 +41,7 @@ describe('AgentType look up', () => {
       },
     };
 
-    AgentInitiatorRegistry.register(
-      agentClassName.value,
-      FailingAgentInitiator,
-    );
+    AgentInitiatorRegistry.register(agentClassName, FailingAgentInitiator);
 
     const lookupResult = AgentInitiatorRegistry.lookup(agentClassName.value);
 

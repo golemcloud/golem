@@ -161,9 +161,11 @@ export function agent(customName?: string) {
     }
     const methods = methodSchemaEither.val;
 
-    const agentTypeName = customName || agentClassName.value;
+    const agentTypeName = new AgentClassName(
+      customName || agentClassName.value,
+    );
 
-    if (AgentInitiatorRegistry.exists(agentTypeName)) {
+    if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
       throw new Error(
         `Agent name conflict: Another agent with the name "${agentTypeName}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
       );
@@ -184,7 +186,7 @@ export function agent(customName?: string) {
       defaultPromptHint;
 
     const agentType: AgentType = {
-      typeName: agentTypeName,
+      typeName: agentTypeName.value,
       description: agentTypeDescription,
       constructor: {
         name: agentClassName.value,
@@ -223,10 +225,7 @@ export function agent(customName?: string) {
     (ctor as any).get = getRemoteClient(ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (
-        agentClassName: AgentClassName,
-        constructorInput: DataValue,
-      ) => {
+      initiate: (constructorInput: DataValue) => {
         const deserializedConstructorArgs = deserializeDataValue(
           constructorInput,
           constructorParamTypes,
@@ -236,9 +235,9 @@ export function agent(customName?: string) {
 
         const containerName = getSelfMetadata().workerId.workerName;
 
-        if (!containerName.startsWith(agentClassName.asWit)) {
+        if (!containerName.startsWith(agentTypeName.asWit)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentClassName.asWit}", but got "${containerName}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", but got "${containerName}"`,
           );
 
           return {

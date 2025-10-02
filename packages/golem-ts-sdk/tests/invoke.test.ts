@@ -305,10 +305,7 @@ test('BarAgent can be successfully initiated', () => {
           () => new Error('BarAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(
-          BarAgentCustomClassName,
-          dataValue,
-        );
+        const result = agentInitiator.initiate(dataValue);
 
         expect(result.tag).toEqual('ok');
       },
@@ -354,7 +351,7 @@ function initiateFooAgent(
     () => new Error('FooAgent not found in AgentInitiatorRegistry'),
   );
 
-  const result = agentInitiator.initiate(FooAgentClassName, constructorParams);
+  const result = agentInitiator.initiate(constructorParams);
 
   if (result.tag !== 'ok') {
     throw new Error('Agent initiation failed');

@@ -19,11 +19,48 @@ export class AgentClassName {
   readonly asWit: string;
 
   constructor(agentClassName: string) {
+    validateAgentClassName(agentClassName);
     this.value = agentClassName;
-    let wit = convertTypeNameToKebab(agentClassName);
-    if (!wit) {
-      throw new Error(`Unsupported agent class name: ${agentClassName}`);
+    this.asWit = convertTypeNameToKebab(agentClassName);
+  }
+}
+
+function validateAgentClassName(agentClassName: string): void {
+  if (agentClassName.length === 0) {
+    throw new Error('Agent class name cannot be empty');
+  }
+
+  if (!/^[a-zA-Z0-9_-]+$/.test(agentClassName)) {
+    throw new Error(
+      'Agent class name must contain only ASCII letters, numbers, underscores, and dashes',
+    );
+  }
+
+  if (/__/.test(agentClassName) || /--/.test(agentClassName)) {
+    throw new Error(
+      'Agent class name cannot contain consecutive underscores or dashes',
+    );
+  }
+
+  if (
+    agentClassName.startsWith('_') ||
+    agentClassName.endsWith('_') ||
+    agentClassName.startsWith('-') ||
+    agentClassName.endsWith('-')
+  ) {
+    throw new Error(
+      'Agent class name cannot start or end with underscore or dash',
+    );
+  }
+
+  const parts = agentClassName.split(/[_-]/);
+  for (const part of parts) {
+    if (/^\d/.test(part)) {
+      throw new Error('Agent class name segments cannot start with a number');
     }
-    this.asWit = wit;
+  }
+
+  if (!/^[a-zA-Z]/.test(agentClassName)) {
+    throw new Error('Agent class name must start with a letter');
   }
 }

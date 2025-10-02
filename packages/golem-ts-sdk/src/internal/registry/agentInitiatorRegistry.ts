@@ -14,6 +14,7 @@
 
 import * as Option from '../../newTypes/option';
 import { AgentInitiator } from '../agentInitiator';
+import { AgentClassName } from '../../newTypes/agentClassName';
 
 // Although only 1 agent instance can exist max in a container,
 // the container will end up keeping track of initiators of all agent classes
@@ -21,8 +22,11 @@ import { AgentInitiator } from '../agentInitiator';
 const agentInitiators = new Map<string, AgentInitiator>();
 
 export const AgentInitiatorRegistry = {
-  register(agentTypeName: string, agentInitiator: AgentInitiator): void {
-    agentInitiators.set(agentTypeName, agentInitiator);
+  register(
+    agentTypeName: AgentClassName,
+    agentInitiator: AgentInitiator,
+  ): void {
+    agentInitiators.set(agentTypeName.value, agentInitiator);
   },
 
   lookup(agentTypeName: string): Option.Option<AgentInitiator> {
