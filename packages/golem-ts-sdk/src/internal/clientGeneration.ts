@@ -138,7 +138,8 @@ function getMethodProxy(
           methodName,
           param[0],
         );
-        if (!typeInfo || typeInfo.tag !== 'analysed') {
+
+        if (!typeInfo) {
           throw new Error(
             `Unsupported type for parameter ${param[0]} in method ${String(
               prop,
@@ -146,7 +147,16 @@ function getMethodProxy(
           );
         }
 
-        return WitValue.fromTsValue(fnArg, typeInfo.val);
+        switch (typeInfo.tag) {
+          case 'analysed':
+            return WitValue.fromTsValue(fnArg, typeInfo.val);
+
+          case 'unstructured-text':
+            return Either.right(WitValue.fromTsValueTextReference(fnArg));
+
+          case 'unstructured-binary':
+            return Either.right(WitValue.fromTsValueBinaryReference(fnArg));
+        }
       }),
     );
     if (Either.isLeft(parameterWitValuesEither)) {
@@ -241,17 +251,17 @@ function getWorkerId(
   const constructorParamInfo = classMetadata.constructorArgs;
 
   const constructorParamTypes = constructorParamInfo.map((param) => {
-    const analysedType = AgentConstructorParamRegistry.getParamType(
+    const typeInfoInternal = AgentConstructorParamRegistry.getParamType(
       agentClassName,
       param.name,
     );
 
-    if (!analysedType) {
+    if (!typeInfoInternal) {
       throw new Error(
         `Unresolved type for constructor parameter ${param.name} in agent class ${agentClassName.value}`,
       );
     }
-    return analysedType;
+    return typeInfoInternal;
   });
 
   const constructorParamWitValuesResult: Either.Either<ElementValue[], string> =
@@ -301,8 +311,7 @@ function getWorkerId(
 
   if (Either.isLeft(constructorParamWitValuesResult)) {
     throw new Error(
-      'Failed to create remote agent: ' +
-        JSON.stringify(constructorParamWitValuesResult.val),
+      'Failed to create remote agent: ' + constructorParamWitValuesResult.val,
     );
   }
 
