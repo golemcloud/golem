@@ -18,18 +18,13 @@ import {
   NameTypePair,
 } from '../src/internal/mapping/types/AnalysedType';
 import { AgentClassName } from '../src';
-import { AgentTypeName } from '../src/newTypes/agentTypeName';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
-export const BarAgentClassName = new AgentClassName('BarAgent');
-
 export const FooAgentClassName = new AgentClassName('FooAgent');
-
-export const FooAgentName = AgentTypeName.fromAgentClassName(FooAgentClassName);
-
-export const BarAgentName = AgentTypeName.fromString('my-complex-agent');
+export const BarAgentClassName = new AgentClassName('BarAgent');
+export const BarAgentCustomClassName = new AgentClassName('my-complex-agent');
 
 export function getAll() {
   return TypeMetadata.getAll();

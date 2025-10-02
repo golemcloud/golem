@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {
-  ClassMetadata,
-  Type,
-  TypeMetadata,
-} from '@golemcloud/golem-ts-types-core';
+import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { Datetime, WasmRpc, WorkerId } from 'golem:rpc/types@0.2.2';
 import * as Either from '../newTypes/either';
 import * as WitValue from './mapping/values/WitValue';
@@ -26,11 +22,9 @@ import {
   makeAgentId,
   RegisteredAgentType,
 } from 'golem:agent/host';
-import { AgentTypeName } from '../newTypes/agentTypeName';
 import { AgentClassName } from '../newTypes/agentClassName';
 import { DataValue, ElementValue } from 'golem:agent/common';
 import * as Value from './mapping/values/Value';
-import * as util from 'node:util';
 import { RemoteMethod } from '../baseAgent';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
@@ -44,7 +38,6 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
     const instance = new ctor(...args);
 
     const agentClassName = new AgentClassName(ctor.name);
-    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
 
     const metadataOpt = Option.fromNullable(TypeMetadata.get(ctor.name));
 
@@ -56,12 +49,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 
     const metadata = metadataOpt.val;
 
-    const workerIdEither = getWorkerId(
-      agentClassName,
-      agentTypeName,
-      args,
-      metadata,
-    );
+    const workerIdEither = getWorkerId(agentClassName, args, metadata);
 
     if (Either.isLeft(workerIdEither)) {
       throw new Error(workerIdEither.val);
@@ -74,13 +62,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
         const val = target[prop];
 
         if (typeof val === 'function') {
-          return getMethodProxy(
-            metadata,
-            prop,
-            agentClassName,
-            agentTypeName,
-            workerId,
-          );
+          return getMethodProxy(metadata, prop, agentClassName, workerId);
         }
         return val;
       },
@@ -92,7 +74,6 @@ function getMethodProxy(
   classMetadata: ClassMetadata,
   prop: string | symbol,
   agentClassName: AgentClassName,
-  agentTypeName: AgentTypeName,
   workerId: WorkerId,
 ): RemoteMethod<any[], any> {
   const methodSignature = classMetadata.methods.get(prop.toString());
@@ -113,7 +94,7 @@ function getMethodProxy(
 
   const methodNameKebab = convertAgentMethodNameToKebab(methodName);
 
-  const functionName = `${agentTypeName.value}.{${methodNameKebab}}`;
+  const functionName = `${agentClassName.asWit}.{${methodNameKebab}}`;
 
   const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
     agentClassName,
@@ -210,7 +191,6 @@ function getMethodProxy(
 // given value in JSON format, and the wit-type of each value and agent-type name?
 function getWorkerId(
   agentClassName: AgentClassName,
-  agentTypeName: AgentTypeName,
   constructorArgs: any[],
   classMetadata: ClassMetadata,
 ): Either.Either<WorkerId, string> {
@@ -219,11 +199,13 @@ function getWorkerId(
   // But we don't have that functionality yet, hence just retrieving the current
   // component-id (for now)
   const optionalRegisteredAgentType = Option.fromNullable(
-    getAgentType(agentTypeName.value),
+    getAgentType(agentClassName.value),
   );
 
   if (Option.isNone(optionalRegisteredAgentType)) {
-    return Either.left(`There are no components implementing ${agentTypeName}`);
+    return Either.left(
+      `There are no components implementing ${agentClassName}`,
+    );
   }
 
   const registeredAgentType: RegisteredAgentType =
@@ -272,7 +254,7 @@ function getWorkerId(
     val: constructorParamWitValuesResult.val,
   };
 
-  const agentId = makeAgentId(agentTypeName.value, constructorDataValue);
+  const agentId = makeAgentId(agentClassName.asWit, constructorDataValue);
 
   return Either.right({
     componentId: registeredAgentType.implementedBy,

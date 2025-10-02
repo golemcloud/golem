@@ -21,9 +21,8 @@ import { expect } from 'vitest';
 import * as GolemApiHostModule from 'golem:api/host@1.1.7';
 import {
   BarAgentClassName,
-  BarAgentName,
+  BarAgentCustomClassName,
   FooAgentClassName,
-  FooAgentName,
 } from './testUtils';
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
@@ -50,6 +49,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
+import { AgentClassName } from '../src';
 
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -86,7 +86,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
         resultTypeNonExact,
         resultTypeNonExact2,
       ) => {
-        overrideSelfMetadataImpl(FooAgentName.value);
+        overrideSelfMetadataImpl(FooAgentClassName);
 
         const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
 
@@ -233,7 +233,7 @@ test('BarAgent can be successfully initiated', () => {
       fc.oneof(fc.string(), fc.constant(null)),
       fc.oneof(unionArb, fc.constant(null)),
       (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(BarAgentName.value);
+        overrideSelfMetadataImpl(BarAgentCustomClassName);
 
         const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
 
@@ -301,11 +301,11 @@ test('BarAgent can be successfully initiated', () => {
         };
 
         const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(BarAgentName),
+          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
           () => new Error('BarAgent not found in AgentInitiatorRegistry'),
         );
 
-        const result = agentInitiator.initiate(BarAgentName.value, dataValue);
+        const result = agentInitiator.initiate(dataValue);
 
         expect(result.tag).toEqual('ok');
       },
@@ -347,11 +347,11 @@ function initiateFooAgent(
   };
 
   const agentInitiator = Option.getOrThrowWith(
-    AgentInitiatorRegistry.lookup(FooAgentName),
+    AgentInitiatorRegistry.lookup(FooAgentClassName.value),
     () => new Error('FooAgent not found in AgentInitiatorRegistry'),
   );
 
-  const result = agentInitiator.initiate(FooAgentName.value, constructorParams);
+  const result = agentInitiator.initiate(constructorParams);
 
   if (result.tag !== 'ok') {
     throw new Error('Agent initiation failed');
@@ -418,7 +418,7 @@ function testInvoke(
   });
 }
 
-function overrideSelfMetadataImpl(agentName: string) {
+function overrideSelfMetadataImpl(agentClassName: AgentClassName) {
   vi.spyOn(GolemApiHostModule, 'getSelfMetadata').mockImplementation(() => ({
     workerId: {
       componentId: {
@@ -427,7 +427,7 @@ function overrideSelfMetadataImpl(agentName: string) {
           lowBits: 99n,
         },
       },
-      workerName: agentName,
+      workerName: agentClassName.asWit,
     },
     args: [],
     env: [],

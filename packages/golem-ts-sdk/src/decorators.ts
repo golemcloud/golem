@@ -15,8 +15,7 @@
 import { AgentType, DataValue, AgentError } from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { MethodParams, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { Type } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
@@ -33,7 +32,6 @@ import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegist
 import { getSelfMetadata } from 'golem:api/host@1.1.7';
 import { AgentId } from './agentId';
 import { createCustomError } from './internal/agentError';
-import { AgentTypeName } from './newTypes/agentTypeName';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
@@ -42,8 +40,6 @@ import { UnstructuredBinary } from './newTypes/binaryInput';
 import { AnalysedType } from './internal/mapping/types/AnalysedType';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
-
-type TsType = Type.Type;
 
 /**
  *
@@ -54,8 +50,9 @@ type TsType = Type.Type;
  *
  * Only a class that extends `BaseAgent` can be decorated with `@agent()`.
  *
- * ### Naming
- * By default, the agent name is the kebab-case of the class name.
+ * ### Naming of agents
+ * By default, the agent name is the class name. When using the agent through
+ * Golem's CLI, these names are converted to kebab-case.
  *
  * Example:
  * ```ts
@@ -164,19 +161,19 @@ export function agent(customName?: string) {
     }
     const methods = methodSchemaEither.val;
 
-    const agentTypeName = customName
-      ? AgentTypeName.fromString(customName)
-      : AgentTypeName.fromAgentClassName(agentClassName);
+    const agentTypeName = new AgentClassName(
+      customName || agentClassName.value,
+    );
 
-    if (AgentInitiatorRegistry.exists(agentTypeName)) {
+    if (AgentInitiatorRegistry.exists(agentTypeName.value)) {
       throw new Error(
-        `Agent name conflict: Another agent with the name "${agentTypeName.value}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
+        `Agent name conflict: Another agent with the name "${agentTypeName}" is already registered. Please choose a different agent name for the class \`${agentClassName.value}\` using \`@agent("custom-name")\``,
       );
     }
 
     const agentTypeDescription =
       AgentConstructorRegistry.lookup(agentClassName)?.description ??
-      `Constructs the agent ${agentTypeName.value}`;
+      `Constructs the agent ${agentTypeName}`;
 
     const constructorParameterNames = classMetadata.constructorArgs
       .map((arg) => arg.name)
@@ -228,7 +225,7 @@ export function agent(customName?: string) {
     (ctor as any).get = getRemoteClient(ctor);
 
     AgentInitiatorRegistry.register(agentTypeName, {
-      initiate: (agentName: string, constructorInput: DataValue) => {
+      initiate: (constructorInput: DataValue) => {
         const deserializedConstructorArgs = deserializeDataValue(
           constructorInput,
           constructorParamTypes,
@@ -238,9 +235,9 @@ export function agent(customName?: string) {
 
         const containerName = getSelfMetadata().workerId.workerName;
 
-        if (!containerName.startsWith(agentName)) {
+        if (!containerName.startsWith(agentTypeName.asWit)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentName}", but got "${containerName}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", but got "${containerName}"`,
           );
 
           return {
@@ -268,7 +265,7 @@ export function agent(customName?: string) {
 
             if (Option.isNone(agentType)) {
               throw new Error(
-                `Failed to find agent type for ${agentClassName}. Ensure it is decorated with @agent() and registered properly.`,
+                `Failed to find agent type for ${agentClassName.value}. Ensure it is decorated with @agent() and registered properly.`,
               );
             }
 
@@ -284,7 +281,7 @@ export function agent(customName?: string) {
             const fn = instance[methodName];
             if (!fn)
               throw new Error(
-                `Method ${methodName} not found on agent ${agentClassName}`,
+                `Method ${methodName} not found on agent ${agentClassName.value}`,
               );
 
             const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
@@ -292,7 +289,7 @@ export function agent(customName?: string) {
             if (Option.isNone(agentTypeOpt)) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Agent type ${agentClassName} not found in registry.`,
+                val: `Agent type ${agentClassName.value} not found in registry.`,
               };
               return {
                 tag: 'err',
@@ -307,7 +304,7 @@ export function agent(customName?: string) {
             if (!methodInfo) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Method ${methodName} not found in metadata for agent ${agentClassName}.`,
+                val: `Method ${methodName} not found in metadata for agent ${agentClassName.value}.`,
               };
               return {
                 tag: 'err',
@@ -327,7 +324,7 @@ export function agent(customName?: string) {
             if (!methodParams) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName}.`,
+                val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName.value}.`,
               };
               return {
                 tag: 'err',
@@ -361,7 +358,7 @@ export function agent(customName?: string) {
             if (!methodDef) {
               const error: AgentError = {
                 tag: 'invalid-method',
-                val: `Method ${methodName} not found in agent type ${agentClassName}`,
+                val: `Method ${methodName} not found in agent type ${agentClassName.value}`,
               };
 
               return {
@@ -373,7 +370,7 @@ export function agent(customName?: string) {
             if (!returnTypeAnalysed) {
               const error: AgentError = {
                 tag: 'invalid-type',
-                val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
+                val: `Return type of method ${methodName} in agent ${agentClassName.value} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
               };
 
               return {

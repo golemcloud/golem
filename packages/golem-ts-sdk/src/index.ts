@@ -19,7 +19,6 @@ import { createCustomError, isAgentError } from './internal/agentError';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
 import * as Option from './newTypes/option';
 import { AgentInitiatorRegistry } from './internal/registry/agentInitiatorRegistry';
-import { AgentTypeName } from './newTypes/agentTypeName';
 import { makeAgentId, parseAgentId } from 'golem:agent/host';
 
 export { BaseAgent } from './baseAgent';
@@ -64,7 +63,10 @@ function getResolvedAgentOrThrow(
   );
 }
 
-async function initialize(agentType: string, input: DataValue): Promise<void> {
+async function initialize(
+  agentTypeName: string,
+  input: DataValue,
+): Promise<void> {
   // There shouldn't be a need to re-initialize an agent in a container.
   // If the input (DataValue) differs in a re-initialization, then that shouldn't be routed
   // to this already-initialized container either.
@@ -72,19 +74,15 @@ async function initialize(agentType: string, input: DataValue): Promise<void> {
     throw createCustomError(`Agent is already initialized in this container`);
   }
 
-  const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
+  const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (Option.isNone(initiator)) {
-    const entries = Array.from(AgentInitiatorRegistry.entries()).map(
-      (entry) => entry[0].value,
-    );
-
     throw createCustomError(
-      `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`,
+      `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`,
     );
   }
 
-  const initiateResult = initiator.val.initiate(agentType, input);
+  const initiateResult = initiator.val.initiate(input);
 
   if (initiateResult.tag === 'ok') {
     resolvedAgent = Option.some(initiateResult.val);
@@ -169,19 +167,15 @@ async function load(bytes: Uint8Array): Promise<void> {
   const agentId = textDecoder.decode(bytes.slice(1 + 4, 1 + 4 + agentIdLength));
   const agentSnapshot = bytes.slice(1 + 4 + agentIdLength);
 
-  const [agentType, agentParameters] = parseAgentId(agentId);
+  const [agentTypeName, agentParameters] = parseAgentId(agentId);
 
-  const initiator = AgentInitiatorRegistry.lookup(new AgentTypeName(agentType));
+  const initiator = AgentInitiatorRegistry.lookup(agentTypeName);
 
   if (Option.isNone(initiator)) {
-    const entries = Array.from(AgentInitiatorRegistry.entries()).map(
-      (entry) => entry[0].value,
-    );
-
-    throw `Invalid agent'${agentType}'. Valid agents are ${entries.join(', ')}`;
+    throw `Invalid agent'${agentTypeName}'. Valid agents are ${AgentInitiatorRegistry.agentTypeNames().join(', ')}`;
   }
 
-  const initiateResult = initiator.val.initiate(agentType, agentParameters);
+  const initiateResult = initiator.val.initiate(agentParameters);
 
   if (initiateResult.tag === 'ok') {
     const agent = initiateResult.val;

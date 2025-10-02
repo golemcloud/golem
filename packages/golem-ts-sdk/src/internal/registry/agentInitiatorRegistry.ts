@@ -14,7 +14,7 @@
 
 import * as Option from '../../newTypes/option';
 import { AgentInitiator } from '../agentInitiator';
-import { AgentTypeName } from '../../newTypes/agentTypeName';
+import { AgentClassName } from '../../newTypes/agentClassName';
 
 // Although only 1 agent instance can exist max in a container,
 // the container will end up keeping track of initiators of all agent classes
@@ -22,31 +22,26 @@ import { AgentTypeName } from '../../newTypes/agentTypeName';
 const agentInitiators = new Map<string, AgentInitiator>();
 
 export const AgentInitiatorRegistry = {
-  register(agentName: AgentTypeName, agentInitiator: AgentInitiator): void {
-    agentInitiators.set(agentName.value, agentInitiator);
+  register(
+    agentTypeName: AgentClassName,
+    agentInitiator: AgentInitiator,
+  ): void {
+    agentInitiators.set(agentTypeName.value, agentInitiator);
   },
 
-  lookup(agentName: AgentTypeName): Option.Option<AgentInitiator> {
-    return Option.fromNullable(agentInitiators.get(agentName.value));
+  lookup(agentTypeName: string): Option.Option<AgentInitiator> {
+    return Option.fromNullable(agentInitiators.get(agentTypeName));
   },
 
-  entries(): IterableIterator<[AgentTypeName, AgentInitiator]> {
-    return Array.from(agentInitiators.entries())
-      .map(
-        ([name, initiator]) =>
-          [new AgentTypeName(name), initiator] as [
-            AgentTypeName,
-            AgentInitiator,
-          ],
-      )
-      [Symbol.iterator]();
+  entries(): IterableIterator<[string, AgentInitiator]> {
+    return agentInitiators.entries();
   },
 
-  agentTypes(): Array<string> {
+  agentTypeNames(): Array<string> {
     return Array.from(agentInitiators.keys());
   },
 
-  exists(agentTypeName: AgentTypeName): boolean {
-    return agentInitiators.has(agentTypeName.value);
+  exists(agentTypeName: string): boolean {
+    return agentInitiators.has(agentTypeName);
   },
 };
