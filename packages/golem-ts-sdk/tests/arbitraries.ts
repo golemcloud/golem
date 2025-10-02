@@ -40,7 +40,7 @@ import {
   ResultTypeInvalid3,
 } from './testTypes';
 
-import { AgentClassName } from '../src';
+import { AgentClassName, UnstructuredText } from '../src';
 
 export const stringOrNull = fc.oneof(fc.string(), fc.constant(null));
 
@@ -94,23 +94,20 @@ export const resultTypeNonExact2Arb: Arbitrary<ResultTypeNonExact2> = fc.oneof(
   fc.record({ tag: fc.constant('err'), errValue: fc.string() }),
 );
 
-export const resultTypeNonExact3Arb: Arbitrary<ResultTypeInvalid1> = fc.oneof(
-  fc.record({ tag: fc.constant('ok'), okVal: fc.integer() }),
-  fc.record({ tag: fc.constant('ok') }),
-  fc.record({ tag: fc.constant('err'), errVal: fc.string() }),
+export const unstructuredTextArb: Arbitrary<UnstructuredText> = fc.oneof(
+  fc.record({ tag: fc.constant('url'), val: fc.string() }),
+  fc.record({ tag: fc.constant('inline'), val: fc.string() }),
 );
 
-export const resultTypeNonExact4Arb: Arbitrary<ResultTypeInvalid2> = fc.oneof(
-  fc.record({ tag: fc.constant('ok'), okVal: fc.integer() }),
-  fc.record({ tag: fc.constant('err'), errVal: fc.string() }),
-  fc.record({ tag: fc.constant('err') }),
-);
-
-export const resultTypeNonExact5Arb: Arbitrary<ResultTypeInvalid3> = fc.oneof(
-  fc.record({ tag: fc.constant('ok'), okVal: fc.integer() }),
-  fc.record({ tag: fc.constant('ok') }),
-  fc.record({ tag: fc.constant('err'), errVal: fc.string() }),
-  fc.record({ tag: fc.constant('err') }),
+export const unstructuredTextWithLCArb: Arbitrary<
+  UnstructuredText<['en', 'de']>
+> = fc.oneof(
+  fc.record({ tag: fc.constant('url'), val: fc.string() }),
+  fc.record({
+    tag: fc.constant('inline'),
+    val: fc.string(),
+    languageCode: fc.oneof(fc.constant('en'), fc.constant('de')),
+  }),
 );
 
 export const taggedUnionArb: Arbitrary<TaggedUnion> = fc.oneof(

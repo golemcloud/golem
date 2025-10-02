@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import { ElementSchema, BinaryReference } from 'golem:agent/common';
+import * as Either from '../newTypes/either';
 
 /**
  * Represents unstructured binary input, which can be either a URL or inline binary data.
@@ -41,34 +42,35 @@ export type UnstructuredBinary<MT extends MimeType[] = []> =
 
 export const UnstructuredBinary = {
   fromDataValue<MT extends string[] = []>(
+    parameterName: string,
     dataValue: BinaryReference,
     allowedMimeTypes: string[],
-  ): UnstructuredBinary<MT> {
+  ): Either.Either<UnstructuredBinary<MT>, string> {
     if (dataValue.tag === 'url') {
-      return {
+      return Either.right({
         tag: 'url',
         val: dataValue.val,
-      };
+      });
     }
 
     if (allowedMimeTypes.length > 0) {
       if (!allowedMimeTypes.includes(dataValue.val.binaryType.mimeType)) {
-        throw new Error(
-          `Language code ${dataValue.val.binaryType.mimeType} is not allowed. Allowed codes: ${allowedMimeTypes.join(', ')}`,
+        return Either.left(
+          `Invalid value for parameter ${parameterName}. Mime type \`${dataValue.val.binaryType.mimeType}\` is not allowed. Allowed mime types: ${allowedMimeTypes.join(', ')}`,
         );
       }
 
-      return {
+      return Either.right({
         tag: 'inline',
         val: dataValue.val.data,
         mimeType: dataValue.val.binaryType.mimeType,
-      };
+      });
     }
 
-    return {
+    return Either.right({
       tag: 'inline',
       val: dataValue.val.data,
-    };
+    });
   },
 
   /**

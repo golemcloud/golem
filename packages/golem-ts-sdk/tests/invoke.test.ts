@@ -41,6 +41,8 @@ import {
   unionArb,
   unionWithLiteralArb,
   unionWithOnlyLiteralsArb,
+  unstructuredTextArb,
+  unstructuredTextWithLCArb,
 } from './arbitraries';
 import { ResolvedAgent } from '../src/internal/resolvedAgent';
 import * as Value from '../src/internal/mapping/values/Value';
@@ -55,23 +57,7 @@ import {
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 import { deserializeDataValue } from '../src/decorators';
 import { convertTsValueToElementValue } from '../src/internal/mapping/values/elementValue';
-
-test('unstructured text invoke', () => {
-  overrideSelfMetadataImpl(FooAgentName.value);
-
-  const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
-
-  if (!typeRegistry) {
-    throw new Error('FooAgent type metadata not found');
-  }
-
-  const resolvedAgent = initiateFooAgent('foo', typeRegistry);
-
-  testInvoke('fun15', [['param', { tag: 'url', val: 'foo' }]], resolvedAgent, {
-    tag: 'url',
-    val: 'foo',
-  });
-});
+import { UnstructuredText } from '../src';
 
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -91,6 +77,8 @@ test('An agent can be successfully initiated and all of its methods can be invok
       resultTypeExactArb,
       resultTypeNonExactArb,
       resultTypeNonExact2Arb,
+      unstructuredTextArb,
+      unstructuredTextWithLCArb,
       (
         arbString,
         number,
@@ -107,6 +95,8 @@ test('An agent can be successfully initiated and all of its methods can be invok
         resultTypeExactBoth,
         resultTypeNonExact,
         resultTypeNonExact2,
+        unstructuredText,
+        unstructuredTextWithLC,
       ) => {
         overrideSelfMetadataImpl(FooAgentName.value);
 
@@ -157,7 +147,6 @@ test('An agent can be successfully initiated and all of its methods can be invok
           resolvedAgent,
           `Weather in ${arbString} is sunny!`,
         );
-
 
         // Invoking function with return type not specified
         testInvoke(
@@ -256,6 +245,22 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', resultTypeNonExact2]],
           resolvedAgent,
           resultTypeNonExact2,
+        );
+
+        // Invoking with unstructured text
+        testInvoke(
+          'fun15',
+          [['param', unstructuredText]],
+          resolvedAgent,
+          unstructuredText,
+        );
+
+        // Invoking with unstructured text with language code
+        testInvoke(
+          'fun16',
+          [['param', unstructuredTextWithLC]],
+          resolvedAgent,
+          unstructuredTextWithLC,
         );
       },
     ),
@@ -358,6 +363,56 @@ test('BarAgent can be successfully initiated', () => {
   );
 });
 
+// This is already in the above big test, but we keep it separate to have a clearer
+// view of how unstructured text is handled.
+test('Invoke function that takes unstructured-text and returns unstructured-text', () => {
+  overrideSelfMetadataImpl(FooAgentName.value);
+
+  const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!typeRegistry) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', typeRegistry);
+
+  const validUnstructuredText: UnstructuredText<['en', 'de']> = {
+    tag: 'inline',
+    val: 'foo',
+    languageCode: 'de',
+  };
+
+  testInvoke(
+    'fun16',
+    [['param', validUnstructuredText]],
+    resolvedAgent,
+    validUnstructuredText,
+  );
+
+  // fun16 doesn't support language code `pl`. We dynamically invoke with it to see
+  // if the error is properly thrown.
+  const invalidUnstructuredText: UnstructuredText<['en', 'pl']> = {
+    tag: 'inline',
+    val: 'foo',
+    languageCode: 'pl',
+  };
+
+  const dataValue = createInputDataValue(
+    [['param', invalidUnstructuredText]],
+    'fun16',
+  );
+
+  resolvedAgent.invoke('fun16', dataValue).then((invokeResult) => {
+    if (invokeResult.tag === 'ok') {
+      throw new Error('Test failure: invocation should have failed');
+    } else {
+      expect(invokeResult.val.val).toContain(
+        'Failed to deserialize arguments for method fun16 in agent FooAgent: Invalid value for parameter param. Language code `pl` is not allowed. Allowed codes: en, de',
+      );
+    }
+  });
+});
+
 function initiateFooAgent(
   constructorParam: string,
   simpleAgentClassMeta: ClassMetadata,
@@ -427,7 +482,7 @@ function testInvoke(
     // we deserialize and assert if the input is same as output.
     const result = deserializeReturnValue(methodName, resultDataValue);
 
-    expect(result).toEqual(expectedOutput);
+    expect(result).toEqual(Either.right(expectedOutput));
   });
 }
 
@@ -483,7 +538,10 @@ function createInputDataValue(
   };
 }
 
-function deserializeReturnValue(methodName: string, returnValue: DataValue) {
+function deserializeReturnValue(
+  methodName: string,
+  returnValue: DataValue,
+): Either.Either<any[], string> {
   const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
     methodName,
   )?.returnType;
@@ -503,32 +561,41 @@ function deserializeReturnValue(methodName: string, returnValue: DataValue) {
 
   switch (returnTypeAnalysedType.tag) {
     case 'analysed':
-      return deserializeDataValue(returnValue, [
-        [
-          'return-value',
-          [returnType, { tag: 'analysed', val: returnTypeAnalysedType.val }],
-        ],
-      ])[0];
+      return Either.map(
+        deserializeDataValue(returnValue, [
+          [
+            'return-value',
+            [returnType, { tag: 'analysed', val: returnTypeAnalysedType.val }],
+          ],
+        ]),
+        (v) => v[0],
+      );
     case 'unstructured-text':
-      return deserializeDataValue(returnValue, [
-        [
-          'return-value',
+      return Either.map(
+        deserializeDataValue(returnValue, [
           [
-            returnType,
-            { tag: 'unstructured-text', val: returnTypeAnalysedType.val },
+            'return-value',
+            [
+              returnType,
+              { tag: 'unstructured-text', val: returnTypeAnalysedType.val },
+            ],
           ],
-        ],
-      ])[0];
+        ]),
+        (v) => v[0],
+      );
     case 'unstructured-binary':
-      return deserializeDataValue(returnValue, [
-        [
-          'return-value',
+      return Either.map(
+        deserializeDataValue(returnValue, [
           [
-            returnType,
-            { tag: 'unstructured-binary', val: returnTypeAnalysedType.val },
+            'return-value',
+            [
+              returnType,
+              { tag: 'unstructured-binary', val: returnTypeAnalysedType.val },
+            ],
           ],
-        ],
-      ])[0];
+        ]),
+        (v) => v[0],
+      );
   }
 }
 

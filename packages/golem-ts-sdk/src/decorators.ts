@@ -244,7 +244,18 @@ export function agent(customName?: string) {
           constructorParamTypes,
         );
 
-        const instance = new ctor(...deserializedConstructorArgs);
+        if (Either.isLeft(deserializedConstructorArgs)) {
+          const error = createCustomError(
+            `Failed to deserialize constructor arguments for agent ${agentClassName.value}: ${deserializedConstructorArgs.val}`,
+          );
+
+          return {
+            tag: 'err',
+            val: error,
+          };
+        }
+
+        const instance = new ctor(...deserializedConstructorArgs.val);
 
         const containerName = getSelfMetadata().workerId.workerName;
 
@@ -447,138 +458,165 @@ export function description(description: string) {
 export function deserializeDataValue(
   dataValue: DataValue,
   paramTypes: [string, [TsType, TypeInfoInternal]][],
-): any[] {
+): Either.Either<any[], string> {
   switch (dataValue.tag) {
     case 'tuple':
       const elements = dataValue.val;
 
-      return elements.map((elem, idx) => {
-        switch (elem.tag) {
-          case 'unstructured-text':
-            const [type] = paramTypes[idx][1];
+      return Either.all(
+        elements.map((elem, idx) => {
+          switch (elem.tag) {
+            case 'unstructured-text':
+              const [type] = paramTypes[idx][1];
 
-            const textRef = elem.val;
+              const unstructuredTextParamName = paramTypes[idx][0];
 
-            const languageCodes: Either.Either<string[], string> =
-              getLanguageCodes(type);
+              const textRef = elem.val;
 
-            if (Either.isLeft(languageCodes)) {
-              throw new Error(
-                `Failed to get language codes for parameter ${paramTypes[idx][0]}: ${languageCodes.val}`,
+              const languageCodes: Either.Either<string[], string> =
+                getLanguageCodes(type);
+
+              if (Either.isLeft(languageCodes)) {
+                throw new Error(
+                  `Failed to get language codes for parameter ${paramTypes[idx][0]}: ${languageCodes.val}`,
+                );
+              }
+
+              return UnstructuredText.fromDataValue(
+                unstructuredTextParamName,
+                textRef,
+                languageCodes.val,
               );
-            }
-            return UnstructuredText.fromDataValue(textRef, languageCodes.val);
 
-          case 'unstructured-binary':
-            const [binaryType] = paramTypes[idx][1];
+            case 'unstructured-binary':
+              const unstructuredBinaryParamName = paramTypes[idx][0];
 
-            const binaryRef = elem.val;
+              const [binaryType] = paramTypes[idx][1];
 
-            const mimeTypes: Either.Either<string[], string> =
-              getMimeTypes(binaryType);
+              const binaryRef = elem.val;
 
-            if (Either.isLeft(mimeTypes)) {
-              throw new Error(
-                `Failed to get mime types for parameter ${paramTypes[idx][0]}: ${mimeTypes.val}`,
+              const mimeTypes: Either.Either<string[], string> =
+                getMimeTypes(binaryType);
+
+              if (Either.isLeft(mimeTypes)) {
+                throw new Error(
+                  `Failed to get mime types for parameter ${paramTypes[idx][0]}: ${mimeTypes.val}`,
+                );
+              }
+
+              return UnstructuredBinary.fromDataValue(
+                unstructuredBinaryParamName,
+                binaryRef,
+                mimeTypes.val,
               );
-            }
 
-            return UnstructuredBinary.fromDataValue(binaryRef, mimeTypes.val);
+            case 'component-model':
+              const paramType = paramTypes[idx][1];
+              const typeInfo = paramType[1];
 
-          case 'component-model':
-            const paramType = paramTypes[idx][1];
-            const typeInfo = paramType[1];
+              if (typeInfo.tag !== 'analysed') {
+                throw new Error(
+                  `Internal error: Unknown parameter type for ${util.format(Value.fromWitValue(elem.val))} at index ${idx}`,
+                );
+              }
 
-            if (typeInfo.tag !== 'analysed') {
-              throw new Error(
-                `Internal error: Unknown parameter type for ${util.format(Value.fromWitValue(elem.val))} at index ${idx}`,
-              );
-            }
-
-            const witValue = elem.val;
-            return WitValue.toTsValue(witValue, typeInfo.val);
-        }
-      });
+              const witValue = elem.val;
+              return Either.right(WitValue.toTsValue(witValue, typeInfo.val));
+          }
+        }),
+      );
 
     case 'multimodal':
       const multiModalElements = dataValue.val;
 
-      return multiModalElements.map(([name, elem]) => {
-        switch (elem.tag) {
-          case 'unstructured-text':
-            const nameAndType = paramTypes.find(
-              ([paramName]) => paramName === name,
-            );
-
-            if (!nameAndType) {
-              throw new Error(
-                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+      return Either.all(
+        multiModalElements.map(([name, elem]) => {
+          switch (elem.tag) {
+            case 'unstructured-text':
+              const nameAndType = paramTypes.find(
+                ([paramName]) => paramName === name,
               );
-            }
 
-            const [type] = nameAndType[1];
+              if (!nameAndType) {
+                throw new Error(
+                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                );
+              }
 
-            const textRef = elem.val;
+              const [type] = nameAndType[1];
 
-            const languageCodes: Either.Either<string[], string> =
-              getLanguageCodes(type);
+              const textRef = elem.val;
 
-            if (Either.isLeft(languageCodes)) {
-              throw new Error(
-                `Failed to get language codes for parameter ${name}: ${languageCodes.val}`,
+              const languageCodes: Either.Either<string[], string> =
+                getLanguageCodes(type);
+
+              if (Either.isLeft(languageCodes)) {
+                throw new Error(
+                  `Failed to get language codes for parameter ${name}: ${languageCodes.val}`,
+                );
+              }
+
+              return UnstructuredText.fromDataValue(
+                name,
+                textRef,
+                languageCodes.val,
               );
-            }
 
-            return UnstructuredText.fromDataValue(textRef, languageCodes.val);
-
-          case 'unstructured-binary':
-            const binaryTypeWithName = paramTypes.find(
-              ([paramName]) => paramName === name,
-            );
-
-            if (!binaryTypeWithName) {
-              throw new Error(
-                `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+            case 'unstructured-binary':
+              const binaryTypeWithName = paramTypes.find(
+                ([paramName]) => paramName === name,
               );
-            }
 
-            const [binaryType] = binaryTypeWithName[1];
+              if (!binaryTypeWithName) {
+                throw new Error(
+                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                );
+              }
 
-            const binaryRef = elem.val;
+              const [binaryType] = binaryTypeWithName[1];
 
-            const mimeTypes = getMimeTypes(binaryType);
+              const binaryRef = elem.val;
 
-            if (Either.isLeft(mimeTypes)) {
-              throw new Error(
-                `Failed to get mime types for parameter ${name}: ${mimeTypes.val}`,
+              const mimeTypes = getMimeTypes(binaryType);
+
+              if (Either.isLeft(mimeTypes)) {
+                throw new Error(
+                  `Failed to get mime types for parameter ${name}: ${mimeTypes.val}`,
+                );
+              }
+
+              return UnstructuredBinary.fromDataValue(
+                name,
+                binaryRef,
+                mimeTypes.val,
               );
-            }
 
-            return UnstructuredBinary.fromDataValue(binaryRef, mimeTypes.val);
+            case 'component-model':
+              const witValue = elem.val;
 
-          case 'component-model':
-            const witValue = elem.val;
-
-            const param = paramTypes.find(([paramName]) => paramName === name);
-
-            if (!param) {
-              throw new Error(
-                `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+              const param = paramTypes.find(
+                ([paramName]) => paramName === name,
               );
-            }
 
-            const paramType = param[1];
-            const typeInfo = paramType[1];
+              if (!param) {
+                throw new Error(
+                  `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                );
+              }
 
-            if (typeInfo.tag !== 'analysed') {
-              throw new Error(
-                `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
-              );
-            }
+              const paramType = param[1];
+              const typeInfo = paramType[1];
 
-            return WitValue.toTsValue(witValue, typeInfo.val);
-        }
-      });
+              if (typeInfo.tag !== 'analysed') {
+                throw new Error(
+                  `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
+                );
+              }
+
+              return Either.right(WitValue.toTsValue(witValue, typeInfo.val));
+          }
+        }),
+      );
   }
 }
 
@@ -686,14 +724,24 @@ function getAgentInternal(
         },
       );
 
-      const deserializedArgs = deserializeDataValue(
-        methodArgs,
-        methodParamTypes,
-      );
+      const deserializedArgs: Either.Either<any[], string> =
+        deserializeDataValue(methodArgs, methodParamTypes);
+
+      if (Either.isLeft(deserializedArgs)) {
+        const error: AgentError = {
+          tag: 'invalid-input',
+          val: `Failed to deserialize arguments for method ${methodName} in agent ${agentClassName.value}: ${deserializedArgs.val}`,
+        };
+
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
 
       const methodResult = await agentMethod.apply(
         agentInstance,
-        deserializedArgs,
+        deserializedArgs.val,
       );
 
       const methodSignature = agentTypeOpt.val.methods.find(

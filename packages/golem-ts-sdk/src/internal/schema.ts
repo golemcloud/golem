@@ -394,11 +394,11 @@ function convertToElementSchema(
   const paramTypeName = parameterType.name;
 
   if (paramTypeName && paramTypeName === 'UnstructuredText') {
-    const textDecritptor = getTextDescriptor(parameterType);
+    const textDescriptor = getTextDescriptor(parameterType);
 
-    if (Either.isLeft(textDecritptor)) {
+    if (Either.isLeft(textDescriptor)) {
       return Either.left(
-        `Failed to get text descriptor for unstructured-text parameter ${parameterName}: ${textDecritptor.val}`,
+        `Failed to get text descriptor for unstructured-text parameter ${parameterName}: ${textDescriptor.val}`,
       );
     }
 
@@ -406,12 +406,12 @@ function convertToElementSchema(
       agentClassName,
       methodName,
       parameterName,
-      { tag: 'unstructured-text', val: textDecritptor.val },
+      { tag: 'unstructured-text', val: textDescriptor.val },
     );
 
     const elementSchema: ElementSchema = {
       tag: 'unstructured-text',
-      val: textDecritptor.val,
+      val: textDescriptor.val,
     };
 
     return Either.right(elementSchema);

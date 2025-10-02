@@ -143,6 +143,12 @@ class FooAgent extends BaseAgent {
     return param;
   }
 
+  async fun16(
+    param: UnstructuredText<['en', 'de']>,
+  ): Promise<UnstructuredText<['en', 'de']>> {
+    return param;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
