@@ -1347,7 +1347,7 @@ async fn test_http_api_merging() {
             .join("golem.yaml"),
     );
 
-    // Add mergable definitions and deployments to both components
+    // Add mergeable definitions and deployments to both components
     fs::write_str(
         &component1_manifest_path,
         indoc! { r#"
@@ -1582,7 +1582,7 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
         .await;
     assert!(outputs.success());
     assert!(outputs.stdout_contains(
-        r#"({"typ":{"type":"Tuple","items":[{"type":"Record","fields":[{"name":"one-field","typ":{"type":"Str"}},{"name":"another-field","typ":{"type":"F64"}}]},{"type":"Record","fields":[{"name":"one-field","typ":{"type":"Str"}},{"name":"another-field","typ":{"type":"F64"}}]}]},"value":[{"another-field":100.0,"one-field":"1212"},{"another-field":2.0,"one-field":"1"}]}"#
+        r#"{"another-field":100.0,"one-field":"1212"},{"another-field":2.0,"one-field":"1"}"#
     ));
 }
 

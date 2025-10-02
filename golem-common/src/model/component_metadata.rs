@@ -522,7 +522,7 @@ impl ComponentMetadataInnerData {
                         let agent = self
                             .agent_types
                             .iter()
-                            .find(|agent| agent.type_name.to_wit_naming() == resource_name);
+                            .find(|agent| agent.wrapper_type_name() == resource_name);
 
                         let method = agent.and_then(|agent| {
                             agent
@@ -541,7 +541,7 @@ impl ComponentMetadataInnerData {
                             let agent = self
                                 .agent_types
                                 .iter()
-                                .find(|agent| agent.type_name.to_wit_naming() == resource_name);
+                                .find(|agent| agent.wrapper_type_name() == resource_name);
 
                             Ok(agent.map(|agent| {
                                 AgentMethodOrConstructor::Constructor(agent.constructor.clone())

@@ -255,7 +255,7 @@ fn verify_agent_invocation(
         if invocation.agent_method_or_constructor.is_some() {
             if let Some(interface_name) = invocation.name.site.interface_name() {
                 // interface_name is the kebab-cased agent type name from the static wrapper
-                let agent_type = agent_id.agent_type.to_kebab_case();
+                let agent_type = agent_id.wrapper_agent_type();
                 if interface_name != agent_type {
                     Err(WorkerExecutorError::invalid_request(
                         format!("Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}")

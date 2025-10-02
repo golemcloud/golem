@@ -74,7 +74,7 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
                     instance_name: agent_type.wrapper_type_name(),
                     parameter_types: agent_type.constructor.wit_arg_types(),
                     interface_name: Some(InterfaceName {
-                        name: agent_type.type_name,
+                        name: agent_type.wrapper_type_name(),
                         version: None,
                     }),
                 });

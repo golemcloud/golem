@@ -19,6 +19,7 @@ use golem_common::model::agent::bindings::golem::agent::common::AgentError;
 use golem_common::model::agent::bindings::golem::agent::host;
 use golem_common::model::agent::bindings::golem::agent::host::{DataValue, Host};
 use golem_common::model::agent::{AgentId, RegisteredAgentType};
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::oplog::DurableFunctionType;
 
 impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
@@ -94,7 +95,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 agent_type.agent_type.constructor.input_schema,
             ) {
                 Ok(input) => {
-                    let agent_id = AgentId::new(agent_type_name, input);
+                    let agent_id = AgentId::new(agent_type_name.to_wit_naming(), input);
                     Ok(Ok(agent_id.to_string()))
                 }
                 Err(err) => Ok(Err(AgentError::InvalidInput(err))),
