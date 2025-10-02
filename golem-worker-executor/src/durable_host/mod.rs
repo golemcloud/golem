@@ -628,6 +628,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     store,
                                     instance,
                                     &component_metadata,
+                                    true,
                                 )
                                 .await;
                                 store
@@ -1616,6 +1617,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             store,
                             instance,
                             &component_metadata,
+                            false,
                         )
                         .instrument(span)
                         .await;
