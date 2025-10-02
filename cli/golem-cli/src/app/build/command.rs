@@ -18,7 +18,7 @@ use crate::app::build::task_result_marker::{
     InjectToPrebuiltQuickJsCommandMarkerHash, ResolvedExternalCommandMarkerHash, TaskResultMarker,
 };
 use crate::app::build::{delete_path_logged, is_up_to_date, new_task_up_to_date_check};
-use crate::app::context::ApplicationContext;
+use crate::app::context::{ApplicationContext, ToolsWithEnsuredCommonDeps};
 use crate::app::error::CustomCommandError;
 use crate::fs::compile_and_collect_globs;
 use crate::log::{
@@ -532,7 +532,11 @@ pub async fn execute_external_command(
                 return Err(anyhow!("Empty command!"));
             }
 
-            ensure_common_deps_for_tool(ctx, command_tokens[0].as_str()).await?;
+            ensure_common_deps_for_tool(
+                &ctx.tools_with_ensured_common_deps,
+                command_tokens[0].as_str(),
+            )
+            .await?;
 
             Command::new(command_tokens[0].clone())
                 .args(command_tokens.iter().skip(1))
@@ -544,7 +548,10 @@ pub async fn execute_external_command(
     )
 }
 
-async fn ensure_common_deps_for_tool(ctx: &ApplicationContext, tool: &str) -> anyhow::Result<()> {
+pub async fn ensure_common_deps_for_tool(
+    ctx: &ToolsWithEnsuredCommonDeps,
+    tool: &str,
+) -> anyhow::Result<()> {
     match tool {
         "node" | "npx" => {
             ctx.ensure_common_deps_for_tool_once("node", || async {

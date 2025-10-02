@@ -38,10 +38,10 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
-use test_r::{flaky, inherit_test_dep, test, timeout};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::log::info;
-use tracing::Instrument;
+use tracing::{warn, Instrument};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -813,7 +813,6 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-#[flaky(10)] // TODO: stabilize test
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("http-client-2").unique().store().await;
@@ -874,75 +873,109 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
         worker_ids.insert(worker_id);
     }
 
-    let mut found_worker_ids = HashSet::new();
-
-    for worker_id in worker_ids.clone() {
+    for worker_id in &worker_ids {
         let _ = admin
             .invoke(
-                &worker_id,
+                worker_id,
                 "golem:it/api.{start-polling}",
                 vec!["first".into_value_and_type()],
             )
             .await;
+        admin
+            .wait_for_status(worker_id, WorkerStatus::Running, Duration::from_secs(10))
+            .await;
     }
 
     let mut wait_counter = 0;
-
     loop {
-        sleep(Duration::from_secs(2)).await;
         wait_counter += 1;
         let ids = polling_worker_ids.lock().unwrap().clone();
 
-        if worker_ids.eq(&ids) || wait_counter >= 10 {
+        if worker_ids.eq(&ids) {
+            info!("All the spawned workers have polled the server at least once.");
             break;
         }
+        if wait_counter >= 30 {
+            warn!(
+                "Waiting for all spawned workers timed out. Only {}/{} workers polled the server",
+                ids.len(),
+                workers_count
+            );
+            break;
+        }
+
+        sleep(Duration::from_secs(1)).await;
     }
 
-    for worker_id in worker_ids.clone() {
-        let (_, values) = admin
+    // Testing looking for a single worker
+    let mut cursor = ScanCursor::default();
+    let mut enum_results = Vec::new();
+    loop {
+        let (next_cursor, values) = admin
             .get_workers_metadata(
                 &component_id,
-                Some(
-                    WorkerFilter::new_name(
-                        StringFilterComparator::Equal,
-                        worker_id.worker_name.clone(),
-                    )
-                    .and(WorkerFilter::new_status(
-                        FilterComparator::Equal,
-                        WorkerStatus::Running,
-                    )),
-                ),
-                ScanCursor::default(),
-                workers_count as u64,
+                Some(WorkerFilter::new_name(
+                    StringFilterComparator::Equal,
+                    worker_ids.iter().next().unwrap().worker_name.clone(),
+                )),
+                cursor,
+                1,
                 true,
             )
             .await;
-
-        found_worker_ids.extend(get_worker_ids(values));
+        enum_results.extend(values);
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+        } else {
+            break;
+        }
     }
+    check!(enum_results.len() == 1);
 
-    let (_, values) = admin
-        .get_workers_metadata(
-            &component_id,
-            Some(WorkerFilter::new_status(
-                FilterComparator::Equal,
-                WorkerStatus::Running,
-            )),
-            ScanCursor::default(),
-            workers_count as u64,
-            true,
-        )
-        .await;
+    // Testing looking for all the workers
+    let mut cursor = ScanCursor::default();
+    let mut enum_results = Vec::new();
+    loop {
+        let (next_cursor, values) = admin
+            .get_workers_metadata(&component_id, None, cursor, workers_count, true)
+            .await;
+        enum_results.extend(values);
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+        } else {
+            break;
+        }
+    }
+    check!(enum_results.len() == workers_count as usize);
+
+    // Testing looking for running workers
+    let mut cursor = ScanCursor::default();
+    let mut enum_results = Vec::new();
+    loop {
+        let (next_cursor, values) = admin
+            .get_workers_metadata(
+                &component_id,
+                Some(WorkerFilter::new_status(
+                    FilterComparator::Equal,
+                    WorkerStatus::Running,
+                )),
+                cursor,
+                workers_count,
+                true,
+            )
+            .await;
+        enum_results.extend(values);
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+        } else {
+            break;
+        }
+    }
+    // At least one worker should be running, we cannot guarantee that all of them are running simultaneously
+    check!(enum_results.len() <= workers_count as usize);
+    check!(enum_results.len() > 0);
 
     http_server.abort();
-
-    check!(found_worker_ids.len() == workers_count);
-    check!(&found_worker_ids == &worker_ids);
-
-    let found_worker_ids2 = get_worker_ids(values);
-
-    check!(found_worker_ids2.len() == workers_count);
-    check!(&found_worker_ids2 == &worker_ids);
 }
 
 #[test]

@@ -27,7 +27,6 @@ members = [
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "cli/template-golem-agent-ts",
     "test-components/app-and-library",
     "test-components/shopping-cart",
     "test-components/write-stdout",
