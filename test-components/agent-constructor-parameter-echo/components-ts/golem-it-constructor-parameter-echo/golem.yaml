@@ -297,5 +297,3 @@ dependencies:
     ## Tavily
     # - type: wasm
     #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.4/golem_web_search_tavily-dev.wasm
-
-

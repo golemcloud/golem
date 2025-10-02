@@ -67,7 +67,7 @@ pub async fn gen_rpc(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
             any_changed |= changed;
         }
         if any_changed {
-            ctx.update_wit_context()?;
+            ctx.update_wit_context().await?;
         }
     }
 

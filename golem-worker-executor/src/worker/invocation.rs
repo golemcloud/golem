@@ -48,6 +48,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
+    is_live: bool,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -60,6 +61,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
         &mut store,
         instance,
         component_metadata,
+        is_live,
     )
     .await;
 
@@ -180,6 +182,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
+    is_live: bool,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -195,7 +198,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         validate_function_parameters(&mut store, &function, &full_function_name, &function_input)
             .await?;
 
-    if store.data().is_live() {
+    if is_live {
         store
             .data_mut()
             .on_exported_function_invoked(&full_function_name, &function_input)

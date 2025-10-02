@@ -32,6 +32,7 @@ use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
@@ -142,6 +143,7 @@ pub trait WorkerCtx:
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;

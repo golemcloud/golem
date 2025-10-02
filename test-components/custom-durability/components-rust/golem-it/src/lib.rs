@@ -203,7 +203,7 @@ impl GuestLazyPollableTest for LazyPollableTest {
                         )
                         .send()
                         .expect("Request failed");
-                    let input_stream = new_response.get_raw_input_stream();
+                    let (input_stream, _body) = new_response.get_raw_input_stream();
                     let pollable = input_stream.subscribe();
                     self.lazy_pollable
                         .set(unsafe { std::mem::transmute(pollable) });

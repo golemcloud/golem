@@ -17,6 +17,7 @@ pub mod golem {
             pub type ComponentId = super::super::super::golem::rpc::types::ComponentId;
             pub type Uuid = super::super::super::golem::rpc::types::Uuid;
             pub type AgentId = super::super::super::golem::rpc::types::AgentId;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
             /// An index into the persistent log storing all performed operations of an agent
             pub type OplogIndex = u64;
             /// A promise ID is a value that can be passed to an external Golem API to complete that promise
@@ -624,6 +625,43 @@ pub mod golem {
                     }
                 }
             }
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct GetPromiseResult {
+                handle: _rt::Resource<GetPromiseResult>,
+            }
+            impl GetPromiseResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: unsafe { _rt::Resource::from_handle(handle) },
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for GetPromiseResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        unsafe extern "C" {
+                            #[link_name = "[resource-drop]get-promise-result"]
+                            fn drop(_: u32);
+                        }
+                        unsafe { drop(_handle) };
+                    }
+                }
+            }
             impl GetAgents {
                 #[allow(unused_unsafe, clippy::all)]
                 /// Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
@@ -1075,6 +1113,80 @@ pub mod golem {
                     }
                 }
             }
+            impl GetPromiseResult {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns a pollable that can be used to wait for the promise to become ready.j
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        unsafe extern "C" {
+                            #[link_name = "[method]get-promise-result.subscribe"]
+                            fn wit_import0(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unsafe extern "C" fn wit_import0(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = unsafe { wit_import0((self).handle() as i32) };
+                        unsafe {
+                            super::super::super::wasi::io::poll::Pollable::from_handle(
+                                ret as u32,
+                            )
+                        }
+                    }
+                }
+            }
+            impl GetPromiseResult {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Poll the result of the promise, returning none if it is not yet ready.
+                pub fn get(&self) -> Option<_rt::Vec<u8>> {
+                    unsafe {
+                        #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                        #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                        struct RetArea(
+                            [::core::mem::MaybeUninit<
+                                u8,
+                            >; 3 * ::core::mem::size_of::<*const u8>()],
+                        );
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 3
+                                * ::core::mem::size_of::<*const u8>()],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        unsafe extern "C" {
+                            #[link_name = "[method]get-promise-result.get"]
+                            fn wit_import1(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unsafe extern "C" fn wit_import1(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        unsafe { wit_import1((self).handle() as i32, ptr0) };
+                        let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                        let result6 = match l2 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>();
+                                    let l4 = *ptr0
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    let len5 = l4;
+                                    _rt::Vec::from_raw_parts(l3.cast(), len5, len5)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        };
+                        result6
+                    }
+                }
+            }
             #[allow(unused_unsafe, clippy::all)]
             /// Create a new promise
             pub fn create_promise() -> PromiseId {
@@ -1128,21 +1240,9 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Suspends execution until the given promise gets completed, and returns the payload passed to
-            /// the promise completion.
-            pub fn await_promise(promise_id: &PromiseId) -> _rt::Vec<u8> {
+            /// Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
+            pub fn get_promise(promise_id: &PromiseId) -> GetPromiseResult {
                 unsafe {
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 2 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 2
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
                     let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
                     let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
@@ -1158,135 +1258,38 @@ pub mod golem {
                     let vec4 = agent_id1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
-                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "await-promise"]
-                        fn wit_import6(
+                        #[link_name = "get-promise"]
+                        fn wit_import5(
                             _: i64,
                             _: i64,
                             _: *mut u8,
                             _: usize,
                             _: i64,
-                            _: *mut u8,
-                        );
+                        ) -> i32;
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import6(
+                    unsafe extern "C" fn wit_import5(
                         _: i64,
                         _: i64,
                         _: *mut u8,
                         _: usize,
                         _: i64,
-                        _: *mut u8,
-                    ) {
+                    ) -> i32 {
                         unreachable!()
                     }
-                    unsafe {
-                        wit_import6(
+                    let ret = unsafe {
+                        wit_import5(
                             _rt::as_i64(high_bits3),
                             _rt::as_i64(low_bits3),
                             ptr4.cast_mut(),
                             len4,
                             _rt::as_i64(oplog_idx0),
-                            ptr5,
                         )
                     };
-                    let l7 = *ptr5.add(0).cast::<*mut u8>();
-                    let l8 = *ptr5
-                        .add(::core::mem::size_of::<*const u8>())
-                        .cast::<usize>();
-                    let len9 = l8;
-                    let result10 = _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
-                    result10
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
-            /// it returns the payload passed to the promise completion.
-            pub fn poll_promise(promise_id: &PromiseId) -> Option<_rt::Vec<u8>> {
-                unsafe {
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 3 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 3
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::AgentId {
-                        component_id: component_id1,
-                        agent_id: agent_id1,
-                    } = agent_id0;
-                    let super::super::super::golem::rpc::types::ComponentId {
-                        uuid: uuid2,
-                    } = component_id1;
-                    let super::super::super::golem::rpc::types::Uuid {
-                        high_bits: high_bits3,
-                        low_bits: low_bits3,
-                    } = uuid2;
-                    let vec4 = agent_id1;
-                    let ptr4 = vec4.as_ptr().cast::<u8>();
-                    let len4 = vec4.len();
-                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
-                    unsafe extern "C" {
-                        #[link_name = "poll-promise"]
-                        fn wit_import6(
-                            _: i64,
-                            _: i64,
-                            _: *mut u8,
-                            _: usize,
-                            _: i64,
-                            _: *mut u8,
-                        );
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import6(
-                        _: i64,
-                        _: i64,
-                        _: *mut u8,
-                        _: usize,
-                        _: i64,
-                        _: *mut u8,
-                    ) {
-                        unreachable!()
-                    }
-                    unsafe {
-                        wit_import6(
-                            _rt::as_i64(high_bits3),
-                            _rt::as_i64(low_bits3),
-                            ptr4.cast_mut(),
-                            len4,
-                            _rt::as_i64(oplog_idx0),
-                            ptr5,
-                        )
-                    };
-                    let l7 = i32::from(*ptr5.add(0).cast::<u8>());
-                    let result11 = match l7 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let l8 = *ptr5
-                                    .add(::core::mem::size_of::<*const u8>())
-                                    .cast::<*mut u8>();
-                                let l9 = *ptr5
-                                    .add(2 * ::core::mem::size_of::<*const u8>())
-                                    .cast::<usize>();
-                                let len10 = l9;
-                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    };
-                    result11
+                    unsafe { GetPromiseResult::from_handle(ret as u32) }
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
@@ -1350,52 +1353,6 @@ pub mod golem {
                         )
                     };
                     _rt::bool_lift(ret as u8)
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Deletes the given promise
-            pub fn delete_promise(promise_id: &PromiseId) -> () {
-                unsafe {
-                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::AgentId {
-                        component_id: component_id1,
-                        agent_id: agent_id1,
-                    } = agent_id0;
-                    let super::super::super::golem::rpc::types::ComponentId {
-                        uuid: uuid2,
-                    } = component_id1;
-                    let super::super::super::golem::rpc::types::Uuid {
-                        high_bits: high_bits3,
-                        low_bits: low_bits3,
-                    } = uuid2;
-                    let vec4 = agent_id1;
-                    let ptr4 = vec4.as_ptr().cast::<u8>();
-                    let len4 = vec4.len();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
-                    unsafe extern "C" {
-                        #[link_name = "delete-promise"]
-                        fn wit_import5(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import5(
-                        _: i64,
-                        _: i64,
-                        _: *mut u8,
-                        _: usize,
-                        _: i64,
-                    ) {
-                        unreachable!()
-                    }
-                    unsafe {
-                        wit_import5(
-                            _rt::as_i64(high_bits3),
-                            _rt::as_i64(low_bits3),
-                            ptr4.cast_mut(),
-                            len4,
-                            _rt::as_i64(oplog_idx0),
-                        )
-                    };
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
@@ -15735,8 +15692,8 @@ pub(crate) use __export_runtime_service_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 11937] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9b\\\x01A\x02\x01A)\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 12020] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xee\\\x01A\x02\x01A)\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -15790,152 +15747,154 @@ ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0
 \x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x03\
 \0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0cc\
 omponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\x03\0\x03\x08\
-agent-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\
-\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\
-\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x08\
-agent-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01r\x02\x08agent-id\x09\x09\
-oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\x11component-version\x03\0\
-\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01r\x01\x04uuid\x05\x04\0\
-\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max\
--delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\0\x0cretry-policy\x03\0\x15\
-\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\
-\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09automatic\x0esnapshot-based\x04\
-\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07g\
-reater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\x01m\x05\x05eq\
-ual\x09not-equal\x04like\x08not-like\x0bstarts-with\x04\0\x18string-filter-compa\
-rator\x03\0\x1d\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retry\
-ing\x06failed\x06exited\x04\0\x0cagent-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\
-\x05values\x04\0\x11agent-name-filter\x03\0!\x01r\x02\x0acomparator\x1c\x05value\
-\x20\x04\0\x13agent-status-filter\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\
-\0\x14agent-version-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x17\
-agent-created-at-filter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\
-\0\x10agent-env-filter\x03\0)\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\0\
-\x18agent-config-vars-filter\x03\0+\x01q\x06\x04name\x01\"\0\x06status\x01$\0\x07\
-version\x01&\0\x0acreated-at\x01(\0\x03env\x01*\0\x10wasi-config-vars\x01,\0\x04\
-\0\x15agent-property-filter\x03\0-\x01p.\x01r\x01\x07filters/\x04\0\x10agent-all\
--filter\x03\00\x01p1\x01r\x01\x07filters2\x04\0\x10agent-any-filter\x03\03\x01ps\
-\x01o\x02ss\x01p6\x01r\x07\x08agent-id\x09\x04args5\x03env7\x0bconfig-vars7\x06s\
-tatus\x20\x11component-versionw\x0bretry-countw\x04\0\x0eagent-metadata\x03\08\x04\
-\0\x0aget-agents\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\x0b\0\x17revert-l\
-ast-invocations\x01w\0\x04\0\x13revert-agent-target\x03\0;\x01m\x02\x08original\x06\
-forked\x04\0\x0bfork-result\x03\0=\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06f\
-ilter?\x07precise\x7f\0\xc0\0\x04\0\x17[constructor]get-agents\x01A\x01h:\x01p9\x01\
-k\xc3\0\x01@\x01\x04self\xc2\0\0\xc4\0\x04\0\x1b[method]get-agents.get-next\x01E\
-\x01@\0\0\x0d\x04\0\x0ecreate-promise\x01F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\
-\0\x04\0\x0dawait-promise\x01H\x01k\xc7\0\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\
-\0\x0cpoll-promise\x01J\x01@\x02\x0apromise-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10\
-complete-promise\x01K\x01@\x01\x0apromise-id\x0d\x01\0\x04\0\x0edelete-promise\x01\
-L\x01@\0\0\x0b\x04\0\x0fget-oplog-index\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\
-\0\x0fset-oplog-index\x01N\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01\
-O\x04\0\x14mark-begin-operation\x01M\x01@\x01\x05begin\x0b\x01\0\x04\0\x12mark-e\
-nd-operation\x01P\x01@\0\0\x16\x04\0\x10get-retry-policy\x01Q\x01@\x01\x10new-re\
-try-policy\x16\x01\0\x04\0\x10set-retry-policy\x01R\x01@\0\0\x18\x04\0\x1bget-op\
-log-persistence-level\x01S\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1b\
-set-oplog-persistence-level\x01T\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01U\
-\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01V\x01@\0\0\x05\
-\x04\0\x18generate-idempotency-key\x01W\x01@\x03\x08agent-id\x09\x0etarget-versi\
-on\x0f\x04mode\x1a\x01\0\x04\0\x0cupdate-agent\x01X\x01@\0\09\x04\0\x11get-self-\
-metadata\x01Y\x01k9\x01@\x01\x08agent-id\x09\0\xda\0\x04\0\x12get-agent-metadata\
-\x01[\x01@\x03\x0fsource-agent-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-of\
-f\x0b\x01\0\x04\0\x0afork-agent\x01\\\x01@\x02\x08agent-id\x09\x0drevert-target<\
-\x01\0\x04\0\x0crevert-agent\x01]\x01k\x03\x01@\x01\x13component-references\0\xde\
-\0\x04\0\x14resolve-component-id\x01_\x01k\x09\x01@\x02\x13component-references\x0a\
-agent-names\0\xe0\0\x04\0\x10resolve-agent-id\x01a\x04\0\x17resolve-agent-id-str\
-ict\x01a\x01@\x01\x08new-names\0>\x04\0\x04fork\x01b\x03\0\x14golem:api/host@1.1\
-.7\x05\x0b\x01B\x04\x04\0\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d\
-[method]error.to-debug-string\x01\x02\x03\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\
-\0\x05\x05error\x01B(\x02\x03\x02\x01\x0d\x04\0\x05error\x03\0\0\x02\x03\x02\x01\
-\x01\x04\0\x08pollable\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\
-\0\x06closed\0\0\x04\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\
-\0\x0doutput-stream\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\
-\x09\x03lenw\0\x0b\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]inp\
-ut-stream.blocking-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\
-\x0d\x04\0\x19[method]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.bloc\
-king-skip\x01\x0e\x01i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-str\
-eam.subscribe\x01\x10\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-s\
-tream.check-write\x01\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\
-\x04\0\x1b[method]output-stream.write\x01\x14\x04\0.[method]output-stream.blocki\
-ng-write-and-flush\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-st\
-ream.flush\x01\x15\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04\
-self\x11\0\x0f\x04\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\
-\x11\x03lenw\0\x13\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[meth\
-od]output-stream.blocking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03\
-src\x09\x03lenw\0\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[metho\
-d]output-stream.blocking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\
-\x03\0\x06\x0cinput-stream\x02\x03\0\x06\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\
-\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\
-\0\x02\x02\x03\x02\x01\x10\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x0d\x04\
-\0\x08io-error\x03\0\x06\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\
-\x03get\0\0\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07o\
-ptions\0\0\x05trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01\
-q\x03\x04HTTP\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01\
-k{\x01r\x02\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01\
-k}\x01r\x02\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-pay\
-load\x03\0\x13\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field\
--size-payload\x03\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\
-\x11\0\x15destination-not-found\0\0\x17destination-unavailable\0\0\x19destinatio\
-n-IP-prohibited\0\0\x19destination-IP-unroutable\0\0\x12connection-refused\0\0\x15\
-connection-terminated\0\0\x12connection-timeout\0\0\x17connection-read-timeout\0\
-\0\x18connection-write-timeout\0\0\x18connection-limit-reached\0\0\x12TLS-protoc\
-ol-error\0\0\x15TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTT\
-P-request-denied\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-request-body-si\
-ze\x01\x18\0\x1bHTTP-request-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19\
-HTTP-request-URI-too-long\0\0\x20HTTP-request-header-section-size\x01\x15\0\x18H\
-TTP-request-header-size\x01\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19\
-HTTP-request-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HTTP-respons\
-e-header-section-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-r\
-esponse-body-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\0\x1aHTT\
-P-response-trailer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1c\
-HTTP-response-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgr\
-ade-failed\0\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configuration-\
-error\0\0\x0einternal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0e\
-invalid-syntax\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\0\
-\x1c\x01s\x04\0\x09field-key\x03\0\x1e\x04\0\x0afield-name\x03\0\x1f\x01p}\x04\0\
-\x0bfield-value\x03\0!\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\0#\x04\0\x08\
-trailers\x03\0#\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\
-\x04\0\x0frequest-options\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0b\
-status-code\x03\0*\x04\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\
-\x01\x04\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0d\
-outgoing-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\x01i#\x01@\0\02\x04\
-\0\x13[constructor]fields\x013\x01o\x02\x20\"\x01p4\x01j\x012\x01\x1d\x01@\x01\x07\
-entries5\06\x04\0\x18[static]fields.from-list\x017\x01h#\x01p\"\x01@\x02\x04self\
-8\x04name\x20\09\x04\0\x12[method]fields.get\x01:\x01@\x02\x04self8\x04name\x20\0\
-\x7f\x04\0\x12[method]fields.has\x01;\x01j\0\x01\x1d\x01@\x03\x04self8\x04name\x20\
-\x05value9\0<\x04\0\x12[method]fields.set\x01=\x01@\x02\x04self8\x04name\x20\0<\x04\
-\0\x15[method]fields.delete\x01>\x01@\x03\x04self8\x04name\x20\x05value\"\0<\x04\
-\0\x15[method]fields.append\x01?\x01@\x01\x04self8\05\x04\0\x16[method]fields.en\
-tries\x01@\x01@\x01\x04self8\02\x04\0\x14[method]fields.clone\x01A\x01h&\x01@\x01\
-\x04self\xc2\0\0\x0b\x04\0\x1f[method]incoming-request.method\x01C\x01@\x01\x04s\
-elf\xc2\0\0\x0e\x04\0([method]incoming-request.path-with-query\x01D\x01k\x0d\x01\
-@\x01\x04self\xc2\0\0\xc5\0\x04\0\x1f[method]incoming-request.scheme\x01F\x04\0\"\
-[method]incoming-request.authority\x01D\x01i$\x01@\x01\x04self\xc2\0\0\xc7\0\x04\
-\0\x20[method]incoming-request.headers\x01H\x01i-\x01j\x01\xc9\0\0\x01@\x01\x04s\
-elf\xc2\0\0\xca\0\x04\0\x20[method]incoming-request.consume\x01K\x01i'\x01@\x01\x07\
-headers\xc7\0\0\xcc\0\x04\0\x1d[constructor]outgoing-request\x01M\x01h'\x01i0\x01\
-j\x01\xcf\0\0\x01@\x01\x04self\xce\0\0\xd0\0\x04\0\x1d[method]outgoing-request.b\
-ody\x01Q\x01@\x01\x04self\xce\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01\
-R\x01j\0\0\x01@\x02\x04self\xce\0\x06method\x0b\0\xd3\0\x04\0#[method]outgoing-r\
-equest.set-method\x01T\x01@\x01\x04self\xce\0\0\x0e\x04\0([method]outgoing-reque\
-st.path-with-query\x01U\x01@\x02\x04self\xce\0\x0fpath-with-query\x0e\0\xd3\0\x04\
-\0,[method]outgoing-request.set-path-with-query\x01V\x01@\x01\x04self\xce\0\0\xc5\
-\0\x04\0\x1f[method]outgoing-request.scheme\x01W\x01@\x02\x04self\xce\0\x06schem\
-e\xc5\0\0\xd3\0\x04\0#[method]outgoing-request.set-scheme\x01X\x04\0\"[method]ou\
-tgoing-request.authority\x01U\x01@\x02\x04self\xce\0\x09authority\x0e\0\xd3\0\x04\
-\0&[method]outgoing-request.set-authority\x01Y\x01@\x01\x04self\xce\0\0\xc7\0\x04\
-\0\x20[method]outgoing-request.headers\x01Z\x01i(\x01@\0\0\xdb\0\x04\0\x1c[const\
-ructor]request-options\x01\\\x01h(\x01k\x01\x01@\x01\x04self\xdd\0\0\xde\0\x04\0\
-'[method]request-options.connect-timeout\x01_\x01@\x02\x04self\xdd\0\x08duration\
-\xde\0\0\xd3\0\x04\0+[method]request-options.set-connect-timeout\x01`\x04\0*[met\
-hod]request-options.first-byte-timeout\x01_\x04\0.[method]request-options.set-fi\
-rst-byte-timeout\x01`\x04\0-[method]request-options.between-bytes-timeout\x01_\x04\
-\01[method]request-options.set-between-bytes-timeout\x01`\x01i)\x01i/\x01j\x01\xe2\
-\0\x01\x1b\x01@\x02\x05param\xe1\0\x08response\xe3\0\x01\0\x04\0\x1d[static]resp\
-onse-outparam.set\x01d\x01h,\x01@\x01\x04self\xe5\0\0+\x04\0\x20[method]incoming\
--response.status\x01f\x01@\x01\x04self\xe5\0\0\xc7\0\x04\0![method]incoming-resp\
-onse.headers\x01g\x01@\x01\x04self\xe5\0\0\xca\0\x04\0![method]incoming-response\
-.consume\x01h\x01h-\x01i\x03\x01j\x01\xea\0\0\x01@\x01\x04self\xe9\0\0\xeb\0\x04\
-\0\x1c[method]incoming-body.stream\x01l\x01i.\x01@\x01\x04this\xc9\0\0\xed\0\x04\
-\0\x1c[static]incoming-body.finish\x01n\x01h.\x01i\x09\x01@\x01\x04self\xef\0\0\xf0\
+agent-id\x01B\x85\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\
+\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\
+\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\
+\x08agent-id\x03\0\x08\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x0a\x01w\x04\0\
+\x0boplog-index\x03\0\x0c\x01r\x02\x08agent-id\x09\x09oplog-idx\x0d\x04\0\x0apro\
+mise-id\x03\0\x0e\x01w\x04\0\x11component-version\x03\0\x10\x01r\x01\x05values\x04\
+\0\x0aaccount-id\x03\0\x12\x01r\x01\x04uuid\x05\x04\0\x0aproject-id\x03\0\x14\x01\
+ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11\
+max-jitter-factor\x16\x04\0\x0cretry-policy\x03\0\x17\x01q\x03\x0fpersist-nothin\
+g\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\
+\x03\0\x19\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x1b\
+\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0aless-equal\x04les\
+s\x04\0\x11filter-comparator\x03\0\x1d\x01m\x05\x05equal\x09not-equal\x04like\x08\
+not-like\x0bstarts-with\x04\0\x18string-filter-comparator\x03\0\x1f\x01m\x07\x07\
+running\x04idle\x09suspended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\
+\x0cagent-status\x03\0!\x01r\x02\x0acomparator\x20\x05values\x04\0\x11agent-name\
+-filter\x03\0#\x01r\x02\x0acomparator\x1e\x05value\"\x04\0\x13agent-status-filte\
+r\x03\0%\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x14agent-version-filter\x03\0\
+'\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x17agent-created-at-filter\x03\0)\x01\
+r\x03\x04names\x0acomparator\x20\x05values\x04\0\x10agent-env-filter\x03\0+\x01r\
+\x03\x04names\x0acomparator\x20\x05values\x04\0\x18agent-config-vars-filter\x03\0\
+-\x01q\x06\x04name\x01$\0\x06status\x01&\0\x07version\x01(\0\x0acreated-at\x01*\0\
+\x03env\x01,\0\x10wasi-config-vars\x01.\0\x04\0\x15agent-property-filter\x03\0/\x01\
+p0\x01r\x01\x07filters1\x04\0\x10agent-all-filter\x03\02\x01p3\x01r\x01\x07filte\
+rs4\x04\0\x10agent-any-filter\x03\05\x01ps\x01o\x02ss\x01p8\x01r\x07\x08agent-id\
+\x09\x04args7\x03env9\x0bconfig-vars9\x06status\"\x11component-versionw\x0bretry\
+-countw\x04\0\x0eagent-metadata\x03\0:\x04\0\x0aget-agents\x03\x01\x01q\x02\x15r\
+evert-to-oplog-index\x01\x0d\0\x17revert-last-invocations\x01w\0\x04\0\x13revert\
+-agent-target\x03\0=\x01m\x02\x08original\x06forked\x04\0\x0bfork-result\x03\0?\x04\
+\0\x12get-promise-result\x03\x01\x01k6\x01i<\x01@\x03\x0ccomponent-id\x03\x06fil\
+ter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\x17[constructor]get-agents\x01D\x01h<\x01\
+p;\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\xc7\0\x04\0\x1b[method]get-agents.get-nex\
+t\x01H\x01hA\x01i\x0b\x01@\x01\x04self\xc9\0\0\xca\0\x04\0$[method]get-promise-r\
+esult.subscribe\x01K\x01p}\x01k\xcc\0\x01@\x01\x04self\xc9\0\0\xcd\0\x04\0\x1e[m\
+ethod]get-promise-result.get\x01N\x01@\0\0\x0f\x04\0\x0ecreate-promise\x01O\x01i\
+A\x01@\x01\x0apromise-id\x0f\0\xd0\0\x04\0\x0bget-promise\x01Q\x01@\x02\x0apromi\
+se-id\x0f\x04data\xcc\0\0\x7f\x04\0\x10complete-promise\x01R\x01@\0\0\x0d\x04\0\x0f\
+get-oplog-index\x01S\x01@\x01\x09oplog-idx\x0d\x01\0\x04\0\x0fset-oplog-index\x01\
+T\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01U\x04\0\x14mark-begin-ope\
+ration\x01S\x01@\x01\x05begin\x0d\x01\0\x04\0\x12mark-end-operation\x01V\x01@\0\0\
+\x18\x04\0\x10get-retry-policy\x01W\x01@\x01\x10new-retry-policy\x18\x01\0\x04\0\
+\x10set-retry-policy\x01X\x01@\0\0\x1a\x04\0\x1bget-oplog-persistence-level\x01Y\
+\x01@\x01\x15new-persistence-level\x1a\x01\0\x04\0\x1bset-oplog-persistence-leve\
+l\x01Z\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01[\x01@\x01\x0aidempotent\x7f\
+\x01\0\x04\0\x14set-idempotence-mode\x01\\\x01@\0\0\x05\x04\0\x18generate-idempo\
+tency-key\x01]\x01@\x03\x08agent-id\x09\x0etarget-version\x11\x04mode\x1c\x01\0\x04\
+\0\x0cupdate-agent\x01^\x01@\0\0;\x04\0\x11get-self-metadata\x01_\x01k;\x01@\x01\
+\x08agent-id\x09\0\xe0\0\x04\0\x12get-agent-metadata\x01a\x01@\x03\x0fsource-age\
+nt-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-off\x0d\x01\0\x04\0\x0afork-ag\
+ent\x01b\x01@\x02\x08agent-id\x09\x0drevert-target>\x01\0\x04\0\x0crevert-agent\x01\
+c\x01k\x03\x01@\x01\x13component-references\0\xe4\0\x04\0\x14resolve-component-i\
+d\x01e\x01k\x09\x01@\x02\x13component-references\x0aagent-names\0\xe6\0\x04\0\x10\
+resolve-agent-id\x01g\x04\0\x17resolve-agent-id-strict\x01g\x01@\x01\x08new-name\
+s\0\xc0\0\x04\0\x04fork\x01h\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x04\x04\0\
+\x05error\x03\x01\x01h\0\x01@\x01\x04self\x01\0s\x04\0\x1d[method]error.to-debug\
+-string\x01\x02\x03\0\x13wasi:io/error@0.2.3\x05\x0c\x02\x03\0\x05\x05error\x01B\
+(\x02\x03\x02\x01\x0d\x04\0\x05error\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollab\
+le\x03\0\x02\x01i\x01\x01q\x02\x15last-operation-failed\x01\x04\0\x06closed\0\0\x04\
+\0\x0cstream-error\x03\0\x05\x04\0\x0cinput-stream\x03\x01\x04\0\x0doutput-strea\
+m\x03\x01\x01h\x07\x01p}\x01j\x01\x0a\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0b\
+\x04\0\x19[method]input-stream.read\x01\x0c\x04\0\"[method]input-stream.blocking\
+-read\x01\x0c\x01j\x01w\x01\x06\x01@\x02\x04self\x09\x03lenw\0\x0d\x04\0\x19[met\
+hod]input-stream.skip\x01\x0e\x04\0\"[method]input-stream.blocking-skip\x01\x0e\x01\
+i\x03\x01@\x01\x04self\x09\0\x0f\x04\0\x1e[method]input-stream.subscribe\x01\x10\
+\x01h\x08\x01@\x01\x04self\x11\0\x0d\x04\0![method]output-stream.check-write\x01\
+\x12\x01j\0\x01\x06\x01@\x02\x04self\x11\x08contents\x0a\0\x13\x04\0\x1b[method]\
+output-stream.write\x01\x14\x04\0.[method]output-stream.blocking-write-and-flush\
+\x01\x14\x01@\x01\x04self\x11\0\x13\x04\0\x1b[method]output-stream.flush\x01\x15\
+\x04\0$[method]output-stream.blocking-flush\x01\x15\x01@\x01\x04self\x11\0\x0f\x04\
+\0\x1f[method]output-stream.subscribe\x01\x16\x01@\x02\x04self\x11\x03lenw\0\x13\
+\x04\0\"[method]output-stream.write-zeroes\x01\x17\x04\05[method]output-stream.b\
+locking-write-zeroes-and-flush\x01\x17\x01@\x03\x04self\x11\x03src\x09\x03lenw\0\
+\x0d\x04\0\x1c[method]output-stream.splice\x01\x18\x04\0%[method]output-stream.b\
+locking-splice\x01\x18\x03\0\x15wasi:io/streams@0.2.3\x05\x0e\x02\x03\0\x06\x0ci\
+nput-stream\x02\x03\0\x06\x0doutput-stream\x01B\xc1\x01\x02\x03\x02\x01\x06\x04\0\
+\x08duration\x03\0\0\x02\x03\x02\x01\x0f\x04\0\x0cinput-stream\x03\0\x02\x02\x03\
+\x02\x01\x10\x04\0\x0doutput-stream\x03\0\x04\x02\x03\x02\x01\x0d\x04\0\x08io-er\
+ror\x03\0\x06\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\x08\x01q\x0a\x03get\0\0\
+\x04head\0\0\x04post\0\0\x03put\0\0\x06delete\0\0\x07connect\0\0\x07options\0\0\x05\
+trace\0\0\x05patch\0\0\x05other\x01s\0\x04\0\x06method\x03\0\x0a\x01q\x03\x04HTT\
+P\0\0\x05HTTPS\0\0\x05other\x01s\0\x04\0\x06scheme\x03\0\x0c\x01ks\x01k{\x01r\x02\
+\x05rcode\x0e\x09info-code\x0f\x04\0\x11DNS-error-payload\x03\0\x10\x01k}\x01r\x02\
+\x08alert-id\x12\x0dalert-message\x0e\x04\0\x1aTLS-alert-received-payload\x03\0\x13\
+\x01ky\x01r\x02\x0afield-name\x0e\x0afield-size\x15\x04\0\x12field-size-payload\x03\
+\0\x16\x01kw\x01k\x17\x01q'\x0bDNS-timeout\0\0\x09DNS-error\x01\x11\0\x15destina\
+tion-not-found\0\0\x17destination-unavailable\0\0\x19destination-IP-prohibited\0\
+\0\x19destination-IP-unroutable\0\0\x12connection-refused\0\0\x15connection-term\
+inated\0\0\x12connection-timeout\0\0\x17connection-read-timeout\0\0\x18connectio\
+n-write-timeout\0\0\x18connection-limit-reached\0\0\x12TLS-protocol-error\0\0\x15\
+TLS-certificate-error\0\0\x12TLS-alert-received\x01\x14\0\x13HTTP-request-denied\
+\0\0\x1cHTTP-request-length-required\0\0\x16HTTP-request-body-size\x01\x18\0\x1b\
+HTTP-request-method-invalid\0\0\x18HTTP-request-URI-invalid\0\0\x19HTTP-request-\
+URI-too-long\0\0\x20HTTP-request-header-section-size\x01\x15\0\x18HTTP-request-h\
+eader-size\x01\x19\0!HTTP-request-trailer-section-size\x01\x15\0\x19HTTP-request\
+-trailer-size\x01\x17\0\x18HTTP-response-incomplete\0\0!HTTP-response-header-sec\
+tion-size\x01\x15\0\x19HTTP-response-header-size\x01\x17\0\x17HTTP-response-body\
+-size\x01\x18\0\"HTTP-response-trailer-section-size\x01\x15\0\x1aHTTP-response-t\
+railer-size\x01\x17\0\x1dHTTP-response-transfer-coding\x01\x0e\0\x1cHTTP-respons\
+e-content-coding\x01\x0e\0\x15HTTP-response-timeout\0\0\x13HTTP-upgrade-failed\0\
+\0\x13HTTP-protocol-error\0\0\x0dloop-detected\0\0\x13configuration-error\0\0\x0e\
+internal-error\x01\x0e\0\x04\0\x0aerror-code\x03\0\x1a\x01q\x03\x0einvalid-synta\
+x\0\0\x09forbidden\0\0\x09immutable\0\0\x04\0\x0cheader-error\x03\0\x1c\x01s\x04\
+\0\x09field-key\x03\0\x1e\x04\0\x0afield-name\x03\0\x1f\x01p}\x04\0\x0bfield-val\
+ue\x03\0!\x04\0\x06fields\x03\x01\x04\0\x07headers\x03\0#\x04\0\x08trailers\x03\0\
+#\x04\0\x10incoming-request\x03\x01\x04\0\x10outgoing-request\x03\x01\x04\0\x0fr\
+equest-options\x03\x01\x04\0\x11response-outparam\x03\x01\x01{\x04\0\x0bstatus-c\
+ode\x03\0*\x04\0\x11incoming-response\x03\x01\x04\0\x0dincoming-body\x03\x01\x04\
+\0\x0ffuture-trailers\x03\x01\x04\0\x11outgoing-response\x03\x01\x04\0\x0doutgoi\
+ng-body\x03\x01\x04\0\x18future-incoming-response\x03\x01\x01i#\x01@\0\02\x04\0\x13\
+[constructor]fields\x013\x01o\x02\x20\"\x01p4\x01j\x012\x01\x1d\x01@\x01\x07entr\
+ies5\06\x04\0\x18[static]fields.from-list\x017\x01h#\x01p\"\x01@\x02\x04self8\x04\
+name\x20\09\x04\0\x12[method]fields.get\x01:\x01@\x02\x04self8\x04name\x20\0\x7f\
+\x04\0\x12[method]fields.has\x01;\x01j\0\x01\x1d\x01@\x03\x04self8\x04name\x20\x05\
+value9\0<\x04\0\x12[method]fields.set\x01=\x01@\x02\x04self8\x04name\x20\0<\x04\0\
+\x15[method]fields.delete\x01>\x01@\x03\x04self8\x04name\x20\x05value\"\0<\x04\0\
+\x15[method]fields.append\x01?\x01@\x01\x04self8\05\x04\0\x16[method]fields.entr\
+ies\x01@\x01@\x01\x04self8\02\x04\0\x14[method]fields.clone\x01A\x01h&\x01@\x01\x04\
+self\xc2\0\0\x0b\x04\0\x1f[method]incoming-request.method\x01C\x01@\x01\x04self\xc2\
+\0\0\x0e\x04\0([method]incoming-request.path-with-query\x01D\x01k\x0d\x01@\x01\x04\
+self\xc2\0\0\xc5\0\x04\0\x1f[method]incoming-request.scheme\x01F\x04\0\"[method]\
+incoming-request.authority\x01D\x01i$\x01@\x01\x04self\xc2\0\0\xc7\0\x04\0\x20[m\
+ethod]incoming-request.headers\x01H\x01i-\x01j\x01\xc9\0\0\x01@\x01\x04self\xc2\0\
+\0\xca\0\x04\0\x20[method]incoming-request.consume\x01K\x01i'\x01@\x01\x07header\
+s\xc7\0\0\xcc\0\x04\0\x1d[constructor]outgoing-request\x01M\x01h'\x01i0\x01j\x01\
+\xcf\0\0\x01@\x01\x04self\xce\0\0\xd0\0\x04\0\x1d[method]outgoing-request.body\x01\
+Q\x01@\x01\x04self\xce\0\0\x0b\x04\0\x1f[method]outgoing-request.method\x01R\x01\
+j\0\0\x01@\x02\x04self\xce\0\x06method\x0b\0\xd3\0\x04\0#[method]outgoing-reques\
+t.set-method\x01T\x01@\x01\x04self\xce\0\0\x0e\x04\0([method]outgoing-request.pa\
+th-with-query\x01U\x01@\x02\x04self\xce\0\x0fpath-with-query\x0e\0\xd3\0\x04\0,[\
+method]outgoing-request.set-path-with-query\x01V\x01@\x01\x04self\xce\0\0\xc5\0\x04\
+\0\x1f[method]outgoing-request.scheme\x01W\x01@\x02\x04self\xce\0\x06scheme\xc5\0\
+\0\xd3\0\x04\0#[method]outgoing-request.set-scheme\x01X\x04\0\"[method]outgoing-\
+request.authority\x01U\x01@\x02\x04self\xce\0\x09authority\x0e\0\xd3\0\x04\0&[me\
+thod]outgoing-request.set-authority\x01Y\x01@\x01\x04self\xce\0\0\xc7\0\x04\0\x20\
+[method]outgoing-request.headers\x01Z\x01i(\x01@\0\0\xdb\0\x04\0\x1c[constructor\
+]request-options\x01\\\x01h(\x01k\x01\x01@\x01\x04self\xdd\0\0\xde\0\x04\0'[meth\
+od]request-options.connect-timeout\x01_\x01@\x02\x04self\xdd\0\x08duration\xde\0\
+\0\xd3\0\x04\0+[method]request-options.set-connect-timeout\x01`\x04\0*[method]re\
+quest-options.first-byte-timeout\x01_\x04\0.[method]request-options.set-first-by\
+te-timeout\x01`\x04\0-[method]request-options.between-bytes-timeout\x01_\x04\01[\
+method]request-options.set-between-bytes-timeout\x01`\x01i)\x01i/\x01j\x01\xe2\0\
+\x01\x1b\x01@\x02\x05param\xe1\0\x08response\xe3\0\x01\0\x04\0\x1d[static]respon\
+se-outparam.set\x01d\x01h,\x01@\x01\x04self\xe5\0\0+\x04\0\x20[method]incoming-r\
+esponse.status\x01f\x01@\x01\x04self\xe5\0\0\xc7\0\x04\0![method]incoming-respon\
+se.headers\x01g\x01@\x01\x04self\xe5\0\0\xca\0\x04\0![method]incoming-response.c\
+onsume\x01h\x01h-\x01i\x03\x01j\x01\xea\0\0\x01@\x01\x04self\xe9\0\0\xeb\0\x04\0\
+\x1c[method]incoming-body.stream\x01l\x01i.\x01@\x01\x04this\xc9\0\0\xed\0\x04\0\
+\x1c[static]incoming-body.finish\x01n\x01h.\x01i\x09\x01@\x01\x04self\xef\0\0\xf0\
 \0\x04\0![method]future-trailers.subscribe\x01q\x01i%\x01k\xf2\0\x01j\x01\xf3\0\x01\
 \x1b\x01j\x01\xf4\0\0\x01k\xf5\0\x01@\x01\x04self\xef\0\0\xf6\0\x04\0\x1b[method\
 ]future-trailers.get\x01w\x01@\x01\x07headers\xc7\0\0\xe2\0\x04\0\x1e[constructo\

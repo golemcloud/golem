@@ -422,10 +422,14 @@ async fn promise(
         .in_current_span(),
     );
 
+    info!("Waiting for worker to be suspended on promise");
+
     // While waiting for the promise, the worker gets suspended
     executor
         .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
         .await;
+
+    info!("Completing promise to resume worker");
 
     executor
         .deps

@@ -5,7 +5,6 @@ IFS=$'\n\t'
 rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopping-cart" "file-write-read-delete" "file-service" "http-client" "directories" "environment-service" "promise" "interruption" "clock-service"
 "option-service" "flags-service" "http-client-2" "failing-component" "variant-service" "key-value-service" "blob-store-service" "runtime-service" "networking" "shopping-cart-resource"
 "update-test-v1" "update-test-v2-11" "update-test-v3-11" "update-test-v4" "rust-echo" "durability-overhead" "logging" "oplog-processor" "rdbms-service" "component-resolve" "http-client-3" "golem-rust-tests")
-zig_test_components=("zig-3")
 tinygo_test_components=("tinygo-wasi" "tinygo-wasi-http")
 grain_test_components=("grain-1")
 js_test_components=("js-1" "js-2" "js-3" "js-4" "js-echo")
@@ -16,12 +15,12 @@ c_test_components=("c-1" "large-initial-memory" "large-dynamic-memory")
 python_test_components=("python-1" "py-echo")
 
 rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability")
-ts_test_apps=("ts-rpc")
+ts_test_apps=("ts-rpc" "agent-constructor-parameter-echo")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
 # - update-wit: update the wit/deps directories
-# - rust / zig / tinygo / grain / js / java / dotnet / swift / c / python: build only the specified language
+# - rust / tinygo / grain / js / java / dotnet / swift / c / python: build only the specified language
 
 rebuild=false
 single_lang=false
@@ -38,10 +37,6 @@ for arg in "$@"; do
     rust)
       single_lang=true
       lang="rust"
-      ;;
-    zig)
-      single_lang=true
-      lang="zig"
       ;;
     tinygo)
       single_lang=true
@@ -131,32 +126,6 @@ if [ "$single_lang" = "false" ] || [ "$lang" = "rust" ]; then
 
     $GOLEM_CLI app -b release build
     $GOLEM_CLI app -b release copy
-
-    popd || exit
-  done
-fi
-
-if [ "$single_lang" = "false" ] || [ "$lang" = "zig" ]; then
-  echo "Building the Zig test components"
-  for subdir in "${zig_test_components[@]}"; do
-    echo "Building $subdir..."
-    pushd "$subdir" || exit
-
-    if [ "$update_wit" = true ] && [ -f "wit/deps.toml" ]; then
-      wit-deps update
-    fi
-
-    if [ "$rebuild" = true ]; then
-      rm -rf zig-out
-      rm -rf zig-cache
-    fi
-    zig build -Dadapter=../../../golem-wit/adapters/tier1/wasi_snapshot_preview1.wasm
-
-    echo "Turning the module into a WebAssembly Component..."
-    target="../$subdir.wasm"
-    target_wat="../$subdir.wat"
-    cp zig-out/bin/component.wasm "$target"
-    wasm-tools print "$target" >"$target_wat"
 
     popd || exit
   done
