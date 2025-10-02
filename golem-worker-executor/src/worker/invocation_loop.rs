@@ -549,6 +549,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             self.store,
             self.instance,
             &component_metadata,
+            true,
         )
         .await;
 
@@ -743,6 +744,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     self.store,
                     self.instance,
                     &component_metadata,
+                    true
                 )
                 .await;
                 self.store.data_mut().end_call_snapshotting_function();

@@ -192,9 +192,7 @@ async fn fork_running_worker_1(deps: &EnvBasedTestDependencies, _tracing: &Traci
         .search_oplog(&target_worker_id, "initialize-cart AND NOT pending")
         .await;
 
-    // Since the fork point was before the completion, it re-intitialises making the total initialisation
-    // records 2 along with the new log in target worker.
-    assert_eq!(total_cart_initialisation.len(), 2);
+    assert_eq!(total_cart_initialisation.len(), 1);
 }
 
 #[test]
