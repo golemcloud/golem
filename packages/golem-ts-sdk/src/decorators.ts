@@ -457,21 +457,17 @@ export function deserializeDataValue(
           case 'unstructured-text':
             const [type] = paramTypes[idx][1];
 
-            if (type.name === 'UnstructuredText') {
-              const textRef = elem.val;
+            const textRef = elem.val;
 
-              const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(type);
+            const languageCodes: Either.Either<string[], string> =
+              getLanguageCodes(type);
 
-              if (Either.isLeft(languageCodes)) {
-                throw new Error(
-                  `Failed to get language codes for parameter ${paramTypes[idx][0]}: ${languageCodes.val}`,
-                );
-              }
-              return UnstructuredText.fromDataValue(textRef, languageCodes.val);
-            } else {
-              throw new Error('Type mismatch: expected UnstructuredText type.');
+            if (Either.isLeft(languageCodes)) {
+              throw new Error(
+                `Failed to get language codes for parameter ${paramTypes[idx][0]}: ${languageCodes.val}`,
+              );
             }
+            return UnstructuredText.fromDataValue(textRef, languageCodes.val);
 
           case 'unstructured-binary':
             const [binaryType] = paramTypes[idx][1];

@@ -56,7 +56,7 @@ import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistr
 import { deserializeDataValue } from '../src/decorators';
 import { convertTsValueToElementValue } from '../src/internal/mapping/values/elementValue';
 
-test('something x y z ', () => {
+test('unstructured text invoke', () => {
   overrideSelfMetadataImpl(FooAgentName.value);
 
   const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
@@ -65,30 +65,14 @@ test('something x y z ', () => {
     throw new Error('FooAgent type metadata not found');
   }
 
-  const resolvedAgent = initiateFooAgent('foo-init', typeRegistry);
+  const resolvedAgent = initiateFooAgent('foo', typeRegistry);
 
-  testInvoke(
-    'fun1',
-    [['param', 'foo']],
-    resolvedAgent,
-    'Weather in ' + 'foo' + ' is sunny!',
-  );
-
-  // overrideSelfMetadataImpl(FooAgentName.value);
-  //
-  // const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
-  //
-  // if (!typeRegistry) {
-  //   throw new Error('FooAgent type metadata not found');
-  // }
-  //
-  // const resolvedAgent = initiateFooAgent('foo', typeRegistry);
-  //
-  // testInvoke('fun15', [['param', { tag: 'url', val: 'foo' }]], resolvedAgent, {
-  //   tag: 'url',
-  //   val: 'foo',
-  // });
+  testInvoke('fun15', [['param', { tag: 'url', val: 'foo' }]], resolvedAgent, {
+    tag: 'url',
+    val: 'foo',
+  });
 });
+
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
     fc.property(

@@ -533,8 +533,13 @@ function getTextDescriptor(
 }
 
 export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
-  if (type.name === 'UnstructuredBinary' && type.kind === 'union') {
-    const parameterTypes: Type.Type[] = type.typeParams ?? [];
+  const promiseUnwrappedType = type.kind === 'promise' ? type.element : type;
+
+  if (
+    promiseUnwrappedType.name === 'UnstructuredBinary' &&
+    promiseUnwrappedType.kind === 'union'
+  ) {
+    const parameterTypes: Type.Type[] = promiseUnwrappedType.typeParams ?? [];
 
     if (parameterTypes.length !== 1) {
       return Either.right([]);
@@ -570,8 +575,13 @@ export function getMimeTypes(type: Type.Type): Either.Either<string[], string> {
 export function getLanguageCodes(
   type: Type.Type,
 ): Either.Either<string[], string> {
-  if (type.name === 'UnstructuredText' && type.kind === 'union') {
-    const parameterTypes: Type.Type[] = type.typeParams ?? [];
+  const promiseUnwrappedType = type.kind === 'promise' ? type.element : type;
+
+  if (
+    promiseUnwrappedType.name === 'UnstructuredText' &&
+    promiseUnwrappedType.kind === 'union'
+  ) {
+    const parameterTypes: Type.Type[] = promiseUnwrappedType.typeParams ?? [];
 
     if (parameterTypes.length !== 1) {
       return Either.right([]);
