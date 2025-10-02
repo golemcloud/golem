@@ -79,7 +79,9 @@ declare module 'golem:api/context@1.1.7' {
   /**
    * Possible span attribute value types
    */
-  export type AttributeValue = {
+  export type AttributeValue = 
+  /** A string value */
+  {
     tag: 'string'
     val: string
   };

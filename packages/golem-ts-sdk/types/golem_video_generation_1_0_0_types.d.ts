@@ -1,5 +1,6 @@
 declare module 'golem:video-generation/types@1.0.0' {
-  export type VideoError = {
+  export type VideoError = 
+  {
     tag: 'invalid-input'
     val: string
   } |
@@ -26,7 +27,8 @@ declare module 'golem:video-generation/types@1.0.0' {
     bytes: Uint8Array;
     mimeType: string;
   };
-  export type MediaData = {
+  export type MediaData = 
+  {
     tag: 'url'
     val: string
   } |
@@ -45,7 +47,8 @@ declare module 'golem:video-generation/types@1.0.0' {
   export type BaseVideo = {
     data: MediaData;
   };
-  export type MediaInput = {
+  export type MediaInput = 
+  {
     tag: 'text'
     val: string
   } |
@@ -79,7 +82,8 @@ declare module 'golem:video-generation/types@1.0.0' {
     zoom: number;
     roll: number;
   };
-  export type CameraMovement = {
+  export type CameraMovement = 
+  {
     tag: 'simple'
     val: CameraConfig
   } |
@@ -128,7 +132,8 @@ declare module 'golem:video-generation/types@1.0.0' {
     durationSeconds?: number;
     generationId?: string;
   };
-  export type JobStatus = {
+  export type JobStatus = 
+  {
     tag: 'pending'
   } |
   {
@@ -152,7 +157,8 @@ declare module 'golem:video-generation/types@1.0.0' {
     language: VoiceLanguage;
     speed: number;
   };
-  export type AudioSource = {
+  export type AudioSource = 
+  {
     tag: 'from-text'
     val: TextToSpeech
   } |
@@ -172,7 +178,8 @@ declare module 'golem:video-generation/types@1.0.0' {
     effect: DualImageEffects;
     secondImage: InputImage;
   };
-  export type EffectType = {
+  export type EffectType = 
+  {
     tag: 'single'
     val: SingleImageEffects
   } |
@@ -180,7 +187,8 @@ declare module 'golem:video-generation/types@1.0.0' {
     tag: 'dual'
     val: DualEffect
   };
-  export type LipSyncVideo = {
+  export type LipSyncVideo = 
+  {
     tag: 'video'
     val: BaseVideo
   } |

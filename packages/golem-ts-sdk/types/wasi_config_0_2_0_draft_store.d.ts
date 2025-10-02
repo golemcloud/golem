@@ -15,10 +15,24 @@ declare module 'wasi:config/store@0.2.0-draft' {
   /**
    * An error type that encapsulates the different errors that can occur fetching configuration values.
    */
-  export type Error = {
+  export type Error = 
+  /**
+   * This indicates an error from an "upstream" config source.
+   * As this could be almost _anything_ (such as Vault, Kubernetes ConfigMaps, KeyValue buckets, etc),
+   * the error message is a string.
+   */
+  {
     tag: 'upstream'
     val: string
   } |
+  /**
+   * This indicates an error from an I/O operation.
+   * As this could be almost _anything_ (such as a file read, network connection, etc),
+   * the error message is a string.
+   * Depending on how this ends up being consumed,
+   * we may consider moving this to use the `wasi:io/error` type instead.
+   * For simplicity right now in supporting multiple implementations, it is being left as a string.
+   */
   {
     tag: 'io'
     val: string

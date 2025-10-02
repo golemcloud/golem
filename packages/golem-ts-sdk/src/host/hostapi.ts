@@ -12,5 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+import { PromiseId, getPromise } from 'golem:api/host@1.1.7';
+
 // reexport golem host api
 export * from 'golem:api/host@1.1.7';
+
+export async function awaitPromise(promiseId: PromiseId): Promise<Uint8Array> {
+  const promise = getPromise(promiseId);
+  await promise.subscribe().promise();
+  return promise.get()!;
+}

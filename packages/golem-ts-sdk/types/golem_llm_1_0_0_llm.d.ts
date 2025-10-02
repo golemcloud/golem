@@ -28,7 +28,8 @@ declare module 'golem:llm/llm@1.0.0' {
     mimeType: string;
     detail?: ImageDetail;
   };
-  export type ImageReference = {
+  export type ImageReference = 
+  {
     tag: 'url'
     val: ImageUrl
   } |
@@ -36,7 +37,8 @@ declare module 'golem:llm/llm@1.0.0' {
     tag: 'inline'
     val: ImageSource
   };
-  export type ContentPart = {
+  export type ContentPart = 
+  {
     tag: 'text'
     val: string
   } |
@@ -74,7 +76,8 @@ declare module 'golem:llm/llm@1.0.0' {
     errorMessage: string;
     errorCode?: string;
   };
-  export type ToolResult = {
+  export type ToolResult = 
+  {
     tag: 'success'
     val: ToolSuccess
   } |
@@ -130,7 +133,8 @@ declare module 'golem:llm/llm@1.0.0' {
   /**
    * --- Chat Response Variants ---
    */
-  export type ChatEvent = {
+  export type ChatEvent = 
+  {
     tag: 'message'
     val: CompleteResponse
   } |
@@ -149,7 +153,8 @@ declare module 'golem:llm/llm@1.0.0' {
     content?: ContentPart[];
     toolCalls?: ToolCall[];
   };
-  export type StreamEvent = {
+  export type StreamEvent = 
+  {
     tag: 'delta'
     val: StreamDelta
   } |

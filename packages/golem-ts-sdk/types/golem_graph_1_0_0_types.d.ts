@@ -8,12 +8,16 @@ declare module 'golem:graph/types@1.0.0' {
   export type Date = {
     year: number;
     month: number;
+    /** 1-12 */
     day: number;
   };
   export type Time = {
     hour: number;
+    /** 0-23 */
     minute: number;
+    /** 0-59 */
     second: number;
+    /** 0-59 */
     nanosecond: number;
   };
   export type Datetime = {
@@ -43,7 +47,8 @@ declare module 'golem:graph/types@1.0.0' {
   /**
    * Universal property value types that can be represented across all graph databases
    */
-  export type PropertyValue = {
+  export type PropertyValue = 
+  {
     tag: 'null-value'
   } |
   {
@@ -98,6 +103,7 @@ declare module 'golem:graph/types@1.0.0' {
     tag: 'bytes'
     val: Uint8Array
   } |
+  /** Temporal types (unified representation) */
   {
     tag: 'date'
     val: Date
@@ -114,6 +120,7 @@ declare module 'golem:graph/types@1.0.0' {
     tag: 'duration'
     val: Duration
   } |
+  /** Geospatial types (unified GeoJSON-like representation) */
   {
     tag: 'point'
     val: Point
@@ -129,7 +136,8 @@ declare module 'golem:graph/types@1.0.0' {
   /**
    * Universal element ID that can represent various database ID schemes
    */
-  export type ElementId = {
+  export type ElementId = 
+  {
     tag: 'string-value'
     val: string
   } |
@@ -151,7 +159,9 @@ declare module 'golem:graph/types@1.0.0' {
   export type Vertex = {
     id: ElementId;
     vertexType: string;
+    /** Primary type (collection/tag/label) */
     additionalLabels: string[];
+    /** Secondary labels (Neo4j-style) */
     properties: PropertyMap;
   };
   /**
@@ -160,6 +170,7 @@ declare module 'golem:graph/types@1.0.0' {
   export type Edge = {
     id: ElementId;
     edgeType: string;
+    /** Edge type/relationship type */
     fromVertex: ElementId;
     toVertex: ElementId;
     properties: PropertyMap;
@@ -198,7 +209,8 @@ declare module 'golem:graph/types@1.0.0' {
   /**
    * Query result that maintains symmetry with data insertion formats
    */
-  export type QueryResult = {
+  export type QueryResult = 
+  {
     tag: 'vertices'
     val: Vertex[]
   } |
@@ -230,7 +242,9 @@ declare module 'golem:graph/types@1.0.0' {
     parameters?: QueryParameters;
     timeoutSeconds?: number;
     maxResults?: number;
+    /** Return execution plan instead of results, default to false */
     explain?: boolean;
+    /** Include performance metrics, default to false */
     profile?: boolean;
   };
   /**
@@ -239,6 +253,7 @@ declare module 'golem:graph/types@1.0.0' {
   export type CreateVertexOptions = {
     vertexType: string;
     properties?: PropertyMap;
+    /** For multi-label systems like Neo4j */
     labels?: string[];
   };
   /**
@@ -248,6 +263,7 @@ declare module 'golem:graph/types@1.0.0' {
     id: ElementId;
     properties: PropertyMap;
     partial?: boolean;
+    /** defaults to false */
     createMissing?: boolean;
   };
   /**
@@ -274,6 +290,7 @@ declare module 'golem:graph/types@1.0.0' {
     id: ElementId;
     properties: PropertyMap;
     partial?: boolean;
+    /** defaults to false */
     createMissingWith?: CreateMissingEdgeOptions;
   };
   /**
@@ -322,6 +339,7 @@ declare module 'golem:graph/types@1.0.0' {
     executionTimeMs?: number;
     rowsAffected?: number;
     explanation?: string;
+    /** Execution plan if requested */
     profileData?: string;
   };
   /**

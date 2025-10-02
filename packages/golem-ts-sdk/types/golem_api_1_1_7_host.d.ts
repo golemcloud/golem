@@ -5,29 +5,20 @@
 declare module 'golem:api/host@1.1.7' {
   import * as golemRpc022Types from 'golem:rpc/types@0.2.2';
   import * as wasiClocks023MonotonicClock from 'wasi:clocks/monotonic-clock@0.2.3';
+  import * as wasiIo023Poll from 'wasi:io/poll@0.2.3';
   /**
    * Create a new promise
    */
   export function createPromise(): PromiseId;
   /**
-   * Suspends execution until the given promise gets completed, and returns the payload passed to
-   * the promise completion.
+   * Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
    */
-  export function awaitPromise(promiseId: PromiseId): Uint8Array;
-  /**
-   * Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
-   * it returns the payload passed to the promise completion.
-   */
-  export function pollPromise(promiseId: PromiseId): Uint8Array | undefined;
+  export function getPromise(promiseId: PromiseId): GetPromiseResult;
   /**
    * Completes the given promise with the given payload. Returns true if the promise was completed, false
-   * if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+   * if the promise was already completed. The payload is passed to the agent that is awaiting the promise.
    */
   export function completePromise(promiseId: PromiseId, data: Uint8Array): boolean;
-  /**
-   * Deletes the given promise
-   */
-  export function deletePromise(promiseId: PromiseId): void;
   /**
    * Returns the current position in the persistent op log
    */
@@ -141,11 +132,22 @@ declare module 'golem:api/host@1.1.7' {
     constructor(componentId: ComponentId, filter: WorkerAnyFilter | undefined, precise: boolean);
     getNext(): WorkerMetadata[] | undefined;
   }
+  export class GetPromiseResult {
+    /**
+     * Returns a pollable that can be used to wait for the promise to become ready.j
+     */
+    subscribe(): Pollable;
+    /**
+     * Poll the result of the promise, returning none if it is not yet ready.
+     */
+    get(): Uint8Array | undefined;
+  }
   export type Duration = wasiClocks023MonotonicClock.Duration;
   export type ComponentId = golemRpc022Types.ComponentId;
   export type Uuid = golemRpc022Types.Uuid;
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type WorkerId = golemRpc022Types.WorkerId;
+  export type Pollable = wasiIo023Poll.Pollable;
   /**
    * An index into the persistent log storing all performed operations of a worker
    */
@@ -178,16 +180,22 @@ declare module 'golem:api/host@1.1.7' {
    * Configures how the executor retries failures
    */
   export type RetryPolicy = {
+    /** The maximum number of retries before the worker becomes permanently failed */
     maxAttempts: number;
+    /** The minimum delay between retries (applied to the first retry) */
     minDelay: Duration;
+    /** The maximum delay between retries */
     maxDelay: Duration;
+    /** Multiplier applied to the delay on each retry to implement exponential backoff */
     multiplier: number;
+    /** The maximum amount of jitter to add to the delay */
     maxJitterFactor?: number;
   };
   /**
    * Configurable persistence level for workers
    */
-  export type PersistenceLevel = {
+  export type PersistenceLevel = 
+  {
     tag: 'persist-nothing'
   } |
   {
@@ -229,7 +237,8 @@ declare module 'golem:api/host@1.1.7' {
     comparator: StringFilterComparator;
     value: string;
   };
-  export type WorkerPropertyFilter = {
+  export type WorkerPropertyFilter = 
+  {
     tag: 'name'
     val: WorkerNameFilter
   } |
@@ -271,10 +280,13 @@ declare module 'golem:api/host@1.1.7' {
   /**
    * Target parameter for the `revert-worker` operation
    */
-  export type RevertWorkerTarget = {
+  export type RevertWorkerTarget = 
+  /** Revert to a specific oplog index. The given index will be the last one to be kept. */
+  {
     tag: 'revert-to-oplog-index'
     val: OplogIndex
   } |
+  /** Revert the last N invocations. */
   {
     tag: 'revert-last-invocations'
     val: bigint

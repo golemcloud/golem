@@ -28,18 +28,34 @@ declare module 'golem:api/oplog@1.1.7' {
   export type AttributeValue = golemApi117Context.AttributeValue;
   export type SpanId = golemApi117Context.SpanId;
   export type TraceId = golemApi117Context.TraceId;
-  export type WrappedFunctionType = {
+  export type WrappedFunctionType = 
+  /**
+   * The side-effect reads from the worker's local state (for example local file system,
+   * random generator, etc.)
+   */
+  {
     tag: 'read-local'
   } |
+  /** The side-effect writes to the worker's local state (for example local file system) */
   {
     tag: 'write-local'
   } |
+  /** The side-effect reads from external state (for example a key-value store) */
   {
     tag: 'read-remote'
   } |
+  /** The side-effect manipulates external state (for example an RPC call) */
   {
     tag: 'write-remote'
   } |
+  /**
+   * The side-effect manipulates external state through multiple invoked functions (for example
+   * a HTTP request where reading the response involves multiple host function calls)
+   * On the first invocation of the batch, the parameter should be `None` - this triggers
+   * writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
+   * this entry's index as the parameter. In batched remote writes it is the caller's responsibility
+   * to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
+   */
   {
     tag: 'write-remote-batched'
     val: OplogIndex | undefined
@@ -78,6 +94,7 @@ declare module 'golem:api/oplog@1.1.7' {
     spanId: SpanId;
     start: Datetime;
     parent?: SpanId;
+    /** Optionally an index of the exported-function-invoked-parameters's invocation-context field */
     linkedContext?: bigint;
     attributes: Attribute[];
     inherited: boolean;
@@ -85,7 +102,8 @@ declare module 'golem:api/oplog@1.1.7' {
   export type ExternalSpanData = {
     spanId: SpanId;
   };
-  export type SpanData = {
+  export type SpanData = 
+  {
     tag: 'local-span'
     val: LocalSpanData
   } |
@@ -100,6 +118,10 @@ declare module 'golem:api/oplog@1.1.7' {
     idempotencyKey: string;
     traceId: TraceId;
     traceStates: string[];
+    /**
+     * The first one is the invocation context stack associated with the exported function invocation,
+     * and further stacks can be added that are referenced by the `linked-context` field of `local-span-data`
+     */
     invocationContext: SpanData[][];
   };
   export type ExportedFunctionCompletedParameters = {
@@ -133,7 +155,8 @@ declare module 'golem:api/oplog@1.1.7' {
     functionName: string;
     input?: WitValue[];
   };
-  export type WorkerInvocation = {
+  export type WorkerInvocation = 
+  {
     tag: 'exported-function'
     val: ExportedFunctionInvocationParameters
   } |
@@ -145,9 +168,12 @@ declare module 'golem:api/oplog@1.1.7' {
     timestamp: Datetime;
     invocation: WorkerInvocation;
   };
-  export type UpdateDescription = {
+  export type UpdateDescription = 
+  /** Automatic update by replaying the oplog on the new version */
+  {
     tag: 'auto-update'
   } |
+  /** Custom update by loading a given snapshot on the new version */
   {
     tag: 'snapshot-based'
     val: Uint8Array
@@ -238,150 +264,210 @@ declare module 'golem:api/oplog@1.1.7' {
     timestamp: Datetime;
     beginIndex: OplogIndex;
   };
-  export type OplogEntry = {
+  export type OplogEntry = 
+  /** The initial worker oplog entry */
+  {
     tag: 'create'
     val: CreateParameters
   } |
+  /** The worker invoked a host function */
   {
     tag: 'imported-function-invoked'
     val: ImportedFunctionInvokedParameters
   } |
+  /** The worker has been invoked */
   {
     tag: 'exported-function-invoked'
     val: ExportedFunctionInvokedParameters
   } |
+  /** The worker has completed an invocation */
   {
     tag: 'exported-function-completed'
     val: ExportedFunctionCompletedParameters
   } |
+  /** Worker suspended */
   {
     tag: 'suspend'
     val: Datetime
   } |
+  /** Worker failed */
   {
     tag: 'error'
     val: ErrorParameters
   } |
+  /**
+   * Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
+   * more predictable.
+   */
   {
     tag: 'no-op'
     val: Datetime
   } |
+  /**
+   * The worker needs to recover up to the given target oplog index and continue running from
+   * the source oplog index from there
+   * `jump` is an oplog region representing that from the end of that region we want to go back to the start and
+   * ignore all recorded operations in between.
+   */
   {
     tag: 'jump'
     val: JumpParameters
   } |
+  /**
+   * Indicates that the worker has been interrupted at this point.
+   * Only used to recompute the worker's (cached) status, has no effect on execution.
+   */
   {
     tag: 'interrupted'
     val: Datetime
   } |
+  /** Indicates that the worker has been exited using WASI's exit function. */
   {
     tag: 'exited'
     val: Datetime
   } |
+  /** Overrides the worker's retry policy */
   {
     tag: 'change-retry-policy'
     val: ChangeRetryPolicyParameters
   } |
+  /**
+   * Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
+   * recovery except if there is a corresponding `EndAtomicRegion` entry.
+   */
   {
     tag: 'begin-atomic-region'
     val: Datetime
   } |
+  /**
+   * Ends an atomic region. All oplog entries between the corresponding `BeginAtomicRegion` and this
+   * entry are to be considered during recovery, and the begin/end markers can be removed during oplog
+   * compaction.
+   */
   {
     tag: 'end-atomic-region'
     val: EndAtomicRegionParameters
   } |
+  /**
+   * Begins a remote write operation. Only used when idempotence mode is off. In this case each
+   * remote write must be surrounded by a `BeginRemoteWrite` and `EndRemoteWrite` log pair and
+   * unfinished remote writes cannot be recovered.
+   */
   {
     tag: 'begin-remote-write'
     val: Datetime
   } |
+  /** Marks the end of a remote write operation. Only used when idempotence mode is off. */
   {
     tag: 'end-remote-write'
     val: EndRemoteWriteParameters
   } |
+  /** An invocation request arrived while the worker was busy */
   {
     tag: 'pending-worker-invocation'
     val: PendingWorkerInvocationParameters
   } |
+  /** An update request arrived and will be applied as soon the worker restarts */
   {
     tag: 'pending-update'
     val: PendingUpdateParameters
   } |
+  /** An update was successfully applied */
   {
     tag: 'successful-update'
     val: SuccessfulUpdateParameters
   } |
+  /** An update failed to be applied */
   {
     tag: 'failed-update'
     val: FailedUpdateParameters
   } |
+  /** Increased total linear memory size */
   {
     tag: 'grow-memory'
     val: GrowMemoryParameters
   } |
+  /** Created a resource instance */
   {
     tag: 'create-resource'
     val: CreateResourceParameters
   } |
+  /** Dropped a resource instance */
   {
     tag: 'drop-resource'
     val: DropResourceParameters
   } |
+  /** The worker emitted a log message */
   {
     tag: 'log'
     val: LogParameters
   } |
+  /** The worker's has been restarted, forgetting all its history */
   {
     tag: 'restart'
     val: Datetime
   } |
+  /** Activates a plugin */
   {
     tag: 'activate-plugin'
     val: ActivatePluginParameters
   } |
+  /** Deactivates a plugin */
   {
     tag: 'deactivate-plugin'
     val: DeactivatePluginParameters
   } |
+  /** Revert a worker to a previous state */
   {
     tag: 'revert'
     val: RevertParameters
   } |
+  /** Cancel a pending invocation */
   {
     tag: 'cancel-invocation'
     val: CancelInvocationParameters
   } |
+  /** Start a new span in the invocation context */
   {
     tag: 'start-span'
     val: StartSpanParameters
   } |
+  /** Finish an open span in the invocation context */
   {
     tag: 'finish-span'
     val: FinishSpanParameters
   } |
+  /** Set an attribute on an open span in the invocation context */
   {
     tag: 'set-span-attribute'
     val: SetSpanAttributeParameters
   } |
+  /** Change the current persistence level */
   {
     tag: 'change-persistence-level'
     val: ChangePersistenceLevelParameters
   } |
+  /** Begins a transaction operation */
   {
     tag: 'begin-remote-transaction'
     val: BeginRemoteTransactionParameters
   } |
+  /** Pre-Commit of the transaction, indicating that the transaction will be committed */
   {
     tag: 'pre-commit-remote-transaction'
     val: RemoteTransactionParameters
   } |
+  /** Pre-Rollback of the transaction, indicating that the transaction will be rolled back */
   {
     tag: 'pre-rollback-remote-transaction'
     val: RemoteTransactionParameters
   } |
+  /** Committed transaction operation, indicating that the transaction was committed */
   {
     tag: 'committed-remote-transaction'
     val: RemoteTransactionParameters
   } |
+  /** Rolled back transaction operation, indicating that the transaction was rolled back */
   {
     tag: 'rolled-back-remote-transaction'
     val: RemoteTransactionParameters

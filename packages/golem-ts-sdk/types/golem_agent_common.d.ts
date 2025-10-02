@@ -11,7 +11,8 @@ declare module 'golem:agent/common' {
     data: string;
     textType?: TextType;
   };
-  export type TextReference = {
+  export type TextReference = 
+  {
     tag: 'url'
     val: string
   } |
@@ -28,7 +29,8 @@ declare module 'golem:agent/common' {
   export type BinaryDescriptor = {
     restrictions?: BinaryType[];
   };
-  export type ElementSchema = {
+  export type ElementSchema = 
+  {
     tag: 'component-model'
     val: WitType
   } |
@@ -40,10 +42,13 @@ declare module 'golem:agent/common' {
     tag: 'unstructured-binary'
     val: BinaryDescriptor
   };
-  export type DataSchema = {
+  export type DataSchema = 
+  /** List of named elements */
+  {
     tag: 'tuple'
     val: [string, ElementSchema][]
   } |
+  /** List of named variants that can be used 0 or more times in a multimodal `data-value` */
   {
     tag: 'multimodal'
     val: [string, ElementSchema][]
@@ -78,7 +83,8 @@ declare module 'golem:agent/common' {
     data: Uint8Array;
     binaryType: BinaryType;
   };
-  export type BinaryReference = {
+  export type BinaryReference = 
+  {
     tag: 'url'
     val: Url
   } |
@@ -86,7 +92,8 @@ declare module 'golem:agent/common' {
     tag: 'inline'
     val: BinarySource
   };
-  export type ElementValue = {
+  export type ElementValue = 
+  {
     tag: 'component-model'
     val: WitValue
   } |
@@ -98,15 +105,22 @@ declare module 'golem:agent/common' {
     tag: 'unstructured-binary'
     val: BinaryReference
   };
-  export type DataValue = {
+  export type DataValue = 
+  /** List of element values, each corresponding to an element of the tuple `data-schema` */
+  {
     tag: 'tuple'
     val: ElementValue[]
   } |
+  /**
+   * List of element values and their schema names; each name points to one named element of the corresponding
+   * multimodal `data-schema`.
+   */
   {
     tag: 'multimodal'
     val: [string, ElementValue][]
   };
-  export type AgentError = {
+  export type AgentError = 
+  {
     tag: 'invalid-input'
     val: string
   } |

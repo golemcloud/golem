@@ -1,0 +1,11 @@
+{
+  "name": "app",
+  "dependencies": {
+    "@golemcloud/golem-ts-sdk": "file:../packages/golem-ts-sdk"
+  },
+  "scripts": {
+    "generate": "wasm-rquickjs generate-wrapper-crate --wit ../../wit --output dist/wrapper --world agent-guest --js-modules '@golemcloud/golem-ts-sdk=node_modules/@golemcloud/golem-ts-sdk/dist/index.mjs' --js-modules 'user=@composition'",
+    "build": "cargo component build --manifest-path=dist/wrapper/Cargo.toml --release",
+    "copy": "cp dist/wrapper/target/wasm32-wasip1/release/agent_guest.wasm ../packages/golem-ts-sdk/wasm"
+  }
+}

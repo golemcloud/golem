@@ -8,7 +8,8 @@
   },
   "files": [
     "types",
-    "dist"
+    "dist",
+    "wasm"
   ],
   "main": "dist/index.mjs",
   "exports": {

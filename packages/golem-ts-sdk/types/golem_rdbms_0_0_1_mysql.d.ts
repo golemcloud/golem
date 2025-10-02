@@ -51,7 +51,8 @@ declare module 'golem:rdbms/mysql@0.0.1' {
   export type Date = golemRdbms001Types.Date;
   export type Time = golemRdbms001Types.Time;
   export type Timestamp = golemRdbms001Types.Timestamp;
-  export type Error = {
+  export type Error = 
+  {
     tag: 'connection-failure'
     val: string
   } |
@@ -71,7 +72,8 @@ declare module 'golem:rdbms/mysql@0.0.1' {
     tag: 'other'
     val: string
   };
-  export type DbColumnType = {
+  export type DbColumnType = 
+  {
     tag: 'boolean'
   } |
   {
@@ -185,7 +187,8 @@ declare module 'golem:rdbms/mysql@0.0.1' {
   /**
    * Value descriptor for a single database value
    */
-  export type DbValue = {
+  export type DbValue = 
+  {
     tag: 'boolean'
     val: boolean
   } |
@@ -197,6 +200,7 @@ declare module 'golem:rdbms/mysql@0.0.1' {
     tag: 'smallint'
     val: number
   } |
+  /** s24 */
   {
     tag: 'mediumint'
     val: number
@@ -217,6 +221,7 @@ declare module 'golem:rdbms/mysql@0.0.1' {
     tag: 'smallint-unsigned'
     val: number
   } |
+  /** u24 */
   {
     tag: 'mediumint-unsigned'
     val: number

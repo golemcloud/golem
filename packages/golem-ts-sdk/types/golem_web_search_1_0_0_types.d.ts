@@ -70,7 +70,8 @@ declare module 'golem:web-search/types@1.0.0' {
   /**
    * Structured search error
    */
-  export type SearchError = {
+  export type SearchError = 
+  {
     tag: 'invalid-query'
   } |
   {
