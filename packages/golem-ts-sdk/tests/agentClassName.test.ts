@@ -49,78 +49,71 @@ describe('AgentClassName', () => {
   });
 
   describe('invalid class names', () => {
+    const onlyValidChars =
+      /Agent class name '.*' must contain only ASCII letters, numbers, underscores, and dashes/;
+    const validSeparatorsAndSections =
+      /Agent class name '.*' cannot contain consecutive underscores or dashes/;
+    const notStartOrEndWithSeparator =
+      /Agent class name '.*' cannot start or end with underscore or dash/;
+    const noNumbersAtStart =
+      /Agent class name '.*' segments cannot start with a number/;
+
     it('should reject empty or whitespace-only names', () => {
       expect(() => new AgentClassName('')).toThrow(
         'Agent class name cannot be empty',
       );
-      expect(() => new AgentClassName('   ')).toThrow(
-        'Agent class name must contain only ASCII letters, numbers, underscores, and dashes',
-      );
+      expect(() => new AgentClassName('   ')).toThrow(onlyValidChars);
     });
 
     it('should reject names with invalid characters', () => {
-      expect(() => new AgentClassName('My Agent')).toThrow(
-        'Agent class name must contain only ASCII letters, numbers, underscores, and dashes',
-      );
-      expect(() => new AgentClassName('My@Agent')).toThrow(
-        'Agent class name must contain only ASCII letters, numbers, underscores, and dashes',
-      );
-      expect(() => new AgentClassName('My.Agent')).toThrow(
-        'Agent class name must contain only ASCII letters, numbers, underscores, and dashes',
-      );
-      expect(() => new AgentClassName('My#Agent')).toThrow(
-        'Agent class name must contain only ASCII letters, numbers, underscores, and dashes',
-      );
+      expect(() => new AgentClassName('My Agent')).toThrow(onlyValidChars);
+      expect(() => new AgentClassName('My@Agent')).toThrow(onlyValidChars);
+      expect(() => new AgentClassName('My.Agent')).toThrow(onlyValidChars);
+      expect(() => new AgentClassName('My#Agent')).toThrow(onlyValidChars);
     });
 
     it('should reject names with consecutive separators', () => {
       expect(() => new AgentClassName('My__Agent')).toThrow(
-        'Agent class name cannot contain consecutive underscores or dashes',
+        validSeparatorsAndSections,
       );
       expect(() => new AgentClassName('My--Agent')).toThrow(
-        'Agent class name cannot contain consecutive underscores or dashes',
+        validSeparatorsAndSections,
       );
       expect(() => new AgentClassName('User___Profile')).toThrow(
-        'Agent class name cannot contain consecutive underscores or dashes',
+        validSeparatorsAndSections,
       );
     });
 
     it('should reject names starting or ending with separators', () => {
       expect(() => new AgentClassName('_MyAgent')).toThrow(
-        'Agent class name cannot start or end with underscore or dash',
+        notStartOrEndWithSeparator,
       );
       expect(() => new AgentClassName('-MyAgent')).toThrow(
-        'Agent class name cannot start or end with underscore or dash',
+        notStartOrEndWithSeparator,
       );
       expect(() => new AgentClassName('MyAgent_')).toThrow(
-        'Agent class name cannot start or end with underscore or dash',
+        notStartOrEndWithSeparator,
       );
       expect(() => new AgentClassName('MyAgent-')).toThrow(
-        'Agent class name cannot start or end with underscore or dash',
+        notStartOrEndWithSeparator,
       );
     });
 
     it('should reject names starting with numbers', () => {
-      expect(() => new AgentClassName('2Agent')).toThrow(
-        'Agent class name segments cannot start with a number',
-      );
-      expect(() => new AgentClassName('123Class')).toThrow(
-        'Agent class name segments cannot start with a number',
-      );
+      expect(() => new AgentClassName('2Agent')).toThrow(noNumbersAtStart);
+      expect(() => new AgentClassName('123Class')).toThrow(noNumbersAtStart);
     });
 
     it('should reject segments starting with numbers', () => {
-      expect(() => new AgentClassName('My_2Agent')).toThrow(
-        'Agent class name segments cannot start with a number',
-      );
+      expect(() => new AgentClassName('My_2Agent')).toThrow(noNumbersAtStart);
       expect(() => new AgentClassName('User-123Profile')).toThrow(
-        'Agent class name segments cannot start with a number',
+        noNumbersAtStart,
       );
       expect(() => new AgentClassName('Data_9Service')).toThrow(
-        'Agent class name segments cannot start with a number',
+        noNumbersAtStart,
       );
       expect(() => new AgentClassName('Agent_123_Manager')).toThrow(
-        'Agent class name segments cannot start with a number',
+        noNumbersAtStart,
       );
     });
   });
