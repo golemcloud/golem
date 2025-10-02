@@ -149,5 +149,7 @@ function fetchType(typeNameInTestData: string): Type.Type {
     }
   }
 
-  throw new Error(`Unresolved type ${typeNameInTestData}. Make sure test data ${typeNameInTestData}`);
+  throw new Error(
+    `Unresolved type ${typeNameInTestData}. Make sure test data ${typeNameInTestData}`,
+  );
 }
