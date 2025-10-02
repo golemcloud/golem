@@ -9,7 +9,7 @@
         "test": "pnpm -r run test",
         "format": "pnpm -r run format",
         "format:check": "pnpm -r run format:check",
-        "clean": "rm -rf dist node_modules packages/*/dist packages/*/node_modules packages/*/.metadata"
+        "clean": "rm -rf dist node_modules packages/*/dist packages/*/node_modules packages/*/.metadata packages/golem-ts-sdk/agent-template"
     },
     "devDependencies": {
         "@eslint/js": "^9.35.0",
