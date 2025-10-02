@@ -273,7 +273,7 @@ impl AgentTypeResolver for TestAgentTypes {
     fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
-            .map(|agent_type| agent_type.clone())
+            .cloned()
             .ok_or_else(|| format!("Unknown agent type: {}", agent_type))
     }
 }
