@@ -160,5 +160,5 @@ function fetchTypeFromBarAgent(
       return [analysedType!, param[1]];
     }
   }
-  throw new Error(`Type ${typeNameInTestData} not found in metadata`);
+  throw new Error(`Unresolved type ${typeNameInTestData}. Make sure \`${BarAgentClassName.value}\` use ${typeNameInTestData}`);
 }

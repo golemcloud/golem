@@ -101,9 +101,9 @@ function getMethodProxy(
 
   if (!methodParams) {
     throw new Error(
-      `Method ${String(
+      `Unresolved method ${String(
         prop,
-      )} not found in metadata. Make sure this method exists and is not private/protected`,
+      )} in RPC call. Make sure this method exists and is not private/protected`,
     );
   }
 
@@ -131,9 +131,9 @@ function getMethodProxy(
         );
         if (!analysedType) {
           throw new Error(
-            `Parameter type for parameter ${param[0]} of method ${String(
+            `Unresolved type for parameter ${param[0]} in method ${String(
               prop,
-            )} not found in metadata.`,
+            )}`,
           );
         }
 
@@ -239,7 +239,7 @@ function getWorkerId(
 
     if (!analysedType) {
       throw new Error(
-        `Parameter type for constructor parameter ${param.name} of agent class ${agentClassName.value} not found in metadata.`,
+        `Unresolved type for constructor parameter ${param.name} in agent class ${agentClassName.value}`,
       );
     }
     return analysedType;

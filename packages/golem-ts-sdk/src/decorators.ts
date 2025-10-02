@@ -697,9 +697,9 @@ function getAgentInternal(
         ] as [string, [Type.Type, Option.Option<AnalysedType>]];
       });
 
-      const convertedArgs = deserializeDataValue(methodArgs, paramTypes);
+      const deserializedArgs = deserializeDataValue(methodArgs, paramTypes);
 
-      const result = await agentMethod.apply(agentInstance, convertedArgs);
+      const result = await agentMethod.apply(agentInstance, deserializedArgs);
 
       const methodDef = agentTypeOpt.val.methods.find(
         (m) => m.name === methodName,

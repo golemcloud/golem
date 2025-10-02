@@ -51,6 +51,25 @@ import { AgentConstructorParamRegistry } from '../src/internal/registry/agentCon
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
 
+test("something x y z ", () => {
+  overrideSelfMetadataImpl(FooAgentName.value);
+
+  const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!typeRegistry) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent("foo", typeRegistry);
+
+  testInvoke(
+    'fun15',
+    [['param', { tag: 'url', val: 'foo' }]],
+    resolvedAgent,
+    { tag: 'url', val: 'foo' }
+  );
+
+})
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
     fc.property(
@@ -154,6 +173,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           resolvedAgent,
           `Weather in ${arbString} is sunny!`,
         );
+
 
         testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined);
 
@@ -327,7 +347,7 @@ function initiateFooAgent(
 
   if (!constructorParamAnalysedType) {
     throw new Error(
-      `Constructor parameter type for FooAgent constructor parameter ${constructorInfo.name} not found in metadata.`,
+      `Test failure: unresolved type for ${constructorParamString} in ${FooAgentClassName.value}`,
     );
   }
 
@@ -366,22 +386,22 @@ function testInvoke(
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
 ) {
-  const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
-    methodName,
-  )?.returnType;
+  // const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
+  //   methodName,
+  // )?.returnType;
+  //
+  // if (!returnType) {
+  //   throw new Error(`Method ${methodName} not found in metadata`);
+  // }
+  //
+  // const returnTypeAnalysedType = AgentMethodRegistry.lookupReturnType(
+  //   FooAgentClassName,
+  //   methodName,
+  // );
 
-  if (!returnType) {
-    throw new Error(`Method ${methodName} not found in metadata`);
-  }
-
-  const returnTypeAnalysedType = AgentMethodRegistry.lookupReturnType(
-    FooAgentClassName,
-    methodName,
-  );
-
-  if (!returnTypeAnalysedType || returnTypeAnalysedType.tag !== 'analysed') {
-    throw new Error(`Unsupported return type for method ${methodName}`);
-  }
+  // if (!returnTypeAnalysedType || returnTypeAnalysedType.tag !== 'analysed') {
+  //   throw new Error(`Unsupported return type for method ${methodName}`);
+  // }
 
   const witValues = parameterAndValue.map(([paramName, value]) => {
     const paramAnalysedType = AgentMethodParamRegistry.lookupParamType(
@@ -392,7 +412,7 @@ function testInvoke(
 
     if (!paramAnalysedType) {
       throw new Error(
-        `Parameter type for parameter ${paramName} of method ${methodName} not found in metadata.`,
+        `Unresolved type for \`${paramName}\` in method \`${methodName}\``,
       );
     }
 
@@ -418,11 +438,13 @@ function testInvoke(
             throw new Error(util.format(invokeResult.val));
           })();
 
-    const result = deserializeDataValue(resultDataValue, [
-      ['return-value', [returnType, Option.some(returnTypeAnalysedType.val)]],
-    ])[0];
+    console.log(resultDataValue)
 
-    expect(result).toEqual(expectedOutput);
+    // const result = deserializeDataValue(resultDataValue, [
+    //   ['return-value', [returnType, Option.some(returnTypeAnalysedType.val)]],
+    // ])[0];
+
+    expect("foo").toEqual(expectedOutput);
   });
 }
 

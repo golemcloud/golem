@@ -149,5 +149,5 @@ function fetchType(typeNameInTestData: string): Type.Type {
     }
   }
 
-  throw new Error(`Type ${typeNameInTestData} not found in metadata`);
+  throw new Error(`Unresolved type ${typeNameInTestData}. Make sure test data ${typeNameInTestData}`);
 }
