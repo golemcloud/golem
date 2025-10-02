@@ -118,6 +118,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
 
         const resolvedAgent = initiateFooAgent(arbString, typeRegistry);
 
+        // Invoking function with string type
         testInvoke(
           'fun1',
           [['param', arbString]],
@@ -125,6 +126,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           'Weather in ' + arbString + ' is sunny!',
         );
 
+        // Invoking function with multiple primitive types
         testInvoke(
           'fun2',
           [
@@ -140,6 +142,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           `Weather in ${arbString} is sunny!`,
         );
 
+        // Invoking function with object type
         testInvoke(
           'fun3',
           [
@@ -155,6 +158,8 @@ test('An agent can be successfully initiated and all of its methods can be invok
           `Weather in ${arbString} is sunny!`,
         );
 
+
+        // Invoking function with return type not specified
         testInvoke(
           'fun4',
           [
@@ -170,6 +175,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           undefined,
         );
 
+        // Arrow function
         testInvoke(
           'fun5',
           [['param', arbString]],
@@ -177,8 +183,10 @@ test('An agent can be successfully initiated and all of its methods can be invok
           `Weather in ${arbString} is sunny!`,
         );
 
+        // Void return type
         testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined);
 
+        // Invoking with various kind of optional types embedded in union type
         testInvoke(
           'fun7',
           [
@@ -202,6 +210,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           },
         );
 
+        // Invoking with union with literals
         testInvoke(
           'fun8',
           [['a', unionWithLiterals]],
@@ -209,6 +218,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           unionWithLiterals,
         );
 
+        // Invoking with tagged union
         testInvoke(
           'fun9',
           [['param', taggedUnion]],
@@ -216,6 +226,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           taggedUnion,
         );
 
+        // Invoking with union with only literals
         testInvoke(
           'fun10',
           [['param', unionWithOnlyLiterals]],
@@ -223,6 +234,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           unionWithOnlyLiterals,
         );
 
+        // Invoking with result type
         testInvoke(
           'fun11',
           [['param', resultTypeExactBoth]],
@@ -230,6 +242,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           resultTypeExactBoth,
         );
 
+        // invoking with result-like type
         testInvoke(
           'fun12',
           [['param', resultTypeNonExact]],
@@ -237,6 +250,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           resultTypeNonExact,
         );
 
+        // invoking with another result-like type
         testInvoke(
           'fun13',
           [['param', resultTypeNonExact2]],
