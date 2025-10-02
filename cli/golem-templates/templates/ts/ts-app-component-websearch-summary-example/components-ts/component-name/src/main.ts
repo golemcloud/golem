@@ -19,15 +19,37 @@ type SearchResult = {
 
 @agent()
 class ResearchAgent extends BaseAgent {
+  private readonly model: string;
+
+  constructor() {
+    super()
+
+    {
+      const model = env["LLM_MODEL"];
+      if (model == null) {
+        throw "No LLM_MODEL env var provided"
+      }
+      this.model = model
+    }
+
+    // check that the user configured the agent
+    {
+      const googleApiKey = env["GOOGLE_API_KEY"]
+      if (googleApiKey == null || googleApiKey === "changeme") {
+        throw "GOOGLE_API_KEY env var not configured. Check the golem.yaml for instructions"
+      }
+    }
+    {
+      const googleSearchEngineId = env["GOOGLE_SEARCH_ENGINE_ID"]
+      if (googleSearchEngineId == null || googleSearchEngineId === "changeme") {
+        throw "GOOGLE_SEARCH_ENGINE_ID env var not configured. Check the golem.yaml for instructions"
+      }
+    }
+  }
 
   @prompt("What topic do you want to research?")
   @description("This method allows the agent to research and summarize a topic for you")
   async research(topic: string): Promise<string> {
-    const model = env["LLM_MODEL"];
-    if (model == null) {
-      throw "No LLM_MODEL env var provided"
-    }
-
     const searchResult = searchWebForTopic(topic)
 
     const llmResponse = atomically(() => {
@@ -52,7 +74,7 @@ class ResearchAgent extends BaseAgent {
           }
         ],
         {
-          model: model,
+          model: this.model,
           tools: [],
           toolChoice: undefined,
           stopSequences: undefined,

@@ -123,6 +123,33 @@ impl<T> ValidatedResult<T> {
         }
         self
     }
+
+    pub fn take(self) -> (ValidatedResult<()>, Option<T>) {
+        match self {
+            ValidatedResult::Ok(value) => (ValidatedResult::Ok(()), Some(value)),
+            ValidatedResult::OkWithWarns(value, warns) => {
+                (ValidatedResult::OkWithWarns((), warns), Some(value))
+            }
+            ValidatedResult::WarnsAndErrors(warns, errors) => {
+                (ValidatedResult::WarnsAndErrors(warns, errors), None)
+            }
+        }
+    }
+
+    pub fn merge_and_get<U>(self, other: ValidatedResult<U>) -> (ValidatedResult<()>, Option<U>) {
+        let next = self.combine(other, |_, other| other);
+        next.take()
+    }
+
+    pub fn expect_error<U>(self) -> ValidatedResult<U> {
+        match self {
+            ValidatedResult::Ok(_) => panic!("Expected error"),
+            ValidatedResult::OkWithWarns(_, _) => panic!("Expected error"),
+            ValidatedResult::WarnsAndErrors(warns, errors) => {
+                ValidatedResult::WarnsAndErrors(warns, errors)
+            }
+        }
+    }
 }
 
 impl<T, E> ValidatedResult<Result<T, E>> {
