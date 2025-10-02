@@ -204,7 +204,7 @@ function getWorkerId(
 
   if (Option.isNone(optionalRegisteredAgentType)) {
     return Either.left(
-      `There are no components implementing ${agentClassName}`,
+      `There are no components implementing ${agentClassName.value}`,
     );
   }
 
@@ -254,7 +254,7 @@ function getWorkerId(
     val: constructorParamWitValuesResult.val,
   };
 
-  const agentId = makeAgentId(agentClassName.asWit, constructorDataValue);
+  const agentId = makeAgentId(agentClassName.value, constructorDataValue);
 
   return Either.right({
     componentId: registeredAgentType.implementedBy,
