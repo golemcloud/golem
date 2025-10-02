@@ -17,6 +17,7 @@ pub mod golem {
             pub type ComponentId = super::super::super::golem::rpc::types::ComponentId;
             pub type Uuid = super::super::super::golem::rpc::types::Uuid;
             pub type WorkerId = super::super::super::golem::rpc::types::WorkerId;
+            pub type Pollable = super::super::super::wasi::io::poll::Pollable;
             /// An index into the persistent log storing all performed operations of a worker
             pub type OplogIndex = u64;
             /// A promise ID is a value that can be passed to an external Golem API to complete that promise
@@ -605,6 +606,43 @@ pub mod golem {
                     }
                 }
             }
+            #[derive(Debug)]
+            #[repr(transparent)]
+            pub struct GetPromiseResult {
+                handle: _rt::Resource<GetPromiseResult>,
+            }
+            impl GetPromiseResult {
+                #[doc(hidden)]
+                pub unsafe fn from_handle(handle: u32) -> Self {
+                    Self {
+                        handle: unsafe { _rt::Resource::from_handle(handle) },
+                    }
+                }
+                #[doc(hidden)]
+                pub fn take_handle(&self) -> u32 {
+                    _rt::Resource::take_handle(&self.handle)
+                }
+                #[doc(hidden)]
+                pub fn handle(&self) -> u32 {
+                    _rt::Resource::handle(&self.handle)
+                }
+            }
+            unsafe impl _rt::WasmResource for GetPromiseResult {
+                #[inline]
+                unsafe fn drop(_handle: u32) {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    unreachable!();
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        unsafe extern "C" {
+                            #[link_name = "[resource-drop]get-promise-result"]
+                            fn drop(_: u32);
+                        }
+                        unsafe { drop(_handle) };
+                    }
+                }
+            }
             impl GetWorkers {
                 #[allow(unused_unsafe, clippy::all)]
                 pub fn new(
@@ -1051,6 +1089,80 @@ pub mod golem {
                     }
                 }
             }
+            impl GetPromiseResult {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Returns a pollable that can be used to wait for the promise to become ready.j
+                pub fn subscribe(&self) -> Pollable {
+                    unsafe {
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        unsafe extern "C" {
+                            #[link_name = "[method]get-promise-result.subscribe"]
+                            fn wit_import0(_: i32) -> i32;
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unsafe extern "C" fn wit_import0(_: i32) -> i32 {
+                            unreachable!()
+                        }
+                        let ret = unsafe { wit_import0((self).handle() as i32) };
+                        unsafe {
+                            super::super::super::wasi::io::poll::Pollable::from_handle(
+                                ret as u32,
+                            )
+                        }
+                    }
+                }
+            }
+            impl GetPromiseResult {
+                #[allow(unused_unsafe, clippy::all)]
+                /// Poll the result of the promise, returning none if it is not yet ready.
+                pub fn get(&self) -> Option<_rt::Vec<u8>> {
+                    unsafe {
+                        #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
+                        #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
+                        struct RetArea(
+                            [::core::mem::MaybeUninit<
+                                u8,
+                            >; 3 * ::core::mem::size_of::<*const u8>()],
+                        );
+                        let mut ret_area = RetArea(
+                            [::core::mem::MaybeUninit::uninit(); 3
+                                * ::core::mem::size_of::<*const u8>()],
+                        );
+                        let ptr0 = ret_area.0.as_mut_ptr().cast::<u8>();
+                        #[cfg(target_arch = "wasm32")]
+                        #[link(wasm_import_module = "golem:api/host@1.1.7")]
+                        unsafe extern "C" {
+                            #[link_name = "[method]get-promise-result.get"]
+                            fn wit_import1(_: i32, _: *mut u8);
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        unsafe extern "C" fn wit_import1(_: i32, _: *mut u8) {
+                            unreachable!()
+                        }
+                        unsafe { wit_import1((self).handle() as i32, ptr0) };
+                        let l2 = i32::from(*ptr0.add(0).cast::<u8>());
+                        let result6 = match l2 {
+                            0 => None,
+                            1 => {
+                                let e = {
+                                    let l3 = *ptr0
+                                        .add(::core::mem::size_of::<*const u8>())
+                                        .cast::<*mut u8>();
+                                    let l4 = *ptr0
+                                        .add(2 * ::core::mem::size_of::<*const u8>())
+                                        .cast::<usize>();
+                                    let len5 = l4;
+                                    _rt::Vec::from_raw_parts(l3.cast(), len5, len5)
+                                };
+                                Some(e)
+                            }
+                            _ => _rt::invalid_enum_discriminant(),
+                        };
+                        result6
+                    }
+                }
+            }
             #[allow(unused_unsafe, clippy::all)]
             /// Create a new promise
             pub fn create_promise() -> PromiseId {
@@ -1104,21 +1216,9 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Suspends execution until the given promise gets completed, and returns the payload passed to
-            /// the promise completion.
-            pub fn await_promise(promise_id: &PromiseId) -> _rt::Vec<u8> {
+            /// Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
+            pub fn get_promise(promise_id: &PromiseId) -> GetPromiseResult {
                 unsafe {
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 2 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 2
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
                     let super::super::super::golem::rpc::types::WorkerId {
                         component_id: component_id1,
@@ -1134,140 +1234,43 @@ pub mod golem {
                     let vec4 = worker_name1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
-                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "await-promise"]
-                        fn wit_import6(
+                        #[link_name = "get-promise"]
+                        fn wit_import5(
                             _: i64,
                             _: i64,
                             _: *mut u8,
                             _: usize,
                             _: i64,
-                            _: *mut u8,
-                        );
+                        ) -> i32;
                     }
                     #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import6(
+                    unsafe extern "C" fn wit_import5(
                         _: i64,
                         _: i64,
                         _: *mut u8,
                         _: usize,
                         _: i64,
-                        _: *mut u8,
-                    ) {
+                    ) -> i32 {
                         unreachable!()
                     }
-                    unsafe {
-                        wit_import6(
+                    let ret = unsafe {
+                        wit_import5(
                             _rt::as_i64(high_bits3),
                             _rt::as_i64(low_bits3),
                             ptr4.cast_mut(),
                             len4,
                             _rt::as_i64(oplog_idx0),
-                            ptr5,
                         )
                     };
-                    let l7 = *ptr5.add(0).cast::<*mut u8>();
-                    let l8 = *ptr5
-                        .add(::core::mem::size_of::<*const u8>())
-                        .cast::<usize>();
-                    let len9 = l8;
-                    let result10 = _rt::Vec::from_raw_parts(l7.cast(), len9, len9);
-                    result10
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
-            /// it returns the payload passed to the promise completion.
-            pub fn poll_promise(promise_id: &PromiseId) -> Option<_rt::Vec<u8>> {
-                unsafe {
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 3 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 3
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::WorkerId {
-                        component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id0;
-                    let super::super::super::golem::rpc::types::ComponentId {
-                        uuid: uuid2,
-                    } = component_id1;
-                    let super::super::super::golem::rpc::types::Uuid {
-                        high_bits: high_bits3,
-                        low_bits: low_bits3,
-                    } = uuid2;
-                    let vec4 = worker_name1;
-                    let ptr4 = vec4.as_ptr().cast::<u8>();
-                    let len4 = vec4.len();
-                    let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
-                    unsafe extern "C" {
-                        #[link_name = "poll-promise"]
-                        fn wit_import6(
-                            _: i64,
-                            _: i64,
-                            _: *mut u8,
-                            _: usize,
-                            _: i64,
-                            _: *mut u8,
-                        );
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import6(
-                        _: i64,
-                        _: i64,
-                        _: *mut u8,
-                        _: usize,
-                        _: i64,
-                        _: *mut u8,
-                    ) {
-                        unreachable!()
-                    }
-                    unsafe {
-                        wit_import6(
-                            _rt::as_i64(high_bits3),
-                            _rt::as_i64(low_bits3),
-                            ptr4.cast_mut(),
-                            len4,
-                            _rt::as_i64(oplog_idx0),
-                            ptr5,
-                        )
-                    };
-                    let l7 = i32::from(*ptr5.add(0).cast::<u8>());
-                    let result11 = match l7 {
-                        0 => None,
-                        1 => {
-                            let e = {
-                                let l8 = *ptr5
-                                    .add(::core::mem::size_of::<*const u8>())
-                                    .cast::<*mut u8>();
-                                let l9 = *ptr5
-                                    .add(2 * ::core::mem::size_of::<*const u8>())
-                                    .cast::<usize>();
-                                let len10 = l9;
-                                _rt::Vec::from_raw_parts(l8.cast(), len10, len10)
-                            };
-                            Some(e)
-                        }
-                        _ => _rt::invalid_enum_discriminant(),
-                    };
-                    result11
+                    unsafe { GetPromiseResult::from_handle(ret as u32) }
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
             /// Completes the given promise with the given payload. Returns true if the promise was completed, false
-            /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+            /// if the promise was already completed. The payload is passed to the agent that is awaiting the promise.
             pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
                 unsafe {
                     let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
@@ -1326,52 +1329,6 @@ pub mod golem {
                         )
                     };
                     _rt::bool_lift(ret as u8)
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            /// Deletes the given promise
-            pub fn delete_promise(promise_id: &PromiseId) -> () {
-                unsafe {
-                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::WorkerId {
-                        component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id0;
-                    let super::super::super::golem::rpc::types::ComponentId {
-                        uuid: uuid2,
-                    } = component_id1;
-                    let super::super::super::golem::rpc::types::Uuid {
-                        high_bits: high_bits3,
-                        low_bits: low_bits3,
-                    } = uuid2;
-                    let vec4 = worker_name1;
-                    let ptr4 = vec4.as_ptr().cast::<u8>();
-                    let len4 = vec4.len();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:api/host@1.1.7")]
-                    unsafe extern "C" {
-                        #[link_name = "delete-promise"]
-                        fn wit_import5(_: i64, _: i64, _: *mut u8, _: usize, _: i64);
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import5(
-                        _: i64,
-                        _: i64,
-                        _: *mut u8,
-                        _: usize,
-                        _: i64,
-                    ) {
-                        unreachable!()
-                    }
-                    unsafe {
-                        wit_import5(
-                            _rt::as_i64(high_bits3),
-                            _rt::as_i64(low_bits3),
-                            ptr4.cast_mut(),
-                            len4,
-                            _rt::as_i64(oplog_idx0),
-                        )
-                    };
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
@@ -9178,8 +9135,8 @@ pub(crate) use __export_networking_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6603] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xca2\x01A\x02\x01A\x1c\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6686] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\x9d3\x01A\x02\x01A\x1c\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -9234,86 +9191,87 @@ ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0
 @\x01\x03vnt-\0+\x04\0\x0dextract-value\x01J\x01@\x01\x03vnt-\0\x20\x04\0\x0cext\
 ract-type\x01K\x03\0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\
 \x03\0\x03\x0ccomponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\
-\x02\x03\0\x03\x09worker-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\
-\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\
-\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\
-\x02\x01\x0a\x04\0\x09worker-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01\
-r\x02\x09worker-id\x09\x09oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\
-\x11component-version\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\
-\x01r\x01\x04uuid\x05\x04\0\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemp\
-tsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\
-\0\x0cretry-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-s\
-ide-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09au\
-tomatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09no\
-t-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-compar\
-ator\x03\0\x1b\x01m\x05\x05equal\x09not-equal\x04like\x08not-like\x0bstarts-with\
-\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\x07running\x04idle\x09susp\
-ended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\
-\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x12worker-name-filter\x03\0!\x01\
-r\x02\x0acomparator\x1c\x05value\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\
-\x0acomparator\x1c\x05valuew\x04\0\x15worker-version-filter\x03\0%\x01r\x02\x0ac\
-omparator\x1c\x05valuew\x04\0\x18worker-created-at-filter\x03\0'\x01r\x03\x04nam\
-es\x0acomparator\x1e\x05values\x04\0\x11worker-env-filter\x03\0)\x01r\x03\x04nam\
-es\x0acomparator\x1e\x05values\x04\0\x1eworker-wasi-config-vars-filter\x03\0+\x01\
-q\x06\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03\
-env\x01*\0\x10wasi-config-vars\x01,\0\x04\0\x16worker-property-filter\x03\0-\x01\
-p.\x01r\x01\x07filters/\x04\0\x11worker-all-filter\x03\00\x01p1\x01r\x01\x07filt\
-ers2\x04\0\x11worker-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker\
--id\x09\x04args5\x03env7\x10wasi-config-vars7\x06status\x20\x11component-version\
-w\x0bretry-countw\x04\0\x0fworker-metadata\x03\08\x04\0\x0bget-workers\x03\x01\x01\
-q\x02\x15revert-to-oplog-index\x01\x0b\0\x17revert-last-invocations\x01w\0\x04\0\
-\x14revert-worker-target\x03\0;\x01m\x02\x08original\x06forked\x04\0\x0bfork-res\
-ult\x03\0=\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06filter?\x07precise\x7f\0\xc0\
-\0\x04\0\x18[constructor]get-workers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04sel\
-f\xc2\0\0\xc4\0\x04\0\x1c[method]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0e\
-create-promise\x01F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-prom\
-ise\x01H\x01k\xc7\0\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01\
-J\x01@\x02\x0apromise-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01\
-@\x01\x0apromise-id\x0d\x01\0\x04\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0f\
-get-oplog-index\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01\
-N\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01O\x04\0\x14mark-begin-ope\
-ration\x01M\x01@\x01\x05begin\x0b\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\
-\x16\x04\0\x10get-retry-policy\x01Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\
-\x10set-retry-policy\x01R\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01S\
-\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-leve\
-l\x01T\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\
-\x01\0\x04\0\x14set-idempotence-mode\x01V\x01@\0\0\x05\x04\0\x18generate-idempot\
-ency-key\x01W\x01@\x03\x09worker-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\
-\0\x0dupdate-worker\x01X\x01@\0\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\
-\x09worker-id\x09\0\xda\0\x04\0\x13get-worker-metadata\x01[\x01@\x03\x10source-w\
-orker-id\x09\x10target-worker-id\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfor\
-k-worker\x01\\\x01@\x02\x09worker-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert\
--worker\x01]\x01k\x03\x01@\x01\x13component-references\0\xde\0\x04\0\x14resolve-\
-component-id\x01_\x01k\x09\x01@\x02\x13component-references\x0bworker-names\0\xe0\
-\0\x04\0\x11resolve-worker-id\x01a\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\
-\x08new-names\0>\x04\0\x04fork\x01b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x11\
-\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0dnot-supported\x10\
-invalid-argument\x0dout-of-memory\x07timeout\x14concurrency-conflict\x0fnot-in-p\
-rogress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14address-not-binda\
-ble\x0eaddress-in-use\x12remote-unreachable\x12connection-refused\x10connection-\
-reset\x12connection-aborted\x12datagram-too-large\x11name-unresolvable\x1atempor\
-ary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerror-code\x03\0\x01\
-\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\
-\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\
-\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04\
-port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09\
-flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01\
-q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x03\
-\0\x1awasi:sockets/network@0.2.3\x05\x0c\x02\x03\0\x05\x07network\x02\x03\0\x05\x0a\
-error-code\x02\x03\0\x05\x0aip-address\x01B\x16\x02\x03\x02\x01\x01\x04\0\x08pol\
-lable\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x07network\x03\0\x02\x02\x03\x02\x01\x0e\
-\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01\x0f\x04\0\x0aip-address\x03\0\x06\
-\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01\
-@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-stream.resolve-next-addres\
-s\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stre\
-am.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\
-\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\0!wasi:sockets/ip-name-lo\
-okup@0.2.3\x05\x10\x01B\x05\x02\x03\x02\x01\x0d\x04\0\x07network\x03\0\0\x01i\x01\
-\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wasi:sockets/instance-netw\
-ork@0.2.3\x05\x11\x01B\x03\x01ps\x01@\0\0\0\x04\0\x03get\x01\x01\x04\0\x0cgolem:\
-it/api\x05\x12\x04\0\x13golem:it/networking\x04\0\x0b\x10\x01\0\x0anetworking\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-\
-bindgen-rust\x060.41.0";
+\x02\x03\0\x03\x09worker-id\x01B\x85\x01\x02\x03\x02\x01\x06\x04\0\x08duration\x03\
+\0\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\
+\0\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\
+\x02\x01\x0a\x04\0\x09worker-id\x03\0\x08\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
+\0\x0a\x01w\x04\0\x0boplog-index\x03\0\x0c\x01r\x02\x09worker-id\x09\x09oplog-id\
+x\x0d\x04\0\x0apromise-id\x03\0\x0e\x01w\x04\0\x11component-version\x03\0\x10\x01\
+r\x01\x05values\x04\0\x0aaccount-id\x03\0\x12\x01r\x01\x04uuid\x05\x04\0\x0aproj\
+ect-id\x03\0\x14\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max-delay\x01\
+\x0amultiplieru\x11max-jitter-factor\x16\x04\0\x0cretry-policy\x03\0\x17\x01q\x03\
+\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\x04\0\x11\
+persistence-level\x03\0\x19\x01m\x02\x09automatic\x0esnapshot-based\x04\0\x0bupd\
+ate-mode\x03\0\x1b\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07greater\x0a\
+less-equal\x04less\x04\0\x11filter-comparator\x03\0\x1d\x01m\x05\x05equal\x09not\
+-equal\x04like\x08not-like\x0bstarts-with\x04\0\x18string-filter-comparator\x03\0\
+\x1f\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retrying\x06fail\
+ed\x06exited\x04\0\x0dworker-status\x03\0!\x01r\x02\x0acomparator\x20\x05values\x04\
+\0\x12worker-name-filter\x03\0#\x01r\x02\x0acomparator\x1e\x05value\"\x04\0\x14w\
+orker-status-filter\x03\0%\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x15worker-\
+version-filter\x03\0'\x01r\x02\x0acomparator\x1e\x05valuew\x04\0\x18worker-creat\
+ed-at-filter\x03\0)\x01r\x03\x04names\x0acomparator\x20\x05values\x04\0\x11worke\
+r-env-filter\x03\0+\x01r\x03\x04names\x0acomparator\x20\x05values\x04\0\x1eworke\
+r-wasi-config-vars-filter\x03\0-\x01q\x06\x04name\x01$\0\x06status\x01&\0\x07ver\
+sion\x01(\0\x0acreated-at\x01*\0\x03env\x01,\0\x10wasi-config-vars\x01.\0\x04\0\x16\
+worker-property-filter\x03\0/\x01p0\x01r\x01\x07filters1\x04\0\x11worker-all-fil\
+ter\x03\02\x01p3\x01r\x01\x07filters4\x04\0\x11worker-any-filter\x03\05\x01ps\x01\
+o\x02ss\x01p8\x01r\x07\x09worker-id\x09\x04args7\x03env9\x10wasi-config-vars9\x06\
+status\"\x11component-versionw\x0bretry-countw\x04\0\x0fworker-metadata\x03\0:\x04\
+\0\x0bget-workers\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\x0d\0\x17revert-\
+last-invocations\x01w\0\x04\0\x14revert-worker-target\x03\0=\x01m\x02\x08origina\
+l\x06forked\x04\0\x0bfork-result\x03\0?\x04\0\x12get-promise-result\x03\x01\x01k\
+6\x01i<\x01@\x03\x0ccomponent-id\x03\x06filter\xc2\0\x07precise\x7f\0\xc3\0\x04\0\
+\x18[constructor]get-workers\x01D\x01h<\x01p;\x01k\xc6\0\x01@\x01\x04self\xc5\0\0\
+\xc7\0\x04\0\x1c[method]get-workers.get-next\x01H\x01hA\x01i\x0b\x01@\x01\x04sel\
+f\xc9\0\0\xca\0\x04\0$[method]get-promise-result.subscribe\x01K\x01p}\x01k\xcc\0\
+\x01@\x01\x04self\xc9\0\0\xcd\0\x04\0\x1e[method]get-promise-result.get\x01N\x01\
+@\0\0\x0f\x04\0\x0ecreate-promise\x01O\x01iA\x01@\x01\x0apromise-id\x0f\0\xd0\0\x04\
+\0\x0bget-promise\x01Q\x01@\x02\x0apromise-id\x0f\x04data\xcc\0\0\x7f\x04\0\x10c\
+omplete-promise\x01R\x01@\0\0\x0d\x04\0\x0fget-oplog-index\x01S\x01@\x01\x09oplo\
+g-idx\x0d\x01\0\x04\0\x0fset-oplog-index\x01T\x01@\x01\x08replicas}\x01\0\x04\0\x0c\
+oplog-commit\x01U\x04\0\x14mark-begin-operation\x01S\x01@\x01\x05begin\x0d\x01\0\
+\x04\0\x12mark-end-operation\x01V\x01@\0\0\x18\x04\0\x10get-retry-policy\x01W\x01\
+@\x01\x10new-retry-policy\x18\x01\0\x04\0\x10set-retry-policy\x01X\x01@\0\0\x1a\x04\
+\0\x1bget-oplog-persistence-level\x01Y\x01@\x01\x15new-persistence-level\x1a\x01\
+\0\x04\0\x1bset-oplog-persistence-level\x01Z\x01@\0\0\x7f\x04\0\x14get-idempoten\
+ce-mode\x01[\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01\\\
+\x01@\0\0\x05\x04\0\x18generate-idempotency-key\x01]\x01@\x03\x09worker-id\x09\x0e\
+target-version\x11\x04mode\x1c\x01\0\x04\0\x0dupdate-worker\x01^\x01@\0\0;\x04\0\
+\x11get-self-metadata\x01_\x01k;\x01@\x01\x09worker-id\x09\0\xe0\0\x04\0\x13get-\
+worker-metadata\x01a\x01@\x03\x10source-worker-id\x09\x10target-worker-id\x09\x11\
+oplog-idx-cut-off\x0d\x01\0\x04\0\x0bfork-worker\x01b\x01@\x02\x09worker-id\x09\x0d\
+revert-target>\x01\0\x04\0\x0drevert-worker\x01c\x01k\x03\x01@\x01\x13component-\
+references\0\xe4\0\x04\0\x14resolve-component-id\x01e\x01k\x09\x01@\x02\x13compo\
+nent-references\x0bworker-names\0\xe6\0\x04\0\x11resolve-worker-id\x01g\x04\0\x18\
+resolve-worker-id-strict\x01g\x01@\x01\x08new-names\0\xc0\0\x04\0\x04fork\x01h\x03\
+\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07\
+unknown\x0daccess-denied\x0dnot-supported\x10invalid-argument\x0dout-of-memory\x07\
+timeout\x14concurrency-conflict\x0fnot-in-progress\x0bwould-block\x0dinvalid-sta\
+te\x10new-socket-limit\x14address-not-bindable\x0eaddress-in-use\x12remote-unrea\
+chable\x12connection-refused\x10connection-reset\x12connection-aborted\x12datagr\
+am-too-large\x11name-unresolvable\x1atemporary-resolver-failure\x1apermanent-res\
+olver-failure\x04\0\x0aerror-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip\
+-address-family\x03\0\x03\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{\
+{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\
+\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-\
+socket-address\x03\0\x0b\x01r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope\
+-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\
+\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.3\x05\
+\x0c\x02\x03\0\x05\x07network\x02\x03\0\x05\x0aerror-code\x02\x03\0\x05\x0aip-ad\
+dress\x01B\x16\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01\x0d\
+\x04\0\x07network\x03\0\x02\x02\x03\x02\x01\x0e\x04\0\x0aerror-code\x03\0\x04\x02\
+\x03\x02\x01\x0f\x04\0\x0aip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\
+\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[me\
+thod]resolve-address-stream.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04se\
+lf\x09\0\x0d\x04\0([method]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01\
+i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resol\
+ve-addresses\x01\x12\x03\0!wasi:sockets/ip-name-lookup@0.2.3\x05\x10\x01B\x05\x02\
+\x03\x02\x01\x0d\x04\0\x07network\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instanc\
+e-network\x01\x03\x03\0#wasi:sockets/instance-network@0.2.3\x05\x11\x01B\x03\x01\
+ps\x01@\0\0\0\x04\0\x03get\x01\x01\x04\0\x0cgolem:it/api\x05\x12\x04\0\x13golem:\
+it/networking\x04\0\x0b\x10\x01\0\x0anetworking\x03\0\0\0G\x09producers\x01\x0cp\
+rocessed-by\x02\x0dwit-component\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

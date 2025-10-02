@@ -1005,14 +1005,11 @@ async fn encode_host_function_request_as_value(
         "wall_clock::now" => no_payload(),
         "wall_clock::resolution" => no_payload(),
         "golem::api::create_promise" => no_payload(),
-        "golem::api::delete_promise" => {
-            let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "golem::api::complete_promise" => {
             let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
+        "golem::api::get-promise-result::get" => no_payload(),
         "golem::api::update-worker" => {
             let payload: (WorkerId, ComponentVersion, UpdateMode) =
                 try_deserialize(oplog_index, &what, bytes)?;
@@ -1225,10 +1222,6 @@ async fn encode_host_function_request_as_value(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: SerializableScheduleId = try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
-        "golem::api::poll_promise" => {
-            let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
         "golem::api::resolve_component_id" => {
@@ -1473,8 +1466,8 @@ fn encode_host_function_response_as_value(
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::api::delete_promise" => {
-            let payload: Result<(), SerializableError> =
+        "golem::api::get-promise-result::get" => {
+            let payload: Result<Option<Vec<u8>>, SerializableError> =
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
@@ -1691,11 +1684,6 @@ fn encode_host_function_response_as_value(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: Result<(), SerializableError> =
-                try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
-        "golem::api::poll_promise" => {
-            let payload: Result<Option<Vec<u8>>, SerializableError> =
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }

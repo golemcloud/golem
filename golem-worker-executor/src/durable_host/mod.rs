@@ -34,6 +34,7 @@ pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
+use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
 use crate::durable_host::replay_state::ReplayState;
@@ -56,6 +57,7 @@ use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
@@ -168,6 +170,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_fork: Arc<dyn WorkerForkService>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -268,6 +271,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.created_by.clone(),
                 worker_config.initial_wasi_config_vars,
                 wasi_config_vars,
+                shard_service,
             )
             .await,
             temp_dir,
@@ -2401,10 +2405,17 @@ struct PrivateDurableWorkerState {
     file_loader: Arc<FileLoader>,
 
     project_service: Arc<dyn ProjectService>,
+    shard_service: Arc<dyn ShardService>,
+
     /// The initial config vars that the worker was configured with
     initial_wasi_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
     wasi_config_vars: RwLock<BTreeMap<String, String>>,
+
+    // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
+    promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
+    // Map from resource_id to the dyn_pollables that wrap it
+    promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2439,6 +2450,7 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
+        shard_service: Arc<dyn ShardService>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2491,6 +2503,9 @@ impl PrivateDurableWorkerState {
             created_by,
             initial_wasi_config_vars,
             wasi_config_vars: RwLock::new(wasi_config_vars),
+            shard_service,
+            promise_backed_pollables: TRwLock::new(HashMap::new()),
+            promise_dyn_pollables: TRwLock::new(HashMap::new()),
         }
     }
 
