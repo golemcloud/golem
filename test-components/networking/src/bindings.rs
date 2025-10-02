@@ -16,14 +16,14 @@ pub mod golem {
             pub type Duration = super::super::super::wasi::clocks::monotonic_clock::Duration;
             pub type ComponentId = super::super::super::golem::rpc::types::ComponentId;
             pub type Uuid = super::super::super::golem::rpc::types::Uuid;
-            pub type WorkerId = super::super::super::golem::rpc::types::WorkerId;
-            /// An index into the persistent log storing all performed operations of a worker
+            pub type AgentId = super::super::super::golem::rpc::types::AgentId;
+            /// An index into the persistent log storing all performed operations of an agent
             pub type OplogIndex = u64;
             /// A promise ID is a value that can be passed to an external Golem API to complete that promise
-            /// from an arbitrary external source, while Golem workers can await for this completion.
+            /// from an arbitrary external source, while Golem agents can await for this completion.
             #[derive(Clone)]
             pub struct PromiseId {
-                pub worker_id: WorkerId,
+                pub agent_id: AgentId,
                 pub oplog_idx: OplogIndex,
             }
             impl ::core::fmt::Debug for PromiseId {
@@ -32,7 +32,7 @@ pub mod golem {
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     f.debug_struct("PromiseId")
-                        .field("worker-id", &self.worker_id)
+                        .field("agent-id", &self.agent_id)
                         .field("oplog-idx", &self.oplog_idx)
                         .finish()
                 }
@@ -43,7 +43,7 @@ pub mod golem {
             #[repr(C)]
             #[derive(Clone, Copy)]
             pub struct RetryPolicy {
-                /// The maximum number of retries before the worker becomes permanently failed
+                /// The maximum number of retries before the agent becomes permanently failed
                 pub max_attempts: u32,
                 /// The minimum delay between retries (applied to the first retry)
                 pub min_delay: Duration,
@@ -68,7 +68,7 @@ pub mod golem {
                         .finish()
                 }
             }
-            /// Configurable persistence level for workers
+            /// Configurable persistence level for agents
             #[derive(Clone, Copy)]
             pub enum PersistenceLevel {
                 PersistNothing,
@@ -94,15 +94,15 @@ pub mod golem {
                     }
                 }
             }
-            /// Describes how to update a worker to a different component version
+            /// Describes how to update an agent to a different component version
             #[repr(u8)]
             #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
             pub enum UpdateMode {
-                /// Automatic update tries to recover the worker using the new component version
+                /// Automatic update tries to recover the agent using the new component version
                 /// and may fail if there is a divergence.
                 Automatic,
                 /// Manual, snapshot-based update uses a user-defined implementation of the `save-snapshot` interface
-                /// to store the worker's state, and a user-defined implementation of the `load-snapshot` interface to
+                /// to store the agent's state, and a user-defined implementation of the `load-snapshot` interface to
                 /// load it into the new version.
                 SnapshotBased,
             }
@@ -134,6 +134,7 @@ pub mod golem {
                     }
                 }
             }
+            /// Operators used in filtering enumerated agents
             #[repr(u8)]
             #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
             pub enum FilterComparator {
@@ -188,6 +189,7 @@ pub mod golem {
                     }
                 }
             }
+            /// Operators used on strings in filtering enumerated agents
             #[repr(u8)]
             #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
             pub enum StringFilterComparator {
@@ -237,12 +239,13 @@ pub mod golem {
                     }
                 }
             }
+            /// The current status of an agent
             #[repr(u8)]
             #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
-            pub enum WorkerStatus {
-                /// The worker is running an invoked function
+            pub enum AgentStatus {
+                /// The agent is running an invoked function
                 Running,
-                /// The worker is ready to run an invoked function
+                /// The agent is ready to run an invoked function
                 Idle,
                 /// An invocation is active but waiting for something (sleeping, waiting for a promise)
                 Suspended,
@@ -250,266 +253,282 @@ pub mod golem {
                 Interrupted,
                 /// The last invocation failed and a retry was scheduled
                 Retrying,
-                /// The last invocation failed and the worker can no longer be used
+                /// The last invocation failed and the agent can no longer be used
                 Failed,
-                /// The worker exited after a successful invocation and can no longer be invoked
+                /// The agent exited after a successful invocation and can no longer be invoked
                 Exited,
             }
-            impl ::core::fmt::Debug for WorkerStatus {
+            impl ::core::fmt::Debug for AgentStatus {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        WorkerStatus::Running => {
-                            f.debug_tuple("WorkerStatus::Running").finish()
+                        AgentStatus::Running => {
+                            f.debug_tuple("AgentStatus::Running").finish()
                         }
-                        WorkerStatus::Idle => {
-                            f.debug_tuple("WorkerStatus::Idle").finish()
+                        AgentStatus::Idle => f.debug_tuple("AgentStatus::Idle").finish(),
+                        AgentStatus::Suspended => {
+                            f.debug_tuple("AgentStatus::Suspended").finish()
                         }
-                        WorkerStatus::Suspended => {
-                            f.debug_tuple("WorkerStatus::Suspended").finish()
+                        AgentStatus::Interrupted => {
+                            f.debug_tuple("AgentStatus::Interrupted").finish()
                         }
-                        WorkerStatus::Interrupted => {
-                            f.debug_tuple("WorkerStatus::Interrupted").finish()
+                        AgentStatus::Retrying => {
+                            f.debug_tuple("AgentStatus::Retrying").finish()
                         }
-                        WorkerStatus::Retrying => {
-                            f.debug_tuple("WorkerStatus::Retrying").finish()
+                        AgentStatus::Failed => {
+                            f.debug_tuple("AgentStatus::Failed").finish()
                         }
-                        WorkerStatus::Failed => {
-                            f.debug_tuple("WorkerStatus::Failed").finish()
-                        }
-                        WorkerStatus::Exited => {
-                            f.debug_tuple("WorkerStatus::Exited").finish()
+                        AgentStatus::Exited => {
+                            f.debug_tuple("AgentStatus::Exited").finish()
                         }
                     }
                 }
             }
-            impl WorkerStatus {
+            impl AgentStatus {
                 #[doc(hidden)]
-                pub unsafe fn _lift(val: u8) -> WorkerStatus {
+                pub unsafe fn _lift(val: u8) -> AgentStatus {
                     if !cfg!(debug_assertions) {
                         return ::core::mem::transmute(val);
                     }
                     match val {
-                        0 => WorkerStatus::Running,
-                        1 => WorkerStatus::Idle,
-                        2 => WorkerStatus::Suspended,
-                        3 => WorkerStatus::Interrupted,
-                        4 => WorkerStatus::Retrying,
-                        5 => WorkerStatus::Failed,
-                        6 => WorkerStatus::Exited,
+                        0 => AgentStatus::Running,
+                        1 => AgentStatus::Idle,
+                        2 => AgentStatus::Suspended,
+                        3 => AgentStatus::Interrupted,
+                        4 => AgentStatus::Retrying,
+                        5 => AgentStatus::Failed,
+                        6 => AgentStatus::Exited,
                         _ => panic!("invalid enum discriminant"),
                     }
                 }
             }
+            /// Describes a filter condition on agent IDs when enumerating agents
             #[derive(Clone)]
-            pub struct WorkerNameFilter {
+            pub struct AgentNameFilter {
                 pub comparator: StringFilterComparator,
                 pub value: _rt::String,
             }
-            impl ::core::fmt::Debug for WorkerNameFilter {
+            impl ::core::fmt::Debug for AgentNameFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerNameFilter")
+                    f.debug_struct("AgentNameFilter")
                         .field("comparator", &self.comparator)
                         .field("value", &self.value)
                         .finish()
                 }
             }
+            /// Describes a filter condition on the agent status when enumerating agents
             #[repr(C)]
             #[derive(Clone, Copy)]
-            pub struct WorkerStatusFilter {
+            pub struct AgentStatusFilter {
                 pub comparator: FilterComparator,
-                pub value: WorkerStatus,
+                pub value: AgentStatus,
             }
-            impl ::core::fmt::Debug for WorkerStatusFilter {
+            impl ::core::fmt::Debug for AgentStatusFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerStatusFilter")
+                    f.debug_struct("AgentStatusFilter")
                         .field("comparator", &self.comparator)
                         .field("value", &self.value)
                         .finish()
                 }
             }
+            /// Describes a filter condition on the component version when enumerating agents
             #[repr(C)]
             #[derive(Clone, Copy)]
-            pub struct WorkerVersionFilter {
-                pub comparator: FilterComparator,
-                pub value: u64,
-            }
-            impl ::core::fmt::Debug for WorkerVersionFilter {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerVersionFilter")
-                        .field("comparator", &self.comparator)
-                        .field("value", &self.value)
-                        .finish()
-                }
-            }
-            #[repr(C)]
-            #[derive(Clone, Copy)]
-            pub struct WorkerCreatedAtFilter {
+            pub struct AgentVersionFilter {
                 pub comparator: FilterComparator,
                 pub value: u64,
             }
-            impl ::core::fmt::Debug for WorkerCreatedAtFilter {
+            impl ::core::fmt::Debug for AgentVersionFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerCreatedAtFilter")
+                    f.debug_struct("AgentVersionFilter")
                         .field("comparator", &self.comparator)
                         .field("value", &self.value)
                         .finish()
                 }
             }
+            /// Describes a filter condition on the agent's creation time when enumerating agents
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            pub struct AgentCreatedAtFilter {
+                pub comparator: FilterComparator,
+                pub value: u64,
+            }
+            impl ::core::fmt::Debug for AgentCreatedAtFilter {
+                fn fmt(
+                    &self,
+                    f: &mut ::core::fmt::Formatter<'_>,
+                ) -> ::core::fmt::Result {
+                    f.debug_struct("AgentCreatedAtFilter")
+                        .field("comparator", &self.comparator)
+                        .field("value", &self.value)
+                        .finish()
+                }
+            }
+            /// Describes a filter condition on the agent's environment variables when enumerating agents
             #[derive(Clone)]
-            pub struct WorkerEnvFilter {
+            pub struct AgentEnvFilter {
                 pub name: _rt::String,
                 pub comparator: StringFilterComparator,
                 pub value: _rt::String,
             }
-            impl ::core::fmt::Debug for WorkerEnvFilter {
+            impl ::core::fmt::Debug for AgentEnvFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerEnvFilter")
+                    f.debug_struct("AgentEnvFilter")
                         .field("name", &self.name)
                         .field("comparator", &self.comparator)
                         .field("value", &self.value)
                         .finish()
                 }
             }
+            /// Describes a filter condition on the agent's configuration variables when enumerating agents
             #[derive(Clone)]
-            pub struct WorkerWasiConfigVarsFilter {
+            pub struct AgentConfigVarsFilter {
                 pub name: _rt::String,
                 pub comparator: StringFilterComparator,
                 pub value: _rt::String,
             }
-            impl ::core::fmt::Debug for WorkerWasiConfigVarsFilter {
+            impl ::core::fmt::Debug for AgentConfigVarsFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerWasiConfigVarsFilter")
+                    f.debug_struct("AgentConfigVarsFilter")
                         .field("name", &self.name)
                         .field("comparator", &self.comparator)
                         .field("value", &self.value)
                         .finish()
                 }
             }
+            /// Describes one filter condition for enumerating agents
             #[derive(Clone)]
-            pub enum WorkerPropertyFilter {
-                Name(WorkerNameFilter),
-                Status(WorkerStatusFilter),
-                Version(WorkerVersionFilter),
-                CreatedAt(WorkerCreatedAtFilter),
-                Env(WorkerEnvFilter),
-                WasiConfigVars(WorkerWasiConfigVarsFilter),
+            pub enum AgentPropertyFilter {
+                Name(AgentNameFilter),
+                Status(AgentStatusFilter),
+                Version(AgentVersionFilter),
+                CreatedAt(AgentCreatedAtFilter),
+                Env(AgentEnvFilter),
+                WasiConfigVars(AgentConfigVarsFilter),
             }
-            impl ::core::fmt::Debug for WorkerPropertyFilter {
+            impl ::core::fmt::Debug for AgentPropertyFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        WorkerPropertyFilter::Name(e) => {
-                            f.debug_tuple("WorkerPropertyFilter::Name").field(e).finish()
+                        AgentPropertyFilter::Name(e) => {
+                            f.debug_tuple("AgentPropertyFilter::Name").field(e).finish()
                         }
-                        WorkerPropertyFilter::Status(e) => {
-                            f.debug_tuple("WorkerPropertyFilter::Status")
+                        AgentPropertyFilter::Status(e) => {
+                            f.debug_tuple("AgentPropertyFilter::Status")
                                 .field(e)
                                 .finish()
                         }
-                        WorkerPropertyFilter::Version(e) => {
-                            f.debug_tuple("WorkerPropertyFilter::Version")
+                        AgentPropertyFilter::Version(e) => {
+                            f.debug_tuple("AgentPropertyFilter::Version")
                                 .field(e)
                                 .finish()
                         }
-                        WorkerPropertyFilter::CreatedAt(e) => {
-                            f.debug_tuple("WorkerPropertyFilter::CreatedAt")
+                        AgentPropertyFilter::CreatedAt(e) => {
+                            f.debug_tuple("AgentPropertyFilter::CreatedAt")
                                 .field(e)
                                 .finish()
                         }
-                        WorkerPropertyFilter::Env(e) => {
-                            f.debug_tuple("WorkerPropertyFilter::Env").field(e).finish()
+                        AgentPropertyFilter::Env(e) => {
+                            f.debug_tuple("AgentPropertyFilter::Env").field(e).finish()
                         }
-                        WorkerPropertyFilter::WasiConfigVars(e) => {
-                            f.debug_tuple("WorkerPropertyFilter::WasiConfigVars")
+                        AgentPropertyFilter::WasiConfigVars(e) => {
+                            f.debug_tuple("AgentPropertyFilter::WasiConfigVars")
                                 .field(e)
                                 .finish()
                         }
                     }
                 }
             }
+            /// Combines multiple filter conditions with an `AND` relationship for enumerating agents
             #[derive(Clone)]
-            pub struct WorkerAllFilter {
-                pub filters: _rt::Vec<WorkerPropertyFilter>,
+            pub struct AgentAllFilter {
+                pub filters: _rt::Vec<AgentPropertyFilter>,
             }
-            impl ::core::fmt::Debug for WorkerAllFilter {
+            impl ::core::fmt::Debug for AgentAllFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerAllFilter")
+                    f.debug_struct("AgentAllFilter")
                         .field("filters", &self.filters)
                         .finish()
                 }
             }
+            /// Combines multiple groups of filter conditions with an `OR` relationship for enumerating agents
             #[derive(Clone)]
-            pub struct WorkerAnyFilter {
-                pub filters: _rt::Vec<WorkerAllFilter>,
+            pub struct AgentAnyFilter {
+                pub filters: _rt::Vec<AgentAllFilter>,
             }
-            impl ::core::fmt::Debug for WorkerAnyFilter {
+            impl ::core::fmt::Debug for AgentAnyFilter {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerAnyFilter")
+                    f.debug_struct("AgentAnyFilter")
                         .field("filters", &self.filters)
                         .finish()
                 }
             }
+            /// Metadata about an agent
             #[derive(Clone)]
-            pub struct WorkerMetadata {
-                pub worker_id: WorkerId,
+            pub struct AgentMetadata {
+                /// The agent ID, consists of the component ID, agent type and agent parameters
+                pub agent_id: AgentId,
+                /// Command line arguments seen by the agent
                 pub args: _rt::Vec<_rt::String>,
+                /// Environment variables seen by the agent
                 pub env: _rt::Vec<(_rt::String, _rt::String)>,
-                pub wasi_config_vars: _rt::Vec<(_rt::String, _rt::String)>,
-                pub status: WorkerStatus,
+                /// Configuration variables seen by the agent
+                pub config_vars: _rt::Vec<(_rt::String, _rt::String)>,
+                /// The current agent status
+                pub status: AgentStatus,
+                /// The component version the agent is running with
                 pub component_version: u64,
+                /// The agent's current retry count
                 pub retry_count: u64,
             }
-            impl ::core::fmt::Debug for WorkerMetadata {
+            impl ::core::fmt::Debug for AgentMetadata {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerMetadata")
-                        .field("worker-id", &self.worker_id)
+                    f.debug_struct("AgentMetadata")
+                        .field("agent-id", &self.agent_id)
                         .field("args", &self.args)
                         .field("env", &self.env)
-                        .field("wasi-config-vars", &self.wasi_config_vars)
+                        .field("config-vars", &self.config_vars)
                         .field("status", &self.status)
                         .field("component-version", &self.component_version)
                         .field("retry-count", &self.retry_count)
                         .finish()
                 }
             }
+            /// Creates an agent enumeration
             #[derive(Debug)]
             #[repr(transparent)]
-            pub struct GetWorkers {
-                handle: _rt::Resource<GetWorkers>,
+            pub struct GetAgents {
+                handle: _rt::Resource<GetAgents>,
             }
-            impl GetWorkers {
+            impl GetAgents {
                 #[doc(hidden)]
                 pub unsafe fn from_handle(handle: u32) -> Self {
                     Self {
@@ -525,7 +544,7 @@ pub mod golem {
                     _rt::Resource::handle(&self.handle)
                 }
             }
-            unsafe impl _rt::WasmResource for GetWorkers {
+            unsafe impl _rt::WasmResource for GetAgents {
                 #[inline]
                 unsafe fn drop(_handle: u32) {
                     #[cfg(not(target_arch = "wasm32"))]
@@ -534,47 +553,47 @@ pub mod golem {
                     {
                         #[link(wasm_import_module = "golem:api/host@1.1.7")]
                         unsafe extern "C" {
-                            #[link_name = "[resource-drop]get-workers"]
+                            #[link_name = "[resource-drop]get-agents"]
                             fn drop(_: u32);
                         }
                         unsafe { drop(_handle) };
                     }
                 }
             }
-            /// Target parameter for the `revert-worker` operation
+            /// Target parameter for the `revert-agent` operation
             #[derive(Clone, Copy)]
-            pub enum RevertWorkerTarget {
+            pub enum RevertAgentTarget {
                 /// Revert to a specific oplog index. The given index will be the last one to be kept.
                 RevertToOplogIndex(OplogIndex),
                 /// Revert the last N invocations.
                 RevertLastInvocations(u64),
             }
-            impl ::core::fmt::Debug for RevertWorkerTarget {
+            impl ::core::fmt::Debug for RevertAgentTarget {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
                     match self {
-                        RevertWorkerTarget::RevertToOplogIndex(e) => {
-                            f.debug_tuple("RevertWorkerTarget::RevertToOplogIndex")
+                        RevertAgentTarget::RevertToOplogIndex(e) => {
+                            f.debug_tuple("RevertAgentTarget::RevertToOplogIndex")
                                 .field(e)
                                 .finish()
                         }
-                        RevertWorkerTarget::RevertLastInvocations(e) => {
-                            f.debug_tuple("RevertWorkerTarget::RevertLastInvocations")
+                        RevertAgentTarget::RevertLastInvocations(e) => {
+                            f.debug_tuple("RevertAgentTarget::RevertLastInvocations")
                                 .field(e)
                                 .finish()
                         }
                     }
                 }
             }
-            /// Indicates which worker the code is running on after `fork`
+            /// Indicates which agent the code is running on after `fork`
             #[repr(u8)]
             #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
             pub enum ForkResult {
-                /// The original worker that called `fork`
+                /// The original agent that called `fork`
                 Original,
-                /// The new worker
+                /// The new agent
                 Forked,
             }
             impl ::core::fmt::Debug for ForkResult {
@@ -605,11 +624,15 @@ pub mod golem {
                     }
                 }
             }
-            impl GetWorkers {
+            impl GetAgents {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
+                /// defined in `component-id`, filtered by the conditions given by `filter`. If `precise` is true,
+                /// the server will calculate the most recent state of all the returned agents, otherwise the returned
+                /// metadata will be not guaranteed to be up-to-date.
                 pub fn new(
                     component_id: ComponentId,
-                    filter: Option<&WorkerAnyFilter>,
+                    filter: Option<&AgentAnyFilter>,
                     precise: bool,
                 ) -> Self {
                     unsafe {
@@ -623,7 +646,7 @@ pub mod golem {
                         } = uuid0;
                         let (result17_0, result17_1, result17_2) = match filter {
                             Some(e) => {
-                                let WorkerAnyFilter { filters: filters2 } = e;
+                                let AgentAnyFilter { filters: filters2 } = e;
                                 let vec16 = filters2;
                                 let len16 = vec16.len();
                                 let layout16 = _rt::alloc::Layout::from_size_align_unchecked(
@@ -643,7 +666,7 @@ pub mod golem {
                                     let base = result16
                                         .add(i * (2 * ::core::mem::size_of::<*const u8>()));
                                     {
-                                        let WorkerAllFilter { filters: filters3 } = e;
+                                        let AgentAllFilter { filters: filters3 } = e;
                                         let vec15 = filters3;
                                         let len15 = vec15.len();
                                         let layout15 = _rt::alloc::Layout::from_size_align_unchecked(
@@ -665,9 +688,9 @@ pub mod golem {
                                                 .add(i * (16 + 4 * ::core::mem::size_of::<*const u8>()));
                                             {
                                                 match e {
-                                                    WorkerPropertyFilter::Name(e) => {
+                                                    AgentPropertyFilter::Name(e) => {
                                                         *base.add(0).cast::<u8>() = (0i32) as u8;
-                                                        let WorkerNameFilter {
+                                                        let AgentNameFilter {
                                                             comparator: comparator4,
                                                             value: value4,
                                                         } = e;
@@ -683,9 +706,9 @@ pub mod golem {
                                                             .add(8 + 1 * ::core::mem::size_of::<*const u8>())
                                                             .cast::<*mut u8>() = ptr5.cast_mut();
                                                     }
-                                                    WorkerPropertyFilter::Status(e) => {
+                                                    AgentPropertyFilter::Status(e) => {
                                                         *base.add(0).cast::<u8>() = (1i32) as u8;
-                                                        let WorkerStatusFilter {
+                                                        let AgentStatusFilter {
                                                             comparator: comparator6,
                                                             value: value6,
                                                         } = e;
@@ -693,9 +716,9 @@ pub mod golem {
                                                             as u8;
                                                         *base.add(9).cast::<u8>() = (value6.clone() as i32) as u8;
                                                     }
-                                                    WorkerPropertyFilter::Version(e) => {
+                                                    AgentPropertyFilter::Version(e) => {
                                                         *base.add(0).cast::<u8>() = (2i32) as u8;
-                                                        let WorkerVersionFilter {
+                                                        let AgentVersionFilter {
                                                             comparator: comparator7,
                                                             value: value7,
                                                         } = e;
@@ -703,9 +726,9 @@ pub mod golem {
                                                             as u8;
                                                         *base.add(16).cast::<i64>() = _rt::as_i64(value7);
                                                     }
-                                                    WorkerPropertyFilter::CreatedAt(e) => {
+                                                    AgentPropertyFilter::CreatedAt(e) => {
                                                         *base.add(0).cast::<u8>() = (3i32) as u8;
-                                                        let WorkerCreatedAtFilter {
+                                                        let AgentCreatedAtFilter {
                                                             comparator: comparator8,
                                                             value: value8,
                                                         } = e;
@@ -713,9 +736,9 @@ pub mod golem {
                                                             as u8;
                                                         *base.add(16).cast::<i64>() = _rt::as_i64(value8);
                                                     }
-                                                    WorkerPropertyFilter::Env(e) => {
+                                                    AgentPropertyFilter::Env(e) => {
                                                         *base.add(0).cast::<u8>() = (4i32) as u8;
-                                                        let WorkerEnvFilter {
+                                                        let AgentEnvFilter {
                                                             name: name9,
                                                             comparator: comparator9,
                                                             value: value9,
@@ -740,9 +763,9 @@ pub mod golem {
                                                             .add(8 + 3 * ::core::mem::size_of::<*const u8>())
                                                             .cast::<*mut u8>() = ptr11.cast_mut();
                                                     }
-                                                    WorkerPropertyFilter::WasiConfigVars(e) => {
+                                                    AgentPropertyFilter::WasiConfigVars(e) => {
                                                         *base.add(0).cast::<u8>() = (5i32) as u8;
-                                                        let WorkerWasiConfigVarsFilter {
+                                                        let AgentConfigVarsFilter {
                                                             name: name12,
                                                             comparator: comparator12,
                                                             value: value12,
@@ -785,7 +808,7 @@ pub mod golem {
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "golem:api/host@1.1.7")]
                         unsafe extern "C" {
-                            #[link_name = "[constructor]get-workers"]
+                            #[link_name = "[constructor]get-agents"]
                             fn wit_import18(
                                 _: i64,
                                 _: i64,
@@ -824,13 +847,14 @@ pub mod golem {
                                 _rt::alloc::dealloc(ptr.cast(), layout);
                             }
                         }
-                        unsafe { GetWorkers::from_handle(ret as u32) }
+                        unsafe { GetAgents::from_handle(ret as u32) }
                     }
                 }
             }
-            impl GetWorkers {
+            impl GetAgents {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn get_next(&self) -> Option<_rt::Vec<WorkerMetadata>> {
+                /// Retrieves the next batch of agent metadata.
+                pub fn get_next(&self) -> Option<_rt::Vec<AgentMetadata>> {
                     unsafe {
                         #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
                         #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
@@ -847,7 +871,7 @@ pub mod golem {
                         #[cfg(target_arch = "wasm32")]
                         #[link(wasm_import_module = "golem:api/host@1.1.7")]
                         unsafe extern "C" {
-                            #[link_name = "[method]get-workers.get-next"]
+                            #[link_name = "[method]get-agents.get-next"]
                             fn wit_import1(_: i32, _: *mut u8);
                         }
                         #[cfg(not(target_arch = "wasm32"))]
@@ -1016,20 +1040,20 @@ pub mod golem {
                                             let l36 = *base
                                                 .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                                                 .cast::<i64>();
-                                            WorkerMetadata {
-                                                worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                            AgentMetadata {
+                                                agent_id: super::super::super::golem::rpc::types::AgentId {
                                                     component_id: super::super::super::golem::rpc::types::ComponentId {
                                                         uuid: super::super::super::golem::rpc::types::Uuid {
                                                             high_bits: l5 as u64,
                                                             low_bits: l6 as u64,
                                                         },
                                                     },
-                                                    worker_name: _rt::string_lift(bytes9),
+                                                    agent_id: _rt::string_lift(bytes9),
                                                 },
                                                 args: result15,
                                                 env: result24,
-                                                wasi_config_vars: result33,
-                                                status: WorkerStatus::_lift(l34 as u8),
+                                                config_vars: result33,
+                                                status: AgentStatus::_lift(l34 as u8),
                                                 component_version: l35 as u64,
                                                 retry_count: l36 as u64,
                                             }
@@ -1089,14 +1113,14 @@ pub mod golem {
                         .add(16 + 2 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>();
                     let result8 = PromiseId {
-                        worker_id: super::super::super::golem::rpc::types::WorkerId {
+                        agent_id: super::super::super::golem::rpc::types::AgentId {
                             component_id: super::super::super::golem::rpc::types::ComponentId {
                                 uuid: super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l2 as u64,
                                     low_bits: l3 as u64,
                                 },
                             },
-                            worker_name: _rt::string_lift(bytes6),
+                            agent_id: _rt::string_lift(bytes6),
                         },
                         oplog_idx: l7 as u64,
                     };
@@ -1119,11 +1143,11 @@ pub mod golem {
                         [::core::mem::MaybeUninit::uninit(); 2
                             * ::core::mem::size_of::<*const u8>()],
                     );
-                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id0;
+                        agent_id: agent_id1,
+                    } = agent_id0;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid2,
                     } = component_id1;
@@ -1131,7 +1155,7 @@ pub mod golem {
                         high_bits: high_bits3,
                         low_bits: low_bits3,
                     } = uuid2;
-                    let vec4 = worker_name1;
+                    let vec4 = agent_id1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
@@ -1194,11 +1218,11 @@ pub mod golem {
                         [::core::mem::MaybeUninit::uninit(); 3
                             * ::core::mem::size_of::<*const u8>()],
                     );
-                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id0;
+                        agent_id: agent_id1,
+                    } = agent_id0;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid2,
                     } = component_id1;
@@ -1206,7 +1230,7 @@ pub mod golem {
                         high_bits: high_bits3,
                         low_bits: low_bits3,
                     } = uuid2;
-                    let vec4 = worker_name1;
+                    let vec4 = agent_id1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     let ptr5 = ret_area.0.as_mut_ptr().cast::<u8>();
@@ -1267,14 +1291,14 @@ pub mod golem {
             }
             #[allow(unused_unsafe, clippy::all)]
             /// Completes the given promise with the given payload. Returns true if the promise was completed, false
-            /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+            /// if the promise was already completed. The payload is passed to the agent that is awaiting the promise.
             pub fn complete_promise(promise_id: &PromiseId, data: &[u8]) -> bool {
                 unsafe {
-                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id0;
+                        agent_id: agent_id1,
+                    } = agent_id0;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid2,
                     } = component_id1;
@@ -1282,7 +1306,7 @@ pub mod golem {
                         high_bits: high_bits3,
                         low_bits: low_bits3,
                     } = uuid2;
-                    let vec4 = worker_name1;
+                    let vec4 = agent_id1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     let vec5 = data;
@@ -1332,11 +1356,11 @@ pub mod golem {
             /// Deletes the given promise
             pub fn delete_promise(promise_id: &PromiseId) -> () {
                 unsafe {
-                    let PromiseId { worker_id: worker_id0, oplog_idx: oplog_idx0 } = promise_id;
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let PromiseId { agent_id: agent_id0, oplog_idx: oplog_idx0 } = promise_id;
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id1,
-                        worker_name: worker_name1,
-                    } = worker_id0;
+                        agent_id: agent_id1,
+                    } = agent_id0;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid2,
                     } = component_id1;
@@ -1344,7 +1368,7 @@ pub mod golem {
                         high_bits: high_bits3,
                         low_bits: low_bits3,
                     } = uuid2;
-                    let vec4 = worker_name1;
+                    let vec4 = agent_id1;
                     let ptr4 = vec4.as_ptr().cast::<u8>();
                     let len4 = vec4.len();
                     #[cfg(target_arch = "wasm32")]
@@ -1393,7 +1417,7 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Makes the current worker travel back in time and continue execution from the given position in the persistent
+            /// Makes the current agent travel back in time and continue execution from the given position in the persistent
             /// op log.
             pub fn set_oplog_index(oplog_idx: OplogIndex) -> () {
                 unsafe {
@@ -1468,7 +1492,7 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Gets the current retry policy associated with the worker
+            /// Gets the current retry policy associated with the agent
             pub fn get_retry_policy() -> RetryPolicy {
                 unsafe {
                     #[repr(align(8))]
@@ -1512,7 +1536,7 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
+            /// Overrides the current retry policy associated with the agent. Following this call, `get-retry-policy` will return the
             /// new retry policy.
             pub fn set_retry_policy(new_retry_policy: RetryPolicy) -> () {
                 unsafe {
@@ -1557,7 +1581,7 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Gets the worker's current persistence level.
+            /// Gets the agent's current persistence level.
             pub fn get_oplog_persistence_level() -> PersistenceLevel {
                 unsafe {
                     #[cfg(target_arch = "wasm32")]
@@ -1583,7 +1607,7 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Sets the worker's current persistence level. This can increase the performance of execution in cases where durable
+            /// Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
             /// execution is not required.
             pub fn set_oplog_persistence_level(
                 new_persistence_level: PersistenceLevel,
@@ -1628,7 +1652,7 @@ pub mod golem {
             #[allow(unused_unsafe, clippy::all)]
             /// Sets the current idempotence mode. The default is true.
             /// True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
-            /// In case of false the executor provides at-most-once semantics, failing the worker in case it is
+            /// In case of false the executor provides at-most-once semantics, failing the agent in case it is
             /// not known if the side effect was already executed.
             pub fn set_idempotence_mode(idempotent: bool) -> () {
                 unsafe {
@@ -1683,18 +1707,18 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Initiates an update attempt for the given worker. The function returns immediately once the request has been processed,
-            /// not waiting for the worker to get updated.
-            pub fn update_worker(
-                worker_id: &WorkerId,
+            /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
+            /// not waiting for the agent to get updated.
+            pub fn update_agent(
+                agent_id: &AgentId,
                 target_version: ComponentVersion,
                 mode: UpdateMode,
             ) -> () {
                 unsafe {
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id0,
-                        worker_name: worker_name0,
-                    } = worker_id;
+                        agent_id: agent_id0,
+                    } = agent_id;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid1,
                     } = component_id0;
@@ -1702,13 +1726,13 @@ pub mod golem {
                         high_bits: high_bits2,
                         low_bits: low_bits2,
                     } = uuid1;
-                    let vec3 = worker_name0;
+                    let vec3 = agent_id0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "update-worker"]
+                        #[link_name = "update-agent"]
                         fn wit_import4(
                             _: i64,
                             _: i64,
@@ -1742,8 +1766,8 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Get current worker metadata
-            pub fn get_self_metadata() -> WorkerMetadata {
+            /// Get the current agent's metadata
+            pub fn get_self_metadata() -> AgentMetadata {
                 unsafe {
                     #[repr(align(8))]
                     struct RetArea(
@@ -1906,20 +1930,20 @@ pub mod golem {
                     let l33 = *ptr0
                         .add(32 + 8 * ::core::mem::size_of::<*const u8>())
                         .cast::<i64>();
-                    let result34 = WorkerMetadata {
-                        worker_id: super::super::super::golem::rpc::types::WorkerId {
+                    let result34 = AgentMetadata {
+                        agent_id: super::super::super::golem::rpc::types::AgentId {
                             component_id: super::super::super::golem::rpc::types::ComponentId {
                                 uuid: super::super::super::golem::rpc::types::Uuid {
                                     high_bits: l2 as u64,
                                     low_bits: l3 as u64,
                                 },
                             },
-                            worker_name: _rt::string_lift(bytes6),
+                            agent_id: _rt::string_lift(bytes6),
                         },
                         args: result12,
                         env: result21,
-                        wasi_config_vars: result30,
-                        status: WorkerStatus::_lift(l31 as u8),
+                        config_vars: result30,
+                        status: AgentStatus::_lift(l31 as u8),
                         component_version: l32 as u64,
                         retry_count: l33 as u64,
                     };
@@ -1927,8 +1951,8 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Get worker metadata
-            pub fn get_worker_metadata(worker_id: &WorkerId) -> Option<WorkerMetadata> {
+            /// Get agent metadata
+            pub fn get_agent_metadata(agent_id: &AgentId) -> Option<AgentMetadata> {
                 unsafe {
                     #[repr(align(8))]
                     struct RetArea(
@@ -1940,10 +1964,10 @@ pub mod golem {
                         [::core::mem::MaybeUninit::uninit(); 48
                             + 8 * ::core::mem::size_of::<*const u8>()],
                     );
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id0,
-                        worker_name: worker_name0,
-                    } = worker_id;
+                        agent_id: agent_id0,
+                    } = agent_id;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid1,
                     } = component_id0;
@@ -1951,14 +1975,14 @@ pub mod golem {
                         high_bits: high_bits2,
                         low_bits: low_bits2,
                     } = uuid1;
-                    let vec3 = worker_name0;
+                    let vec3 = agent_id0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     let ptr4 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "get-worker-metadata"]
+                        #[link_name = "get-agent-metadata"]
                         fn wit_import5(_: i64, _: i64, _: *mut u8, _: usize, _: *mut u8);
                     }
                     #[cfg(not(target_arch = "wasm32"))]
@@ -2128,20 +2152,20 @@ pub mod golem {
                                 let l38 = *ptr4
                                     .add(40 + 8 * ::core::mem::size_of::<*const u8>())
                                     .cast::<i64>();
-                                WorkerMetadata {
-                                    worker_id: super::super::super::golem::rpc::types::WorkerId {
+                                AgentMetadata {
+                                    agent_id: super::super::super::golem::rpc::types::AgentId {
                                         component_id: super::super::super::golem::rpc::types::ComponentId {
                                             uuid: super::super::super::golem::rpc::types::Uuid {
                                                 high_bits: l7 as u64,
                                                 low_bits: l8 as u64,
                                             },
                                         },
-                                        worker_name: _rt::string_lift(bytes11),
+                                        agent_id: _rt::string_lift(bytes11),
                                     },
                                     args: result17,
                                     env: result26,
-                                    wasi_config_vars: result35,
-                                    status: WorkerStatus::_lift(l36 as u8),
+                                    config_vars: result35,
+                                    status: AgentStatus::_lift(l36 as u8),
                                     component_version: l37 as u64,
                                     retry_count: l38 as u64,
                                 }
@@ -2154,17 +2178,17 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Fork a worker to another worker at a given oplog index
-            pub fn fork_worker(
-                source_worker_id: &WorkerId,
-                target_worker_id: &WorkerId,
+            /// Fork an agent to another agent at a given oplog index
+            pub fn fork_agent(
+                source_agent_id: &AgentId,
+                target_agent_id: &AgentId,
                 oplog_idx_cut_off: OplogIndex,
             ) -> () {
                 unsafe {
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id0,
-                        worker_name: worker_name0,
-                    } = source_worker_id;
+                        agent_id: agent_id0,
+                    } = source_agent_id;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid1,
                     } = component_id0;
@@ -2172,13 +2196,13 @@ pub mod golem {
                         high_bits: high_bits2,
                         low_bits: low_bits2,
                     } = uuid1;
-                    let vec3 = worker_name0;
+                    let vec3 = agent_id0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id4,
-                        worker_name: worker_name4,
-                    } = target_worker_id;
+                        agent_id: agent_id4,
+                    } = target_agent_id;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid5,
                     } = component_id4;
@@ -2186,13 +2210,13 @@ pub mod golem {
                         high_bits: high_bits6,
                         low_bits: low_bits6,
                     } = uuid5;
-                    let vec7 = worker_name4;
+                    let vec7 = agent_id4;
                     let ptr7 = vec7.as_ptr().cast::<u8>();
                     let len7 = vec7.len();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "fork-worker"]
+                        #[link_name = "fork-agent"]
                         fn wit_import8(
                             _: i64,
                             _: i64,
@@ -2235,16 +2259,16 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Revert a worker to a previous state
-            pub fn revert_worker(
-                worker_id: &WorkerId,
-                revert_target: RevertWorkerTarget,
+            /// Revert an agent to a previous state
+            pub fn revert_agent(
+                agent_id: &AgentId,
+                revert_target: RevertAgentTarget,
             ) -> () {
                 unsafe {
-                    let super::super::super::golem::rpc::types::WorkerId {
+                    let super::super::super::golem::rpc::types::AgentId {
                         component_id: component_id0,
-                        worker_name: worker_name0,
-                    } = worker_id;
+                        agent_id: agent_id0,
+                    } = agent_id;
                     let super::super::super::golem::rpc::types::ComponentId {
                         uuid: uuid1,
                     } = component_id0;
@@ -2252,21 +2276,21 @@ pub mod golem {
                         high_bits: high_bits2,
                         low_bits: low_bits2,
                     } = uuid1;
-                    let vec3 = worker_name0;
+                    let vec3 = agent_id0;
                     let ptr3 = vec3.as_ptr().cast::<u8>();
                     let len3 = vec3.len();
                     let (result4_0, result4_1) = match revert_target {
-                        RevertWorkerTarget::RevertToOplogIndex(e) => {
+                        RevertAgentTarget::RevertToOplogIndex(e) => {
                             (0i32, _rt::as_i64(e))
                         }
-                        RevertWorkerTarget::RevertLastInvocations(e) => {
+                        RevertAgentTarget::RevertLastInvocations(e) => {
                             (1i32, _rt::as_i64(e))
                         }
                     };
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "revert-worker"]
+                        #[link_name = "revert-agent"]
                         fn wit_import5(
                             _: i64,
                             _: i64,
@@ -2353,12 +2377,12 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Get the worker-id for a given component and worker name.
+            /// Get the agent-id for a given component and agent name.
             /// Returns none when no component for the specified reference exists.
-            pub fn resolve_worker_id(
+            pub fn resolve_agent_id(
                 component_reference: &str,
-                worker_name: &str,
-            ) -> Option<WorkerId> {
+                agent_name: &str,
+            ) -> Option<AgentId> {
                 unsafe {
                     #[repr(align(8))]
                     struct RetArea(
@@ -2373,14 +2397,14 @@ pub mod golem {
                     let vec0 = component_reference;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
-                    let vec1 = worker_name;
+                    let vec1 = agent_name;
                     let ptr1 = vec1.as_ptr().cast::<u8>();
                     let len1 = vec1.len();
                     let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "resolve-worker-id"]
+                        #[link_name = "resolve-agent-id"]
                         fn wit_import3(
                             _: *mut u8,
                             _: usize,
@@ -2419,14 +2443,14 @@ pub mod golem {
                                     len9,
                                     len9,
                                 );
-                                super::super::super::golem::rpc::types::WorkerId {
+                                super::super::super::golem::rpc::types::AgentId {
                                     component_id: super::super::super::golem::rpc::types::ComponentId {
                                         uuid: super::super::super::golem::rpc::types::Uuid {
                                             high_bits: l5 as u64,
                                             low_bits: l6 as u64,
                                         },
                                     },
-                                    worker_name: _rt::string_lift(bytes9),
+                                    agent_id: _rt::string_lift(bytes9),
                                 }
                             };
                             Some(e)
@@ -2437,12 +2461,12 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Get the worker-id for a given component and worker name.
-            /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
-            pub fn resolve_worker_id_strict(
+            /// Get the agent-id for a given component and agent-name.
+            /// Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
+            pub fn resolve_agent_id_strict(
                 component_reference: &str,
-                worker_name: &str,
-            ) -> Option<WorkerId> {
+                agent_name: &str,
+            ) -> Option<AgentId> {
                 unsafe {
                     #[repr(align(8))]
                     struct RetArea(
@@ -2457,14 +2481,14 @@ pub mod golem {
                     let vec0 = component_reference;
                     let ptr0 = vec0.as_ptr().cast::<u8>();
                     let len0 = vec0.len();
-                    let vec1 = worker_name;
+                    let vec1 = agent_name;
                     let ptr1 = vec1.as_ptr().cast::<u8>();
                     let len1 = vec1.len();
                     let ptr2 = ret_area.0.as_mut_ptr().cast::<u8>();
                     #[cfg(target_arch = "wasm32")]
                     #[link(wasm_import_module = "golem:api/host@1.1.7")]
                     unsafe extern "C" {
-                        #[link_name = "resolve-worker-id-strict"]
+                        #[link_name = "resolve-agent-id-strict"]
                         fn wit_import3(
                             _: *mut u8,
                             _: usize,
@@ -2503,14 +2527,14 @@ pub mod golem {
                                     len9,
                                     len9,
                                 );
-                                super::super::super::golem::rpc::types::WorkerId {
+                                super::super::super::golem::rpc::types::AgentId {
                                     component_id: super::super::super::golem::rpc::types::ComponentId {
                                         uuid: super::super::super::golem::rpc::types::Uuid {
                                             high_bits: l5 as u64,
                                             low_bits: l6 as u64,
                                         },
                                     },
-                                    worker_name: _rt::string_lift(bytes9),
+                                    agent_id: _rt::string_lift(bytes9),
                                 }
                             };
                             Some(e)
@@ -2521,9 +2545,9 @@ pub mod golem {
                 }
             }
             #[allow(unused_unsafe, clippy::all)]
-            /// Forks the current worker at the current execution point. The new worker gets the `new-name` worker name,
-            /// and this worker continues running as well. The return value is going to be different in this worker and
-            /// the forked worker.
+            /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
+            /// and this agent continues running as well. The return value is going to be different in this agent and
+            /// the forked agent.
             pub fn fork(new_name: &str) -> ForkResult {
                 unsafe {
                     let vec0 = new_name;
@@ -2586,29 +2610,34 @@ pub mod golem {
                     f.debug_struct("ComponentId").field("uuid", &self.uuid).finish()
                 }
             }
-            /// Represents a Golem worker
+            /// Represents a Golem agent
             #[derive(Clone)]
-            pub struct WorkerId {
+            pub struct AgentId {
+                /// Identifies the component the agent belongs to
                 pub component_id: ComponentId,
-                pub worker_name: _rt::String,
+                /// String representation of the agent ID (agent type and constructor parameters)
+                pub agent_id: _rt::String,
             }
-            impl ::core::fmt::Debug for WorkerId {
+            impl ::core::fmt::Debug for AgentId {
                 fn fmt(
                     &self,
                     f: &mut ::core::fmt::Formatter<'_>,
                 ) -> ::core::fmt::Result {
-                    f.debug_struct("WorkerId")
+                    f.debug_struct("AgentId")
                         .field("component-id", &self.component_id)
-                        .field("worker-name", &self.worker_name)
+                        .field("agent-id", &self.agent_id)
                         .finish()
                 }
             }
+            /// The index type used in `wit-value` and `wit-type` to identify nodes
             pub type NodeIndex = i32;
-            pub type ResourceId = u64;
+            /// Resource handle modes
             #[repr(u8)]
             #[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
             pub enum ResourceMode {
+                /// The resource is owned by this handle
                 Owned,
+                /// The resource is owned by someone else, and this handle is just a borrow
                 Borrowed,
             }
             impl ::core::fmt::Debug for ResourceMode {
@@ -2639,136 +2668,7 @@ pub mod golem {
                     }
                 }
             }
-            #[derive(Clone)]
-            pub enum WitTypeNode {
-                RecordType(_rt::Vec<(_rt::String, NodeIndex)>),
-                VariantType(_rt::Vec<(_rt::String, Option<NodeIndex>)>),
-                EnumType(_rt::Vec<_rt::String>),
-                FlagsType(_rt::Vec<_rt::String>),
-                TupleType(_rt::Vec<NodeIndex>),
-                ListType(NodeIndex),
-                OptionType(NodeIndex),
-                ResultType((Option<NodeIndex>, Option<NodeIndex>)),
-                PrimU8Type,
-                PrimU16Type,
-                PrimU32Type,
-                PrimU64Type,
-                PrimS8Type,
-                PrimS16Type,
-                PrimS32Type,
-                PrimS64Type,
-                PrimF32Type,
-                PrimF64Type,
-                PrimCharType,
-                PrimBoolType,
-                PrimStringType,
-                HandleType((ResourceId, ResourceMode)),
-            }
-            impl ::core::fmt::Debug for WitTypeNode {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    match self {
-                        WitTypeNode::RecordType(e) => {
-                            f.debug_tuple("WitTypeNode::RecordType").field(e).finish()
-                        }
-                        WitTypeNode::VariantType(e) => {
-                            f.debug_tuple("WitTypeNode::VariantType").field(e).finish()
-                        }
-                        WitTypeNode::EnumType(e) => {
-                            f.debug_tuple("WitTypeNode::EnumType").field(e).finish()
-                        }
-                        WitTypeNode::FlagsType(e) => {
-                            f.debug_tuple("WitTypeNode::FlagsType").field(e).finish()
-                        }
-                        WitTypeNode::TupleType(e) => {
-                            f.debug_tuple("WitTypeNode::TupleType").field(e).finish()
-                        }
-                        WitTypeNode::ListType(e) => {
-                            f.debug_tuple("WitTypeNode::ListType").field(e).finish()
-                        }
-                        WitTypeNode::OptionType(e) => {
-                            f.debug_tuple("WitTypeNode::OptionType").field(e).finish()
-                        }
-                        WitTypeNode::ResultType(e) => {
-                            f.debug_tuple("WitTypeNode::ResultType").field(e).finish()
-                        }
-                        WitTypeNode::PrimU8Type => {
-                            f.debug_tuple("WitTypeNode::PrimU8Type").finish()
-                        }
-                        WitTypeNode::PrimU16Type => {
-                            f.debug_tuple("WitTypeNode::PrimU16Type").finish()
-                        }
-                        WitTypeNode::PrimU32Type => {
-                            f.debug_tuple("WitTypeNode::PrimU32Type").finish()
-                        }
-                        WitTypeNode::PrimU64Type => {
-                            f.debug_tuple("WitTypeNode::PrimU64Type").finish()
-                        }
-                        WitTypeNode::PrimS8Type => {
-                            f.debug_tuple("WitTypeNode::PrimS8Type").finish()
-                        }
-                        WitTypeNode::PrimS16Type => {
-                            f.debug_tuple("WitTypeNode::PrimS16Type").finish()
-                        }
-                        WitTypeNode::PrimS32Type => {
-                            f.debug_tuple("WitTypeNode::PrimS32Type").finish()
-                        }
-                        WitTypeNode::PrimS64Type => {
-                            f.debug_tuple("WitTypeNode::PrimS64Type").finish()
-                        }
-                        WitTypeNode::PrimF32Type => {
-                            f.debug_tuple("WitTypeNode::PrimF32Type").finish()
-                        }
-                        WitTypeNode::PrimF64Type => {
-                            f.debug_tuple("WitTypeNode::PrimF64Type").finish()
-                        }
-                        WitTypeNode::PrimCharType => {
-                            f.debug_tuple("WitTypeNode::PrimCharType").finish()
-                        }
-                        WitTypeNode::PrimBoolType => {
-                            f.debug_tuple("WitTypeNode::PrimBoolType").finish()
-                        }
-                        WitTypeNode::PrimStringType => {
-                            f.debug_tuple("WitTypeNode::PrimStringType").finish()
-                        }
-                        WitTypeNode::HandleType(e) => {
-                            f.debug_tuple("WitTypeNode::HandleType").field(e).finish()
-                        }
-                    }
-                }
-            }
-            #[derive(Clone)]
-            pub struct NamedWitTypeNode {
-                pub name: Option<_rt::String>,
-                pub owner: Option<_rt::String>,
-                pub type_: WitTypeNode,
-            }
-            impl ::core::fmt::Debug for NamedWitTypeNode {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("NamedWitTypeNode")
-                        .field("name", &self.name)
-                        .field("owner", &self.owner)
-                        .field("type", &self.type_)
-                        .finish()
-                }
-            }
-            #[derive(Clone)]
-            pub struct WitType {
-                pub nodes: _rt::Vec<NamedWitTypeNode>,
-            }
-            impl ::core::fmt::Debug for WitType {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("WitType").field("nodes", &self.nodes).finish()
-                }
-            }
+            /// URI value
             #[derive(Clone)]
             pub struct Uri {
                 pub value: _rt::String,
@@ -2781,29 +2681,53 @@ pub mod golem {
                     f.debug_struct("Uri").field("value", &self.value).finish()
                 }
             }
+            /// One node of a `wit-value`
             #[derive(Clone)]
             pub enum WitNode {
+                /// A record value defined by a list of its field values
                 RecordValue(_rt::Vec<NodeIndex>),
+                /// A variant value defined by a pair of the case index and its inner value
                 VariantValue((u32, Option<NodeIndex>)),
+                /// An enum value defined by a case index
                 EnumValue(u32),
+                /// A flags value defined by a list of its flag states
                 FlagsValue(_rt::Vec<bool>),
+                /// A tuple value defined by a list of its item values
                 TupleValue(_rt::Vec<NodeIndex>),
+                /// A list value defined by a list of its item values
                 ListValue(_rt::Vec<NodeIndex>),
+                /// An option value defined by an optional inner value
                 OptionValue(Option<NodeIndex>),
+                /// A result value defined by either an ok value or an error value. Both values are optional,
+                /// where the `none` case represents the absence of a value.
                 ResultValue(Result<Option<NodeIndex>, Option<NodeIndex>>),
+                /// Primitive unsigned 8-bit integer
                 PrimU8(u8),
+                /// Primitive unsigned 16-bit integer
                 PrimU16(u16),
+                /// Primitive unsigned 32-bit integer
                 PrimU32(u32),
+                /// Primitive unsigned 64-bit integer
                 PrimU64(u64),
+                /// Primitive signed 8-bit integer
                 PrimS8(i8),
+                /// Primitive signed 16-bit integer
                 PrimS16(i16),
+                /// Primitive signed 32-bit integer
                 PrimS32(i32),
+                /// Primitive signed 64-bit integer
                 PrimS64(i64),
+                /// Primitive 32-bit floating point number
                 PrimFloat32(f32),
+                /// Primitive 64-bit floating point number
                 PrimFloat64(f64),
+                /// Primitive character
                 PrimChar(char),
+                /// Primitive boolean
                 PrimBool(bool),
+                /// Primitive string
                 PrimString(_rt::String),
+                /// Resource handle pointing to a URI and a resource ID
                 Handle((Uri, u64)),
             }
             impl ::core::fmt::Debug for WitNode {
@@ -2881,8 +2805,12 @@ pub mod golem {
                     }
                 }
             }
+            /// Describes an arbitrary value
             #[derive(Clone)]
             pub struct WitValue {
+                /// The list of `wit-node` values that make up the value. The list is always non-empty,
+                /// and the first element is the root node describing the value. Because WIT does not support
+                /// recursive types, further nodes are pushed into this list, and referenced by index from their parent node.
                 pub nodes: _rt::Vec<WitNode>,
             }
             impl ::core::fmt::Debug for WitValue {
@@ -2893,27 +2821,16 @@ pub mod golem {
                     f.debug_struct("WitValue").field("nodes", &self.nodes).finish()
                 }
             }
-            #[derive(Clone)]
-            pub struct ValueAndType {
-                pub value: WitValue,
-                pub typ: WitType,
-            }
-            impl ::core::fmt::Debug for ValueAndType {
-                fn fmt(
-                    &self,
-                    f: &mut ::core::fmt::Formatter<'_>,
-                ) -> ::core::fmt::Result {
-                    f.debug_struct("ValueAndType")
-                        .field("value", &self.value)
-                        .field("typ", &self.typ)
-                        .finish()
-                }
-            }
+            /// Possible failures of an RPC call
             #[derive(Clone)]
             pub enum RpcError {
+                /// Protocol level error
                 ProtocolError(_rt::String),
+                /// Access denied
                 Denied(_rt::String),
+                /// Target agent or function not found
                 NotFound(_rt::String),
+                /// Internal error on the remote side
                 RemoteInternalError(_rt::String),
             }
             impl ::core::fmt::Debug for RpcError {
@@ -2948,6 +2865,7 @@ pub mod golem {
                 }
             }
             impl std::error::Error for RpcError {}
+            /// An RPC client
             #[derive(Debug)]
             #[repr(transparent)]
             pub struct WasmRpc {
@@ -2985,6 +2903,7 @@ pub mod golem {
                     }
                 }
             }
+            /// Represents a pollable invocation result
             #[derive(Debug)]
             #[repr(transparent)]
             pub struct FutureInvokeResult {
@@ -3022,6 +2941,7 @@ pub mod golem {
                     }
                 }
             }
+            /// Cancellation token for scheduled invocations
             #[derive(Debug)]
             #[repr(transparent)]
             pub struct CancellationToken {
@@ -3161,15 +3081,16 @@ pub mod golem {
             }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
-                pub fn new(worker_id: &WorkerId) -> Self {
+                /// Constructs the RPC client connecting to the given target agent
+                pub fn new(agent_id: &AgentId) -> Self {
                     unsafe {
-                        let WorkerId {
+                        let AgentId {
                             component_id: component_id0,
-                            worker_name: worker_name0,
-                        } = worker_id;
+                            agent_id: agent_id0,
+                        } = agent_id;
                         let ComponentId { uuid: uuid1 } = component_id0;
                         let Uuid { high_bits: high_bits2, low_bits: low_bits2 } = uuid1;
-                        let vec3 = worker_name0;
+                        let vec3 = agent_id0;
                         let ptr3 = vec3.as_ptr().cast::<u8>();
                         let len3 = vec3.len();
                         #[cfg(target_arch = "wasm32")]
@@ -3201,6 +3122,7 @@ pub mod golem {
             }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Invokes a remote function with the given parameters, and awaits the result
                 pub fn invoke_and_await(
                     &self,
                     function_name: &str,
@@ -3906,6 +3828,7 @@ pub mod golem {
             }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Triggers the invocation of a remote function with the given parameters, and returns immediately.
                 pub fn invoke(
                     &self,
                     function_name: &str,
@@ -4316,6 +4239,10 @@ pub mod golem {
             }
             impl WasmRpc {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Invokes a remote function with the given parameters, and returns a `future-invoke-result` value which can
+                /// be polled for the result.
+                ///
+                /// With this function it is possible to call multiple (different) agents simultaneously.
                 pub fn async_invoke_and_await(
                     &self,
                     function_name: &str,
@@ -5248,6 +5175,7 @@ pub mod golem {
             }
             impl FutureInvokeResult {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Subscribes to the result of the invocation
                 pub fn subscribe(&self) -> Pollable {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
@@ -5271,6 +5199,7 @@ pub mod golem {
             }
             impl FutureInvokeResult {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Poll for the invocation. If the invocation has not completed yet, returns `none`.
                 pub fn get(&self) -> Option<Result<WitValue, RpcError>> {
                     unsafe {
                         #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
@@ -5703,6 +5632,7 @@ pub mod golem {
             }
             impl CancellationToken {
                 #[allow(unused_unsafe, clippy::all)]
+                /// Cancel the scheduled invocation
                 pub fn cancel(&self) -> () {
                     unsafe {
                         #[cfg(target_arch = "wasm32")]
@@ -5717,1985 +5647,6 @@ pub mod golem {
                         }
                         unsafe { wit_import0((self).handle() as i32) };
                     }
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            pub fn extract_value(vnt: &ValueAndType) -> WitValue {
-                unsafe {
-                    let mut cleanup_list = _rt::Vec::new();
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 2 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 2
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let ValueAndType { value: value0, typ: typ0 } = vnt;
-                    let WitValue { nodes: nodes1 } = value0;
-                    let vec11 = nodes1;
-                    let len11 = vec11.len();
-                    let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
-                        vec11.len() * (16 + 2 * ::core::mem::size_of::<*const u8>()),
-                        8,
-                    );
-                    let result11 = if layout11.size() != 0 {
-                        let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
-                        if ptr.is_null() {
-                            _rt::alloc::handle_alloc_error(layout11);
-                        }
-                        ptr
-                    } else {
-                        ::core::ptr::null_mut()
-                    };
-                    for (i, e) in vec11.into_iter().enumerate() {
-                        let base = result11
-                            .add(i * (16 + 2 * ::core::mem::size_of::<*const u8>()));
-                        {
-                            match e {
-                                WitNode::RecordValue(e) => {
-                                    *base.add(0).cast::<u8>() = (0i32) as u8;
-                                    let vec2 = e;
-                                    let ptr2 = vec2.as_ptr().cast::<u8>();
-                                    let len2 = vec2.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len2;
-                                    *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
-                                }
-                                WitNode::VariantValue(e) => {
-                                    *base.add(0).cast::<u8>() = (1i32) as u8;
-                                    let (t3_0, t3_1) = e;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
-                                    match t3_1 {
-                                        Some(e) => {
-                                            *base.add(12).cast::<u8>() = (1i32) as u8;
-                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base.add(12).cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                }
-                                WitNode::EnumValue(e) => {
-                                    *base.add(0).cast::<u8>() = (2i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::FlagsValue(e) => {
-                                    *base.add(0).cast::<u8>() = (3i32) as u8;
-                                    let vec4 = e;
-                                    let len4 = vec4.len();
-                                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec4.len() * 1,
-                                        1,
-                                    );
-                                    let result4 = if layout4.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout4);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec4.into_iter().enumerate() {
-                                        let base = result4.add(i * 1);
-                                        {
-                                            *base.add(0).cast::<u8>() = (match e {
-                                                true => 1,
-                                                false => 0,
-                                            }) as u8;
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len4;
-                                    *base.add(8).cast::<*mut u8>() = result4;
-                                    cleanup_list.extend_from_slice(&[(result4, layout4)]);
-                                }
-                                WitNode::TupleValue(e) => {
-                                    *base.add(0).cast::<u8>() = (4i32) as u8;
-                                    let vec5 = e;
-                                    let ptr5 = vec5.as_ptr().cast::<u8>();
-                                    let len5 = vec5.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len5;
-                                    *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
-                                }
-                                WitNode::ListValue(e) => {
-                                    *base.add(0).cast::<u8>() = (5i32) as u8;
-                                    let vec6 = e;
-                                    let ptr6 = vec6.as_ptr().cast::<u8>();
-                                    let len6 = vec6.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len6;
-                                    *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
-                                }
-                                WitNode::OptionValue(e) => {
-                                    *base.add(0).cast::<u8>() = (6i32) as u8;
-                                    match e {
-                                        Some(e) => {
-                                            *base.add(8).cast::<u8>() = (1i32) as u8;
-                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base.add(8).cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                }
-                                WitNode::ResultValue(e) => {
-                                    *base.add(0).cast::<u8>() = (7i32) as u8;
-                                    match e {
-                                        Ok(e) => {
-                                            *base.add(8).cast::<u8>() = (0i32) as u8;
-                                            match e {
-                                                Some(e) => {
-                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                        Err(e) => {
-                                            *base.add(8).cast::<u8>() = (1i32) as u8;
-                                            match e {
-                                                Some(e) => {
-                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                    };
-                                }
-                                WitNode::PrimU8(e) => {
-                                    *base.add(0).cast::<u8>() = (8i32) as u8;
-                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                }
-                                WitNode::PrimU16(e) => {
-                                    *base.add(0).cast::<u8>() = (9i32) as u8;
-                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                }
-                                WitNode::PrimU32(e) => {
-                                    *base.add(0).cast::<u8>() = (10i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::PrimU64(e) => {
-                                    *base.add(0).cast::<u8>() = (11i32) as u8;
-                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                }
-                                WitNode::PrimS8(e) => {
-                                    *base.add(0).cast::<u8>() = (12i32) as u8;
-                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                }
-                                WitNode::PrimS16(e) => {
-                                    *base.add(0).cast::<u8>() = (13i32) as u8;
-                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                }
-                                WitNode::PrimS32(e) => {
-                                    *base.add(0).cast::<u8>() = (14i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::PrimS64(e) => {
-                                    *base.add(0).cast::<u8>() = (15i32) as u8;
-                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                }
-                                WitNode::PrimFloat32(e) => {
-                                    *base.add(0).cast::<u8>() = (16i32) as u8;
-                                    *base.add(8).cast::<f32>() = _rt::as_f32(e);
-                                }
-                                WitNode::PrimFloat64(e) => {
-                                    *base.add(0).cast::<u8>() = (17i32) as u8;
-                                    *base.add(8).cast::<f64>() = _rt::as_f64(e);
-                                }
-                                WitNode::PrimChar(e) => {
-                                    *base.add(0).cast::<u8>() = (18i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::PrimBool(e) => {
-                                    *base.add(0).cast::<u8>() = (19i32) as u8;
-                                    *base.add(8).cast::<u8>() = (match e {
-                                        true => 1,
-                                        false => 0,
-                                    }) as u8;
-                                }
-                                WitNode::PrimString(e) => {
-                                    *base.add(0).cast::<u8>() = (20i32) as u8;
-                                    let vec7 = e;
-                                    let ptr7 = vec7.as_ptr().cast::<u8>();
-                                    let len7 = vec7.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len7;
-                                    *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
-                                }
-                                WitNode::Handle(e) => {
-                                    *base.add(0).cast::<u8>() = (21i32) as u8;
-                                    let (t8_0, t8_1) = e;
-                                    let Uri { value: value9 } = t8_0;
-                                    let vec10 = value9;
-                                    let ptr10 = vec10.as_ptr().cast::<u8>();
-                                    let len10 = vec10.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len10;
-                                    *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
-                                    *base
-                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i64>() = _rt::as_i64(t8_1);
-                                }
-                            }
-                        }
-                    }
-                    let WitType { nodes: nodes12 } = typ0;
-                    let vec29 = nodes12;
-                    let len29 = vec29.len();
-                    let layout29 = _rt::alloc::Layout::from_size_align_unchecked(
-                        vec29.len() * (24 + 6 * ::core::mem::size_of::<*const u8>()),
-                        8,
-                    );
-                    let result29 = if layout29.size() != 0 {
-                        let ptr = _rt::alloc::alloc(layout29).cast::<u8>();
-                        if ptr.is_null() {
-                            _rt::alloc::handle_alloc_error(layout29);
-                        }
-                        ptr
-                    } else {
-                        ::core::ptr::null_mut()
-                    };
-                    for (i, e) in vec29.into_iter().enumerate() {
-                        let base = result29
-                            .add(i * (24 + 6 * ::core::mem::size_of::<*const u8>()));
-                        {
-                            let NamedWitTypeNode {
-                                name: name13,
-                                owner: owner13,
-                                type_: type_13,
-                            } = e;
-                            match name13 {
-                                Some(e) => {
-                                    *base.add(0).cast::<u8>() = (1i32) as u8;
-                                    let vec14 = e;
-                                    let ptr14 = vec14.as_ptr().cast::<u8>();
-                                    let len14 = vec14.len();
-                                    *base
-                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len14;
-                                    *base
-                                        .add(::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr14.cast_mut();
-                                }
-                                None => {
-                                    *base.add(0).cast::<u8>() = (0i32) as u8;
-                                }
-                            };
-                            match owner13 {
-                                Some(e) => {
-                                    *base
-                                        .add(3 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (1i32) as u8;
-                                    let vec15 = e;
-                                    let ptr15 = vec15.as_ptr().cast::<u8>();
-                                    let len15 = vec15.len();
-                                    *base
-                                        .add(5 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len15;
-                                    *base
-                                        .add(4 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr15.cast_mut();
-                                }
-                                None => {
-                                    *base
-                                        .add(3 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (0i32) as u8;
-                                }
-                            };
-                            match type_13 {
-                                WitTypeNode::RecordType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (0i32) as u8;
-                                    let vec18 = e;
-                                    let len18 = vec18.len();
-                                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec18.len() * (3 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result18 = if layout18.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout18);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec18.into_iter().enumerate() {
-                                        let base = result18
-                                            .add(i * (3 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let (t16_0, t16_1) = e;
-                                            let vec17 = t16_0;
-                                            let ptr17 = vec17.as_ptr().cast::<u8>();
-                                            let len17 = vec17.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len17;
-                                            *base.add(0).cast::<*mut u8>() = ptr17.cast_mut();
-                                            *base
-                                                .add(2 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<i32>() = _rt::as_i32(t16_1);
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len18;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result18;
-                                    cleanup_list.extend_from_slice(&[(result18, layout18)]);
-                                }
-                                WitTypeNode::VariantType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (1i32) as u8;
-                                    let vec21 = e;
-                                    let len21 = vec21.len();
-                                    let layout21 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec21.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result21 = if layout21.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout21).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout21);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec21.into_iter().enumerate() {
-                                        let base = result21
-                                            .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let (t19_0, t19_1) = e;
-                                            let vec20 = t19_0;
-                                            let ptr20 = vec20.as_ptr().cast::<u8>();
-                                            let len20 = vec20.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len20;
-                                            *base.add(0).cast::<*mut u8>() = ptr20.cast_mut();
-                                            match t19_1 {
-                                                Some(e) => {
-                                                    *base
-                                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<u8>() = (1i32) as u8;
-                                                    *base
-                                                        .add(4 + 2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base
-                                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len21;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result21;
-                                    cleanup_list.extend_from_slice(&[(result21, layout21)]);
-                                }
-                                WitTypeNode::EnumType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (2i32) as u8;
-                                    let vec23 = e;
-                                    let len23 = vec23.len();
-                                    let layout23 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec23.len() * (2 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result23 = if layout23.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout23).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout23);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec23.into_iter().enumerate() {
-                                        let base = result23
-                                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let vec22 = e;
-                                            let ptr22 = vec22.as_ptr().cast::<u8>();
-                                            let len22 = vec22.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len22;
-                                            *base.add(0).cast::<*mut u8>() = ptr22.cast_mut();
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len23;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result23;
-                                    cleanup_list.extend_from_slice(&[(result23, layout23)]);
-                                }
-                                WitTypeNode::FlagsType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (3i32) as u8;
-                                    let vec25 = e;
-                                    let len25 = vec25.len();
-                                    let layout25 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec25.len() * (2 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result25 = if layout25.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout25).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout25);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec25.into_iter().enumerate() {
-                                        let base = result25
-                                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let vec24 = e;
-                                            let ptr24 = vec24.as_ptr().cast::<u8>();
-                                            let len24 = vec24.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len24;
-                                            *base.add(0).cast::<*mut u8>() = ptr24.cast_mut();
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len25;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result25;
-                                    cleanup_list.extend_from_slice(&[(result25, layout25)]);
-                                }
-                                WitTypeNode::TupleType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (4i32) as u8;
-                                    let vec26 = e;
-                                    let ptr26 = vec26.as_ptr().cast::<u8>();
-                                    let len26 = vec26.len();
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len26;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr26.cast_mut();
-                                }
-                                WitTypeNode::ListType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (5i32) as u8;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitTypeNode::OptionType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (6i32) as u8;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitTypeNode::ResultType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (7i32) as u8;
-                                    let (t27_0, t27_1) = e;
-                                    match t27_0 {
-                                        Some(e) => {
-                                            *base
-                                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (1i32) as u8;
-                                            *base
-                                                .add(12 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base
-                                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                    match t27_1 {
-                                        Some(e) => {
-                                            *base
-                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (1i32) as u8;
-                                            *base
-                                                .add(20 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base
-                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                }
-                                WitTypeNode::PrimU8Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (8i32) as u8;
-                                }
-                                WitTypeNode::PrimU16Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (9i32) as u8;
-                                }
-                                WitTypeNode::PrimU32Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (10i32) as u8;
-                                }
-                                WitTypeNode::PrimU64Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (11i32) as u8;
-                                }
-                                WitTypeNode::PrimS8Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (12i32) as u8;
-                                }
-                                WitTypeNode::PrimS16Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (13i32) as u8;
-                                }
-                                WitTypeNode::PrimS32Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (14i32) as u8;
-                                }
-                                WitTypeNode::PrimS64Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (15i32) as u8;
-                                }
-                                WitTypeNode::PrimF32Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (16i32) as u8;
-                                }
-                                WitTypeNode::PrimF64Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (17i32) as u8;
-                                }
-                                WitTypeNode::PrimCharType => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (18i32) as u8;
-                                }
-                                WitTypeNode::PrimBoolType => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (19i32) as u8;
-                                }
-                                WitTypeNode::PrimStringType => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (20i32) as u8;
-                                }
-                                WitTypeNode::HandleType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (21i32) as u8;
-                                    let (t28_0, t28_1) = e;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i64>() = _rt::as_i64(t28_0);
-                                    *base
-                                        .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (t28_1.clone() as i32) as u8;
-                                }
-                            }
-                        }
-                    }
-                    let ptr30 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.2.2")]
-                    unsafe extern "C" {
-                        #[link_name = "extract-value"]
-                        fn wit_import31(
-                            _: *mut u8,
-                            _: usize,
-                            _: *mut u8,
-                            _: usize,
-                            _: *mut u8,
-                        );
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import31(
-                        _: *mut u8,
-                        _: usize,
-                        _: *mut u8,
-                        _: usize,
-                        _: *mut u8,
-                    ) {
-                        unreachable!()
-                    }
-                    unsafe { wit_import31(result11, len11, result29, len29, ptr30) };
-                    let l32 = *ptr30.add(0).cast::<*mut u8>();
-                    let l33 = *ptr30
-                        .add(::core::mem::size_of::<*const u8>())
-                        .cast::<usize>();
-                    let base79 = l32;
-                    let len79 = l33;
-                    let mut result79 = _rt::Vec::with_capacity(len79);
-                    for i in 0..len79 {
-                        let base = base79
-                            .add(i * (16 + 2 * ::core::mem::size_of::<*const u8>()));
-                        let e79 = {
-                            let l34 = i32::from(*base.add(0).cast::<u8>());
-                            let v78 = match l34 {
-                                0 => {
-                                    let e78 = {
-                                        let l35 = *base.add(8).cast::<*mut u8>();
-                                        let l36 = *base
-                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let len37 = l36;
-                                        _rt::Vec::from_raw_parts(l35.cast(), len37, len37)
-                                    };
-                                    WitNode::RecordValue(e78)
-                                }
-                                1 => {
-                                    let e78 = {
-                                        let l38 = *base.add(8).cast::<i32>();
-                                        let l39 = i32::from(*base.add(12).cast::<u8>());
-                                        (
-                                            l38 as u32,
-                                            match l39 {
-                                                0 => None,
-                                                1 => {
-                                                    let e = {
-                                                        let l40 = *base.add(16).cast::<i32>();
-                                                        l40
-                                                    };
-                                                    Some(e)
-                                                }
-                                                _ => _rt::invalid_enum_discriminant(),
-                                            },
-                                        )
-                                    };
-                                    WitNode::VariantValue(e78)
-                                }
-                                2 => {
-                                    let e78 = {
-                                        let l41 = *base.add(8).cast::<i32>();
-                                        l41 as u32
-                                    };
-                                    WitNode::EnumValue(e78)
-                                }
-                                3 => {
-                                    let e78 = {
-                                        let l42 = *base.add(8).cast::<*mut u8>();
-                                        let l43 = *base
-                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let base45 = l42;
-                                        let len45 = l43;
-                                        let mut result45 = _rt::Vec::with_capacity(len45);
-                                        for i in 0..len45 {
-                                            let base = base45.add(i * 1);
-                                            let e45 = {
-                                                let l44 = i32::from(*base.add(0).cast::<u8>());
-                                                _rt::bool_lift(l44 as u8)
-                                            };
-                                            result45.push(e45);
-                                        }
-                                        _rt::cabi_dealloc(base45, len45 * 1, 1);
-                                        result45
-                                    };
-                                    WitNode::FlagsValue(e78)
-                                }
-                                4 => {
-                                    let e78 = {
-                                        let l46 = *base.add(8).cast::<*mut u8>();
-                                        let l47 = *base
-                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let len48 = l47;
-                                        _rt::Vec::from_raw_parts(l46.cast(), len48, len48)
-                                    };
-                                    WitNode::TupleValue(e78)
-                                }
-                                5 => {
-                                    let e78 = {
-                                        let l49 = *base.add(8).cast::<*mut u8>();
-                                        let l50 = *base
-                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let len51 = l50;
-                                        _rt::Vec::from_raw_parts(l49.cast(), len51, len51)
-                                    };
-                                    WitNode::ListValue(e78)
-                                }
-                                6 => {
-                                    let e78 = {
-                                        let l52 = i32::from(*base.add(8).cast::<u8>());
-                                        match l52 {
-                                            0 => None,
-                                            1 => {
-                                                let e = {
-                                                    let l53 = *base.add(12).cast::<i32>();
-                                                    l53
-                                                };
-                                                Some(e)
-                                            }
-                                            _ => _rt::invalid_enum_discriminant(),
-                                        }
-                                    };
-                                    WitNode::OptionValue(e78)
-                                }
-                                7 => {
-                                    let e78 = {
-                                        let l54 = i32::from(*base.add(8).cast::<u8>());
-                                        match l54 {
-                                            0 => {
-                                                let e = {
-                                                    let l55 = i32::from(*base.add(12).cast::<u8>());
-                                                    match l55 {
-                                                        0 => None,
-                                                        1 => {
-                                                            let e = {
-                                                                let l56 = *base.add(16).cast::<i32>();
-                                                                l56
-                                                            };
-                                                            Some(e)
-                                                        }
-                                                        _ => _rt::invalid_enum_discriminant(),
-                                                    }
-                                                };
-                                                Ok(e)
-                                            }
-                                            1 => {
-                                                let e = {
-                                                    let l57 = i32::from(*base.add(12).cast::<u8>());
-                                                    match l57 {
-                                                        0 => None,
-                                                        1 => {
-                                                            let e = {
-                                                                let l58 = *base.add(16).cast::<i32>();
-                                                                l58
-                                                            };
-                                                            Some(e)
-                                                        }
-                                                        _ => _rt::invalid_enum_discriminant(),
-                                                    }
-                                                };
-                                                Err(e)
-                                            }
-                                            _ => _rt::invalid_enum_discriminant(),
-                                        }
-                                    };
-                                    WitNode::ResultValue(e78)
-                                }
-                                8 => {
-                                    let e78 = {
-                                        let l59 = i32::from(*base.add(8).cast::<u8>());
-                                        l59 as u8
-                                    };
-                                    WitNode::PrimU8(e78)
-                                }
-                                9 => {
-                                    let e78 = {
-                                        let l60 = i32::from(*base.add(8).cast::<u16>());
-                                        l60 as u16
-                                    };
-                                    WitNode::PrimU16(e78)
-                                }
-                                10 => {
-                                    let e78 = {
-                                        let l61 = *base.add(8).cast::<i32>();
-                                        l61 as u32
-                                    };
-                                    WitNode::PrimU32(e78)
-                                }
-                                11 => {
-                                    let e78 = {
-                                        let l62 = *base.add(8).cast::<i64>();
-                                        l62 as u64
-                                    };
-                                    WitNode::PrimU64(e78)
-                                }
-                                12 => {
-                                    let e78 = {
-                                        let l63 = i32::from(*base.add(8).cast::<i8>());
-                                        l63 as i8
-                                    };
-                                    WitNode::PrimS8(e78)
-                                }
-                                13 => {
-                                    let e78 = {
-                                        let l64 = i32::from(*base.add(8).cast::<i16>());
-                                        l64 as i16
-                                    };
-                                    WitNode::PrimS16(e78)
-                                }
-                                14 => {
-                                    let e78 = {
-                                        let l65 = *base.add(8).cast::<i32>();
-                                        l65
-                                    };
-                                    WitNode::PrimS32(e78)
-                                }
-                                15 => {
-                                    let e78 = {
-                                        let l66 = *base.add(8).cast::<i64>();
-                                        l66
-                                    };
-                                    WitNode::PrimS64(e78)
-                                }
-                                16 => {
-                                    let e78 = {
-                                        let l67 = *base.add(8).cast::<f32>();
-                                        l67
-                                    };
-                                    WitNode::PrimFloat32(e78)
-                                }
-                                17 => {
-                                    let e78 = {
-                                        let l68 = *base.add(8).cast::<f64>();
-                                        l68
-                                    };
-                                    WitNode::PrimFloat64(e78)
-                                }
-                                18 => {
-                                    let e78 = {
-                                        let l69 = *base.add(8).cast::<i32>();
-                                        _rt::char_lift(l69 as u32)
-                                    };
-                                    WitNode::PrimChar(e78)
-                                }
-                                19 => {
-                                    let e78 = {
-                                        let l70 = i32::from(*base.add(8).cast::<u8>());
-                                        _rt::bool_lift(l70 as u8)
-                                    };
-                                    WitNode::PrimBool(e78)
-                                }
-                                20 => {
-                                    let e78 = {
-                                        let l71 = *base.add(8).cast::<*mut u8>();
-                                        let l72 = *base
-                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let len73 = l72;
-                                        let bytes73 = _rt::Vec::from_raw_parts(
-                                            l71.cast(),
-                                            len73,
-                                            len73,
-                                        );
-                                        _rt::string_lift(bytes73)
-                                    };
-                                    WitNode::PrimString(e78)
-                                }
-                                n => {
-                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
-                                    let e78 = {
-                                        let l74 = *base.add(8).cast::<*mut u8>();
-                                        let l75 = *base
-                                            .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let len76 = l75;
-                                        let bytes76 = _rt::Vec::from_raw_parts(
-                                            l74.cast(),
-                                            len76,
-                                            len76,
-                                        );
-                                        let l77 = *base
-                                            .add(8 + 2 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<i64>();
-                                        (
-                                            Uri {
-                                                value: _rt::string_lift(bytes76),
-                                            },
-                                            l77 as u64,
-                                        )
-                                    };
-                                    WitNode::Handle(e78)
-                                }
-                            };
-                            v78
-                        };
-                        result79.push(e79);
-                    }
-                    _rt::cabi_dealloc(
-                        base79,
-                        len79 * (16 + 2 * ::core::mem::size_of::<*const u8>()),
-                        8,
-                    );
-                    let result80 = WitValue { nodes: result79 };
-                    if layout11.size() != 0 {
-                        _rt::alloc::dealloc(result11.cast(), layout11);
-                    }
-                    if layout29.size() != 0 {
-                        _rt::alloc::dealloc(result29.cast(), layout29);
-                    }
-                    for (ptr, layout) in cleanup_list {
-                        if layout.size() != 0 {
-                            _rt::alloc::dealloc(ptr.cast(), layout);
-                        }
-                    }
-                    result80
-                }
-            }
-            #[allow(unused_unsafe, clippy::all)]
-            pub fn extract_type(vnt: &ValueAndType) -> WitType {
-                unsafe {
-                    let mut cleanup_list = _rt::Vec::new();
-                    #[cfg_attr(target_pointer_width = "64", repr(align(8)))]
-                    #[cfg_attr(target_pointer_width = "32", repr(align(4)))]
-                    struct RetArea(
-                        [::core::mem::MaybeUninit<
-                            u8,
-                        >; 2 * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let mut ret_area = RetArea(
-                        [::core::mem::MaybeUninit::uninit(); 2
-                            * ::core::mem::size_of::<*const u8>()],
-                    );
-                    let ValueAndType { value: value0, typ: typ0 } = vnt;
-                    let WitValue { nodes: nodes1 } = value0;
-                    let vec11 = nodes1;
-                    let len11 = vec11.len();
-                    let layout11 = _rt::alloc::Layout::from_size_align_unchecked(
-                        vec11.len() * (16 + 2 * ::core::mem::size_of::<*const u8>()),
-                        8,
-                    );
-                    let result11 = if layout11.size() != 0 {
-                        let ptr = _rt::alloc::alloc(layout11).cast::<u8>();
-                        if ptr.is_null() {
-                            _rt::alloc::handle_alloc_error(layout11);
-                        }
-                        ptr
-                    } else {
-                        ::core::ptr::null_mut()
-                    };
-                    for (i, e) in vec11.into_iter().enumerate() {
-                        let base = result11
-                            .add(i * (16 + 2 * ::core::mem::size_of::<*const u8>()));
-                        {
-                            match e {
-                                WitNode::RecordValue(e) => {
-                                    *base.add(0).cast::<u8>() = (0i32) as u8;
-                                    let vec2 = e;
-                                    let ptr2 = vec2.as_ptr().cast::<u8>();
-                                    let len2 = vec2.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len2;
-                                    *base.add(8).cast::<*mut u8>() = ptr2.cast_mut();
-                                }
-                                WitNode::VariantValue(e) => {
-                                    *base.add(0).cast::<u8>() = (1i32) as u8;
-                                    let (t3_0, t3_1) = e;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(t3_0);
-                                    match t3_1 {
-                                        Some(e) => {
-                                            *base.add(12).cast::<u8>() = (1i32) as u8;
-                                            *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base.add(12).cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                }
-                                WitNode::EnumValue(e) => {
-                                    *base.add(0).cast::<u8>() = (2i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::FlagsValue(e) => {
-                                    *base.add(0).cast::<u8>() = (3i32) as u8;
-                                    let vec4 = e;
-                                    let len4 = vec4.len();
-                                    let layout4 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec4.len() * 1,
-                                        1,
-                                    );
-                                    let result4 = if layout4.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout4).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout4);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec4.into_iter().enumerate() {
-                                        let base = result4.add(i * 1);
-                                        {
-                                            *base.add(0).cast::<u8>() = (match e {
-                                                true => 1,
-                                                false => 0,
-                                            }) as u8;
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len4;
-                                    *base.add(8).cast::<*mut u8>() = result4;
-                                    cleanup_list.extend_from_slice(&[(result4, layout4)]);
-                                }
-                                WitNode::TupleValue(e) => {
-                                    *base.add(0).cast::<u8>() = (4i32) as u8;
-                                    let vec5 = e;
-                                    let ptr5 = vec5.as_ptr().cast::<u8>();
-                                    let len5 = vec5.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len5;
-                                    *base.add(8).cast::<*mut u8>() = ptr5.cast_mut();
-                                }
-                                WitNode::ListValue(e) => {
-                                    *base.add(0).cast::<u8>() = (5i32) as u8;
-                                    let vec6 = e;
-                                    let ptr6 = vec6.as_ptr().cast::<u8>();
-                                    let len6 = vec6.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len6;
-                                    *base.add(8).cast::<*mut u8>() = ptr6.cast_mut();
-                                }
-                                WitNode::OptionValue(e) => {
-                                    *base.add(0).cast::<u8>() = (6i32) as u8;
-                                    match e {
-                                        Some(e) => {
-                                            *base.add(8).cast::<u8>() = (1i32) as u8;
-                                            *base.add(12).cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base.add(8).cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                }
-                                WitNode::ResultValue(e) => {
-                                    *base.add(0).cast::<u8>() = (7i32) as u8;
-                                    match e {
-                                        Ok(e) => {
-                                            *base.add(8).cast::<u8>() = (0i32) as u8;
-                                            match e {
-                                                Some(e) => {
-                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                        Err(e) => {
-                                            *base.add(8).cast::<u8>() = (1i32) as u8;
-                                            match e {
-                                                Some(e) => {
-                                                    *base.add(12).cast::<u8>() = (1i32) as u8;
-                                                    *base.add(16).cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base.add(12).cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                    };
-                                }
-                                WitNode::PrimU8(e) => {
-                                    *base.add(0).cast::<u8>() = (8i32) as u8;
-                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                }
-                                WitNode::PrimU16(e) => {
-                                    *base.add(0).cast::<u8>() = (9i32) as u8;
-                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                }
-                                WitNode::PrimU32(e) => {
-                                    *base.add(0).cast::<u8>() = (10i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::PrimU64(e) => {
-                                    *base.add(0).cast::<u8>() = (11i32) as u8;
-                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                }
-                                WitNode::PrimS8(e) => {
-                                    *base.add(0).cast::<u8>() = (12i32) as u8;
-                                    *base.add(8).cast::<u8>() = (_rt::as_i32(e)) as u8;
-                                }
-                                WitNode::PrimS16(e) => {
-                                    *base.add(0).cast::<u8>() = (13i32) as u8;
-                                    *base.add(8).cast::<u16>() = (_rt::as_i32(e)) as u16;
-                                }
-                                WitNode::PrimS32(e) => {
-                                    *base.add(0).cast::<u8>() = (14i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::PrimS64(e) => {
-                                    *base.add(0).cast::<u8>() = (15i32) as u8;
-                                    *base.add(8).cast::<i64>() = _rt::as_i64(e);
-                                }
-                                WitNode::PrimFloat32(e) => {
-                                    *base.add(0).cast::<u8>() = (16i32) as u8;
-                                    *base.add(8).cast::<f32>() = _rt::as_f32(e);
-                                }
-                                WitNode::PrimFloat64(e) => {
-                                    *base.add(0).cast::<u8>() = (17i32) as u8;
-                                    *base.add(8).cast::<f64>() = _rt::as_f64(e);
-                                }
-                                WitNode::PrimChar(e) => {
-                                    *base.add(0).cast::<u8>() = (18i32) as u8;
-                                    *base.add(8).cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitNode::PrimBool(e) => {
-                                    *base.add(0).cast::<u8>() = (19i32) as u8;
-                                    *base.add(8).cast::<u8>() = (match e {
-                                        true => 1,
-                                        false => 0,
-                                    }) as u8;
-                                }
-                                WitNode::PrimString(e) => {
-                                    *base.add(0).cast::<u8>() = (20i32) as u8;
-                                    let vec7 = e;
-                                    let ptr7 = vec7.as_ptr().cast::<u8>();
-                                    let len7 = vec7.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len7;
-                                    *base.add(8).cast::<*mut u8>() = ptr7.cast_mut();
-                                }
-                                WitNode::Handle(e) => {
-                                    *base.add(0).cast::<u8>() = (21i32) as u8;
-                                    let (t8_0, t8_1) = e;
-                                    let Uri { value: value9 } = t8_0;
-                                    let vec10 = value9;
-                                    let ptr10 = vec10.as_ptr().cast::<u8>();
-                                    let len10 = vec10.len();
-                                    *base
-                                        .add(8 + 1 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len10;
-                                    *base.add(8).cast::<*mut u8>() = ptr10.cast_mut();
-                                    *base
-                                        .add(8 + 2 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i64>() = _rt::as_i64(t8_1);
-                                }
-                            }
-                        }
-                    }
-                    let WitType { nodes: nodes12 } = typ0;
-                    let vec29 = nodes12;
-                    let len29 = vec29.len();
-                    let layout29 = _rt::alloc::Layout::from_size_align_unchecked(
-                        vec29.len() * (24 + 6 * ::core::mem::size_of::<*const u8>()),
-                        8,
-                    );
-                    let result29 = if layout29.size() != 0 {
-                        let ptr = _rt::alloc::alloc(layout29).cast::<u8>();
-                        if ptr.is_null() {
-                            _rt::alloc::handle_alloc_error(layout29);
-                        }
-                        ptr
-                    } else {
-                        ::core::ptr::null_mut()
-                    };
-                    for (i, e) in vec29.into_iter().enumerate() {
-                        let base = result29
-                            .add(i * (24 + 6 * ::core::mem::size_of::<*const u8>()));
-                        {
-                            let NamedWitTypeNode {
-                                name: name13,
-                                owner: owner13,
-                                type_: type_13,
-                            } = e;
-                            match name13 {
-                                Some(e) => {
-                                    *base.add(0).cast::<u8>() = (1i32) as u8;
-                                    let vec14 = e;
-                                    let ptr14 = vec14.as_ptr().cast::<u8>();
-                                    let len14 = vec14.len();
-                                    *base
-                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len14;
-                                    *base
-                                        .add(::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr14.cast_mut();
-                                }
-                                None => {
-                                    *base.add(0).cast::<u8>() = (0i32) as u8;
-                                }
-                            };
-                            match owner13 {
-                                Some(e) => {
-                                    *base
-                                        .add(3 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (1i32) as u8;
-                                    let vec15 = e;
-                                    let ptr15 = vec15.as_ptr().cast::<u8>();
-                                    let len15 = vec15.len();
-                                    *base
-                                        .add(5 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len15;
-                                    *base
-                                        .add(4 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr15.cast_mut();
-                                }
-                                None => {
-                                    *base
-                                        .add(3 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (0i32) as u8;
-                                }
-                            };
-                            match type_13 {
-                                WitTypeNode::RecordType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (0i32) as u8;
-                                    let vec18 = e;
-                                    let len18 = vec18.len();
-                                    let layout18 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec18.len() * (3 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result18 = if layout18.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout18).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout18);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec18.into_iter().enumerate() {
-                                        let base = result18
-                                            .add(i * (3 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let (t16_0, t16_1) = e;
-                                            let vec17 = t16_0;
-                                            let ptr17 = vec17.as_ptr().cast::<u8>();
-                                            let len17 = vec17.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len17;
-                                            *base.add(0).cast::<*mut u8>() = ptr17.cast_mut();
-                                            *base
-                                                .add(2 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<i32>() = _rt::as_i32(t16_1);
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len18;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result18;
-                                    cleanup_list.extend_from_slice(&[(result18, layout18)]);
-                                }
-                                WitTypeNode::VariantType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (1i32) as u8;
-                                    let vec21 = e;
-                                    let len21 = vec21.len();
-                                    let layout21 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec21.len() * (8 + 2 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result21 = if layout21.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout21).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout21);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec21.into_iter().enumerate() {
-                                        let base = result21
-                                            .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let (t19_0, t19_1) = e;
-                                            let vec20 = t19_0;
-                                            let ptr20 = vec20.as_ptr().cast::<u8>();
-                                            let len20 = vec20.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len20;
-                                            *base.add(0).cast::<*mut u8>() = ptr20.cast_mut();
-                                            match t19_1 {
-                                                Some(e) => {
-                                                    *base
-                                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<u8>() = (1i32) as u8;
-                                                    *base
-                                                        .add(4 + 2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<i32>() = _rt::as_i32(e);
-                                                }
-                                                None => {
-                                                    *base
-                                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<u8>() = (0i32) as u8;
-                                                }
-                                            };
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len21;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result21;
-                                    cleanup_list.extend_from_slice(&[(result21, layout21)]);
-                                }
-                                WitTypeNode::EnumType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (2i32) as u8;
-                                    let vec23 = e;
-                                    let len23 = vec23.len();
-                                    let layout23 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec23.len() * (2 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result23 = if layout23.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout23).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout23);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec23.into_iter().enumerate() {
-                                        let base = result23
-                                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let vec22 = e;
-                                            let ptr22 = vec22.as_ptr().cast::<u8>();
-                                            let len22 = vec22.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len22;
-                                            *base.add(0).cast::<*mut u8>() = ptr22.cast_mut();
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len23;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result23;
-                                    cleanup_list.extend_from_slice(&[(result23, layout23)]);
-                                }
-                                WitTypeNode::FlagsType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (3i32) as u8;
-                                    let vec25 = e;
-                                    let len25 = vec25.len();
-                                    let layout25 = _rt::alloc::Layout::from_size_align_unchecked(
-                                        vec25.len() * (2 * ::core::mem::size_of::<*const u8>()),
-                                        ::core::mem::size_of::<*const u8>(),
-                                    );
-                                    let result25 = if layout25.size() != 0 {
-                                        let ptr = _rt::alloc::alloc(layout25).cast::<u8>();
-                                        if ptr.is_null() {
-                                            _rt::alloc::handle_alloc_error(layout25);
-                                        }
-                                        ptr
-                                    } else {
-                                        ::core::ptr::null_mut()
-                                    };
-                                    for (i, e) in vec25.into_iter().enumerate() {
-                                        let base = result25
-                                            .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                        {
-                                            let vec24 = e;
-                                            let ptr24 = vec24.as_ptr().cast::<u8>();
-                                            let len24 = vec24.len();
-                                            *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>() = len24;
-                                            *base.add(0).cast::<*mut u8>() = ptr24.cast_mut();
-                                        }
-                                    }
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len25;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = result25;
-                                    cleanup_list.extend_from_slice(&[(result25, layout25)]);
-                                }
-                                WitTypeNode::TupleType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (4i32) as u8;
-                                    let vec26 = e;
-                                    let ptr26 = vec26.as_ptr().cast::<u8>();
-                                    let len26 = vec26.len();
-                                    *base
-                                        .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<usize>() = len26;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<*mut u8>() = ptr26.cast_mut();
-                                }
-                                WitTypeNode::ListType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (5i32) as u8;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitTypeNode::OptionType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (6i32) as u8;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i32>() = _rt::as_i32(e);
-                                }
-                                WitTypeNode::ResultType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (7i32) as u8;
-                                    let (t27_0, t27_1) = e;
-                                    match t27_0 {
-                                        Some(e) => {
-                                            *base
-                                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (1i32) as u8;
-                                            *base
-                                                .add(12 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base
-                                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                    match t27_1 {
-                                        Some(e) => {
-                                            *base
-                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (1i32) as u8;
-                                            *base
-                                                .add(20 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<i32>() = _rt::as_i32(e);
-                                        }
-                                        None => {
-                                            *base
-                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>() = (0i32) as u8;
-                                        }
-                                    };
-                                }
-                                WitTypeNode::PrimU8Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (8i32) as u8;
-                                }
-                                WitTypeNode::PrimU16Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (9i32) as u8;
-                                }
-                                WitTypeNode::PrimU32Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (10i32) as u8;
-                                }
-                                WitTypeNode::PrimU64Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (11i32) as u8;
-                                }
-                                WitTypeNode::PrimS8Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (12i32) as u8;
-                                }
-                                WitTypeNode::PrimS16Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (13i32) as u8;
-                                }
-                                WitTypeNode::PrimS32Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (14i32) as u8;
-                                }
-                                WitTypeNode::PrimS64Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (15i32) as u8;
-                                }
-                                WitTypeNode::PrimF32Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (16i32) as u8;
-                                }
-                                WitTypeNode::PrimF64Type => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (17i32) as u8;
-                                }
-                                WitTypeNode::PrimCharType => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (18i32) as u8;
-                                }
-                                WitTypeNode::PrimBoolType => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (19i32) as u8;
-                                }
-                                WitTypeNode::PrimStringType => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (20i32) as u8;
-                                }
-                                WitTypeNode::HandleType(e) => {
-                                    *base
-                                        .add(6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (21i32) as u8;
-                                    let (t28_0, t28_1) = e;
-                                    *base
-                                        .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<i64>() = _rt::as_i64(t28_0);
-                                    *base
-                                        .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                        .cast::<u8>() = (t28_1.clone() as i32) as u8;
-                                }
-                            }
-                        }
-                    }
-                    let ptr30 = ret_area.0.as_mut_ptr().cast::<u8>();
-                    #[cfg(target_arch = "wasm32")]
-                    #[link(wasm_import_module = "golem:rpc/types@0.2.2")]
-                    unsafe extern "C" {
-                        #[link_name = "extract-type"]
-                        fn wit_import31(
-                            _: *mut u8,
-                            _: usize,
-                            _: *mut u8,
-                            _: usize,
-                            _: *mut u8,
-                        );
-                    }
-                    #[cfg(not(target_arch = "wasm32"))]
-                    unsafe extern "C" fn wit_import31(
-                        _: *mut u8,
-                        _: usize,
-                        _: *mut u8,
-                        _: usize,
-                        _: *mut u8,
-                    ) {
-                        unreachable!()
-                    }
-                    unsafe { wit_import31(result11, len11, result29, len29, ptr30) };
-                    let l32 = *ptr30.add(0).cast::<*mut u8>();
-                    let l33 = *ptr30
-                        .add(::core::mem::size_of::<*const u8>())
-                        .cast::<usize>();
-                    let base82 = l32;
-                    let len82 = l33;
-                    let mut result82 = _rt::Vec::with_capacity(len82);
-                    for i in 0..len82 {
-                        let base = base82
-                            .add(i * (24 + 6 * ::core::mem::size_of::<*const u8>()));
-                        let e82 = {
-                            let l34 = i32::from(*base.add(0).cast::<u8>());
-                            let l38 = i32::from(
-                                *base
-                                    .add(3 * ::core::mem::size_of::<*const u8>())
-                                    .cast::<u8>(),
-                            );
-                            let l42 = i32::from(
-                                *base
-                                    .add(6 * ::core::mem::size_of::<*const u8>())
-                                    .cast::<u8>(),
-                            );
-                            let v81 = match l42 {
-                                0 => {
-                                    let e81 = {
-                                        let l43 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<*mut u8>();
-                                        let l44 = *base
-                                            .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let base49 = l43;
-                                        let len49 = l44;
-                                        let mut result49 = _rt::Vec::with_capacity(len49);
-                                        for i in 0..len49 {
-                                            let base = base49
-                                                .add(i * (3 * ::core::mem::size_of::<*const u8>()));
-                                            let e49 = {
-                                                let l45 = *base.add(0).cast::<*mut u8>();
-                                                let l46 = *base
-                                                    .add(::core::mem::size_of::<*const u8>())
-                                                    .cast::<usize>();
-                                                let len47 = l46;
-                                                let bytes47 = _rt::Vec::from_raw_parts(
-                                                    l45.cast(),
-                                                    len47,
-                                                    len47,
-                                                );
-                                                let l48 = *base
-                                                    .add(2 * ::core::mem::size_of::<*const u8>())
-                                                    .cast::<i32>();
-                                                (_rt::string_lift(bytes47), l48)
-                                            };
-                                            result49.push(e49);
-                                        }
-                                        _rt::cabi_dealloc(
-                                            base49,
-                                            len49 * (3 * ::core::mem::size_of::<*const u8>()),
-                                            ::core::mem::size_of::<*const u8>(),
-                                        );
-                                        result49
-                                    };
-                                    WitTypeNode::RecordType(e81)
-                                }
-                                1 => {
-                                    let e81 = {
-                                        let l50 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<*mut u8>();
-                                        let l51 = *base
-                                            .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let base57 = l50;
-                                        let len57 = l51;
-                                        let mut result57 = _rt::Vec::with_capacity(len57);
-                                        for i in 0..len57 {
-                                            let base = base57
-                                                .add(i * (8 + 2 * ::core::mem::size_of::<*const u8>()));
-                                            let e57 = {
-                                                let l52 = *base.add(0).cast::<*mut u8>();
-                                                let l53 = *base
-                                                    .add(::core::mem::size_of::<*const u8>())
-                                                    .cast::<usize>();
-                                                let len54 = l53;
-                                                let bytes54 = _rt::Vec::from_raw_parts(
-                                                    l52.cast(),
-                                                    len54,
-                                                    len54,
-                                                );
-                                                let l55 = i32::from(
-                                                    *base
-                                                        .add(2 * ::core::mem::size_of::<*const u8>())
-                                                        .cast::<u8>(),
-                                                );
-                                                (
-                                                    _rt::string_lift(bytes54),
-                                                    match l55 {
-                                                        0 => None,
-                                                        1 => {
-                                                            let e = {
-                                                                let l56 = *base
-                                                                    .add(4 + 2 * ::core::mem::size_of::<*const u8>())
-                                                                    .cast::<i32>();
-                                                                l56
-                                                            };
-                                                            Some(e)
-                                                        }
-                                                        _ => _rt::invalid_enum_discriminant(),
-                                                    },
-                                                )
-                                            };
-                                            result57.push(e57);
-                                        }
-                                        _rt::cabi_dealloc(
-                                            base57,
-                                            len57 * (8 + 2 * ::core::mem::size_of::<*const u8>()),
-                                            ::core::mem::size_of::<*const u8>(),
-                                        );
-                                        result57
-                                    };
-                                    WitTypeNode::VariantType(e81)
-                                }
-                                2 => {
-                                    let e81 = {
-                                        let l58 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<*mut u8>();
-                                        let l59 = *base
-                                            .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let base63 = l58;
-                                        let len63 = l59;
-                                        let mut result63 = _rt::Vec::with_capacity(len63);
-                                        for i in 0..len63 {
-                                            let base = base63
-                                                .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                            let e63 = {
-                                                let l60 = *base.add(0).cast::<*mut u8>();
-                                                let l61 = *base
-                                                    .add(::core::mem::size_of::<*const u8>())
-                                                    .cast::<usize>();
-                                                let len62 = l61;
-                                                let bytes62 = _rt::Vec::from_raw_parts(
-                                                    l60.cast(),
-                                                    len62,
-                                                    len62,
-                                                );
-                                                _rt::string_lift(bytes62)
-                                            };
-                                            result63.push(e63);
-                                        }
-                                        _rt::cabi_dealloc(
-                                            base63,
-                                            len63 * (2 * ::core::mem::size_of::<*const u8>()),
-                                            ::core::mem::size_of::<*const u8>(),
-                                        );
-                                        result63
-                                    };
-                                    WitTypeNode::EnumType(e81)
-                                }
-                                3 => {
-                                    let e81 = {
-                                        let l64 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<*mut u8>();
-                                        let l65 = *base
-                                            .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let base69 = l64;
-                                        let len69 = l65;
-                                        let mut result69 = _rt::Vec::with_capacity(len69);
-                                        for i in 0..len69 {
-                                            let base = base69
-                                                .add(i * (2 * ::core::mem::size_of::<*const u8>()));
-                                            let e69 = {
-                                                let l66 = *base.add(0).cast::<*mut u8>();
-                                                let l67 = *base
-                                                    .add(::core::mem::size_of::<*const u8>())
-                                                    .cast::<usize>();
-                                                let len68 = l67;
-                                                let bytes68 = _rt::Vec::from_raw_parts(
-                                                    l66.cast(),
-                                                    len68,
-                                                    len68,
-                                                );
-                                                _rt::string_lift(bytes68)
-                                            };
-                                            result69.push(e69);
-                                        }
-                                        _rt::cabi_dealloc(
-                                            base69,
-                                            len69 * (2 * ::core::mem::size_of::<*const u8>()),
-                                            ::core::mem::size_of::<*const u8>(),
-                                        );
-                                        result69
-                                    };
-                                    WitTypeNode::FlagsType(e81)
-                                }
-                                4 => {
-                                    let e81 = {
-                                        let l70 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<*mut u8>();
-                                        let l71 = *base
-                                            .add(8 + 7 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<usize>();
-                                        let len72 = l71;
-                                        _rt::Vec::from_raw_parts(l70.cast(), len72, len72)
-                                    };
-                                    WitTypeNode::TupleType(e81)
-                                }
-                                5 => {
-                                    let e81 = {
-                                        let l73 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<i32>();
-                                        l73
-                                    };
-                                    WitTypeNode::ListType(e81)
-                                }
-                                6 => {
-                                    let e81 = {
-                                        let l74 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<i32>();
-                                        l74
-                                    };
-                                    WitTypeNode::OptionType(e81)
-                                }
-                                7 => {
-                                    let e81 = {
-                                        let l75 = i32::from(
-                                            *base
-                                                .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>(),
-                                        );
-                                        let l77 = i32::from(
-                                            *base
-                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>(),
-                                        );
-                                        (
-                                            match l75 {
-                                                0 => None,
-                                                1 => {
-                                                    let e = {
-                                                        let l76 = *base
-                                                            .add(12 + 6 * ::core::mem::size_of::<*const u8>())
-                                                            .cast::<i32>();
-                                                        l76
-                                                    };
-                                                    Some(e)
-                                                }
-                                                _ => _rt::invalid_enum_discriminant(),
-                                            },
-                                            match l77 {
-                                                0 => None,
-                                                1 => {
-                                                    let e = {
-                                                        let l78 = *base
-                                                            .add(20 + 6 * ::core::mem::size_of::<*const u8>())
-                                                            .cast::<i32>();
-                                                        l78
-                                                    };
-                                                    Some(e)
-                                                }
-                                                _ => _rt::invalid_enum_discriminant(),
-                                            },
-                                        )
-                                    };
-                                    WitTypeNode::ResultType(e81)
-                                }
-                                8 => WitTypeNode::PrimU8Type,
-                                9 => WitTypeNode::PrimU16Type,
-                                10 => WitTypeNode::PrimU32Type,
-                                11 => WitTypeNode::PrimU64Type,
-                                12 => WitTypeNode::PrimS8Type,
-                                13 => WitTypeNode::PrimS16Type,
-                                14 => WitTypeNode::PrimS32Type,
-                                15 => WitTypeNode::PrimS64Type,
-                                16 => WitTypeNode::PrimF32Type,
-                                17 => WitTypeNode::PrimF64Type,
-                                18 => WitTypeNode::PrimCharType,
-                                19 => WitTypeNode::PrimBoolType,
-                                20 => WitTypeNode::PrimStringType,
-                                n => {
-                                    debug_assert_eq!(n, 21, "invalid enum discriminant");
-                                    let e81 = {
-                                        let l79 = *base
-                                            .add(8 + 6 * ::core::mem::size_of::<*const u8>())
-                                            .cast::<i64>();
-                                        let l80 = i32::from(
-                                            *base
-                                                .add(16 + 6 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<u8>(),
-                                        );
-                                        (l79 as u64, ResourceMode::_lift(l80 as u8))
-                                    };
-                                    WitTypeNode::HandleType(e81)
-                                }
-                            };
-                            NamedWitTypeNode {
-                                name: match l34 {
-                                    0 => None,
-                                    1 => {
-                                        let e = {
-                                            let l35 = *base
-                                                .add(::core::mem::size_of::<*const u8>())
-                                                .cast::<*mut u8>();
-                                            let l36 = *base
-                                                .add(2 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>();
-                                            let len37 = l36;
-                                            let bytes37 = _rt::Vec::from_raw_parts(
-                                                l35.cast(),
-                                                len37,
-                                                len37,
-                                            );
-                                            _rt::string_lift(bytes37)
-                                        };
-                                        Some(e)
-                                    }
-                                    _ => _rt::invalid_enum_discriminant(),
-                                },
-                                owner: match l38 {
-                                    0 => None,
-                                    1 => {
-                                        let e = {
-                                            let l39 = *base
-                                                .add(4 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<*mut u8>();
-                                            let l40 = *base
-                                                .add(5 * ::core::mem::size_of::<*const u8>())
-                                                .cast::<usize>();
-                                            let len41 = l40;
-                                            let bytes41 = _rt::Vec::from_raw_parts(
-                                                l39.cast(),
-                                                len41,
-                                                len41,
-                                            );
-                                            _rt::string_lift(bytes41)
-                                        };
-                                        Some(e)
-                                    }
-                                    _ => _rt::invalid_enum_discriminant(),
-                                },
-                                type_: v81,
-                            }
-                        };
-                        result82.push(e82);
-                    }
-                    _rt::cabi_dealloc(
-                        base82,
-                        len82 * (24 + 6 * ::core::mem::size_of::<*const u8>()),
-                        8,
-                    );
-                    let result83 = WitType { nodes: result82 };
-                    if layout11.size() != 0 {
-                        _rt::alloc::dealloc(result11.cast(), layout11);
-                    }
-                    if layout29.size() != 0 {
-                        _rt::alloc::dealloc(result29.cast(), layout29);
-                    }
-                    for (ptr, layout) in cleanup_list {
-                        if layout.size() != 0 {
-                            _rt::alloc::dealloc(ptr.cast(), layout);
-                        }
-                    }
-                    result83
                 }
             }
         }
@@ -8252,22 +6203,22 @@ pub mod wasi {
                         ErrorCode::AccessDenied => {
                             "Access denied.
 
-                                                                                          POSIX equivalent: EACCES, EPERM"
+                                                              POSIX equivalent: EACCES, EPERM"
                         }
                         ErrorCode::NotSupported => {
                             "The operation is not supported.
 
-                                                                                          POSIX equivalent: EOPNOTSUPP"
+                                                              POSIX equivalent: EOPNOTSUPP"
                         }
                         ErrorCode::InvalidArgument => {
                             "One of the arguments is invalid.
 
-                                                                                          POSIX equivalent: EINVAL"
+                                                              POSIX equivalent: EINVAL"
                         }
                         ErrorCode::OutOfMemory => {
                             "Not enough memory to complete the operation.
 
-                                                                                          POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY"
+                                                              POSIX equivalent: ENOMEM, ENOBUFS, EAI_MEMORY"
                         }
                         ErrorCode::Timeout => {
                             "The operation timed out before it could finish completely."
@@ -8275,19 +6226,19 @@ pub mod wasi {
                         ErrorCode::ConcurrencyConflict => {
                             "This operation is incompatible with another asynchronous operation that is already in progress.
 
-                                                                                          POSIX equivalent: EALREADY"
+                                                              POSIX equivalent: EALREADY"
                         }
                         ErrorCode::NotInProgress => {
                             "Trying to finish an asynchronous operation that:
-                                                                                          - has not been started yet, or:
-                                                                                          - was already finished by a previous `finish-*` call.
+                                                              - has not been started yet, or:
+                                                              - was already finished by a previous `finish-*` call.
 
-                                                                                          Note: this is scheduled to be removed when `future`s are natively supported."
+                                                              Note: this is scheduled to be removed when `future`s are natively supported."
                         }
                         ErrorCode::WouldBlock => {
                             "The operation has been aborted because it could not be completed immediately.
 
-                                                                                          Note: this is scheduled to be removed when `future`s are natively supported."
+                                                              Note: this is scheduled to be removed when `future`s are natively supported."
                         }
                         ErrorCode::InvalidState => {
                             "The operation is not valid in the socket's current state."
@@ -8311,7 +6262,7 @@ pub mod wasi {
                         ErrorCode::ConnectionAborted => "A TCP connection was aborted.",
                         ErrorCode::DatagramTooLarge => {
                             "The size of a datagram sent to a UDP socket exceeded the maximum
-                                                                                          supported size."
+                                                              supported size."
                         }
                         ErrorCode::NameUnresolvable => {
                             "Name does not exist or has no suitable associated IP addresses."
@@ -9178,8 +7129,8 @@ pub(crate) use __export_networking_impl as export;
 )]
 #[doc(hidden)]
 #[allow(clippy::octal_escapes)]
-pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6603] = *b"\
-\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xca2\x01A\x02\x01A\x1c\
+pub static __WIT_BINDGEN_COMPONENT_TYPE: [u8; 6502] = *b"\
+\0asm\x0d\0\x01\0\0\x19\x16wit-component-encoding\x04\0\x07\xe51\x01A\x02\x01A\x1c\
 \x01B\x0a\x04\0\x08pollable\x03\x01\x01h\0\x01@\x01\x04self\x01\0\x7f\x04\0\x16[\
 method]pollable.ready\x01\x02\x01@\x01\x04self\x01\x01\0\x04\0\x16[method]pollab\
 le.block\x01\x03\x01p\x01\x01py\x01@\x01\x02in\x04\0\x05\x04\0\x04poll\x01\x06\x03\
@@ -9190,19 +7141,19 @@ n\x03\0\x04\x01@\0\0\x03\x04\0\x03now\x01\x06\x01@\0\0\x05\x04\0\x0aresolution\x
 \x01\x04when\x05\0\x08\x04\0\x12subscribe-duration\x01\x0a\x03\0!wasi:clocks/mon\
 otonic-clock@0.2.3\x05\x02\x01B\x05\x01r\x02\x07secondsw\x0bnanosecondsy\x04\0\x08\
 datetime\x03\0\0\x01@\0\0\x01\x04\0\x03now\x01\x02\x04\0\x0aresolution\x01\x02\x03\
-\0\x1cwasi:clocks/wall-clock@0.2.3\x05\x03\x02\x03\0\x02\x08datetime\x01BY\x02\x03\
+\0\x1cwasi:clocks/wall-clock@0.2.3\x05\x03\x02\x03\0\x02\x08datetime\x01BU\x02\x03\
 \x02\x01\x04\x04\0\x08datetime\x03\0\0\x02\x03\x02\x01\x01\x04\0\x08pollable\x03\
 \0\x02\x01r\x02\x09high-bitsw\x08low-bitsw\x04\0\x04uuid\x03\0\x04\x01r\x01\x04u\
-uid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0ccomponent-id\x07\x0bworker-n\
-ames\x04\0\x09worker-id\x03\0\x08\x01z\x04\0\x0anode-index\x03\0\x0a\x01w\x04\0\x0b\
-resource-id\x03\0\x0c\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\
-\x0e\x01o\x02s\x0b\x01p\x10\x01k\x0b\x01o\x02s\x12\x01p\x13\x01ps\x01p\x0b\x01o\x02\
-\x12\x12\x01o\x02\x0d\x0f\x01q\x16\x0brecord-type\x01\x11\0\x0cvariant-type\x01\x14\
-\0\x09enum-type\x01\x15\0\x0aflags-type\x01\x15\0\x0atuple-type\x01\x16\0\x09lis\
-t-type\x01\x0b\0\x0boption-type\x01\x0b\0\x0bresult-type\x01\x17\0\x0cprim-u8-ty\
-pe\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8\
--type\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim\
--f32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
+uid\x05\x04\0\x0ccomponent-id\x03\0\x06\x01r\x02\x0ccomponent-id\x07\x08agent-id\
+s\x04\0\x08agent-id\x03\0\x08\x01z\x04\0\x0anode-index\x03\0\x0a\x01w\x04\0\x0br\
+esource-id\x03\0\x0c\x01m\x02\x05owned\x08borrowed\x04\0\x0dresource-mode\x03\0\x0e\
+\x01o\x02s\x0b\x01p\x10\x01k\x0b\x01o\x02s\x12\x01p\x13\x01ps\x01p\x0b\x01o\x02\x12\
+\x12\x01o\x02\x0d\x0f\x01q\x16\x0brecord-type\x01\x11\0\x0cvariant-type\x01\x14\0\
+\x09enum-type\x01\x15\0\x0aflags-type\x01\x15\0\x0atuple-type\x01\x16\0\x09list-\
+type\x01\x0b\0\x0boption-type\x01\x0b\0\x0bresult-type\x01\x17\0\x0cprim-u8-type\
+\0\0\x0dprim-u16-type\0\0\x0dprim-u32-type\0\0\x0dprim-u64-type\0\0\x0cprim-s8-t\
+ype\0\0\x0dprim-s16-type\0\0\x0dprim-s32-type\0\0\x0dprim-s64-type\0\0\x0dprim-f\
+32-type\0\0\x0dprim-f64-type\0\0\x0eprim-char-type\0\0\x0eprim-bool-type\0\0\x10\
 prim-string-type\0\0\x0bhandle-type\x01\x18\0\x04\0\x0dwit-type-node\x03\0\x19\x01\
 ks\x01r\x03\x04name\x1b\x05owner\x1b\x04type\x1a\x04\0\x13named-wit-type-node\x03\
 \0\x1c\x01p\x1d\x01r\x01\x05nodes\x1e\x04\0\x08wit-type\x03\0\x1f\x01r\x01\x05va\
@@ -9217,7 +7168,7 @@ rim-char\x01t\0\x09prim-bool\x01\x7f\0\x0bprim-string\x01s\0\x06handle\x01&\0\x0
 \x05value+\x03typ\x20\x04\0\x0evalue-and-type\x03\0,\x01q\x04\x0eprotocol-error\x01\
 s\0\x06denied\x01s\0\x09not-found\x01s\0\x15remote-internal-error\x01s\0\x04\0\x09\
 rpc-error\x03\0.\x04\0\x08wasm-rpc\x03\x01\x04\0\x14future-invoke-result\x03\x01\
-\x04\0\x12cancellation-token\x03\x01\x01i0\x01@\x01\x09worker-id\x09\03\x04\0\x15\
+\x04\0\x12cancellation-token\x03\x01\x01i0\x01@\x01\x08agent-id\x09\03\x04\0\x15\
 [constructor]wasm-rpc\x014\x01h0\x01p+\x01j\x01+\x01/\x01@\x03\x04self5\x0dfunct\
 ion-names\x0ffunction-params6\07\x04\0![method]wasm-rpc.invoke-and-await\x018\x01\
 j\0\x01/\x01@\x03\x04self5\x0dfunction-names\x0ffunction-params6\09\x04\0\x17[me\
@@ -9230,90 +7181,88 @@ function-names\x0ffunction-params6\0>\x04\0/[method]wasm-rpc.schedule-cancelable
 ure-invoke-result.subscribe\x01B\x01k7\x01@\x01\x04self\xc0\0\0\xc3\0\x04\0\x20[\
 method]future-invoke-result.get\x01D\x01h2\x01@\x01\x04self\xc5\0\x01\0\x04\0![m\
 ethod]cancellation-token.cancel\x01F\x01j\x01\x05\x01s\x01@\x01\x04uuids\0\xc7\0\
-\x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x01\
-@\x01\x03vnt-\0+\x04\0\x0dextract-value\x01J\x01@\x01\x03vnt-\0\x20\x04\0\x0cext\
-ract-type\x01K\x03\0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\
-\x03\0\x03\x0ccomponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\
-\x02\x03\0\x03\x09worker-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\
-\0\x02\x03\x02\x01\x07\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\
-\x04uuid\x03\0\x04\x02\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\
-\x02\x01\x0a\x04\0\x09worker-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01\
-r\x02\x09worker-id\x09\x09oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\
-\x11component-version\x03\0\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\
-\x01r\x01\x04uuid\x05\x04\0\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemp\
-tsy\x09min-delay\x01\x09max-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\
-\0\x0cretry-policy\x03\0\x15\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-s\
-ide-effects\0\0\x05smart\0\0\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09au\
-tomatic\x0esnapshot-based\x04\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09no\
-t-equal\x0dgreater-equal\x07greater\x0aless-equal\x04less\x04\0\x11filter-compar\
-ator\x03\0\x1b\x01m\x05\x05equal\x09not-equal\x04like\x08not-like\x0bstarts-with\
-\x04\0\x18string-filter-comparator\x03\0\x1d\x01m\x07\x07running\x04idle\x09susp\
-ended\x0binterrupted\x08retrying\x06failed\x06exited\x04\0\x0dworker-status\x03\0\
-\x1f\x01r\x02\x0acomparator\x1e\x05values\x04\0\x12worker-name-filter\x03\0!\x01\
-r\x02\x0acomparator\x1c\x05value\x20\x04\0\x14worker-status-filter\x03\0#\x01r\x02\
-\x0acomparator\x1c\x05valuew\x04\0\x15worker-version-filter\x03\0%\x01r\x02\x0ac\
-omparator\x1c\x05valuew\x04\0\x18worker-created-at-filter\x03\0'\x01r\x03\x04nam\
-es\x0acomparator\x1e\x05values\x04\0\x11worker-env-filter\x03\0)\x01r\x03\x04nam\
-es\x0acomparator\x1e\x05values\x04\0\x1eworker-wasi-config-vars-filter\x03\0+\x01\
-q\x06\x04name\x01\"\0\x06status\x01$\0\x07version\x01&\0\x0acreated-at\x01(\0\x03\
-env\x01*\0\x10wasi-config-vars\x01,\0\x04\0\x16worker-property-filter\x03\0-\x01\
-p.\x01r\x01\x07filters/\x04\0\x11worker-all-filter\x03\00\x01p1\x01r\x01\x07filt\
-ers2\x04\0\x11worker-any-filter\x03\03\x01ps\x01o\x02ss\x01p6\x01r\x07\x09worker\
--id\x09\x04args5\x03env7\x10wasi-config-vars7\x06status\x20\x11component-version\
-w\x0bretry-countw\x04\0\x0fworker-metadata\x03\08\x04\0\x0bget-workers\x03\x01\x01\
-q\x02\x15revert-to-oplog-index\x01\x0b\0\x17revert-last-invocations\x01w\0\x04\0\
-\x14revert-worker-target\x03\0;\x01m\x02\x08original\x06forked\x04\0\x0bfork-res\
-ult\x03\0=\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06filter?\x07precise\x7f\0\xc0\
-\0\x04\0\x18[constructor]get-workers\x01A\x01h:\x01p9\x01k\xc3\0\x01@\x01\x04sel\
-f\xc2\0\0\xc4\0\x04\0\x1c[method]get-workers.get-next\x01E\x01@\0\0\x0d\x04\0\x0e\
-create-promise\x01F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\0\x04\0\x0dawait-prom\
-ise\x01H\x01k\xc7\0\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\0\x0cpoll-promise\x01\
-J\x01@\x02\x0apromise-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10complete-promise\x01K\x01\
-@\x01\x0apromise-id\x0d\x01\0\x04\0\x0edelete-promise\x01L\x01@\0\0\x0b\x04\0\x0f\
-get-oplog-index\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\0\x0fset-oplog-index\x01\
-N\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01O\x04\0\x14mark-begin-ope\
-ration\x01M\x01@\x01\x05begin\x0b\x01\0\x04\0\x12mark-end-operation\x01P\x01@\0\0\
-\x16\x04\0\x10get-retry-policy\x01Q\x01@\x01\x10new-retry-policy\x16\x01\0\x04\0\
-\x10set-retry-policy\x01R\x01@\0\0\x18\x04\0\x1bget-oplog-persistence-level\x01S\
-\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1bset-oplog-persistence-leve\
-l\x01T\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01U\x01@\x01\x0aidempotent\x7f\
-\x01\0\x04\0\x14set-idempotence-mode\x01V\x01@\0\0\x05\x04\0\x18generate-idempot\
-ency-key\x01W\x01@\x03\x09worker-id\x09\x0etarget-version\x0f\x04mode\x1a\x01\0\x04\
-\0\x0dupdate-worker\x01X\x01@\0\09\x04\0\x11get-self-metadata\x01Y\x01k9\x01@\x01\
-\x09worker-id\x09\0\xda\0\x04\0\x13get-worker-metadata\x01[\x01@\x03\x10source-w\
-orker-id\x09\x10target-worker-id\x09\x11oplog-idx-cut-off\x0b\x01\0\x04\0\x0bfor\
-k-worker\x01\\\x01@\x02\x09worker-id\x09\x0drevert-target<\x01\0\x04\0\x0drevert\
--worker\x01]\x01k\x03\x01@\x01\x13component-references\0\xde\0\x04\0\x14resolve-\
-component-id\x01_\x01k\x09\x01@\x02\x13component-references\x0bworker-names\0\xe0\
-\0\x04\0\x11resolve-worker-id\x01a\x04\0\x18resolve-worker-id-strict\x01a\x01@\x01\
-\x08new-names\0>\x04\0\x04fork\x01b\x03\0\x14golem:api/host@1.1.7\x05\x0b\x01B\x11\
-\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denied\x0dnot-supported\x10\
-invalid-argument\x0dout-of-memory\x07timeout\x14concurrency-conflict\x0fnot-in-p\
-rogress\x0bwould-block\x0dinvalid-state\x10new-socket-limit\x14address-not-binda\
-ble\x0eaddress-in-use\x12remote-unreachable\x12connection-refused\x10connection-\
-reset\x12connection-aborted\x12datagram-too-large\x11name-unresolvable\x1atempor\
-ary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0aerror-code\x03\0\x01\
-\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\x01o\x04}}}}\x04\0\
-\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-address\x03\0\x07\x01q\
-\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\0\x09\x01r\x02\x04\
-port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01r\x04\x04port{\x09\
-flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-address\x03\0\x0d\x01\
-q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-address\x03\0\x0f\x03\
-\0\x1awasi:sockets/network@0.2.3\x05\x0c\x02\x03\0\x05\x07network\x02\x03\0\x05\x0a\
-error-code\x02\x03\0\x05\x0aip-address\x01B\x16\x02\x03\x02\x01\x01\x04\0\x08pol\
-lable\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x07network\x03\0\x02\x02\x03\x02\x01\x0e\
-\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01\x0f\x04\0\x0aip-address\x03\0\x06\
-\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01j\x01\x0a\x01\x05\x01\
-@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-stream.resolve-next-addres\
-s\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method]resolve-address-stre\
-am.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\x01@\x02\x07network\x0f\
-\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\0!wasi:sockets/ip-name-lo\
-okup@0.2.3\x05\x10\x01B\x05\x02\x03\x02\x01\x0d\x04\0\x07network\x03\0\0\x01i\x01\
-\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wasi:sockets/instance-netw\
-ork@0.2.3\x05\x11\x01B\x03\x01ps\x01@\0\0\0\x04\0\x03get\x01\x01\x04\0\x0cgolem:\
-it/api\x05\x12\x04\0\x13golem:it/networking\x04\0\x0b\x10\x01\0\x0anetworking\x03\
-\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-component\x070.227.1\x10wit-\
-bindgen-rust\x060.41.0";
+\x04\0\x0aparse-uuid\x01H\x01@\x01\x04uuid\x05\0s\x04\0\x0euuid-to-string\x01I\x03\
+\0\x15golem:rpc/types@0.2.2\x05\x05\x02\x03\0\x01\x08duration\x02\x03\0\x03\x0cc\
+omponent-id\x02\x03\0\x03\x04uuid\x02\x03\0\x03\x0evalue-and-type\x02\x03\0\x03\x08\
+agent-id\x01B\x7f\x02\x03\x02\x01\x06\x04\0\x08duration\x03\0\0\x02\x03\x02\x01\x07\
+\x04\0\x0ccomponent-id\x03\0\x02\x02\x03\x02\x01\x08\x04\0\x04uuid\x03\0\x04\x02\
+\x03\x02\x01\x09\x04\0\x0evalue-and-type\x03\0\x06\x02\x03\x02\x01\x0a\x04\0\x08\
+agent-id\x03\0\x08\x01w\x04\0\x0boplog-index\x03\0\x0a\x01r\x02\x08agent-id\x09\x09\
+oplog-idx\x0b\x04\0\x0apromise-id\x03\0\x0c\x01w\x04\0\x11component-version\x03\0\
+\x0e\x01r\x01\x05values\x04\0\x0aaccount-id\x03\0\x10\x01r\x01\x04uuid\x05\x04\0\
+\x0aproject-id\x03\0\x12\x01ku\x01r\x05\x0cmax-attemptsy\x09min-delay\x01\x09max\
+-delay\x01\x0amultiplieru\x11max-jitter-factor\x14\x04\0\x0cretry-policy\x03\0\x15\
+\x01q\x03\x0fpersist-nothing\0\0\x1bpersist-remote-side-effects\0\0\x05smart\0\0\
+\x04\0\x11persistence-level\x03\0\x17\x01m\x02\x09automatic\x0esnapshot-based\x04\
+\0\x0bupdate-mode\x03\0\x19\x01m\x06\x05equal\x09not-equal\x0dgreater-equal\x07g\
+reater\x0aless-equal\x04less\x04\0\x11filter-comparator\x03\0\x1b\x01m\x05\x05eq\
+ual\x09not-equal\x04like\x08not-like\x0bstarts-with\x04\0\x18string-filter-compa\
+rator\x03\0\x1d\x01m\x07\x07running\x04idle\x09suspended\x0binterrupted\x08retry\
+ing\x06failed\x06exited\x04\0\x0cagent-status\x03\0\x1f\x01r\x02\x0acomparator\x1e\
+\x05values\x04\0\x11agent-name-filter\x03\0!\x01r\x02\x0acomparator\x1c\x05value\
+\x20\x04\0\x13agent-status-filter\x03\0#\x01r\x02\x0acomparator\x1c\x05valuew\x04\
+\0\x14agent-version-filter\x03\0%\x01r\x02\x0acomparator\x1c\x05valuew\x04\0\x17\
+agent-created-at-filter\x03\0'\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\
+\0\x10agent-env-filter\x03\0)\x01r\x03\x04names\x0acomparator\x1e\x05values\x04\0\
+\x18agent-config-vars-filter\x03\0+\x01q\x06\x04name\x01\"\0\x06status\x01$\0\x07\
+version\x01&\0\x0acreated-at\x01(\0\x03env\x01*\0\x10wasi-config-vars\x01,\0\x04\
+\0\x15agent-property-filter\x03\0-\x01p.\x01r\x01\x07filters/\x04\0\x10agent-all\
+-filter\x03\00\x01p1\x01r\x01\x07filters2\x04\0\x10agent-any-filter\x03\03\x01ps\
+\x01o\x02ss\x01p6\x01r\x07\x08agent-id\x09\x04args5\x03env7\x0bconfig-vars7\x06s\
+tatus\x20\x11component-versionw\x0bretry-countw\x04\0\x0eagent-metadata\x03\08\x04\
+\0\x0aget-agents\x03\x01\x01q\x02\x15revert-to-oplog-index\x01\x0b\0\x17revert-l\
+ast-invocations\x01w\0\x04\0\x13revert-agent-target\x03\0;\x01m\x02\x08original\x06\
+forked\x04\0\x0bfork-result\x03\0=\x01k4\x01i:\x01@\x03\x0ccomponent-id\x03\x06f\
+ilter?\x07precise\x7f\0\xc0\0\x04\0\x17[constructor]get-agents\x01A\x01h:\x01p9\x01\
+k\xc3\0\x01@\x01\x04self\xc2\0\0\xc4\0\x04\0\x1b[method]get-agents.get-next\x01E\
+\x01@\0\0\x0d\x04\0\x0ecreate-promise\x01F\x01p}\x01@\x01\x0apromise-id\x0d\0\xc7\
+\0\x04\0\x0dawait-promise\x01H\x01k\xc7\0\x01@\x01\x0apromise-id\x0d\0\xc9\0\x04\
+\0\x0cpoll-promise\x01J\x01@\x02\x0apromise-id\x0d\x04data\xc7\0\0\x7f\x04\0\x10\
+complete-promise\x01K\x01@\x01\x0apromise-id\x0d\x01\0\x04\0\x0edelete-promise\x01\
+L\x01@\0\0\x0b\x04\0\x0fget-oplog-index\x01M\x01@\x01\x09oplog-idx\x0b\x01\0\x04\
+\0\x0fset-oplog-index\x01N\x01@\x01\x08replicas}\x01\0\x04\0\x0coplog-commit\x01\
+O\x04\0\x14mark-begin-operation\x01M\x01@\x01\x05begin\x0b\x01\0\x04\0\x12mark-e\
+nd-operation\x01P\x01@\0\0\x16\x04\0\x10get-retry-policy\x01Q\x01@\x01\x10new-re\
+try-policy\x16\x01\0\x04\0\x10set-retry-policy\x01R\x01@\0\0\x18\x04\0\x1bget-op\
+log-persistence-level\x01S\x01@\x01\x15new-persistence-level\x18\x01\0\x04\0\x1b\
+set-oplog-persistence-level\x01T\x01@\0\0\x7f\x04\0\x14get-idempotence-mode\x01U\
+\x01@\x01\x0aidempotent\x7f\x01\0\x04\0\x14set-idempotence-mode\x01V\x01@\0\0\x05\
+\x04\0\x18generate-idempotency-key\x01W\x01@\x03\x08agent-id\x09\x0etarget-versi\
+on\x0f\x04mode\x1a\x01\0\x04\0\x0cupdate-agent\x01X\x01@\0\09\x04\0\x11get-self-\
+metadata\x01Y\x01k9\x01@\x01\x08agent-id\x09\0\xda\0\x04\0\x12get-agent-metadata\
+\x01[\x01@\x03\x0fsource-agent-id\x09\x0ftarget-agent-id\x09\x11oplog-idx-cut-of\
+f\x0b\x01\0\x04\0\x0afork-agent\x01\\\x01@\x02\x08agent-id\x09\x0drevert-target<\
+\x01\0\x04\0\x0crevert-agent\x01]\x01k\x03\x01@\x01\x13component-references\0\xde\
+\0\x04\0\x14resolve-component-id\x01_\x01k\x09\x01@\x02\x13component-references\x0a\
+agent-names\0\xe0\0\x04\0\x10resolve-agent-id\x01a\x04\0\x17resolve-agent-id-str\
+ict\x01a\x01@\x01\x08new-names\0>\x04\0\x04fork\x01b\x03\0\x14golem:api/host@1.1\
+.7\x05\x0b\x01B\x11\x04\0\x07network\x03\x01\x01m\x15\x07unknown\x0daccess-denie\
+d\x0dnot-supported\x10invalid-argument\x0dout-of-memory\x07timeout\x14concurrenc\
+y-conflict\x0fnot-in-progress\x0bwould-block\x0dinvalid-state\x10new-socket-limi\
+t\x14address-not-bindable\x0eaddress-in-use\x12remote-unreachable\x12connection-\
+refused\x10connection-reset\x12connection-aborted\x12datagram-too-large\x11name-\
+unresolvable\x1atemporary-resolver-failure\x1apermanent-resolver-failure\x04\0\x0a\
+error-code\x03\0\x01\x01m\x02\x04ipv4\x04ipv6\x04\0\x11ip-address-family\x03\0\x03\
+\x01o\x04}}}}\x04\0\x0cipv4-address\x03\0\x05\x01o\x08{{{{{{{{\x04\0\x0cipv6-add\
+ress\x03\0\x07\x01q\x02\x04ipv4\x01\x06\0\x04ipv6\x01\x08\0\x04\0\x0aip-address\x03\
+\0\x09\x01r\x02\x04port{\x07address\x06\x04\0\x13ipv4-socket-address\x03\0\x0b\x01\
+r\x04\x04port{\x09flow-infoy\x07address\x08\x08scope-idy\x04\0\x13ipv6-socket-ad\
+dress\x03\0\x0d\x01q\x02\x04ipv4\x01\x0c\0\x04ipv6\x01\x0e\0\x04\0\x11ip-socket-\
+address\x03\0\x0f\x03\0\x1awasi:sockets/network@0.2.3\x05\x0c\x02\x03\0\x05\x07n\
+etwork\x02\x03\0\x05\x0aerror-code\x02\x03\0\x05\x0aip-address\x01B\x16\x02\x03\x02\
+\x01\x01\x04\0\x08pollable\x03\0\0\x02\x03\x02\x01\x0d\x04\0\x07network\x03\0\x02\
+\x02\x03\x02\x01\x0e\x04\0\x0aerror-code\x03\0\x04\x02\x03\x02\x01\x0f\x04\0\x0a\
+ip-address\x03\0\x06\x04\0\x16resolve-address-stream\x03\x01\x01h\x08\x01k\x07\x01\
+j\x01\x0a\x01\x05\x01@\x01\x04self\x09\0\x0b\x04\03[method]resolve-address-strea\
+m.resolve-next-address\x01\x0c\x01i\x01\x01@\x01\x04self\x09\0\x0d\x04\0([method\
+]resolve-address-stream.subscribe\x01\x0e\x01h\x03\x01i\x08\x01j\x01\x10\x01\x05\
+\x01@\x02\x07network\x0f\x04names\0\x11\x04\0\x11resolve-addresses\x01\x12\x03\0\
+!wasi:sockets/ip-name-lookup@0.2.3\x05\x10\x01B\x05\x02\x03\x02\x01\x0d\x04\0\x07\
+network\x03\0\0\x01i\x01\x01@\0\0\x02\x04\0\x10instance-network\x01\x03\x03\0#wa\
+si:sockets/instance-network@0.2.3\x05\x11\x01B\x03\x01ps\x01@\0\0\0\x04\0\x03get\
+\x01\x01\x04\0\x0cgolem:it/api\x05\x12\x04\0\x13golem:it/networking\x04\0\x0b\x10\
+\x01\0\x0anetworking\x03\0\0\0G\x09producers\x01\x0cprocessed-by\x02\x0dwit-comp\
+onent\x070.227.1\x10wit-bindgen-rust\x060.41.0";
 #[inline(never)]
 #[doc(hidden)]
 pub fn __link_custom_section_describing_imports() {

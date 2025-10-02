@@ -81,8 +81,8 @@ pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 #[cfg(not(feature = "host-bindings"))]
 #[cfg(feature = "stub")]
 pub use golem_rpc_0_2_x::types::{
-    ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WasmRpc,
-    WitNode, WitType, WitTypeNode, WitValue, WorkerId,
+    AgentId, ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, Uuid,
+    WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
 };
 
 #[cfg(not(feature = "host-bindings"))]
@@ -119,8 +119,8 @@ pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
 #[cfg(feature = "host-bindings")]
 pub use golem_rpc_0_2_x::types::{
-    ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode, WitType,
-    WitTypeNode, WitValue, WorkerId,
+    AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode,
+    WitType, WitTypeNode, WitValue,
 };
 
 use std::fmt;
@@ -493,13 +493,13 @@ impl Display for ComponentId {
     }
 }
 
-impl Display for WorkerId {
+impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.component_id, self.worker_name)
+        write!(f, "{}/{}", self.component_id, self.agent_id)
     }
 }
 
-impl FromStr for WorkerId {
+impl FromStr for AgentId {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -507,20 +507,20 @@ impl FromStr for WorkerId {
         if parts.len() == 2 {
             let component_id = ComponentId::from_str(parts[0])
                 .map_err(|_| format!("invalid component id: {s} - expected uuid"))?;
-            let worker_name = parts[1].to_string();
+            let agent_id = parts[1].to_string();
             Ok(Self {
                 component_id,
-                worker_name,
+                agent_id,
             })
         } else {
             Err(format!(
-                "invalid worker id: {s} - expected format: <component_id>/<worker_name>"
+                "invalid agent id: {s} - expected format: <component_id>/<agent_id>"
             ))
         }
     }
 }
 
-impl TryFrom<Uri> for WorkerId {
+impl TryFrom<Uri> for AgentId {
     type Error = String;
 
     fn try_from(uri: Uri) -> Result<Self, Self::Error> {
@@ -535,10 +535,10 @@ impl TryFrom<Uri> for WorkerId {
                     let component_id = ComponentId::from_str(parts[0]).map_err(|err|
                         format!("Invalid URN: expected UUID for component_id: {err}")
                     )?;
-                    let worker_name = parts[1];
-                    Ok(WorkerId {
+                    let agent_id = parts[1];
+                    Ok(AgentId {
                         component_id,
-                        worker_name: worker_name.to_string(),
+                        agent_id: agent_id.to_string(),
                     })
                 }
                 _ => Err(format!(

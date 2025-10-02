@@ -7,7 +7,9 @@ use std::cell::RefCell;
 use std::env;
 use time::{Duration, OffsetDateTime};
 
-use self::bindings::golem::api::host::{resolve_component_id, resolve_worker_id, resolve_worker_id_strict, ComponentId, Uuid, WorkerId};
+use self::bindings::golem::api::host::{
+    resolve_agent_id, resolve_agent_id_strict, resolve_component_id, AgentId, ComponentId, Uuid,
+};
 use self::bindings::golem::rpc::types::{Uri, WasmRpc, WitValue};
 
 struct State {
@@ -26,13 +28,12 @@ const SCHEDULE_DELAY_SECONDS: i64 = 1;
 struct Component;
 
 impl Guest for Component {
-
-    fn run() -> (Option<ComponentId>, Option<WorkerId>, Option<WorkerId>) {
+    fn run() -> (Option<ComponentId>, Option<AgentId>, Option<AgentId>) {
         println!("resolving component");
 
         let component_id = resolve_component_id("component-resolve-target");
-        let worker_id = resolve_worker_id("component-resolve-target", "counter-1");
-        let strict_worker_id = resolve_worker_id_strict("component-resolve-target", "counter-2");
+        let worker_id = resolve_agent_id("component-resolve-target", "counter-1");
+        let strict_worker_id = resolve_agent_id_strict("component-resolve-target", "counter-2");
         (component_id, worker_id, strict_worker_id)
     }
 }

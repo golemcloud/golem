@@ -101,3 +101,8 @@ world = "wasm-rpc"
 "golem:rpc" = { path = "wit/deps/golem-rpc" }
 "wasi:io" = { path = "wit/deps/io" }
 "wasi:clocks" = { path = "wit/deps/clocks" }
+
+
+[package.metadata.component.bindings]
+# See https://github.com/bytecodealliance/cargo-component/blob/main/src/metadata.rs#L62
+generate_unused_types = true

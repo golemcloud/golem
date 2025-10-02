@@ -158,14 +158,14 @@ impl Guest for Component {
 
     fn get_workers(
         component_id: ComponentId,
-        filter: Option<WorkerAnyFilter>,
+        filter: Option<AgentAnyFilter>,
         precise: bool,
-    ) -> Vec<WorkerMetadata> {
+    ) -> Vec<AgentMetadata> {
         println!(
             "Get workers component id: {component_id:?}, filter: {filter:?}, precise: {precise}"
         );
-        let mut workers: Vec<WorkerMetadata> = Vec::new();
-        let getter = GetWorkers::new(component_id, filter.as_ref(), precise);
+        let mut workers: Vec<AgentMetadata> = Vec::new();
+        let getter = GetAgents::new(component_id, filter.as_ref(), precise);
         loop {
             match getter.get_next() {
                 Some(values) => {
@@ -177,24 +177,31 @@ impl Guest for Component {
         workers
     }
 
-    fn get_self_metadata() -> WorkerMetadata {
+    fn get_self_metadata() -> AgentMetadata {
         println!("Get self metadata");
         bindings::golem::api::host::get_self_metadata()
     }
 
-    fn get_worker_metadata(worker_id: WorkerId) -> Option<WorkerMetadata> {
+    fn get_worker_metadata(worker_id: AgentId) -> Option<AgentMetadata> {
         println!("Get worker: {worker_id:?} metadata");
-        bindings::golem::api::host::get_worker_metadata(&worker_id)
+        bindings::golem::api::host::get_agent_metadata(&worker_id)
     }
 
-    fn update_worker(worker_id: WorkerId, component_version: ComponentVersion, update_mode: UpdateMode) {
+    fn update_worker(
+        worker_id: AgentId,
+        component_version: ComponentVersion,
+        update_mode: UpdateMode,
+    ) {
         println!(
             "Update worker worker id: {worker_id:?}, component version: {component_version:?}, update mode: {update_mode:?}"
         );
-        bindings::golem::api::host::update_worker(&worker_id, component_version, update_mode);
+        bindings::golem::api::host::update_agent(&worker_id, component_version, update_mode);
     }
 
-    fn generate_idempotency_keys() -> (bindings::exports::golem::it::api::Uuid, bindings::exports::golem::it::api::Uuid) {
+    fn generate_idempotency_keys() -> (
+        bindings::exports::golem::it::api::Uuid,
+        bindings::exports::golem::it::api::Uuid,
+    ) {
         let key1 = generate_idempotency_key();
         let key2 = generate_idempotency_key();
         (key1, key2)

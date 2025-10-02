@@ -2032,20 +2032,20 @@ impl TryFrom<String> for GatewayBindingType {
     }
 }
 
-impl From<WorkerId> for golem_wasm_rpc::WorkerId {
+impl From<WorkerId> for golem_wasm_rpc::AgentId {
     fn from(worker_id: WorkerId) -> Self {
-        golem_wasm_rpc::WorkerId {
+        golem_wasm_rpc::AgentId {
             component_id: worker_id.component_id.into(),
-            worker_name: worker_id.worker_name,
+            agent_id: worker_id.worker_name,
         }
     }
 }
 
-impl From<golem_wasm_rpc::WorkerId> for WorkerId {
-    fn from(host: golem_wasm_rpc::WorkerId) -> Self {
+impl From<golem_wasm_rpc::AgentId> for WorkerId {
+    fn from(host: golem_wasm_rpc::AgentId) -> Self {
         Self {
             component_id: host.component_id.into(),
-            worker_name: host.worker_name,
+            worker_name: host.agent_id,
         }
     }
 }
