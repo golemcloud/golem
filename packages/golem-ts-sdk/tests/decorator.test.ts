@@ -23,7 +23,7 @@ import * as util from 'node:util';
 // If the sample agents in the set-up changes, this test should fail
 describe('Agent decorator should register the agent class and its methods into AgentTypeRegistry', () => {
   const complexAgent: AgentType = Option.getOrThrowWith(
-    AgentTypeRegistry.lookup(BarAgentClassName),
+    AgentTypeRegistry.get(BarAgentClassName),
     () => new Error('BarAgent not found in AgentTypeRegistry'),
   );
 
@@ -519,7 +519,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('captures all methods and constructor with correct number of parameters', () => {
     const simpleAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.lookup(FooAgentClassName),
+      AgentTypeRegistry.get(FooAgentClassName),
       () => new Error('FooAgent not found in AgentTypeRegistry'),
     );
 
@@ -532,7 +532,7 @@ describe('Agent decorator should register the agent class and its methods into A
 
   it('should not capture overridden functions in base agents as agent methods', () => {
     const simpleAgent = Option.getOrThrowWith(
-      AgentTypeRegistry.lookup(FooAgentClassName),
+      AgentTypeRegistry.get(FooAgentClassName),
       () => new Error('FooAgent not found in AgentTypeRegistry'),
     );
 

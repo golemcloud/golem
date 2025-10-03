@@ -38,7 +38,7 @@ export const AgentTypeRegistry = {
     return Array.from(agentTypeRegistry.values());
   },
 
-  lookup(agentClassName: AgentClassName): Option.Option<AgentType> {
+  get(agentClassName: AgentClassName): Option.Option<AgentType> {
     return Option.fromNullable(agentTypeRegistry.get(agentClassName.value));
   },
 

@@ -52,7 +52,7 @@ export class ResolvedAgent {
 
   getDefinition(): AgentType {
     return Option.getOrThrowWith(
-      AgentTypeRegistry.lookup(this.agentClassName),
+      AgentTypeRegistry.get(this.agentClassName),
       () => new Error(`Agent class ${this.agentClassName} is not registered.`),
     );
   }

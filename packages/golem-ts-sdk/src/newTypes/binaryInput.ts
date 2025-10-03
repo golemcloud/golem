@@ -21,10 +21,12 @@ import * as Either from '../newTypes/either';
  * Example usage:
  *
  * ```ts
- * const urlBinary: UnstructuredBinary = UnstructuredBinary.fromUrl("https://example.com/file.bin");
- * const inlineBinary: UnstructuredBinary = UnstructuredBinary.fromInline(new
- *   Uint8Array([0x00, 0x01, 0x02]), "application/octet-stream"
- * );
+ * const inlineBinary: UnstructuredBinary<'application/json'> =
+ *   UnstructuredBinary.fromInline(Uint8Array([0x00, 0x01, 0x02]), "application/octet-stream");
+ *
+ * const urlBinary: UnstructuredBinary<[]> =
+ *   UnstructuredBinary.fromUrl("https://example.com/file.bin");
+ *
  * ```
  */
 type MimeType = string;
@@ -77,6 +79,15 @@ export const UnstructuredBinary = {
    *
    * Creates a `UnstructuredBinary` from a URL.
    *
+   * Example usage:
+   *
+   * ```ts
+   *
+   * const urlBinary: UnstructuredBinary<[]> =
+   *   UnstructuredBinary.fromUrl("https://example.com/file.bin");
+   *
+   * ```
+   *
    * @param urlValue
    */
   fromUrl(urlValue: string): UnstructuredBinary<[]> {
@@ -89,12 +100,21 @@ export const UnstructuredBinary = {
   /**
    * Creates a `UnstructuredBinary` from inline binary data.
    *
+   * Example usage:
+   *
+   * ```ts
+   *
+   * const inlineBinary: UnstructuredBinary<'application/json'> =
+   *   UnstructuredBinary.fromInline(Uint8Array([0x00, 0x01, 0x02]), "application/octet-stream");
+   *
+   * ```
+   *
    * @param data
    * @param mimeType
    */
   fromInline<MT extends MimeType[] = []>(
     data: Uint8Array,
-    mimeType?: MT[number],
+    mimeType: MT[number],
   ): UnstructuredBinary<MT> {
     return {
       tag: 'inline',

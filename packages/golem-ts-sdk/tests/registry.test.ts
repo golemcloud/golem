@@ -68,7 +68,7 @@ describe('AgentType look up', () => {
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);
 
-    const lookupResult = AgentTypeRegistry.lookup(
+    const lookupResult = AgentTypeRegistry.get(
       new AgentClassName('AssistantAgent'),
     );
 

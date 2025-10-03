@@ -645,7 +645,7 @@ function getAgentInternal(
       return constructorInput;
     },
     getAgentType: () => {
-      const agentType = AgentTypeRegistry.lookup(agentClassName);
+      const agentType = AgentTypeRegistry.get(agentClassName);
 
       if (Option.isNone(agentType)) {
         throw new Error(
@@ -666,10 +666,10 @@ function getAgentInternal(
 
       if (!agentMethod)
         throw new Error(
-          `Method ${methodName} not found on agent ${agentClassName}`,
+          `Method ${methodName} not found on agent ${agentClassName.value}`,
         );
 
-      const agentTypeOpt = AgentTypeRegistry.lookup(agentClassName);
+      const agentTypeOpt = AgentTypeRegistry.get(agentClassName);
 
       if (Option.isNone(agentTypeOpt)) {
         const error: AgentError = {
@@ -689,7 +689,7 @@ function getAgentInternal(
       if (!methodParams) {
         const error: AgentError = {
           tag: 'invalid-method',
-          val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName}.`,
+          val: `Failed to retrieve parameter types for method ${methodName} in agent ${agentClassName.value}.`,
         };
         return {
           tag: 'err',
@@ -710,7 +710,7 @@ function getAgentInternal(
 
           if (!paramTypeInfo) {
             throw new Error(
-              `Unsupported type for parameter ${paramName} in method ${methodName} of agent ${agentClassName}`,
+              `Unsupported type for parameter ${paramName} in method ${methodName} of agent ${agentClassName.value}`,
             );
           }
 
@@ -748,7 +748,7 @@ function getAgentInternal(
       if (!methodSignature) {
         const error: AgentError = {
           tag: 'invalid-method',
-          val: `Method ${methodName} not found in agent type ${agentClassName}`,
+          val: `Method ${methodName} not found in agent type ${agentClassName.value}`,
         };
 
         return {
@@ -765,7 +765,7 @@ function getAgentInternal(
       if (!returnTypeAnalysed) {
         const error: AgentError = {
           tag: 'invalid-type',
-          val: `Return type of method ${methodName} in agent ${agentClassName} is not supported. Only primitive types, arrays, objects, and tagged unions (Result types) are supported.`,
+          val: `Return type of method ${methodName} in agent ${agentClassName.value} is not supported.`,
         };
 
         return {

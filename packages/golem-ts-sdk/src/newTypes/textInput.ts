@@ -14,18 +14,29 @@
 
 import { TextReference } from 'golem:agent/common';
 import * as Either from '../newTypes/either';
+
+type LanguageCode = string;
+
 /**
  * Represents unstructured text input, which can be either a URL or inline text.
  *
  * Example usage:
  *
  * ```ts
- * const urlText: UnstructuredText = UnstructuredText.fromUrl("https://example.com");
- * const inlineText: UnstructuredText = UnstructuredText.fromInline("Hello, world!", ['en']);
+ *
+ * function foo(input: UnstructuredText) {..}
+ *
+ * // With language codes
+ * function bar(input: UnstructuredText<['en', 'de']>) {..}
+ *
+ *
+ * foo(UnstructuredText.fromInline("hello"));
+ * foo(UnstructuredText.fromUrl("http://.."'));
+ *
+ * bar(UnstructuredText.fromInline("hello", 'en')); // with language code
+ *
  * ```
  */
-type LanguageCode = string;
-
 export type UnstructuredText<LC extends LanguageCode[] = []> =
   | {
       tag: 'url';
@@ -77,9 +88,15 @@ export const UnstructuredText = {
   },
 
   /**
-   * Creates a `UnstructuredText` from a URL.
+   * Creates `UnstructuredText` from a URL.
    *
-   * @param urlValue
+   * ```ts
+   * function foo(input: UnstructuredText) {..}
+   *
+   * foo(UnstructuredText.fromUrl("hello"));
+   * ```
+   *
+   * @param urlValue A URL string
    *
    */
   fromUrl(urlValue: string): UnstructuredText {
@@ -90,7 +107,23 @@ export const UnstructuredText = {
   },
 
   /**
-   * Creates a `TextInput` with a default language code of `'en'`.
+   * Creates `UnstructuredText` from inline text data.
+   *
+   * ```ts
+   * function foo(input: UnstructuredText<['en', 'de']>) {..}
+   *
+   * foo(UnstructuredText.fromInline("hello", 'en'));
+   * ```
+   *
+   * If defining separately, please annotate the types to infer the types.
+   *
+   * ```ts
+   *
+   * const x: UnstructuredText<['en', 'de']> = UnstructuredText.fromInline("hello", 'en');
+   *
+   * foo(x);
+   *
+   * ```
    *
    * @param data
    * @param languageCode - The language code

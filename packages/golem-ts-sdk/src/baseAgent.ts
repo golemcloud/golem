@@ -62,7 +62,7 @@ export class BaseAgent {
   getAgentType(): AgentType {
     const agentClassName = new AgentClassName(this.constructor.name);
 
-    const agentType = AgentTypeRegistry.lookup(agentClassName);
+    const agentType = AgentTypeRegistry.get(agentClassName);
 
     if (Option.isNone(agentType)) {
       throw new Error(
