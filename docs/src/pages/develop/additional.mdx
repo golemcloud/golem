@@ -2,10 +2,6 @@ import { Callout, Tabs } from "nextra/components"
 
 # Additional Runtime APIs
 
-<Callout type="info">
-    Previously Golem called _agents_ as workers, and the new name has not been applied everywhere yet. The APIs described in this section are still using the _worker_ name.
-</Callout>
-
 ### Generate an idempotency key
 
 Golem provides a function to generate an idempotency key (a UUID) which can be passed to external systems to ensure that the same request is not processed multiple times.
@@ -26,26 +22,36 @@ const key: Uuid = generateIdempotencyKey();
 
 ### Get agent metadata
 
-It is possible to query **metadata** for Golem agents. This metadata is defined by the `WorkerMetadata` interface:
+It is possible to query **metadata** for Golem agents. This metadata is defined by the `AgentMetadata` interface:
 
 <Tabs items={["TypeScript"]}>
     <Tabs.Tab>
     ```typescript
-    export type WorkerMetadata = {
-        workerId: WorkerId;
-        args: string[];
-        env: [string, string][];
-        wasiConfigVars: [string, string][];
-        status: WorkerStatus;
-        componentVersion: bigint;
-        retryCount: bigint;
+    /**
+     * Metadata about an agent
+     */
+    export type AgentMetadata = {
+      /** The agent ID, consists of the component ID, agent type and agent parameters */
+      agentId: AgentId;
+      /** Command line arguments seen by the agent */
+      args: string[];
+      /** Environment variables seen by the agent */
+      env: [string, string][];
+      /** Configuration variables seen by the agent */
+      configVars: [string, string][];
+      /** The current agent status */
+      status: AgentStatus;
+      /** The component version the agent is running with */
+      componentVersion: bigint;
+      /** The agent's current retry count */
+      retryCount: bigint;
     };
     ```
 
     There are two exported functions to query agent metadata:
 
     - `getSelfMetadata()` returns the metadata for the current agent
-    - `getWorkerMetadata(workerId: WorkerId)` returns the metadata for a specific agent given by its `WorkerId`
+    - `getAgentMetadata(agentId: AgentId)` returns the metadata for a specific agent given by its `AgentId`
 
     </Tabs.Tab>
 </Tabs>
@@ -65,13 +71,13 @@ The following example demonstrates how to use the agent enumeration API:
 ```typescript
 import {
   ComponentId,
-  GetWorkers,
-  WorkerAnyFilter,
-  WorkerMetadata,
-  WorkerStatusFilter,
+  GetAgents,
+  AgentAnyFilter,
+  AgentMetadata,
+  AgentStatusFilter,
 } from "golem:api/host@1.1.0"
 
-const filter: WorkerAnyFilter = {
+const filter: AgentAnyFilter = {
   filters: [
     {
       filters: [
@@ -80,7 +86,7 @@ const filter: WorkerAnyFilter = {
           val: {
             comparator: "equal",
             value: "idle",
-          } satisfies WorkerStatusFilter,
+          } satisfies AgentStatusFilter,
         },
       ],
     },
@@ -90,35 +96,35 @@ const filter: WorkerAnyFilter = {
 const componentId: ComponentId = {
   /* ... */
 }
-const workers: WorkerMetadata[] = []
-const getter = new GetWorkers(componentId, filter, true)
+const agents: AgentMetadata[] = []
+const getter = new GetAgents(componentId, filter, true)
 
-let batch: WorkerMetadata[] | undefined
+let batch: AgentMetadata[] | undefined
 while ((batch = getter.getNext()) !== undefined) {
-  workers.push(...batch)
+  agents.push(...batch)
 }
 ```
     </Tabs.Tab>
 </Tabs>
 
-The third parameter of the `GetWorkers` constructor enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned worker; otherwise, it uses only the last cached values.
+The third parameter of the `GetAgents` constructor enables `precise` mode. In this mode, Golem will calculate the latest metadata for each returned agent; otherwise, it uses only the last cached values.
 
 ### Update an agent
 
 <Tabs items={["TypeScript"]}>
     <Tabs.Tab>
-To trigger an update for a given agent from one component version to another, use the `updateWorker` function:
+To trigger an update for a given agent from one component version to another, use the `updateAgent` function:
 
 ```typescript
-import { updateWorker, WorkerId, ComponentVersion } from "golem:api/host@0.2.0"
+import { updateAgent, AgentId, ComponentVersion } from "golem:api/host@0.2.0"
 
-const workerId: WorkerId = {
+const agentId: AgentId = {
   /* ... */
 }
 
 const targetVersion: ComponentVersion = 1n
 
-updateWorker(workerId, targetVersion, "automatic")
+updateAgent(agentId, targetVersion, "automatic")
 ```
     </Tabs.Tab>
 </Tabs>
@@ -126,9 +132,9 @@ updateWorker(workerId, targetVersion, "automatic")
 To learn more about updating agents, see the Agent Update section of the [agents page](/concepts/agents).
 
 ### Oplog search and query
-The `oplog` interface in `golem:api` provides functions to search and query the worker's persisted oplog.
+The `oplog` interface in `golem:api` provides functions to search and query the agent's persisted oplog.
 
-The interface defines a big `variant` data type called `oplog-entry`, and two **resources** for querying a worker's oplog.
+The interface defines a big `variant` data type called `oplog-entry`, and two **resources** for querying an agent's oplog.
 
 - the `get-oplog` resource enumerates through **all entries** of the oplog
 - the `search-oplog` resource accepts a **search expression** and only returns the matching entries
@@ -170,8 +176,8 @@ export type DurableFunctionType =
   };
 ```
 
-- `read-local` indicates that the side effect reads from the worker's local state (for example local file system, random generator, etc.)
-- `write-local` indicates that the side effect writes to the worker's local state (for example local file system)
+- `read-local` indicates that the side effect reads from the agent's local state (for example local file system, random generator, etc.)
+- `write-local` indicates that the side effect writes to the agent's local state (for example local file system)
 - `read-remote` indicates that the side effect reads from external state (for example a key-value store)
 - `write-remote` indicates that the side effect manipulates external state (for example an RPC call)
 - `write-remote-batched` indicates that the side effect manipulates external state through multiple invoked functions (for example an HTTP request where reading the response involves multiple host function calls)
@@ -191,7 +197,7 @@ export type DurableExecutionState = {
 };
 
 /**
- * Configurable persistence level for workers
+ * Configurable persistence level for agents
  */
 export type PersistenceLevel = {
     tag: 'persist-nothing'
@@ -204,7 +210,7 @@ export type PersistenceLevel = {
   };
 ```
 
-Here the `isLive` field indicates whether the executor is currently _replaying_ a worker's previously persisted state or side effects should be executed. The `persistenceLevel` is a user-configurable setting that can turn off persistence for certain sections of the code.
+Here the `isLive` field indicates whether the executor is currently _replaying_ an agent's previously persisted state or side effects should be executed. The `persistenceLevel` is a user-configurable setting that can turn off persistence for certain sections of the code.
 
 The `PersistedTypedDurableFunctionInvocation` is a record holding all the information about one persisted durable function. This should be used during _replay_ to simulate the side effect instead of actually running it.
 
@@ -247,7 +253,7 @@ In cases when a durable function's execution interleaves with other calls, the `
 
 ### Invocation context
 
-Golem associates an **invocation context** with each invocation, which contains various information depending on how the exported function was called. This context gets inherited when making further invocations via worker-to-worker communication, and it is also possible to define custom **spans** and associate custom **attributes** to it.
+Golem associates an **invocation context** with each invocation, which contains various information depending on how the exported function was called. This context gets inherited when making further invocations via agent-to-agent communication, and it is also possible to define custom **spans** and associate custom **attributes** to it.
 
 The spans are not automatically sent to any tracing system but they can be reconstructed from the oplog, for example using **oplog processor plugins**, to provide real-time tracing information.
 

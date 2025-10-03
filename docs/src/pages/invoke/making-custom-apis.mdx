@@ -212,12 +212,12 @@ httpApi:
 ```
 
 #### File server bindings
-The `file-server` binding type can be used to retrieve files from a workers filesystem. For read-write files the file is retrieved between running worker invocation, so users are guaranteed to not see any in-progress changes to files.
+The `file-server` binding type can be used to retrieve files from an agent's filesystem. For read-write files the file is retrieved between running worker invocation, so users are guaranteed to not see any in-progress changes to files.
 
-For read-only files the files are retrieved from a separate datastore and not directly from the worker. This makes retrieving read-only files very cheap
+For read-only files the files are retrieved from a separate datastore and not directly from the agent. This makes retrieving read-only files very cheap
 and allows it be used for serving static content.
 
-To learn more about the worker filesystem, check out the [dedicated guide](/develop/agent-filesystem).
+To learn more about the agent filesystem, check out the [dedicated guide](/develop/agent-filesystem).
 
 Example:
 
@@ -238,7 +238,7 @@ Parameters:
 | Parameter               | Required | Type   | Description                                                                                                                                                         |
 | ----------------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | componentName | true     | string | Name of the component to invoke                                                                                                                                       |
-| workerName              | false    | rib    | Script used to compute the name of the worker that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used.       |
+| workerName              | false    | rib    | Script used to compute the name of the agent that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used.       |
 | idempotencyKey          | false    | rib    | Script used to compute the idempotency key. The script has access to the request input. If not provided an idempotency key will be generated.                       |
 | response                | true     | rib    | Script that is used to compute the file to retrieve and the response to send to users. See the dedicatedc [section](#file-server-response-object) for more details. |
 

@@ -6,7 +6,7 @@ Golem **promises** provide a way for Golem agents to wait for an external condit
 
 It is also possible to complete a promise from within a Golem agent using the Golem SDK, which is especially useful when used together with [forking](/develop/forking).
 
-When a promise is completed, an arbitrary byte array can be attached to it as a payload; this data is returned to the awaiting worker when it continues execution.
+When a promise is completed, an arbitrary byte array can be attached to it as a payload; this data is returned to the awaiting agent when it continues execution.
 
 ### Creating a promise
 
@@ -39,16 +39,16 @@ The returned value has the type `PromiseId`, and defined as the following (inclu
             uuid: Uuid
         }
 
-        // Represents a Worker
-        export interface WorkerId {
+        // Represents an agent
+        export interface AgentId {
             componentId: ComponentId
-            workerName: string
+            agentId: string
         }
 
         // A promise ID is a value that can be passed to an external Golem API to complete that promise
-        // from an arbitrary external source, while Golem workers can await for this completion.
+        // from an arbitrary external source, while Golem agents can await for this completion.
         export interface PromiseId {
-            workerId: WorkerId
+            agentId: AgentId
             oplogIdx: OplogIndex
         }
         ```

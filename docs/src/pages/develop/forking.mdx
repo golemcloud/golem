@@ -15,14 +15,14 @@ declare module 'golem:api/host@1.1.7' {
   // ...
 
   /**
-   * Indicates which worker the code is running on after `fork`
+   * Indicates which agent the code is running on after `fork`
    */
   export type ForkResult = "original" | "forked";
 
   /**
-   * Forks the current worker at the current execution point. The new worker gets the `new-name` worker name,
-   * and this worker continues running as well. The return value is going to be different in this worker and
-   * the forked worker.
+   * Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
+   * and this agent continues running as well. The return value is going to be different in this agent and
+   * the forked agent.
    */
   export function fork(newName: string): ForkResult;
 }
