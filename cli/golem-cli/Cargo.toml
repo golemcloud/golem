@@ -13,6 +13,9 @@ build = "build.rs"
 [features]
 default = []
 server-commands = []
+mcp-server = ["dep:axum", "dep:schemars", "dep:globwalk", "dep:mime_guess"]
+mcp-introspect-clap = []      # optional, when you wire up real clap allowlist
+mcp-reuse-discovery = []   
 
 [lib]
 harness = false
@@ -124,9 +127,13 @@ wit-encoder = { workspace = true }
 wit-parser = { workspace = true }
 webbrowser = { workspace = true }
 warp = { workspace = true }
+axum = { workspace = true,  optional = true  }     
+globwalk =  { version = "0.9", optional = true }
+schemars   = { version = "0.8", features = ["derive"], optional = true }
+mime_guess = { version = "2.0.5", optional = true }               
+
 
 [dev-dependencies]
-axum = { workspace = true }
 log = { workspace = true }
 pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
