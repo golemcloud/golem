@@ -68,11 +68,11 @@ describe('AgentType look up', () => {
 
     AgentTypeRegistry.register(agentClassName, AgentTypeSample);
 
-    const lookupResult = AgentTypeRegistry.get(
+    const agentType = AgentTypeRegistry.get(
       new AgentClassName('AssistantAgent'),
     );
 
-    expect(lookupResult).toEqual(Option.some(AgentTypeSample));
+    expect(agentType).toEqual(Option.some(AgentTypeSample));
   });
 
   it('AgentMethodMetadataRegistry should return method details when looking up by string representation of agentClassName', () => {
