@@ -29,11 +29,11 @@ declare module 'golem:durability/durability@1.2.1' {
    */
   export function currentDurableExecutionState(): DurableExecutionState;
   /**
-   * Writes a record to the worker's oplog representing a durable function invocation
+   * Writes a record to the agent's oplog representing a durable function invocation
    */
   export function persistDurableFunctionInvocation(functionName: string, request: Uint8Array, response: Uint8Array, functionType: DurableFunctionType): void;
   /**
-   * Writes a record to the worker's oplog representing a durable function invocation
+   * Writes a record to the agent's oplog representing a durable function invocation
    * The request and response are defined as pairs of value and type, which makes it
    * self-describing for observers of oplogs. This is the recommended way to persist
    * third-party function invocations.
@@ -67,23 +67,55 @@ declare module 'golem:durability/durability@1.2.1' {
   export type Pollable = wasiIo023Poll.Pollable;
   export type ValueAndType = golemRpc022Types.ValueAndType;
   export type DurableFunctionType = WrappedFunctionType;
+  /**
+   * Represents the current durable execution state
+   */
   export type DurableExecutionState = {
+    /**
+     * If true, the executor is in live mode, side-effects should be performed and persisted.
+     * If false, the executor is in replay mode, side-effects should be replayed from the persisted data.
+     */
     isLive: boolean;
+    /** The currently active persistence level */
     persistenceLevel: PersistenceLevel;
   };
+  /**
+   * Represents the oplog entry version; this is for backward compatibility and most use cases should always use
+   * (and expect) the latest version.
+   */
   export type OplogEntryVersion = "v1" | "v2";
+  /**
+   * Represents a raw persisted durable function invocation. This record is not self-describing, the `response` field
+   * can store an arbitrary data. This is used internally for some predefined invocations. For user-defined custom
+   * durability, the `typed` variants are recommended, as those contain type information about the payload that can
+   * be used by tools to observe the contents of the entries.
+   */
   export type PersistedDurableFunctionInvocation = {
+    /** The timestamp of the invocation. */
     timestamp: Datetime;
+    /** The invoked function's unique name */
     functionName: string;
+    /** Arbitrary byte array storing the persisted result of the function */
     response: Uint8Array;
+    /** Type of the durable function invocation */
     functionType: DurableFunctionType;
+    /** Oplog entry version */
     entryVersion: OplogEntryVersion;
   };
+  /**
+   * The typed, self-describing version of `persisted-durable-function-invocation`. The difference is that the `response` field
+   * contains a value and its type information together, making the user-defined payload observable by external tools.
+   */
   export type PersistedTypedDurableFunctionInvocation = {
+    /** The timestamp of the invocation. */
     timestamp: Datetime;
+    /** The invoked function's unique name */
     functionName: string;
+    /** Arbitrary structured value (and type) describing the invocation's result */
     response: ValueAndType;
+    /** Type of the durable function invocation */
     functionType: DurableFunctionType;
+    /** Oplog entry version */
     entryVersion: OplogEntryVersion;
   };
 }

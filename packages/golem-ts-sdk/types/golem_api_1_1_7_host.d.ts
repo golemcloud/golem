@@ -24,7 +24,7 @@ declare module 'golem:api/host@1.1.7' {
    */
   export function getOplogIndex(): OplogIndex;
   /**
-   * Makes the current worker travel back in time and continue execution from the given position in the persistent
+   * Makes the current agent travel back in time and continue execution from the given position in the persistent
    * op log.
    */
   export function setOplogIndex(oplogIdx: OplogIndex): void;
@@ -46,20 +46,20 @@ declare module 'golem:api/host@1.1.7' {
    */
   export function markEndOperation(begin: OplogIndex): void;
   /**
-   * Gets the current retry policy associated with the worker
+   * Gets the current retry policy associated with the agent
    */
   export function getRetryPolicy(): RetryPolicy;
   /**
-   * Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
+   * Overrides the current retry policy associated with the agent. Following this call, `get-retry-policy` will return the
    * new retry policy.
    */
   export function setRetryPolicy(newRetryPolicy: RetryPolicy): void;
   /**
-   * Gets the worker's current persistence level.
+   * Gets the agent's current persistence level.
    */
   export function getOplogPersistenceLevel(): PersistenceLevel;
   /**
-   * Sets the worker's current persistence level. This can increase the performance of execution in cases where durable
+   * Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
    * execution is not required.
    */
   export function setOplogPersistenceLevel(newPersistenceLevel: PersistenceLevel): void;
@@ -70,7 +70,7 @@ declare module 'golem:api/host@1.1.7' {
   /**
    * Sets the current idempotence mode. The default is true.
    * True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
-   * In case of false the executor provides at-most-once semantics, failing the worker in case it is
+   * In case of false the executor provides at-most-once semantics, failing the agent in case it is
    * not known if the side effect was already executed.
    */
   export function setIdempotenceMode(idempotent: boolean): void;
@@ -81,26 +81,26 @@ declare module 'golem:api/host@1.1.7' {
    */
   export function generateIdempotencyKey(): Uuid;
   /**
-   * Initiates an update attempt for the given worker. The function returns immediately once the request has been processed,
-   * not waiting for the worker to get updated.
+   * Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
+   * not waiting for the agent to get updated.
    */
-  export function updateWorker(workerId: WorkerId, targetVersion: ComponentVersion, mode: UpdateMode): void;
+  export function updateAgent(agentId: AgentId, targetVersion: ComponentVersion, mode: UpdateMode): void;
   /**
-   * Get current worker metadata
+   * Get the current agent's metadata
    */
-  export function getSelfMetadata(): WorkerMetadata;
+  export function getSelfMetadata(): AgentMetadata;
   /**
-   * Get worker metadata
+   * Get agent metadata
    */
-  export function getWorkerMetadata(workerId: WorkerId): WorkerMetadata | undefined;
+  export function getAgentMetadata(agentId: AgentId): AgentMetadata | undefined;
   /**
-   * Fork a worker to another worker at a given oplog index
+   * Fork an agent to another agent at a given oplog index
    */
-  export function forkWorker(sourceWorkerId: WorkerId, targetWorkerId: WorkerId, oplogIdxCutOff: OplogIndex): void;
+  export function forkAgent(sourceAgentId: AgentId, targetAgentId: AgentId, oplogIdxCutOff: OplogIndex): void;
   /**
-   * Revert a worker to a previous state
+   * Revert an agent to a previous state
    */
-  export function revertWorker(workerId: WorkerId, revertTarget: RevertWorkerTarget): void;
+  export function revertAgent(agentId: AgentId, revertTarget: RevertAgentTarget): void;
   /**
    * Get the component-id for a given component reference.
    * Returns none when no component with the specified reference exists.
@@ -113,24 +113,33 @@ declare module 'golem:api/host@1.1.7' {
    */
   export function resolveComponentId(componentReference: string): ComponentId | undefined;
   /**
-   * Get the worker-id for a given component and worker name.
+   * Get the agent-id for a given component and agent name.
    * Returns none when no component for the specified reference exists.
    */
-  export function resolveWorkerId(componentReference: string, workerName: string): WorkerId | undefined;
+  export function resolveAgentId(componentReference: string, agentName: string): AgentId | undefined;
   /**
-   * Get the worker-id for a given component and worker name.
-   * Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
+   * Get the agent-id for a given component and agent-name.
+   * Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
    */
-  export function resolveWorkerIdStrict(componentReference: string, workerName: string): WorkerId | undefined;
+  export function resolveAgentIdStrict(componentReference: string, agentName: string): AgentId | undefined;
   /**
-   * Forks the current worker at the current execution point. The new worker gets the `new-name` worker name,
-   * and this worker continues running as well. The return value is going to be different in this worker and
-   * the forked worker.
+   * Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
+   * and this agent continues running as well. The return value is going to be different in this agent and
+   * the forked agent.
    */
   export function fork(newName: string): ForkResult;
-  export class GetWorkers {
-    constructor(componentId: ComponentId, filter: WorkerAnyFilter | undefined, precise: boolean);
-    getNext(): WorkerMetadata[] | undefined;
+  export class GetAgents {
+    /**
+     * Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
+     * defined in `component-id`, filtered by the conditions given by `filter`. If `precise` is true,
+     * the server will calculate the most recent state of all the returned agents, otherwise the returned
+     * metadata will be not guaranteed to be up-to-date.
+     */
+    constructor(componentId: ComponentId, filter: AgentAnyFilter | undefined, precise: boolean);
+    /**
+     * Retrieves the next batch of agent metadata.
+     */
+    getNext(): AgentMetadata[] | undefined;
   }
   export class GetPromiseResult {
     /**
@@ -146,18 +155,18 @@ declare module 'golem:api/host@1.1.7' {
   export type ComponentId = golemRpc022Types.ComponentId;
   export type Uuid = golemRpc022Types.Uuid;
   export type ValueAndType = golemRpc022Types.ValueAndType;
-  export type WorkerId = golemRpc022Types.WorkerId;
+  export type AgentId = golemRpc022Types.AgentId;
   export type Pollable = wasiIo023Poll.Pollable;
   /**
-   * An index into the persistent log storing all performed operations of a worker
+   * An index into the persistent log storing all performed operations of an agent
    */
   export type OplogIndex = bigint;
   /**
    * A promise ID is a value that can be passed to an external Golem API to complete that promise
-   * from an arbitrary external source, while Golem workers can await for this completion.
+   * from an arbitrary external source, while Golem agents can await for this completion.
    */
   export type PromiseId = {
-    workerId: WorkerId;
+    agentId: AgentId;
     oplogIdx: OplogIndex;
   };
   /**
@@ -180,7 +189,7 @@ declare module 'golem:api/host@1.1.7' {
    * Configures how the executor retries failures
    */
   export type RetryPolicy = {
-    /** The maximum number of retries before the worker becomes permanently failed */
+    /** The maximum number of retries before the agent becomes permanently failed */
     maxAttempts: number;
     /** The minimum delay between retries (applied to the first retry) */
     minDelay: Duration;
@@ -192,7 +201,7 @@ declare module 'golem:api/host@1.1.7' {
     maxJitterFactor?: number;
   };
   /**
-   * Configurable persistence level for workers
+   * Configurable persistence level for agents
    */
   export type PersistenceLevel = 
   {
@@ -205,82 +214,128 @@ declare module 'golem:api/host@1.1.7' {
     tag: 'smart'
   };
   /**
-   * Describes how to update a worker to a different component version
+   * Describes how to update an agent to a different component version
    */
   export type UpdateMode = "automatic" | "snapshot-based";
+  /**
+   * Operators used in filtering enumerated agents
+   */
   export type FilterComparator = "equal" | "not-equal" | "greater-equal" | "greater" | "less-equal" | "less";
+  /**
+   * Operators used on strings in filtering enumerated agents
+   */
   export type StringFilterComparator = "equal" | "not-equal" | "like" | "not-like" | "starts-with";
-  export type WorkerStatus = "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited";
-  export type WorkerNameFilter = {
+  /**
+   * The current status of an agent
+   */
+  export type AgentStatus = "running" | "idle" | "suspended" | "interrupted" | "retrying" | "failed" | "exited";
+  /**
+   * Describes a filter condition on agent IDs when enumerating agents
+   */
+  export type AgentNameFilter = {
     comparator: StringFilterComparator;
     value: string;
   };
-  export type WorkerStatusFilter = {
+  /**
+   * Describes a filter condition on the agent status when enumerating agents
+   */
+  export type AgentStatusFilter = {
     comparator: FilterComparator;
-    value: WorkerStatus;
+    value: AgentStatus;
   };
-  export type WorkerVersionFilter = {
+  /**
+   * Describes a filter condition on the component version when enumerating agents
+   */
+  export type AgentVersionFilter = {
     comparator: FilterComparator;
     value: bigint;
   };
-  export type WorkerCreatedAtFilter = {
+  /**
+   * Describes a filter condition on the agent's creation time when enumerating agents
+   */
+  export type AgentCreatedAtFilter = {
     comparator: FilterComparator;
     value: bigint;
   };
-  export type WorkerEnvFilter = {
+  /**
+   * Describes a filter condition on the agent's environment variables when enumerating agents
+   */
+  export type AgentEnvFilter = {
     name: string;
     comparator: StringFilterComparator;
     value: string;
   };
-  export type WorkerWasiConfigVarsFilter = {
+  /**
+   * Describes a filter condition on the agent's configuration variables when enumerating agents
+   */
+  export type AgentConfigVarsFilter = {
     name: string;
     comparator: StringFilterComparator;
     value: string;
   };
-  export type WorkerPropertyFilter = 
+  /**
+   * Describes one filter condition for enumerating agents
+   */
+  export type AgentPropertyFilter = 
   {
     tag: 'name'
-    val: WorkerNameFilter
+    val: AgentNameFilter
   } |
   {
     tag: 'status'
-    val: WorkerStatusFilter
+    val: AgentStatusFilter
   } |
   {
     tag: 'version'
-    val: WorkerVersionFilter
+    val: AgentVersionFilter
   } |
   {
     tag: 'created-at'
-    val: WorkerCreatedAtFilter
+    val: AgentCreatedAtFilter
   } |
   {
     tag: 'env'
-    val: WorkerEnvFilter
+    val: AgentEnvFilter
   } |
   {
     tag: 'wasi-config-vars'
-    val: WorkerWasiConfigVarsFilter
+    val: AgentConfigVarsFilter
   };
-  export type WorkerAllFilter = {
-    filters: WorkerPropertyFilter[];
+  /**
+   * Combines multiple filter conditions with an `AND` relationship for enumerating agents
+   */
+  export type AgentAllFilter = {
+    filters: AgentPropertyFilter[];
   };
-  export type WorkerAnyFilter = {
-    filters: WorkerAllFilter[];
+  /**
+   * Combines multiple groups of filter conditions with an `OR` relationship for enumerating agents
+   */
+  export type AgentAnyFilter = {
+    filters: AgentAllFilter[];
   };
-  export type WorkerMetadata = {
-    workerId: WorkerId;
+  /**
+   * Metadata about an agent
+   */
+  export type AgentMetadata = {
+    /** The agent ID, consists of the component ID, agent type and agent parameters */
+    agentId: AgentId;
+    /** Command line arguments seen by the agent */
     args: string[];
+    /** Environment variables seen by the agent */
     env: [string, string][];
-    wasiConfigVars: [string, string][];
-    status: WorkerStatus;
+    /** Configuration variables seen by the agent */
+    configVars: [string, string][];
+    /** The current agent status */
+    status: AgentStatus;
+    /** The component version the agent is running with */
     componentVersion: bigint;
+    /** The agent's current retry count */
     retryCount: bigint;
   };
   /**
-   * Target parameter for the `revert-worker` operation
+   * Target parameter for the `revert-agent` operation
    */
-  export type RevertWorkerTarget = 
+  export type RevertAgentTarget = 
   /** Revert to a specific oplog index. The given index will be the last one to be kept. */
   {
     tag: 'revert-to-oplog-index'
@@ -292,7 +347,7 @@ declare module 'golem:api/host@1.1.7' {
     val: bigint
   };
   /**
-   * Indicates which worker the code is running on after `fork`
+   * Indicates which agent the code is running on after `fork`
    */
   export type ForkResult = "original" | "forked";
 }

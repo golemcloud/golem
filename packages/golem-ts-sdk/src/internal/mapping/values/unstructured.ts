@@ -14,7 +14,7 @@
 
 import { BinaryReference, TextReference } from 'golem:agent/common';
 
-import util from 'node:util';
+import * as util from 'node:util';
 
 import { Value } from './Value';
 

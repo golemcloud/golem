@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import { ClassMetadata, TypeMetadata } from '@golemcloud/golem-ts-types-core';
-import { Datetime, WasmRpc, WorkerId } from 'golem:rpc/types@0.2.2';
+import { Datetime, WasmRpc, AgentId } from 'golem:rpc/types@0.2.2';
 import * as Either from '../newTypes/either';
 import * as WitValue from './mapping/values/WitValue';
 import * as Option from '../newTypes/option';
@@ -58,7 +58,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
 
     const metadata = metadataOpt.val;
 
-    const workerIdEither = getWorkerId(agentClassName, args, metadata);
+    const workerIdEither = getAgentId(agentClassName, args, metadata);
 
     if (Either.isLeft(workerIdEither)) {
       throw new Error(workerIdEither.val);
@@ -83,7 +83,7 @@ function getMethodProxy(
   classMetadata: ClassMetadata,
   prop: string | symbol,
   agentClassName: AgentClassName,
-  workerId: WorkerId,
+  agentId: AgentId,
 ): RemoteMethod<any[], any> {
   const methodSignature = classMetadata.methods.get(prop.toString());
 
@@ -148,7 +148,7 @@ function getMethodProxy(
 
   async function invokeAndAwait(...fnArgs: any[]) {
     const parameterWitValues = serializeArgs(fnArgs);
-    const wasmRpc = new WasmRpc(workerId);
+    const wasmRpc = new WasmRpc(agentId);
 
     const rpcResultFuture = wasmRpc.asyncInvokeAndAwait(
       functionName,
@@ -161,7 +161,7 @@ function getMethodProxy(
     const rpcResult = rpcResultFuture.get();
     if (!rpcResult) {
       throw new Error(
-        `Failed to invoke ${functionName} in agent ${workerId.workerName}`,
+        `Failed to invoke ${functionName} in agent ${agentId.agentId}`,
       );
     }
 
@@ -185,13 +185,13 @@ function getMethodProxy(
 
   async function invokeFireAndForget(...fnArgs: any[]) {
     const parameterWitValues = serializeArgs(fnArgs);
-    const wasmRpc = new WasmRpc(workerId);
+    const wasmRpc = new WasmRpc(agentId);
     wasmRpc.invoke(functionName, parameterWitValues);
   }
 
   async function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
     const parameterWitValues = serializeArgs(fnArgs);
-    const wasmRpc = new WasmRpc(workerId);
+    const wasmRpc = new WasmRpc(agentId);
     wasmRpc.scheduleInvocation(ts, functionName, parameterWitValues);
   }
 
@@ -208,11 +208,11 @@ function getMethodProxy(
 // Probably this implementation is going to exist in various forms in Golem. Not sure if there
 // would be a way to reuse - may be a host function that retrieves the worker-id
 // given value in JSON format, and the wit-type of each value and agent-type name?
-function getWorkerId(
+function getAgentId(
   agentClassName: AgentClassName,
   constructorArgs: any[],
   classMetadata: ClassMetadata,
-): Either.Either<WorkerId, string> {
+): Either.Either<AgentId, string> {
   // PlaceHolder implementation that finds the container-id corresponding to the agentType!
   // We need a host function - given an agent-type, it should return a component-id as proved in the prototype.
   // But we don't have that functionality yet, hence just retrieving the current
@@ -306,7 +306,7 @@ function getWorkerId(
 
   return Either.right({
     componentId: registeredAgentType.implementedBy,
-    workerName: agentId,
+    agentId: agentId,
   });
 }
 
