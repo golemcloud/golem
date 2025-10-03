@@ -117,21 +117,34 @@ impl RibReplHandler {
 
         // The REPL has to know about the custom instance parameters
         // to support creating instances using agent interface names.
-        let custom_instance_spec = component
-            .metadata
-            .agent_types()
-            .iter()
-            .map(|agent_type| {
-                rib::CustomInstanceSpec::new(
-                    agent_type.wrapper_type_name(),
-                    agent_type.constructor.wit_arg_types(),
-                    Some(rib::InterfaceName {
-                        name: agent_type.wrapper_type_name(),
-                        version: None,
-                    }),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut custom_instance_spec = Vec::new();
+
+        for agent_type in component.metadata.agent_types() {
+            let wrapper_function = component
+                .metadata
+                .find_wrapper_function_by_agent_constructor(&agent_type.type_name)
+                .map_err(|err| anyhow!(err))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Missing static WIT wrapper for constructor of agent type {}",
+                        agent_type.type_name
+                    )
+                })?;
+
+            custom_instance_spec.push(rib::CustomInstanceSpec {
+                instance_name: agent_type.wrapper_type_name(),
+                parameter_types: wrapper_function
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| p.typ.clone())
+                    .collect(),
+                interface_name: Some(rib::InterfaceName {
+                    name: agent_type.wrapper_type_name(),
+                    version: None,
+                }),
+            });
+        }
 
         self.ctx
             .set_rib_repl_state(RibReplState {
