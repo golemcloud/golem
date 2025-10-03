@@ -1322,7 +1322,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let agent_id = if component.metadata.is_agent() {
                     let agent_id =
                         AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .await
                             .map_err(|err| {
                                 WorkerExecutorError::invalid_request(format!(
                                     "Invalid agent id: {}",
@@ -1407,7 +1406,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let agent_id = if component.metadata.is_agent() {
                     let agent_id =
                         AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .await
                             .map_err(|err| {
                                 WorkerExecutorError::invalid_request(format!(
                                     "Invalid agent id: {}",

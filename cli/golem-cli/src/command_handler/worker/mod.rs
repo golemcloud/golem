@@ -51,8 +51,7 @@ use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::{AgentTypesClient, ComponentClient, WorkerClient};
 use golem_client::model::{
-    AgentType, InvokeParameters as InvokeParametersCloud,
-    RevertLastInvocations as RevertLastInvocationsCloud,
+    InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
     UpdateWorkerRequest as UpdateWorkerRequestCloud,
     WorkerCreationRequest as WorkerCreationRequestCloud,
@@ -207,8 +206,7 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        self.validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
-            .await?;
+        self.validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)?;
 
         log_action(
             "Creating",
@@ -283,17 +281,19 @@ impl WorkerCommandHandler {
             )
             .await?;
 
-        // First validate without the function name
-        let agent_type = self
-            .validate_worker_and_function_names(&component, &worker_name_match.worker_name, None)
-            .await?;
+        // First, validate without the function name
+        let agent_id_and_type = self.validate_worker_and_function_names(
+            &component,
+            &worker_name_match.worker_name,
+            None,
+        )?;
 
         let matched_function_name = fuzzy_match_function_name(
             function_name,
             component.metadata.exports(),
-            agent_type
+            agent_id_and_type
                 .as_ref()
-                .and_then(|a| agent_interface_name(&component, &a.type_name))
+                .and_then(|a| agent_interface_name(&component, a.wrapper_agent_type()))
                 .as_deref(),
         );
         let function_name = match matched_function_name {
@@ -320,7 +320,7 @@ impl WorkerCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,
-                        agent_type.as_ref(),
+                        agent_id_and_type.as_ref(),
                     ));
 
                     bail!(NonSuccessfulExit);
@@ -334,7 +334,7 @@ impl WorkerCommandHandler {
                     logln("");
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,
-                        agent_type.as_ref(),
+                        agent_id_and_type.as_ref(),
                     ));
 
                     bail!(NonSuccessfulExit);
@@ -342,13 +342,24 @@ impl WorkerCommandHandler {
             },
         };
 
-        // Re-validate with function name
-        self.validate_worker_and_function_names(
+        // Re-validate with function-name
+        let agent_id = self.validate_worker_and_function_names(
             &component,
             &worker_name_match.worker_name,
             Some(&function_name),
-        )
-        .await?;
+        )?;
+
+        // Update worker_name with normalized agent id if needed
+        let worker_name_match = {
+            if let Some(agent_id) = agent_id {
+                WorkerNameMatch {
+                    worker_name: agent_id.to_string().into(),
+                    ..worker_name_match
+                }
+            } else {
+                worker_name_match
+            }
+        };
 
         if trigger {
             log_action(
@@ -1774,23 +1785,22 @@ impl WorkerCommandHandler {
         }
     }
 
-    pub async fn validate_worker_and_function_names(
+    pub fn validate_worker_and_function_names(
         &self,
         component: &Component,
         worker_name: &WorkerName,
         function_name: Option<&str>,
-    ) -> anyhow::Result<Option<AgentType>> {
+    ) -> anyhow::Result<Option<AgentId>> {
         if !component.metadata.is_agent() {
             return Ok(None);
         }
 
-        match AgentId::parse_and_resolve_type(&worker_name.0, &component.metadata).await {
-            Ok((agent_id, agent_type)) => match function_name {
+        match AgentId::parse(&worker_name.0, &component.metadata) {
+            Ok(agent_id) => match function_name {
                 Some(function_name) => {
                     if let Some((namespace, package, interface)) = component
                         .metadata
                         .find_function(function_name)
-                        .await
                         .ok()
                         .flatten()
                         .and_then(|f| match f.name.site {
@@ -1805,10 +1815,10 @@ impl WorkerCommandHandler {
                         })
                     {
                         let component_name = format!("{namespace}:{package}");
-                        if interface == agent_type.type_name
+                        if interface == agent_id.wrapper_agent_type()
                             && component.component_name.0 == component_name
                         {
-                            return Ok(Some(agent_type));
+                            return Ok(Some(agent_id));
                         }
                     }
 
@@ -1819,14 +1829,11 @@ impl WorkerCommandHandler {
                         function_name.log_color_error_highlight()
                     ));
                     logln("");
-                    log_text_view(&AvailableFunctionNamesHelp::new(
-                        component,
-                        Some(&agent_type),
-                    ));
+                    log_text_view(&AvailableFunctionNamesHelp::new(component, Some(&agent_id)));
                     bail!(NonSuccessfulExit);
                 }
 
-                None => Ok(Some(agent_type)),
+                None => Ok(Some(agent_id)),
             },
             Err(err) => {
                 logln("");

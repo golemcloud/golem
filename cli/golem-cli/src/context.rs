@@ -50,6 +50,7 @@ use golem_client::api::WorkerClientLive as WorkerClientCloud;
 use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
 use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_client::{Context as ContextCloud, Security};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
@@ -468,9 +469,9 @@ impl Context {
         Ok(app_ctx.application.task_result_marker_dir())
     }
 
-    pub async fn set_rib_repl_dependencies(&self, dependencies: ReplComponentDependencies) {
+    pub async fn set_rib_repl_state(&self, state: RibReplState) {
         let mut rib_repl_state = self.rib_repl_state.write().await;
-        rib_repl_state.dependencies = dependencies;
+        *rib_repl_state = state;
     }
 
     pub async fn get_rib_repl_dependencies(&self) -> ReplComponentDependencies {
@@ -479,6 +480,11 @@ impl Context {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
             custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
         }
+    }
+
+    pub async fn get_rib_repl_component_metadata(&self) -> ComponentMetadata {
+        let rib_repl_state = self.rib_repl_state.read().await;
+        rib_repl_state.component_metadata.clone()
     }
 
     pub fn templates(
@@ -861,7 +867,8 @@ impl ApplicationContextState {
 }
 
 pub struct RibReplState {
-    dependencies: ReplComponentDependencies,
+    pub dependencies: ReplComponentDependencies,
+    pub component_metadata: ComponentMetadata,
 }
 
 impl Default for RibReplState {
@@ -871,6 +878,7 @@ impl Default for RibReplState {
                 component_dependencies: vec![],
                 custom_instance_spec: vec![],
             },
+            component_metadata: ComponentMetadata::default(),
         }
     }
 }

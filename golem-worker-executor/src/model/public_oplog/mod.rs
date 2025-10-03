@@ -364,7 +364,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let function = metadata.metadata.find_function(&function_name).await?.ok_or(
+                let function = metadata.metadata.find_function(&function_name)?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
@@ -484,7 +484,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function = metadata.metadata.find_function(&full_function_name).await?;
+                        let function = metadata.metadata.find_function(&full_function_name)?;
 
                         // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
                         // we only know the current component version. If the client enqueued an update earlier and assumes
@@ -822,9 +822,7 @@ async fn try_resolve_agent_id(
         .get_metadata(&worker_id.component_id, None)
         .await
     {
-        AgentId::parse(&worker_id.worker_name, &component.metadata)
-            .await
-            .ok()
+        AgentId::parse(&worker_id.worker_name, &component.metadata).ok()
     } else {
         None
     }
