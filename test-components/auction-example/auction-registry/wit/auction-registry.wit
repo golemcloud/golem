@@ -8,11 +8,11 @@ interface api {
 
   create-bidder: func(name: string, address: string) -> bidder-id;
 
-  create-auction: func(name: string, description: string, limit-price: float32, expiration: deadline) -> auction-id;
+  create-auction: func(name: string, description: string, limit-price: f32, expiration: deadline) -> auction-id;
 
   get-auctions: func() -> list<auction>;
 
-  create-auction-res: func(name: string, description: string, limit-price: float32, expiration: deadline) -> auction-id;
+  create-auction-res: func(name: string, description: string, limit-price: f32, expiration: deadline) -> auction-id;
 }
 
 world auction-registry {

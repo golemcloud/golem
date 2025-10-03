@@ -19,7 +19,9 @@ use serde::Serialize;
 pub fn await_promise_json<T: DeserializeOwned>(
     promise_id: &PromiseId,
 ) -> Result<T, serde_json::Error> {
-    let bytes = crate::bindings::golem::api::host::await_promise(promise_id);
+    let promise = crate::bindings::golem::api::host::get_promise(promise_id);
+    promise.subscribe().block();
+    let bytes = promise.get().unwrap();
     serde_json::from_slice(&bytes)
 }
 

@@ -23,11 +23,11 @@ fn with_api<T>(f: impl FnOnce(&Api) -> T) -> T {
                 env::var("CHILD_COMPONENT_ID").expect("CHILD_COMPONENT_ID not set");
 
             let uuid = bindings::golem::rpc::types::parse_uuid(&remote_component_id).unwrap();
-            let worker_name = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
+            let agent_id = env::var("CHILD_WORKER_NAME").expect("CHILD_WORKER_NAME not set");
 
-            let api = Api::custom(&bindings::golem::rpc::types::WorkerId {
+            let api = Api::custom(&bindings::golem::rpc::types::AgentId {
                 component_id: bindings::golem::rpc::types::ComponentId { uuid },
-                worker_name,
+                agent_id,
             });
             let result = f(&api);
             state.api = Some(api);

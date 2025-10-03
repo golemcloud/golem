@@ -364,7 +364,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let function = metadata.metadata.find_function(&function_name).await?.ok_or(
+                let function = metadata.metadata.find_function(&function_name)?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
@@ -484,7 +484,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function = metadata.metadata.find_function(&full_function_name).await?;
+                        let function = metadata.metadata.find_function(&full_function_name)?;
 
                         // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
                         // we only know the current component version. If the client enqueued an update earlier and assumes
@@ -822,9 +822,7 @@ async fn try_resolve_agent_id(
         .get_metadata(&worker_id.component_id, None)
         .await
     {
-        AgentId::parse(&worker_id.worker_name, &component.metadata)
-            .await
-            .ok()
+        AgentId::parse(&worker_id.worker_name, &component.metadata).ok()
     } else {
         None
     }
@@ -1007,14 +1005,11 @@ async fn encode_host_function_request_as_value(
         "wall_clock::now" => no_payload(),
         "wall_clock::resolution" => no_payload(),
         "golem::api::create_promise" => no_payload(),
-        "golem::api::delete_promise" => {
-            let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
         "golem::api::complete_promise" => {
             let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
+        "golem::api::get-promise-result::get" => no_payload(),
         "golem::api::update-worker" => {
             let payload: (WorkerId, ComponentVersion, UpdateMode) =
                 try_deserialize(oplog_index, &what, bytes)?;
@@ -1227,10 +1222,6 @@ async fn encode_host_function_request_as_value(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: SerializableScheduleId = try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
-        "golem::api::poll_promise" => {
-            let payload: PromiseId = try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
         "golem::api::resolve_component_id" => {
@@ -1475,8 +1466,8 @@ fn encode_host_function_response_as_value(
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
-        "golem::api::delete_promise" => {
-            let payload: Result<(), SerializableError> =
+        "golem::api::get-promise-result::get" => {
+            let payload: Result<Option<Vec<u8>>, SerializableError> =
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
@@ -1693,11 +1684,6 @@ fn encode_host_function_response_as_value(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: Result<(), SerializableError> =
-                try_deserialize(oplog_index, &what, bytes)?;
-            Ok(payload.into_value_and_type())
-        }
-        "golem::api::poll_promise" => {
-            let payload: Result<Option<Vec<u8>>, SerializableError> =
                 try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }

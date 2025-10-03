@@ -71,10 +71,10 @@ impl WorkerServiceRibCompiler for DefaultWorkerServiceRibCompiler {
         for (_component_index, agent_types) in agent_types {
             for agent_type in agent_types {
                 custom_instance_spec.push(rib::CustomInstanceSpec {
-                    instance_name: agent_type.type_name.clone(),
+                    instance_name: agent_type.wrapper_type_name(),
                     parameter_types: agent_type.constructor.wit_arg_types(),
                     interface_name: Some(InterfaceName {
-                        name: agent_type.type_name,
+                        name: agent_type.wrapper_type_name(),
                         version: None,
                     }),
                 });

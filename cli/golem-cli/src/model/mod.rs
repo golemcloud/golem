@@ -574,18 +574,21 @@ pub trait HasVerbosity {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkerConnectOptions {
+pub struct AgentLogStreamOptions {
     pub colors: bool,
     pub show_timestamp: bool,
     pub show_level: bool,
+    /// Only show entries coming from the agent, no output about invocation markers and stream status
+    pub logs_only: bool,
 }
 
-impl From<StreamArgs> for WorkerConnectOptions {
+impl From<StreamArgs> for AgentLogStreamOptions {
     fn from(args: StreamArgs) -> Self {
-        WorkerConnectOptions {
+        AgentLogStreamOptions {
             colors: SHOULD_COLORIZE.should_colorize(),
             show_timestamp: !args.stream_no_timestamp,
             show_level: !args.stream_no_log_level,
+            logs_only: args.logs_only,
         }
     }
 }
