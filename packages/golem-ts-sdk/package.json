@@ -41,9 +41,13 @@
     "generate-sample-agents-types": "node ../golem-ts-typegen/dist/bin/golem-typegen ./tsconfig.json --files tests/**/*.ts --include-class-decorators agent",
     "prebuild": "npm run clean-test-data && pnpm run generate-dts && pnpm run generate-sample-agents-types",
     "build": "pnpm run prebuild && tsc --noEmit && rollup -c",
-    "clean": "rm -rf .metadata dist node_modules package-lock.json && printf '\\nRun `npm install` before building again.\\n\\n'",
+    "clean": "rm -rf .metadata agent-template dist node_modules package-lock.json && printf '\\nRun `npm install` before building again.\\n\\n'",
     "test": "npm run build && tsc --noEmit && vitest run",
-    "dev": "rollup -c -w"
+    "dev": "rollup -c -w",
+    "generate-agent-template": "wasm-rquickjs generate-wrapper-crate --wit ../../../wit --output agent-template --world agent-guest --js-modules '@golemcloud/golem-ts-sdk=dist/index.mjs' --js-modules 'user=@composition'",
+    "compile-agent-template": "cargo component build --manifest-path=agent-template/Cargo.toml --release",
+    "copy-agent-template": "cp agent-template/target/wasm32-wasip1/release/agent_guest.wasm ./wasm/agent_guest.wasm",
+    "build-agent-template": "pnpm run generate-agent-template && pnpm run compile-agent-template && pnpm run copy-agent-template"
   },
   "keywords": [],
   "sideEffects": [
