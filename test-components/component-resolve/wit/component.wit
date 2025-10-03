@@ -1,9 +1,9 @@
 package golem:it;
 
 interface component-resolve-api {
-  use golem:api/host@1.1.7.{worker-id, component-id};
+  use golem:api/host@1.1.7.{agent-id, component-id};
 
-  run: func() -> tuple<option<component-id>, option<worker-id>, option<worker-id>>;
+  run: func() -> tuple<option<component-id>, option<agent-id>, option<agent-id>>;
 }
 
 world component-resolve {

@@ -40,8 +40,8 @@ impl oplog_processor::Guest for Component {
         account_info: oplog_processor::AccountInfo,
         _config: Vec<(String, String)>,
         component_id: oplog_processor::ComponentId,
-        worker_id: oplog_processor::WorkerId,
-        _metadata: oplog_processor::WorkerMetadata,
+        worker_id: oplog_processor::AgentId,
+        _metadata: oplog_processor::AgentMetadata,
         _first_entry_index: oplog_processor::OplogIndex,
         entries: Vec<oplog_processor::OplogEntry>,
     ) -> Result<(), String> {
@@ -64,7 +64,7 @@ impl oplog_processor::Guest for Component {
                             "{}/{:?}/{}/{}",
                             account_info.account_id.value,
                             component_id,
-                            worker_id.worker_name,
+                            worker_id.agent_id,
                             invocation.function_name
                         ));
                     } else {

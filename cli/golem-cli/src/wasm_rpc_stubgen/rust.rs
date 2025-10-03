@@ -56,11 +56,11 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
         let struct_fns: Vec<TokenStream> = if entity.is_resource() {
             vec![quote! {
                 pub fn from_remote_handle(uri: golem_rust::wasm_rpc::Uri, id: u64) -> Self {
-                    let worker_id: golem_rust::wasm_rpc::WorkerId = uri.clone().try_into().expect(
-                        &format!("Invalid worker uri in remote resource handle: {}", uri.value)
+                    let agent_id: golem_rust::wasm_rpc::AgentId = uri.clone().try_into().expect(
+                        &format!("Invalid agent uri in remote resource handle: {}", uri.value)
                     );
                     Self {
-                        rpc: WasmRpc::new(&worker_id),
+                        rpc: WasmRpc::new(&agent_id),
                         id,
                         uri,
                     }
@@ -247,20 +247,20 @@ pub fn generate_stub_source(def: &StubDefinition) -> anyhow::Result<()> {
             let component_name = def.config.component_name.as_str();
 
             quote! {
-                fn new(worker_name: String) -> Self {
+                fn new(agent_id: String) -> Self {
                     let component_name = #component_name;
-                    let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &worker_name).expect(
-                        &format!("Failed to resolve worker id: {}/{}", component_name, worker_name)
+                    let agent_id = golem_rust::bindings::golem::api::host::resolve_agent_id(component_name, &agent_id).expect(
+                        &format!("Failed to resolve agent id: {}/{}", component_name, agent_id)
                     );
                     Self {
-                        rpc: WasmRpc::new(&worker_id)
+                        rpc: WasmRpc::new(&agent_id)
                     }
                 }
 
-                fn custom(worker_id: golem_rust::wasm_rpc::WorkerId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
+                fn custom(agent_id: golem_rust::wasm_rpc::AgentId) -> crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name {
                     crate::bindings::exports::#root_ns::#root_name::#stub_interface_name::#interface_name::new(
                         Self {
-                            rpc: WasmRpc::new(&worker_id)
+                            rpc: WasmRpc::new(&agent_id)
                         }
                     )
                 }
@@ -385,9 +385,9 @@ fn generate_function_stub_source(
     }
 
     if mode == FunctionMode::Constructor {
-        params.push(quote! { wasm_rpc_worker_name: String });
+        params.push(quote! { wasm_rpc_agent_id: String });
     } else if mode == FunctionMode::CustomConstructor {
-        params.push(quote! { wasm_rpc_worker_id: golem_rust::wasm_rpc::WorkerId });
+        params.push(quote! { wasm_rpc_agent_id: golem_rust::wasm_rpc::AgentId });
     } else if mode == FunctionMode::Method {
         input_values.push(quote! {
             WitValue::builder().handle(self.uri.clone(), self.id)
@@ -463,14 +463,14 @@ fn generate_function_stub_source(
     let init = if mode == FunctionMode::Constructor {
         quote! {
             let component_name = #component_name;
-            let worker_id = golem_rust::bindings::golem::api::host::resolve_worker_id(component_name, &wasm_rpc_worker_name).expect(
-                &format!("Failed to resolve worker id: {}/{}", component_name, wasm_rpc_worker_name)
+            let agent_id = golem_rust::bindings::golem::api::host::resolve_agent_id(component_name, &wasm_rpc_agent_id).expect(
+                &format!("Failed to resolve agent id: {}/{}", component_name, wasm_rpc_agent_id)
             );
-            let rpc = WasmRpc::new(&worker_id);
+            let rpc = WasmRpc::new(&agent_id);
         }
     } else if mode == FunctionMode::CustomConstructor {
         quote! {
-            let rpc = WasmRpc::new(&wasm_rpc_worker_id);
+            let rpc = WasmRpc::new(&wasm_rpc_agent_id);
         }
     } else {
         quote! {}

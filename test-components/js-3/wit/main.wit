@@ -1,9 +1,0 @@
-package golem:it;
-
-interface api {
-  fetch-get: func(url: string) -> string;
-}
-
-world js3 {
-  export api;
-}
