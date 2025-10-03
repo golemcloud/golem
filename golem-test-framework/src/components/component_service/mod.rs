@@ -562,7 +562,6 @@ pub trait ComponentService: Send + Sync {
                             .to_string(),
                     )),
                     Some(create_component_response::Result::Success(component)) => {
-                        info!("Created component (GRPC) {component:?}");
                         Ok(component)
                     }
                     Some(create_component_response::Result::Error(error)) => match error.error {
