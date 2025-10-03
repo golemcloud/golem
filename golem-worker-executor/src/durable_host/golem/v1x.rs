@@ -19,7 +19,7 @@ use crate::model::public_oplog::{
     find_component_version_at, get_public_oplog_chunk, search_public_oplog,
 };
 use crate::preview2::golem_api_1_x::host::{
-    AgentAnyFilter, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult
+    AgentAnyFilter, ForkResult, GetAgents, Host, HostGetAgents, HostGetPromiseResult,
 };
 use crate::preview2::golem_api_1_x::oplog::{
     Host as OplogHost, HostGetOplog, HostSearchOplog, SearchOplog,
