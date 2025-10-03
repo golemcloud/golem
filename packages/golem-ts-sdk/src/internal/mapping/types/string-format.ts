@@ -28,9 +28,13 @@ export function isKebabCase(str: string): boolean {
   return /^[a-z]+(-[a-z]+)*$/.test(str);
 }
 
-export function convertTypeNameToKebab(typeName: string | undefined): string | undefined{
-  return typeName  ? typeName
-    .replace(/([a-z])([A-Z])/g, '$1-$2')
-    .replace(/[\s_]+/g, '-')
-    .toLowerCase() : undefined;
+export function convertTypeNameToKebab(typeName: string): string {
+  return typeName
+  .replace(/([a-z])([A-Z])/g, '$1-$2')
+  .replace(/[\s_]+/g, '-')
+  .toLowerCase();
+}
+
+export function convertOptionalTypeNameToKebab(typeName: string | undefined): string | undefined {
+  return typeName ? convertTypeNameToKebab(typeName) : undefined;
 }

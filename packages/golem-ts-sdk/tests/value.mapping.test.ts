@@ -26,7 +26,6 @@ import {
   getUnionWithOnlyLiterals,
   getUnionWithLiterals,
   getResultTypeExact,
-  BarAgentName,
 } from './testUtils';
 
 import { TestInterfaceType } from './testTypes';

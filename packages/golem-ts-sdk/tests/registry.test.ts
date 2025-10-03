@@ -13,7 +13,6 @@
 // limitations under the License.
 
 import { describe, expect, it } from 'vitest';
-import { AgentTypeName } from '../src/newTypes/agentTypeName';
 import { AgentClassName } from '../src';
 import { AgentInitiatorRegistry } from '../src/internal/registry/agentInitiatorRegistry';
 import { Result } from 'golem:rpc/types@0.2.2';
@@ -27,11 +26,9 @@ import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistr
 describe('AgentType look up', () => {
   it('AgentInitiatorRegistry should return the initiator when looking up by string representation of agentType', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
-    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
 
     const FailingAgentInitiator: AgentInitiator = {
       initiate: (
-        _agentName: string,
         _constructorParams: DataValue,
       ): Result<ResolvedAgent, AgentError> => {
         return {
@@ -44,20 +41,17 @@ describe('AgentType look up', () => {
       },
     };
 
-    AgentInitiatorRegistry.register(agentTypeName, FailingAgentInitiator);
+    AgentInitiatorRegistry.register(agentClassName, FailingAgentInitiator);
 
-    const lookupResult = AgentInitiatorRegistry.lookup(
-      new AgentTypeName('assistant-agent'),
-    );
+    const lookupResult = AgentInitiatorRegistry.lookup(agentClassName.value);
 
     expect(lookupResult).toEqual(Option.some(FailingAgentInitiator));
   });
 
   it('AgentTypeRegistry should return the agent-type when looking up by string representation of agentClassName', () => {
     const agentClassName = new AgentClassName('AssistantAgent');
-    const agentTypeName = AgentTypeName.fromAgentClassName(agentClassName);
     const AgentTypeSample: AgentType = {
-      typeName: agentTypeName.value,
+      typeName: agentClassName.value,
       description: 'An assistant agent',
       constructor: {
         name: 'foo',

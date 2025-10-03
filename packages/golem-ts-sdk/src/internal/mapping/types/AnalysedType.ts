@@ -17,7 +17,7 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
-import { convertTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './string-format';
+import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './string-format';
 import { getTaggedUnion, getUnionOfLiterals, TaggedTypeMetadata, UserDefinedResultType } from './taggedUnion';
 
 type TsType = CoreType.Type;
@@ -218,20 +218,20 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const u8 =  (): AnalysedType => ({ kind: 'u8' });
  export const s8 =  (): AnalysedType => ({ kind: 's8' });
 
- export const list = (name: string | undefined, typedArrayKind: TypedArrayKind | undefined, mapType: {keyType: AnalysedType, valueType: AnalysedType} | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, mapType: mapType,  value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
- export const option = (name: string| undefined, emptyType: EmptyType, inner: AnalysedType): AnalysedType => ({ kind: 'option',  emptyType: emptyType, value: { name: convertTypeNameToKebab(name), owner: undefined, inner } });
- export const tuple =  (name: string | undefined, emptyType: EmptyType | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple',   emptyType: emptyType, value: { name: convertTypeNameToKebab(name), owner: undefined, items } });
- export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record',  value: { name: convertTypeNameToKebab(name), owner: undefined, fields } });
- export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertTypeNameToKebab(name), owner: undefined, names } });
- export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
- export const variant = (name: string | undefined, taggedTypes: TaggedTypeMetadata[],  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertTypeNameToKebab(name), owner: undefined, cases } });
+ export const list = (name: string | undefined, typedArrayKind: TypedArrayKind | undefined, mapType: {keyType: AnalysedType, valueType: AnalysedType} | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, mapType: mapType,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
+ export const option = (name: string| undefined, emptyType: EmptyType, inner: AnalysedType): AnalysedType => ({ kind: 'option',  emptyType: emptyType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
+ export const tuple =  (name: string | undefined, emptyType: EmptyType | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple',   emptyType: emptyType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, items } });
+ export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record',  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, fields } });
+ export const flags =  (name: string | undefined, names: string[]): AnalysedType => ({ kind: 'flags', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, names } });
+ export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
+ export const variant = (name: string | undefined, taggedTypes: TaggedTypeMetadata[],  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
 
  export const result = (name: string | undefined, okValueName: string| undefined, errValueName: string | undefined, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
-      ({ kind: 'result', okValueName, errValueName, value: { name: convertTypeNameToKebab(name), owner: undefined, ok, err } });
+      ({ kind: 'result', okValueName, errValueName, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, ok, err } });
 
 
  export const handle =  (name: string | undefined, resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
-      ({ kind: 'handle', value: { name: convertTypeNameToKebab(name), owner: undefined, resourceId, mode } });
+      ({ kind: 'handle', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, resourceId, mode } });
 
 
 

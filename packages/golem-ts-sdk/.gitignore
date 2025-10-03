@@ -1,3 +1,4 @@
+.metadata/
 dist/
 node_modules/
-.metadata/
+wasm

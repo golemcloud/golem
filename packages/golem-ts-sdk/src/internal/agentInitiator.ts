@@ -31,12 +31,8 @@ export type AgentInitiator = {
   /**
    * Initiates the creation of an agent.
    *
-   * @param agentName - The name of the agent to instantiate.
    * @param constructorParams - Constructor arguments for the agent, encoded as `WitValue`s.
    * @returns A `ResolvedAgent` containing the created agent and its internal handler.
    */
-  initiate(
-    agentName: string,
-    constructorParams: DataValue,
-  ): Result<ResolvedAgent, AgentError>;
+  initiate(constructorParams: DataValue): Result<ResolvedAgent, AgentError>;
 };
