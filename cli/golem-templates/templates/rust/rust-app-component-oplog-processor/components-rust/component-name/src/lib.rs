@@ -4,7 +4,7 @@ mod bindings;
 
 use golem_rust::oplog_processor;
 use golem_rust::oplog_processor::exports::golem::api::oplog_processor::{
-    AccountInfo, ComponentId, OplogEntry, OplogIndex, WorkerId, WorkerMetadata,
+    AccountInfo, AgentId, AgentMetadata, ComponentId, OplogEntry, OplogIndex,
 };
 use std::collections::HashMap;
 
@@ -18,8 +18,8 @@ impl oplog_processor::exports::golem::api::oplog_processor::Guest for Component 
         account_info: AccountInfo,
         config: Vec<(String, String)>,
         component_id: ComponentId,
-        worker_id: WorkerId,
-        metadata: WorkerMetadata,
+        agent_id: AgentId,
+        metadata: AgentMetadata,
         first_entry_index: OplogIndex,
         entries: Vec<OplogEntry>,
     ) -> Result<(), String> {
