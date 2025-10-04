@@ -28,16 +28,19 @@ import {
 } from './errors';
 import { TaggedTypeMetadata } from '../types/taggedUnion';
 import { Value } from './Value';
+import { BinaryReference, TextReference } from 'golem:agent/common';
+import util from 'node:util';
 
 /**
  * Converts a TypeScript value to a Value based on the provided AnalysedType.
- * This can happen when returning a TypeScript value on a method,
- * or during RPC calls where parameters are converted to Value
+ * This TsValue corresponds to anything other than unstructured-text or unstructured-binary.
+ *
+ * Serialization ins mainly required at RPC boundary.
  *
  * @param tsValue
  * @param analysedType
  */
-export function serialize(
+export function serializeDefaultTsValue(
   tsValue: any,
   analysedType: AnalysedType,
 ): Either.Either<Value, string> {
@@ -127,7 +130,7 @@ export function serialize(
         unhandledTypeError(tsValue, Option.some('handle'), Option.none()),
       );
     case 'bool':
-      return handleBooleanType(tsValue);
+      return serializeBooleanTsValue(tsValue);
 
     case 'f64':
       if (typeof tsValue === 'number') {
@@ -167,7 +170,7 @@ export function serialize(
           kind: 'option',
         });
       } else {
-        return Either.map(serialize(tsValue, innerType), (v) => ({
+        return Either.map(serializeDefaultTsValue(tsValue, innerType), (v) => ({
           kind: 'option',
           value: v,
         }));
@@ -184,7 +187,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -202,7 +205,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -220,7 +223,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -238,7 +241,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -256,7 +259,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -274,7 +277,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -292,7 +295,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -310,7 +313,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -328,7 +331,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -346,7 +349,7 @@ export function serialize(
               return Either.map(
                 Either.all(
                   Array.from(tsValue).map((item) =>
-                    serialize(item, innerListType),
+                    serializeDefaultTsValue(item, innerListType),
                   ),
                 ),
                 (values) => ({
@@ -364,7 +367,9 @@ export function serialize(
 
       if (Array.isArray(tsValue)) {
         return Either.map(
-          Either.all(tsValue.map((item) => serialize(item, innerListType))),
+          Either.all(
+            tsValue.map((item) => serializeDefaultTsValue(item, innerListType)),
+          ),
           (values) => ({
             kind: 'list',
             value: values,
@@ -386,7 +391,12 @@ export function serialize(
 
         const valueType = innerListType.value.items[1];
 
-        return handleKeyValuePairs(tsValue, innerListType, keyType, valueType);
+        return serializeKeyValuePairs(
+          tsValue,
+          innerListType,
+          keyType,
+          valueType,
+        );
       }
 
       return Either.left(typeMismatchInSerialize(tsValue, analysedType));
@@ -405,13 +415,13 @@ export function serialize(
         }
       }
 
-      return handleTupleType(tsValue, analysedTypeTupleElems);
+      return serializeTupleTsValue(tsValue, analysedTypeTupleElems);
 
     case 'variant':
       const variantTypes = analysedType.value.cases;
       const taggedTypes = analysedType.taggedTypes;
 
-      return handleVariant(tsValue, taggedTypes, variantTypes);
+      return serializeUnionTsValue(tsValue, taggedTypes, variantTypes);
 
     case 'enum':
       if (
@@ -433,7 +443,7 @@ export function serialize(
     case 'record':
       const nameTypePairs = analysedType.value.fields;
 
-      return handleObject(tsValue, analysedType, nameTypePairs);
+      return serializeObjectTsValue(tsValue, analysedType, nameTypePairs);
 
     case 'result':
       const okType = analysedType.value.ok;
@@ -456,12 +466,15 @@ export function serialize(
             return Either.left(typeMismatchInSerialize(tsValue, analysedType));
           }
 
-          return Either.map(serialize(tsValue[okValueName], okType), (v) => ({
-            kind: 'result',
-            value: {
-              ok: v,
-            },
-          }));
+          return Either.map(
+            serializeDefaultTsValue(tsValue[okValueName], okType),
+            (v) => ({
+              kind: 'result',
+              value: {
+                ok: v,
+              },
+            }),
+          );
         }
 
         return Either.right({
@@ -476,12 +489,15 @@ export function serialize(
             return Either.left(typeMismatchInSerialize(tsValue, analysedType));
           }
 
-          return Either.map(serialize(tsValue[errValueName], errType), (v) => ({
-            kind: 'result',
-            value: {
-              err: v,
-            },
-          }));
+          return Either.map(
+            serializeDefaultTsValue(tsValue[errValueName], errType),
+            (v) => ({
+              kind: 'result',
+              value: {
+                err: v,
+              },
+            }),
+          );
         }
 
         return Either.right({
@@ -496,7 +512,233 @@ export function serialize(
   }
 }
 
-function handleBooleanType(tsValue: any): Either.Either<Value, string> {
+export function serializeBinaryReferenceTsValue(tsValue: any): Value {
+  const binaryReference = castTsValueToBinaryReference(tsValue);
+
+  switch (binaryReference.tag) {
+    case 'url':
+      return {
+        kind: 'variant',
+        caseIdx: 0,
+        caseValue: { kind: 'string', value: binaryReference.val },
+      };
+
+    case 'inline':
+      return {
+        kind: 'variant',
+        caseIdx: 1,
+        caseValue: {
+          kind: 'record',
+          value: [
+            {
+              kind: 'list',
+              value: Array.from(binaryReference.val.data).map((b) => ({
+                kind: 'u8',
+                value: b,
+              })),
+            },
+            {
+              kind: 'record',
+              value: [
+                {
+                  kind: 'string',
+                  value: binaryReference.val.binaryType.mimeType,
+                },
+              ],
+            },
+          ],
+        },
+      };
+  }
+}
+
+export function serializeTextReferenceTsValue(tsValue: any): Value {
+  const textReference: TextReference = castTsValueToTextReference(tsValue);
+
+  switch (textReference.tag) {
+    case 'url':
+      return {
+        kind: 'variant',
+        caseIdx: 0,
+        caseValue: { kind: 'string', value: textReference.val },
+      };
+
+    case 'inline':
+      if (textReference.val.textType) {
+        return {
+          kind: 'variant',
+          caseIdx: 1,
+          caseValue: {
+            kind: 'record',
+            value: [
+              { kind: 'string', value: textReference.val.data },
+              {
+                kind: 'option',
+                value: {
+                  kind: 'record',
+                  value: [
+                    {
+                      kind: 'string',
+                      value: textReference.val.textType.languageCode,
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        };
+      }
+
+      return {
+        kind: 'variant',
+        caseIdx: 1,
+        caseValue: {
+          kind: 'record',
+          value: [
+            { kind: 'string', value: textReference.val.data },
+            { kind: 'option' },
+          ],
+        },
+      };
+  }
+}
+
+export function castTsValueToBinaryReference(tsValue: any): BinaryReference {
+  if (typeof tsValue === 'object') {
+    const keys = Object.keys(tsValue);
+
+    if (!keys.includes('tag')) {
+      throw new Error(
+        `Unable to cast value ${util.format(
+          tsValue,
+        )} to UnstructuredBinary. Missing 'tag' property.`,
+      );
+    }
+
+    const tag = tsValue['tag'];
+
+    if (typeof tag === 'string' && tag === 'url') {
+      if (keys.includes('val')) {
+        return {
+          tag: 'url',
+          val: tsValue['val'],
+        };
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            tsValue,
+          )} to UnstructuredBinary. Missing 'val' property for tag 'url'.`,
+        );
+      }
+    }
+
+    if (typeof tag === 'string' && tag === 'inline') {
+      if (keys.includes('val') && keys.includes('mimeType')) {
+        return {
+          tag: 'inline',
+          val: {
+            data: tsValue['val'],
+            binaryType: {
+              mimeType: tsValue['mimeType'],
+            },
+          },
+        };
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            tsValue,
+          )} to UnstructuredBinary. Missing 'val' property for tag 'inline'.`,
+        );
+      }
+    }
+
+    throw new Error(
+      `Unable to cast value ${util.format(
+        tsValue,
+      )} to UnstructuredBinary. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
+    );
+  }
+
+  throw new Error(
+    `Unable to cast value ${util.format(
+      tsValue,
+    )} to UnstructuredBinary. Expected an object with 'tag' and 'val' properties.`,
+  );
+}
+
+export function castTsValueToTextReference(value: any): TextReference {
+  if (typeof value === 'object') {
+    const keys = Object.keys(value);
+
+    if (!keys.includes('tag')) {
+      throw new Error(
+        `Unable to cast value ${util.format(
+          value,
+        )} to UnstructuredText. Missing 'tag' property.`,
+      );
+    }
+
+    const tag = value['tag'];
+
+    if (typeof tag === 'string' && tag === 'url') {
+      if (keys.includes('val')) {
+        return {
+          tag: 'url',
+          val: value['val'],
+        };
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            value,
+          )} to UnstructuredText. Missing 'val' property for tag 'url'.`,
+        );
+      }
+    }
+
+    if (typeof tag === 'string' && tag === 'inline') {
+      if (keys.includes('val')) {
+        if (keys.includes('languageCode')) {
+          return {
+            tag: 'inline',
+            val: {
+              data: value['val'],
+              textType: {
+                languageCode: value['languageCode'],
+              },
+            },
+          };
+        } else {
+          return {
+            tag: 'inline',
+            val: {
+              data: value['val'],
+            },
+          };
+        }
+      } else {
+        throw new Error(
+          `Unable to cast value ${util.format(
+            value,
+          )} to UnstructuredText. Missing 'val' property for tag 'inline'.`,
+        );
+      }
+    }
+
+    throw new Error(
+      `Unable to cast value ${util.format(
+        value,
+      )} to UnstructuredText. Invalid 'tag' property: ${tag}. Expected 'url' or 'inline'.`,
+    );
+  }
+
+  throw new Error(
+    `Unable to cast value ${util.format(
+      value,
+    )} to UnstructuredText. Expected an object with 'tag' and 'val' properties.`,
+  );
+}
+
+function serializeBooleanTsValue(tsValue: any): Either.Either<Value, string> {
   if (typeof tsValue === 'boolean') {
     return Either.right({
       kind: 'bool',
@@ -511,7 +753,7 @@ function handleBooleanType(tsValue: any): Either.Either<Value, string> {
   }
 }
 
-function handleKeyValuePairs(
+function serializeKeyValuePairs(
   tsValue: any,
   analysedType: AnalysedType,
   keyAnalysedType: AnalysedType,
@@ -524,8 +766,8 @@ function handleKeyValuePairs(
   const values = Either.all(
     Array.from(tsValue.entries()).map(([key, value]) =>
       Either.zipWith(
-        serialize(key, keyAnalysedType),
-        serialize(value, valueAnalysedType),
+        serializeDefaultTsValue(key, keyAnalysedType),
+        serializeDefaultTsValue(value, valueAnalysedType),
         (k, v) =>
           ({
             kind: 'tuple',
@@ -541,7 +783,7 @@ function handleKeyValuePairs(
   }));
 }
 
-function handleObject(
+function serializeObjectTsValue(
   tsValue: any,
   analysedType: AnalysedType,
   nameTypePairs: NameTypePair[],
@@ -599,7 +841,7 @@ function handleObject(
       return Either.left(typeMismatchInSerialize(tsValue, type));
     }
 
-    const fieldVal = serialize(tsValue[key], nameTypePair.typ);
+    const fieldVal = serializeDefaultTsValue(tsValue[key], nameTypePair.typ);
 
     if (Either.isLeft(fieldVal)) {
       return Either.left(fieldVal.val);
@@ -614,13 +856,13 @@ function handleObject(
   });
 }
 
-function handleVariant(
+function serializeUnionTsValue(
   tsValue: any,
   taggedTypes: TaggedTypeMetadata[],
   nameOptionTypePairs: NameOptionTypePair[],
 ): Either.Either<Value, string> {
   if (taggedTypes.length > 0) {
-    return handleTaggedTypedUnion(tsValue, nameOptionTypePairs);
+    return serializeTaggedUnionTsValue(tsValue, nameOptionTypePairs);
   }
 
   for (const [idx, variant] of nameOptionTypePairs.entries()) {
@@ -648,7 +890,7 @@ function handleVariant(
         kind: 'variant',
         caseIdx: idx,
         caseValue: Either.getOrThrowWith(
-          serialize(tsValue, analysedType),
+          serializeDefaultTsValue(tsValue, analysedType),
           (error) => new Error(`Internal Error: ${error}`),
         ),
       };
@@ -660,7 +902,7 @@ function handleVariant(
   return Either.left(unionTypeMatchError(nameOptionTypePairs, tsValue));
 }
 
-function handleTaggedTypedUnion(
+function serializeTaggedUnionTsValue(
   tsValue: any,
   nameOptionTypePairs: NameOptionTypePair[],
 ): Either.Either<Value, string> {
@@ -707,7 +949,7 @@ function handleTaggedTypedUnion(
         return Either.left(`Missing value correspond to the tag ${typeName}`);
       }
 
-      const innerValue = serialize(tsValue[valueKey], typeOption);
+      const innerValue = serializeDefaultTsValue(tsValue[valueKey], typeOption);
 
       return Either.map(innerValue, (result) => ({
         kind: 'variant',
@@ -720,7 +962,7 @@ function handleTaggedTypedUnion(
   return Either.left(unionTypeMatchError(nameOptionTypePairs, tsValue));
 }
 
-function handleTupleType(
+function serializeTupleTsValue(
   tsValue: any,
   analysedTypes: AnalysedType[],
 ): Either.Either<Value, string> {
@@ -739,7 +981,11 @@ function handleTupleType(
   }
 
   return Either.map(
-    Either.all(tsValue.map((item, idx) => serialize(item, analysedTypes[idx]))),
+    Either.all(
+      tsValue.map((item, idx) =>
+        serializeDefaultTsValue(item, analysedTypes[idx]),
+      ),
+    ),
     (values) => ({
       kind: 'tuple',
       value: values,

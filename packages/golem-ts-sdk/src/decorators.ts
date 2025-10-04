@@ -41,12 +41,8 @@ import { UnstructuredText } from './newTypes/textInput';
 import { UnstructuredBinary } from './newTypes/binaryInput';
 import * as Value from './internal/mapping/values/Value';
 import * as util from 'node:util';
-import { Result } from 'golem:rpc/types@0.2.2';
 import { TypeInfoInternal } from './internal/registry/typeInfoInternal';
-import {
-  convertBinaryReferenceToElementValue,
-  convertTextReferenceToElementValue,
-} from './internal/mapping/values/elementValue';
+import { convertTsValueToDataValue } from './internal/mapping/values/dataValue';
 
 /**
  *
@@ -757,7 +753,7 @@ function getAgentInternal(
         };
       }
 
-      const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
+      const returnTypeAnalysed = AgentMethodRegistry.getReturnType(
         agentClassName,
         methodName,
       );
@@ -774,61 +770,27 @@ function getAgentInternal(
         };
       }
 
-      switch (returnTypeAnalysed.tag) {
-        case 'analysed':
-          const returnValue = WitValue.fromTsValue(
-            methodResult,
-            returnTypeAnalysed.val,
-          );
+      // Converting the result from method back to data-value
+      const dataValueEither = convertTsValueToDataValue(
+        methodResult,
+        returnTypeAnalysed,
+      );
 
-          if (Either.isLeft(returnValue)) {
-            const agentError: AgentError = {
-              tag: 'invalid-type',
-              val: `Failed to serialize the return value from ${methodName}: ${returnValue.val}`,
-            };
+      if (Either.isLeft(dataValueEither)) {
+        const agentError = createCustomError(
+          `Failed to serialize the return value from ${methodName}: ${dataValueEither.val}`,
+        );
 
-            return {
-              tag: 'err',
-              val: agentError,
-            };
-          }
-
-          return {
-            tag: 'ok',
-            val: getDataValueFromReturnValueWit(returnValue.val),
-          };
-        case 'unstructured-text':
-          const unstructuredText =
-            convertTextReferenceToElementValue(methodResult);
-
-          const unstructuredTextValue: DataValue = {
-            tag: 'tuple',
-            val: [unstructuredText],
-          };
-
-          const dataValueResultText: Result<DataValue, AgentError> = {
-            tag: 'ok',
-            val: unstructuredTextValue,
-          };
-
-          return dataValueResultText;
-
-        case 'unstructured-binary':
-          const unstructuredBinary =
-            convertBinaryReferenceToElementValue(methodResult);
-
-          const unstructuredBinaryValue: DataValue = {
-            tag: 'tuple',
-            val: [unstructuredBinary],
-          };
-
-          const dataValueResult: Result<DataValue, AgentError> = {
-            tag: 'ok',
-            val: unstructuredBinaryValue,
-          };
-
-          return dataValueResult;
+        return {
+          tag: 'err',
+          val: agentError,
+        };
       }
+
+      return {
+        tag: 'ok',
+        val: dataValueEither.val,
+      };
     },
   };
 }

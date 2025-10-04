@@ -82,7 +82,7 @@ describe('AgentType look up', () => {
 
     AgentMethodRegistry.setPrompt(agentClassName, 'foo', 'sample prompt');
 
-    const lookupResult = AgentMethodRegistry.lookup(
+    const lookupResult = AgentMethodRegistry.get(
       new AgentClassName('AssistantAgent'),
     );
 

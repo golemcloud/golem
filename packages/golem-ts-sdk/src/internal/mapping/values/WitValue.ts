@@ -16,22 +16,35 @@ import { WitValue } from 'golem:rpc/types@0.2.2';
 import * as Either from '../../../newTypes/either';
 import * as Value from './Value';
 import { AnalysedType } from '../types/AnalysedType';
-import { serialize } from './serializer';
-import { deserialize } from './deserializer';
 import {
-  serializeBinaryReferenceToValue,
-  serializeTextReferenceToValue,
-} from './unstructured';
+  serializeBinaryReferenceTsValue,
+  serializeDefaultTsValue,
+  serializeTextReferenceTsValue,
+} from './serializer';
+import { deserialize } from './deserializer';
 
 export { WitValue } from 'golem:rpc/types@0.2.2';
 
-// Note: See `value.mapping.tests`
-export const fromTsValue = (
+export const fromTsValueDefault = (
   tsValue: any,
   analysedType: AnalysedType,
 ): Either.Either<WitValue, string> => {
-  const valueEither = serialize(tsValue, analysedType);
+  const valueEither = serializeDefaultTsValue(tsValue, analysedType);
   return Either.map(valueEither, Value.toWitValue);
+};
+
+// For RPC calls, we need wit-value representation of the binary reference (and not DataValue)
+export const fromTsValueTextReference = (tsValue: any): WitValue => {
+  const value = serializeTextReferenceTsValue(tsValue);
+
+  return Value.toWitValue(value);
+};
+
+// For RPC calls, we need wit-value representation of the binary reference (and not DataValue)
+export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
+  const value = serializeBinaryReferenceTsValue(tsValue);
+
+  return Value.toWitValue(value);
 };
 
 export const toTsValue = (
@@ -40,16 +53,4 @@ export const toTsValue = (
 ): any => {
   const value: Value.Value = Value.fromWitValue(witValue);
   return deserialize(value, expectedType);
-};
-
-export const fromTsValueTextReference = (tsValue: any): WitValue => {
-  const value = serializeTextReferenceToValue(tsValue);
-
-  return Value.toWitValue(value);
-};
-
-export const fromTsValueBinaryReference = (tsValue: any): WitValue => {
-  const value = serializeBinaryReferenceToValue(tsValue);
-
-  return Value.toWitValue(value);
 };

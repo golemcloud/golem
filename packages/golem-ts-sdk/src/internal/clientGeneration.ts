@@ -38,7 +38,7 @@ import { deserialize } from './mapping/values/deserializer';
 import {
   castTsValueToBinaryReference,
   castTsValueToTextReference,
-} from './mapping/values/unstructured';
+} from './mapping/values/serializer';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -105,7 +105,7 @@ function getMethodProxy(
 
   const functionName = `${agentClassName.asWit}.{${methodNameKebab}}`;
 
-  const returnTypeAnalysed = AgentMethodRegistry.lookupReturnType(
+  const returnTypeAnalysed = AgentMethodRegistry.getReturnType(
     agentClassName,
     methodName,
   );
@@ -130,7 +130,7 @@ function getMethodProxy(
 
         switch (typeInfo.tag) {
           case 'analysed':
-            return WitValue.fromTsValue(fnArg, typeInfo.val);
+            return WitValue.fromTsValueDefault(fnArg, typeInfo.val);
 
           case 'unstructured-text':
             return Either.right(WitValue.fromTsValueTextReference(fnArg));
@@ -246,6 +246,9 @@ function getWorkerId(
     return typeInfoInternal;
   });
 
+  // It's a bit odd that the agent-id creation takes a DataValue,
+  // while remote calls takes WitValue regardless of whether it is component-type
+  // or unstructured-types.
   const constructorParamWitValuesResult: Either.Either<ElementValue[], string> =
     Either.all(
       constructorArgs.map((arg, index) => {
@@ -254,7 +257,7 @@ function getWorkerId(
         switch (typeInfoInternal.tag) {
           case 'analysed':
             return Either.map(
-              WitValue.fromTsValue(arg, typeInfoInternal.val),
+              WitValue.fromTsValueDefault(arg, typeInfoInternal.val),
               (witValue) => {
                 let elementValue: ElementValue = {
                   tag: 'component-model',

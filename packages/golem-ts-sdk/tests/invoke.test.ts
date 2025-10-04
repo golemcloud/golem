@@ -50,15 +50,15 @@ import { DataValue, ElementValue } from 'golem:agent/common';
 import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
+import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
+import { deserializeDataValue } from '../src/decorators';
+import { UnstructuredText } from '../src';
+import { AgentClassName } from '../src';
 import {
   castTsValueToBinaryReference,
   castTsValueToTextReference,
-} from '../src/internal/mapping/values/unstructured';
-import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { deserializeDataValue } from '../src/decorators';
-import { convertTsValueToElementValue } from '../src/internal/mapping/values/elementValue';
-import { UnstructuredText } from '../src';
-import { AgentClassName } from '../src';
+} from '../src/internal/mapping/values/serializer';
+import { convertTsValueToDataValue } from '../src/internal/mapping/values/dataValue';
 
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -325,19 +325,19 @@ test('BarAgent can be successfully initiated', () => {
         }
 
         const interfaceWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(interfaceValue, arg0.val),
+          WitValue.fromTsValueDefault(interfaceValue, arg0.val),
           (error) => new Error(error),
         );
 
         const optionalStringWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(stringValue, arg1.val),
+          WitValue.fromTsValueDefault(stringValue, arg1.val),
           (error) => new Error(error),
         );
 
         expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
 
         const optionalUnionWit = Either.getOrThrowWith(
-          WitValue.fromTsValue(unionValue, arg2.val),
+          WitValue.fromTsValueDefault(unionValue, arg2.val),
           (error) => new Error(error),
         );
 
@@ -442,18 +442,13 @@ function initiateFooAgent(
     );
   }
 
-  const elementValue = Either.getOrThrowWith(
-    convertTsValueToElementValue(
+  const constructorParams = Either.getOrThrowWith(
+    convertTsValueToDataValue(
       constructorParam,
       constructorParamTypeInfoInternal,
     ),
     (error) => new Error(error),
   );
-
-  const constructorParams: DataValue = {
-    tag: 'tuple',
-    val: [elementValue],
-  };
 
   const agentInitiator = Option.getOrThrowWith(
     AgentInitiatorRegistry.lookup(FooAgentClassName.value),
@@ -518,7 +513,7 @@ function createInputDataValue(
       switch (paramAnalysedType.tag) {
         case 'analysed':
           const witValue = Either.getOrThrowWith(
-            WitValue.fromTsValue(value, paramAnalysedType.val),
+            WitValue.fromTsValueDefault(value, paramAnalysedType.val),
             (error) => new Error(error),
           );
           return {
@@ -561,7 +556,7 @@ function deserializeReturnValue(
     throw new Error(`Method ${methodName} not found in metadata`);
   }
 
-  const returnTypeAnalysedType = AgentMethodRegistry.lookupReturnType(
+  const returnTypeAnalysedType = AgentMethodRegistry.getReturnType(
     FooAgentClassName,
     methodName,
   );

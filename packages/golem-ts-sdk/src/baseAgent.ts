@@ -99,7 +99,7 @@ export class BaseAgent {
    * @returns A remote proxy instance of the agent
    *
    * @example
-   * const remoteClient = MyAgent.createRemote("arg1", "arg2") where `arg1`, `arg2` are the constructor arguments
+   * const remoteClient = MyAgent.get("arg1", "arg2") where `arg1`, `arg2` are the constructor arguments
    * validated at compile time.
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
@@ -110,6 +110,32 @@ export class BaseAgent {
   }
 }
 
+/**
+ * `WithRemoteMethods` is the type of the remote Agent
+ *
+ * Example:
+ *
+ * ```ts
+ * @agent()
+ * class MyAgent extends BaseAgent {
+ *
+ *    constructor(readonly input: string) {}
+ *
+ *    function foo(input: string): Promise<void> {}
+ * }
+ *
+ * // Creating a remote instance of MyAgent. Refer to `get` for more details
+ * const myAgent = MyAgent.get("my-constructor-input")
+ *
+ * // The type of myAgent is `WithRemoteMethods<MyAgent>` allowing you
+ * // to call extra functionalities such as the following.
+ *
+ * myAgent.foo("my-input"); // normal invocation
+ * myAgent.foo.trigger("my-input"); // fire and forget
+ * myAgent.foo.schedule(scheduleTime, "my-input") // schedule an invocation
+ *
+ * ```
+ */
 export type WithRemoteMethods<T> = {
   [K in keyof T]: T[K] extends (...args: infer A) => infer R
     ? RemoteMethod<A, Awaited<R>>

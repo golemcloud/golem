@@ -128,7 +128,7 @@ function fetchTypeFromBarAgent(
       method.returnType &&
       Type.getTypeName(method.returnType) === typeNameInTestData
     ) {
-      const returnType = AgentMethodRegistry.lookupReturnType(
+      const returnType = AgentMethodRegistry.getReturnType(
         BarAgentClassName,
         name,
       );

@@ -168,7 +168,7 @@ export function getAgentMethodSchema(
       const returnType: Type.Type = signature.returnType;
 
       const baseMeta =
-        AgentMethodRegistry.lookup(agentClassName)?.get(methodName) ?? {};
+        AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
 
       const inputSchemaEither = buildMethodInputSchema(
         agentClassName,
@@ -271,7 +271,7 @@ export function buildMethodInputSchema(
     ),
   );
 
-  const agentClass = AgentMethodRegistry.lookup(agentClassName);
+  const agentClass = AgentMethodRegistry.get(agentClassName);
 
   const isMultiModal = agentClass?.get(methodName)?.multimodal ?? false;
 

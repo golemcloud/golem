@@ -16,12 +16,6 @@
  * Globally unique ID of an `agent`.
  *
  * An AgentId can also be considered as the container-id in which the agent runs.
- * This is because an AgentId must be distinguished in terms of string representation
- * of an agent-type and its constructor parameters.
- *
- * TODO: Once the host exports a canonical way of constructing the worker-name (or container-name)
- * we should use it form the agent-id
- *
  */
 export class AgentId {
   readonly value: string;

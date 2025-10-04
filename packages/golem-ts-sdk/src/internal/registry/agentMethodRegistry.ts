@@ -42,11 +42,11 @@ export const AgentMethodRegistry = {
     }
   },
 
-  lookup(agentClassName: AgentClassName) {
+  get(agentClassName: AgentClassName) {
     return agentMethodRegistry.get(agentClassName.value);
   },
 
-  lookupReturnType(
+  getReturnType(
     agentClassName: AgentClassName,
     agentMethodName: string,
   ): TypeInfoInternal | undefined {
