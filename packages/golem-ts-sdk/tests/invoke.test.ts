@@ -545,7 +545,9 @@ function createInputDataValue(
 }
 
 // Only in tests, we end up having to convert the returned data-value of dynamic invoking,
-// back to ts-value
+// back to ts-value. This functionality will help ensure
+// the `DataValue` returned by invoke is a properly serialised version
+// of the typescript method result.
 function deserializeReturnValue(
   methodName: string,
   returnValue: DataValue,
