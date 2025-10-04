@@ -571,7 +571,11 @@ function deserializeReturnValue(
         deserializeDataValue(returnValue, [
           [
             'return-value',
-            [returnType, { tag: 'analysed', val: returnTypeAnalysedType.val }],
+            {
+              tag: 'analysed',
+              val: returnTypeAnalysedType.val,
+              tsType: returnType,
+            },
           ],
         ]),
         (v) => v[0],
@@ -581,10 +585,11 @@ function deserializeReturnValue(
         deserializeDataValue(returnValue, [
           [
             'return-value',
-            [
-              returnType,
-              { tag: 'unstructured-text', val: returnTypeAnalysedType.val },
-            ],
+            {
+              tag: 'unstructured-text',
+              val: returnTypeAnalysedType.val,
+              tsType: returnType,
+            },
           ],
         ]),
         (v) => v[0],
@@ -594,10 +599,11 @@ function deserializeReturnValue(
         deserializeDataValue(returnValue, [
           [
             'return-value',
-            [
-              returnType,
-              { tag: 'unstructured-binary', val: returnTypeAnalysedType.val },
-            ],
+            {
+              tag: 'unstructured-binary',
+              val: returnTypeAnalysedType.val,
+              tsType: returnType,
+            },
           ],
         ]),
         (v) => v[0],

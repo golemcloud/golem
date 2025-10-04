@@ -64,6 +64,7 @@ export function getConstructorDataSchema(
         AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
           tag: 'unstructured-text',
           val: textDescriptor.val,
+          tsType: paramType,
         });
 
         const elementSchema: ElementSchema = {
@@ -86,6 +87,7 @@ export function getConstructorDataSchema(
         AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
           tag: 'unstructured-binary',
           val: binaryDescriptor.val,
+          tsType: paramType,
         });
 
         const elementSchema: ElementSchema = {
@@ -114,6 +116,7 @@ export function getConstructorDataSchema(
         AgentConstructorParamRegistry.setType(agentClassName, paramInfo.name, {
           tag: 'analysed',
           val: analysedType,
+          tsType: paramType,
         });
 
         const elementSchema: ElementSchema = {
@@ -200,6 +203,7 @@ export function getAgentMethodSchema(
         AgentMethodRegistry.setReturnType(agentClassName, methodName, {
           tag: 'analysed',
           val: analysedType.val,
+          tsType: returnType,
         });
       } else {
         // Special handling for unstructured types to set metadata in the param registry
@@ -214,12 +218,14 @@ export function getAgentMethodSchema(
                 AgentMethodRegistry.setReturnType(agentClassName, methodName, {
                   tag: 'unstructured-text',
                   val: value.val,
+                  tsType: returnType,
                 });
                 break;
               case 'unstructured-binary':
                 AgentMethodRegistry.setReturnType(agentClassName, methodName, {
                   tag: 'unstructured-binary',
                   val: value.val,
+                  tsType: returnType,
                 });
                 break;
             }
@@ -406,7 +412,11 @@ function convertToElementSchema(
       agentClassName,
       methodName,
       parameterName,
-      { tag: 'unstructured-text', val: textDescriptor.val },
+      {
+        tag: 'unstructured-text',
+        val: textDescriptor.val,
+        tsType: parameterType,
+      },
     );
 
     const elementSchema: ElementSchema = {
@@ -430,7 +440,11 @@ function convertToElementSchema(
       agentClassName,
       methodName,
       parameterName,
-      { tag: 'unstructured-binary', val: binaryDescriptor.val },
+      {
+        tag: 'unstructured-binary',
+        val: binaryDescriptor.val,
+        tsType: parameterType,
+      },
     );
 
     const elementSchema: ElementSchema = {
@@ -449,7 +463,7 @@ function convertToElementSchema(
       agentClassName,
       methodName,
       parameterName,
-      { tag: 'analysed', val: analysedType },
+      { tag: 'analysed', val: analysedType, tsType: parameterType },
     );
 
     return {

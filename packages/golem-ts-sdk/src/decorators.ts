@@ -203,10 +203,8 @@ export function agent(customName?: string) {
 
     AgentTypeRegistry.register(agentClassName, agentType);
 
-    const constructorParamTypes:
-      | [string, [Type.Type, TypeInfoInternal]][]
-      | undefined = TypeMetadata.get(agentClassName.value)?.constructorArgs.map(
-      (arg) => {
+    const constructorParamTypes: [string, TypeInfoInternal][] | undefined =
+      TypeMetadata.get(agentClassName.value)?.constructorArgs.map((arg) => {
         const typeInfo = AgentConstructorParamRegistry.getParamType(
           agentClassName,
           arg.name,
@@ -218,9 +216,8 @@ export function agent(customName?: string) {
           );
         }
 
-        return [arg.name, [arg.type, typeInfo]];
-      },
-    );
+        return [arg.name, typeInfo];
+      });
 
     if (!constructorParamTypes) {
       throw new Error(
@@ -450,7 +447,7 @@ export function description(description: string) {
 
 export function deserializeDataValue(
   dataValue: DataValue,
-  paramTypes: [string, [Type.Type, TypeInfoInternal]][],
+  paramTypes: [string, TypeInfoInternal][],
 ): Either.Either<any[], string> {
   switch (dataValue.tag) {
     case 'tuple':
@@ -460,14 +457,14 @@ export function deserializeDataValue(
         elements.map((elem, idx) => {
           switch (elem.tag) {
             case 'unstructured-text':
-              const [type] = paramTypes[idx][1];
+              const nameAndType = paramTypes[idx];
 
               const unstructuredTextParamName = paramTypes[idx][0];
 
               const textRef = elem.val;
 
               const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(type);
+                getLanguageCodes(nameAndType[1].tsType);
 
               if (Either.isLeft(languageCodes)) {
                 throw new Error(
@@ -482,14 +479,13 @@ export function deserializeDataValue(
               );
 
             case 'unstructured-binary':
-              const unstructuredBinaryParamName = paramTypes[idx][0];
-
-              const [binaryType] = paramTypes[idx][1];
+              const unstructuredBinaryNameAndType = paramTypes[idx];
 
               const binaryRef = elem.val;
 
-              const mimeTypes: Either.Either<string[], string> =
-                getMimeTypes(binaryType);
+              const mimeTypes: Either.Either<string[], string> = getMimeTypes(
+                unstructuredBinaryNameAndType[1].tsType,
+              );
 
               if (Either.isLeft(mimeTypes)) {
                 throw new Error(
@@ -498,23 +494,22 @@ export function deserializeDataValue(
               }
 
               return UnstructuredBinary.fromDataValue(
-                unstructuredBinaryParamName,
+                unstructuredBinaryNameAndType[0],
                 binaryRef,
                 mimeTypes.val,
               );
 
             case 'component-model':
-              const paramType = paramTypes[idx][1];
-              const typeInfo = paramType[1];
+              const [name, type] = paramTypes[idx];
 
-              if (typeInfo.tag !== 'analysed') {
+              if (type.tag !== 'analysed') {
                 throw new Error(
-                  `Internal error: Unknown parameter type for ${util.format(Value.fromWitValue(elem.val))} at index ${idx}`,
+                  `Internal error: Unknown parameter type for ${name}`,
                 );
               }
 
               const witValue = elem.val;
-              return Either.right(WitValue.toTsValue(witValue, typeInfo.val));
+              return Either.right(WitValue.toTsValue(witValue, type.val));
           }
         }),
       );
@@ -536,12 +531,12 @@ export function deserializeDataValue(
                 );
               }
 
-              const [type] = nameAndType[1];
+              const type = nameAndType[1];
 
               const textRef = elem.val;
 
               const languageCodes: Either.Either<string[], string> =
-                getLanguageCodes(type);
+                getLanguageCodes(type.tsType);
 
               if (Either.isLeft(languageCodes)) {
                 throw new Error(
@@ -566,11 +561,11 @@ export function deserializeDataValue(
                 );
               }
 
-              const [binaryType] = binaryTypeWithName[1];
+              const binaryType = binaryTypeWithName[1];
 
               const binaryRef = elem.val;
 
-              const mimeTypes = getMimeTypes(binaryType);
+              const mimeTypes = getMimeTypes(binaryType.tsType);
 
               if (Either.isLeft(mimeTypes)) {
                 throw new Error(
@@ -598,15 +593,14 @@ export function deserializeDataValue(
               }
 
               const paramType = param[1];
-              const typeInfo = paramType[1];
 
-              if (typeInfo.tag !== 'analysed') {
+              if (paramType.tag !== 'analysed') {
                 throw new Error(
                   `Internal error: Unknown parameter type for multimodal input ${util.format(Value.fromWitValue(elem.val))} with name ${name}`,
                 );
               }
 
-              return Either.right(WitValue.toTsValue(witValue, typeInfo.val));
+              return Either.right(WitValue.toTsValue(witValue, paramType.val));
           }
         }),
       );
@@ -665,19 +659,6 @@ function getAgentInternal(
           `Method ${methodName} not found on agent ${agentClassName.value}`,
         );
 
-      const agentTypeOpt = AgentTypeRegistry.get(agentClassName);
-
-      if (Option.isNone(agentTypeOpt)) {
-        const error: AgentError = {
-          tag: 'invalid-method',
-          val: `Agent type ${agentClassName} not found in registry.`,
-        };
-        return {
-          tag: 'err',
-          val: error,
-        };
-      }
-
       const methodParams = TypeMetadata.get(agentClassName.value)?.methods.get(
         methodName,
       )?.methodParams;
@@ -696,7 +677,6 @@ function getAgentInternal(
       const methodParamTypes = Array.from(methodParams.entries()).map(
         (param) => {
           const paramName = param[0];
-          const paramType = param[1];
 
           const paramTypeInfo = AgentMethodParamRegistry.getParamType(
             agentClassName,
@@ -706,14 +686,11 @@ function getAgentInternal(
 
           if (!paramTypeInfo) {
             throw new Error(
-              `Unsupported type for parameter ${paramName} in method ${methodName} of agent ${agentClassName.value}`,
+              `Internal error: Unsupported parameter ${paramName} in method ${methodName} of agent ${agentClassName.value}`,
             );
           }
 
-          return [paramName, [paramType, paramTypeInfo]] as [
-            string,
-            [Type.Type, TypeInfoInternal],
-          ];
+          return [paramName, paramTypeInfo] as [string, TypeInfoInternal];
         },
       );
 
@@ -736,6 +713,19 @@ function getAgentInternal(
         agentInstance,
         deserializedArgs.val,
       );
+
+      const agentTypeOpt = AgentTypeRegistry.get(agentClassName);
+
+      if (Option.isNone(agentTypeOpt)) {
+        const error: AgentError = {
+          tag: 'invalid-method',
+          val: `Agent type ${agentClassName} not found in registry.`,
+        };
+        return {
+          tag: 'err',
+          val: error,
+        };
+      }
 
       const methodSignature = agentTypeOpt.val.methods.find(
         (m) => m.name === methodName,

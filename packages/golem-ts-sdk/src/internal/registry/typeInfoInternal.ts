@@ -14,10 +14,11 @@
 
 import { BinaryDescriptor, TextDescriptor } from 'golem:agent/common';
 import { AnalysedType } from '../mapping/types/AnalysedType';
+import { Type } from '@golemcloud/golem-ts-types-core';
 
 // For all types except unstructured-*, `AnalysedType` has the max details.
 // There is no AnalysedType for unstructured-text/binary
 export type TypeInfoInternal =
-  | { tag: 'analysed'; val: AnalysedType }
-  | { tag: 'unstructured-text'; val: TextDescriptor }
-  | { tag: 'unstructured-binary'; val: BinaryDescriptor };
+  | { tag: 'analysed'; val: AnalysedType; tsType: Type.Type }
+  | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
+  | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type };
