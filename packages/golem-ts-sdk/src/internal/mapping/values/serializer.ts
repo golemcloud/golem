@@ -32,13 +32,14 @@ import { BinaryReference, TextReference } from 'golem:agent/common';
 import util from 'node:util';
 
 /**
- * Converts a TypeScript value to a Value based on the provided AnalysedType.
- * This TsValue corresponds to anything other than unstructured-text or unstructured-binary.
+ * Converts a TypeScript value to a `Value` (one level before it becomes WitValue)
+ * based on the provided AnalysedType.
  *
- * Serialization ins mainly required at RPC boundary.
+ * Serialization of a TypeScript mainly required at RPC boundary
+ * as well as when a result of a method needs to be sent through to golem executor.
  *
- * @param tsValue
- * @param analysedType
+ * @param tsValue The TypeScript value that exists as `any` type, which represents anything other than unstructured-text or unstructured-binary.
+ * @param analysedType The expected AnalysedType of the typescript value. There is no `AnalysedType` as such for unstructured-text or unstructured-binary.
  */
 export function serializeDefaultTsValue(
   tsValue: any,
