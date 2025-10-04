@@ -544,6 +544,8 @@ function createInputDataValue(
   };
 }
 
+// Only in tests, we end up having to convert the returned data-value of dynamic invoking,
+// back to ts-value
 function deserializeReturnValue(
   methodName: string,
   returnValue: DataValue,
