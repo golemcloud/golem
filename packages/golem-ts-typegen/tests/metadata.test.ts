@@ -34,6 +34,7 @@ import {
 
 import { Type } from "@golemcloud/golem-ts-types-core";
 
+// While SDK tests some of these tests repeated within its context, these shouldn't be removed
 describe("golem-ts-typegen can work correctly read types from .metadata directory", () => {
   it("track interface type", () => {
     const stringType = getStringType();

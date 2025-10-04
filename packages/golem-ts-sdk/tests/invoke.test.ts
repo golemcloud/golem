@@ -51,14 +51,16 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { deserializeDataValue } from '../src/decorators';
 import { UnstructuredText } from '../src';
 import { AgentClassName } from '../src';
 import {
   castTsValueToBinaryReference,
   castTsValueToTextReference,
 } from '../src/internal/mapping/values/serializer';
-import { convertTsValueToDataValue } from '../src/internal/mapping/values/dataValue';
+import {
+  deserializeDataValue,
+  serializeToDataValue,
+} from '../src/internal/mapping/values/dataValue';
 
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -443,10 +445,7 @@ function initiateFooAgent(
   }
 
   const constructorParams = Either.getOrThrowWith(
-    convertTsValueToDataValue(
-      constructorParam,
-      constructorParamTypeInfoInternal,
-    ),
+    serializeToDataValue(constructorParam, constructorParamTypeInfoInternal),
     (error) => new Error(error),
   );
 
@@ -544,14 +543,15 @@ function createInputDataValue(
   };
 }
 
-// Only in tests, we end up having to convert the returned data-value of dynamic invoking,
-// back to ts-value. This functionality will help ensure
+// Only in tests, we end up having to convert the result of dynamic invoke back to typescript value.
+// In reality, only constructor arguments and method arugments which comes in as data-value is converted to
+// a typescript value. This functionality will help ensure
 // the `DataValue` returned by invoke is a properly serialised version
 // of the typescript method result.
 function deserializeReturnValue(
   methodName: string,
   returnValue: DataValue,
-): Either.Either<any[], string> {
+): Either.Either<any, string> {
   const returnType = TypeMetadata.get(FooAgentClassName.value)?.methods.get(
     methodName,
   )?.returnType;
@@ -569,50 +569,16 @@ function deserializeReturnValue(
     throw new Error(`Unsupported return type for method ${methodName}`);
   }
 
-  switch (returnTypeAnalysedType.tag) {
-    case 'analysed':
-      return Either.map(
-        deserializeDataValue(returnValue, [
-          [
-            'return-value',
-            {
-              tag: 'analysed',
-              val: returnTypeAnalysedType.val,
-              tsType: returnType,
-            },
-          ],
-        ]),
-        (v) => v[0],
-      );
-    case 'unstructured-text':
-      return Either.map(
-        deserializeDataValue(returnValue, [
-          [
-            'return-value',
-            {
-              tag: 'unstructured-text',
-              val: returnTypeAnalysedType.val,
-              tsType: returnType,
-            },
-          ],
-        ]),
-        (v) => v[0],
-      );
-    case 'unstructured-binary':
-      return Either.map(
-        deserializeDataValue(returnValue, [
-          [
-            'return-value',
-            {
-              tag: 'unstructured-binary',
-              val: returnTypeAnalysedType.val,
-              tsType: returnType,
-            },
-          ],
-        ]),
-        (v) => v[0],
-      );
-  }
+  const result = deserializeDataValue(returnValue, [
+    {
+      parameterName: 'return-value',
+      parameterTypeInfo: returnTypeAnalysedType,
+    },
+  ]);
+
+  // typescript compiles even if you don't index it by 0
+  // any[] === any
+  return Either.map(result, (r) => r[0]);
 }
 
 function overrideSelfMetadataImpl(agentClassName: AgentClassName) {
