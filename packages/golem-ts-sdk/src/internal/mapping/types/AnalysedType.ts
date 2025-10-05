@@ -17,7 +17,7 @@ import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
-import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './string-format';
+import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './stringFormat';
 import { getTaggedUnion, getUnionOfLiterals, TaggedTypeMetadata, UserDefinedResultType } from './taggedUnion';
 
 type TsType = CoreType.Type;

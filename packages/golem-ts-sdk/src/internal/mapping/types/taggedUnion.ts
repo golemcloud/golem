@@ -15,7 +15,7 @@
 import { Type } from '@golemcloud/golem-ts-types-core';
 import * as Either from "../../../newTypes/either";
 import * as Option from "../../../newTypes/option";
-import { isNumberString, trimQuotes } from './string-format';
+import { isNumberString, trimQuotes } from './stringFormat';
 import { TagKeyWords } from './keywords';
 
 export type TsType = Type.Type;

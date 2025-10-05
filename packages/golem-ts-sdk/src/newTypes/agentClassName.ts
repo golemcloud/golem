@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { convertTypeNameToKebab } from '../internal/mapping/types/string-format';
+import { convertTypeNameToKebab } from '../internal/mapping/types/stringFormat';
 
 export class AgentClassName {
   readonly value: string;
