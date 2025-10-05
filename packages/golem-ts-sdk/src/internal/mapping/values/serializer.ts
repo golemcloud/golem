@@ -29,7 +29,7 @@ import {
 import { TaggedTypeMetadata } from '../types/taggedUnion';
 import { Value } from './Value';
 import { BinaryReference, TextReference } from 'golem:agent/common';
-import util from 'node:util';
+import * as util from 'node:util';
 
 /**
  * Converts a TypeScript value to a `Value` (one level before it becomes WitValue)

@@ -29,7 +29,7 @@ import {
 import { getLanguageCodes, getMimeTypes } from '../../schema';
 import { UnstructuredText } from '../../../newTypes/textInput';
 import { UnstructuredBinary } from '../../../newTypes/binaryInput';
-import util from 'node:util';
+import * as util from 'node:util';
 
 import * as Value from '../values/Value';
 
