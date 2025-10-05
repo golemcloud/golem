@@ -18,7 +18,7 @@ export type TypeMappingScope = {
   scope: 'interface' | 'object' | 'method' | 'constructor';
   name: string;
   parameterName: string
-  questionMarkOptional: boolean
+  hasQuestionMark: boolean
 }
   | {
   scope: 'others';
@@ -26,10 +26,10 @@ export type TypeMappingScope = {
 };
 
 export const TypeMappingScope = {
-  isQuestionMarkOptionalParam(scope: TypeMappingScope) {
+  isOptional(scope: TypeMappingScope) {
     return (scope.scope === 'interface' ||
       scope.scope === 'object' ||
-      scope.scope === 'method' || scope.scope === 'constructor') && scope.questionMarkOptional;
+      scope.scope === 'method' || scope.scope === 'constructor') && scope.hasQuestionMark;
   },
 
   paramName(scope: TypeMappingScope): Option.Option<string> {
@@ -48,7 +48,7 @@ export const TypeMappingScope = {
       scope: 'interface',
       name,
       parameterName,
-      questionMarkOptional,
+      hasQuestionMark: questionMarkOptional,
     };
   },
 
@@ -57,7 +57,7 @@ export const TypeMappingScope = {
       scope: 'object',
       name,
       parameterName,
-      questionMarkOptional,
+      hasQuestionMark: questionMarkOptional,
     };
   },
 
@@ -66,7 +66,7 @@ export const TypeMappingScope = {
       scope: 'method',
       name,
       parameterName,
-      questionMarkOptional,
+      hasQuestionMark: questionMarkOptional,
     };
   },
 
@@ -75,7 +75,7 @@ export const TypeMappingScope = {
       scope: 'constructor',
       name: name,
       parameterName: parameterName,
-      questionMarkOptional,
+      hasQuestionMark: questionMarkOptional,
     }
 
   },
