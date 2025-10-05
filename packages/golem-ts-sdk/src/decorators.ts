@@ -251,11 +251,11 @@ export function agent(customName?: string) {
 
         const instance = new ctor(...deserializedConstructorArgs.val);
 
-        const containerName = getSelfMetadata().workerId.workerName;
+        const rawAgentId = getSelfMetadata().agentId.agentId;
 
-        if (!containerName.startsWith(agentTypeName.asWit)) {
+        if (!rawAgentId.startsWith(agentTypeName.asWit)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", but got "${containerName}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", but got "${rawAgentId}"`,
           );
 
           return {
@@ -267,7 +267,7 @@ export function agent(customName?: string) {
         // When an agent is initiated using an initializer,
         // it runs in a worker, and the name of the worker is in-fact the agent-id
         // Example: weather-agent-{"US", celsius}
-        const uniqueAgentId = new AgentId(containerName);
+        const uniqueAgentId = new AgentId(rawAgentId);
 
         (instance as BaseAgent).getId = () => uniqueAgentId;
 

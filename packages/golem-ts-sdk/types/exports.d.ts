@@ -1,7 +1,7 @@
 declare module 'agent-guest' {
   import * as golemAgentCommon from 'golem:agent/common';
   /**
-   * Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+   * Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
    * when the new component incompatible with the old one.
    */
   export namespace saveSnapshot {
@@ -11,12 +11,12 @@ declare module 'agent-guest' {
     export function save(): Promise<Uint8Array>;
   }
   /**
-   * Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+   * Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
    * when the new component incompatible with the old one.
    */
   export namespace loadSnapshot {
     /**
-     * Tries to load a user-defined snapshot, setting up the worker's state based on it.
+     * Tries to load a user-defined snapshot, setting up the agent's state based on it.
      * The function can return with a failure to indicate that the update is not possible.
      * @throws string
      */

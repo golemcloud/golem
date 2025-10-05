@@ -583,18 +583,18 @@ function deserializeReturnValue(
 
 function overrideSelfMetadataImpl(agentClassName: AgentClassName) {
   vi.spyOn(GolemApiHostModule, 'getSelfMetadata').mockImplementation(() => ({
-    workerId: {
+    agentId: {
       componentId: {
         uuid: {
           highBits: 42n,
           lowBits: 99n,
         },
       },
-      workerName: agentClassName.asWit,
+      agentId: agentClassName.asWit,
     },
     args: [],
     env: [],
-    wasiConfigVars: [],
+    configVars: [],
     status: 'running',
     componentVersion: 0n,
     retryCount: 0n,

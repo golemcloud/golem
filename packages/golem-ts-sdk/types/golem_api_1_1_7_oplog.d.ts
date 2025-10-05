@@ -1,5 +1,5 @@
 /**
- * Host interface for enumerating and searching for worker oplogs
+ * Host interface for enumerating and searching for agent oplogs
  */
 declare module 'golem:api/oplog@1.1.7' {
   import * as golemApi117Context from 'golem:api/context@1.1.7';
@@ -7,11 +7,11 @@ declare module 'golem:api/oplog@1.1.7' {
   import * as golemRpc022Types from 'golem:rpc/types@0.2.2';
   import * as wasiClocks023WallClock from 'wasi:clocks/wall-clock@0.2.3';
   export class GetOplog {
-    constructor(workerId: WorkerId, start: OplogIndex);
+    constructor(agentId: AgentId, start: OplogIndex);
     getNext(): OplogEntry[] | undefined;
   }
   export class SearchOplog {
-    constructor(workerId: WorkerId, text: string);
+    constructor(agentId: AgentId, text: string);
     getNext(): [OplogIndex, OplogEntry][] | undefined;
   }
   export type Datetime = wasiClocks023WallClock.Datetime;
@@ -23,20 +23,20 @@ declare module 'golem:api/oplog@1.1.7' {
   export type ProjectId = golemApi117Host.ProjectId;
   export type RetryPolicy = golemApi117Host.RetryPolicy;
   export type Uuid = golemApi117Host.Uuid;
-  export type WorkerId = golemApi117Host.WorkerId;
+  export type AgentId = golemApi117Host.AgentId;
   export type Attribute = golemApi117Context.Attribute;
   export type AttributeValue = golemApi117Context.AttributeValue;
   export type SpanId = golemApi117Context.SpanId;
   export type TraceId = golemApi117Context.TraceId;
   export type WrappedFunctionType = 
   /**
-   * The side-effect reads from the worker's local state (for example local file system,
+   * The side-effect reads from the agent's local state (for example local file system,
    * random generator, etc.)
    */
   {
     tag: 'read-local'
   } |
-  /** The side-effect writes to the worker's local state (for example local file system) */
+  /** The side-effect writes to the agent's local state (for example local file system) */
   {
     tag: 'write-local'
   } |
@@ -72,13 +72,13 @@ declare module 'golem:api/oplog@1.1.7' {
   };
   export type CreateParameters = {
     timestamp: Datetime;
-    workerId: WorkerId;
+    agentId: AgentId;
     componentVersion: ComponentVersion;
     args: string[];
     env: [string, string][];
     createdBy: AccountId;
     projectId: ProjectId;
-    parent?: WorkerId;
+    parent?: AgentId;
     componentSize: bigint;
     initialTotalLinearMemorySize: bigint;
     initialActivePlugins: PluginInstallationDescription[];
@@ -155,7 +155,7 @@ declare module 'golem:api/oplog@1.1.7' {
     functionName: string;
     input?: WitValue[];
   };
-  export type WorkerInvocation = 
+  export type AgentInvocation = 
   {
     tag: 'exported-function'
     val: ExportedFunctionInvocationParameters
@@ -164,9 +164,9 @@ declare module 'golem:api/oplog@1.1.7' {
     tag: 'manual-update'
     val: ComponentVersion
   };
-  export type PendingWorkerInvocationParameters = {
+  export type PendingAgentInvocationParameters = {
     timestamp: Datetime;
-    invocation: WorkerInvocation;
+    invocation: AgentInvocation;
   };
   export type UpdateDescription = 
   /** Automatic update by replaying the oplog on the new version */
@@ -198,16 +198,16 @@ declare module 'golem:api/oplog@1.1.7' {
     timestamp: Datetime;
     delta: bigint;
   };
-  export type WorkerResourceId = bigint;
+  export type AgentResourceId = bigint;
   export type CreateResourceParameters = {
     timestamp: Datetime;
-    resourceId: WorkerResourceId;
+    resourceId: AgentResourceId;
     name: string;
     owner: string;
   };
   export type DropResourceParameters = {
     timestamp: Datetime;
-    resourceId: WorkerResourceId;
+    resourceId: AgentResourceId;
     name: string;
     owner: string;
   };
@@ -265,38 +265,38 @@ declare module 'golem:api/oplog@1.1.7' {
     beginIndex: OplogIndex;
   };
   export type OplogEntry = 
-  /** The initial worker oplog entry */
+  /** The initial agent oplog entry */
   {
     tag: 'create'
     val: CreateParameters
   } |
-  /** The worker invoked a host function */
+  /** The agent invoked a host function */
   {
     tag: 'imported-function-invoked'
     val: ImportedFunctionInvokedParameters
   } |
-  /** The worker has been invoked */
+  /** The agent has been invoked */
   {
     tag: 'exported-function-invoked'
     val: ExportedFunctionInvokedParameters
   } |
-  /** The worker has completed an invocation */
+  /** The agent has completed an invocation */
   {
     tag: 'exported-function-completed'
     val: ExportedFunctionCompletedParameters
   } |
-  /** Worker suspended */
+  /** Agent suspended */
   {
     tag: 'suspend'
     val: Datetime
   } |
-  /** Worker failed */
+  /** Agent failed */
   {
     tag: 'error'
     val: ErrorParameters
   } |
   /**
-   * Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
+   * Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
    * more predictable.
    */
   {
@@ -304,7 +304,7 @@ declare module 'golem:api/oplog@1.1.7' {
     val: Datetime
   } |
   /**
-   * The worker needs to recover up to the given target oplog index and continue running from
+   * The agent needs to recover up to the given target oplog index and continue running from
    * the source oplog index from there
    * `jump` is an oplog region representing that from the end of that region we want to go back to the start and
    * ignore all recorded operations in between.
@@ -314,19 +314,19 @@ declare module 'golem:api/oplog@1.1.7' {
     val: JumpParameters
   } |
   /**
-   * Indicates that the worker has been interrupted at this point.
-   * Only used to recompute the worker's (cached) status, has no effect on execution.
+   * Indicates that the agent has been interrupted at this point.
+   * Only used to recompute the agent's (cached) status, has no effect on execution.
    */
   {
     tag: 'interrupted'
     val: Datetime
   } |
-  /** Indicates that the worker has been exited using WASI's exit function. */
+  /** Indicates that the agent has been exited using WASI's exit function. */
   {
     tag: 'exited'
     val: Datetime
   } |
-  /** Overrides the worker's retry policy */
+  /** Overrides the agent's retry policy */
   {
     tag: 'change-retry-policy'
     val: ChangeRetryPolicyParameters
@@ -362,12 +362,12 @@ declare module 'golem:api/oplog@1.1.7' {
     tag: 'end-remote-write'
     val: EndRemoteWriteParameters
   } |
-  /** An invocation request arrived while the worker was busy */
+  /** An invocation request arrived while the agent was busy */
   {
-    tag: 'pending-worker-invocation'
-    val: PendingWorkerInvocationParameters
+    tag: 'pending-agent-invocation'
+    val: PendingAgentInvocationParameters
   } |
-  /** An update request arrived and will be applied as soon the worker restarts */
+  /** An update request arrived and will be applied as soon the agent restarts */
   {
     tag: 'pending-update'
     val: PendingUpdateParameters
@@ -397,12 +397,12 @@ declare module 'golem:api/oplog@1.1.7' {
     tag: 'drop-resource'
     val: DropResourceParameters
   } |
-  /** The worker emitted a log message */
+  /** The agent emitted a log message */
   {
     tag: 'log'
     val: LogParameters
   } |
-  /** The worker's has been restarted, forgetting all its history */
+  /** The agent's has been restarted, forgetting all its history */
   {
     tag: 'restart'
     val: Datetime
@@ -417,7 +417,7 @@ declare module 'golem:api/oplog@1.1.7' {
     tag: 'deactivate-plugin'
     val: DeactivatePluginParameters
   } |
-  /** Revert a worker to a previous state */
+  /** Revert an agent to a previous state */
   {
     tag: 'revert'
     val: RevertParameters
