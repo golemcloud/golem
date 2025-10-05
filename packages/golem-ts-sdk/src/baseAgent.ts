@@ -111,7 +111,7 @@ export class BaseAgent {
 }
 
 /**
- * `WithRemoteMethods` is the type of the remote Agent
+ *  Wrapper type of the remote agent obtained through `get` method
  *
  * Example:
  *
@@ -124,8 +124,8 @@ export class BaseAgent {
  *    function foo(input: string): Promise<void> {}
  * }
  *
- * // Creating a remote instance of MyAgent. Refer to `get` for more details
- * const myAgent = MyAgent.get("my-constructor-input")
+ *
+ * const myAgent: WithRemoteMethods<MyAgent> = MyAgent.get("my-constructor-input")
  *
  * // The type of myAgent is `WithRemoteMethods<MyAgent>` allowing you
  * // to call extra functionalities such as the following.
