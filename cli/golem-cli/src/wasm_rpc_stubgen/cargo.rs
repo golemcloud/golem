@@ -527,6 +527,12 @@ pub fn regenerate_cargo_package_component(
         }
     }
 
+    #[cfg(windows)]
+    fs::write(cargo_toml_path, manifest.to_string()
+       .replace("\n", "\r\n")
+    )?;
+
+    #[cfg(not(windows))]
     fs::write(cargo_toml_path, manifest.to_string())?;
 
     Ok(())

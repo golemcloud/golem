@@ -4173,6 +4173,7 @@ dependencies = [
  "golem-rib",
  "golem-rib-repl",
  "golem-templates",
+ "golem-test-framework",
  "golem-wasm-ast",
  "golem-wasm-rpc",
  "golem-wasm-rpc-derive",
