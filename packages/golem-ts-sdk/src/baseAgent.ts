@@ -116,6 +116,9 @@ export class BaseAgent {
  * Example:
  *
  * ```ts
+ *
+ * const myAgent: WithRemoteMethods<MyAgent> = MyAgent.get("my-constructor-input")
+ *
  * @agent()
  * class MyAgent extends BaseAgent {
  *
@@ -123,9 +126,6 @@ export class BaseAgent {
  *
  *    function foo(input: string): Promise<void> {}
  * }
- *
- *
- * const myAgent: WithRemoteMethods<MyAgent> = MyAgent.get("my-constructor-input")
  *
  * // The type of myAgent is `WithRemoteMethods<MyAgent>` allowing you
  * // to call extra functionalities such as the following.
