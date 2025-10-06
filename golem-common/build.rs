@@ -55,7 +55,9 @@ fn append_write_git_describe_tags_hook(file: &File) -> SdResult<()> {
 }
 
 fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
-    let output = Command::new("git").args(["describe", "--tags"]).output()?;
+    let output = Command::new("git")
+        .args(["describe", "--tags", "--match", "v*"])
+        .output()?;
 
     let version = {
         if !output.status.success() {

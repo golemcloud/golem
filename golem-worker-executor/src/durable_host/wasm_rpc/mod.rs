@@ -45,7 +45,7 @@ use golem_wasm_rpc::golem_rpc_0_2_x::types::{
 };
 use golem_wasm_rpc::{
     CancellationTokenEntry, FutureInvokeResultEntry, HostWasmRpc, SubscribeAny, Value,
-    ValueAndType, WasmRpcEntry, WitType, WitValue,
+    ValueAndType, WasmRpcEntry, WitValue,
 };
 use std::any::Any;
 use std::collections::BTreeMap;
@@ -61,7 +61,7 @@ use wasmtime_wasi::subscribe;
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
+        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::AgentId,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
@@ -1091,22 +1091,6 @@ impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
         let uuid: uuid::Uuid = uuid.into();
         Ok(uuid.to_string())
     }
-
-    // NOTE: these extract functions are only added as a workaround for the fact that the binding
-    // generator does not include types that are not used in any exported _functions_
-    async fn extract_value(
-        &mut self,
-        vnt: golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType,
-    ) -> anyhow::Result<WitValue> {
-        Ok(vnt.value)
-    }
-
-    async fn extract_type(
-        &mut self,
-        vnt: golem_wasm_rpc::golem_rpc_0_2_x::types::ValueAndType,
-    ) -> anyhow::Result<WitType> {
-        Ok(vnt.typ)
-    }
 }
 
 pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
@@ -1158,7 +1142,7 @@ async fn try_get_typed_parameters(
     params: &[WitValue],
 ) -> Vec<ValueAndType> {
     if let Ok(component) = components.get_metadata(component_id, None).await {
-        if let Ok(Some(function)) = component.metadata.find_function(function_name).await {
+        if let Ok(Some(function)) = component.metadata.find_function(function_name) {
             if function.analysed_export.parameters.len() == params.len() {
                 return params
                     .iter()

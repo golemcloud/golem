@@ -1,14 +1,16 @@
 #[allow(static_mut_refs)]
 mod bindings;
 
-use std::borrow::BorrowMut;
-use once_cell::sync::Lazy;
-use crate::bindings::golem::api::host::resolve_worker_id;
 use self::bindings::exports::it::scheduled_invocation_client_exports::client_api::Guest;
-use self::bindings::golem::api::host::{get_self_metadata};
+use self::bindings::golem::api::host::get_self_metadata;
 use self::bindings::it::scheduled_invocation_client_client::client_client::ClientApi;
-use self::bindings::it::scheduled_invocation_server_client::server_client::{ServerApi, WasiClocksDatetime};
+use self::bindings::it::scheduled_invocation_server_client::server_client::{
+    ServerApi, WasiClocksDatetime,
+};
 use self::bindings::wasi::clocks::wall_clock::now;
+use crate::bindings::golem::api::host::resolve_agent_id;
+use once_cell::sync::Lazy;
+use std::borrow::BorrowMut;
 
 const NANOS_PER_SECOND: u32 = 1_000_000_000;
 
@@ -16,14 +18,14 @@ struct State {
     global: u64,
 }
 
-static mut STATE: Lazy<State> = Lazy::new(|| State { global: 0 } );
+static mut STATE: Lazy<State> = Lazy::new(|| State { global: 0 });
 
 struct Component;
 
 impl Guest for Component {
     fn test1(component_name: String, worker_name: String) {
-        let worker_id = resolve_worker_id(&component_name, &worker_name).unwrap();
-        let server_api = ServerApi::custom(&worker_id);
+        let agent_id = resolve_agent_id(&component_name, &worker_name).unwrap();
+        let server_api = ServerApi::custom(&agent_id);
 
         let scheduled_for = increment_datetime(now(), 200_000_000);
         server_api.schedule_inc_global_by(1, scheduled_for);
@@ -31,7 +33,7 @@ impl Guest for Component {
     }
 
     fn test2(component_name: String, worker_name: String) {
-        let worker_id = resolve_worker_id(&component_name, &worker_name).unwrap();
+        let worker_id = resolve_agent_id(&component_name, &worker_name).unwrap();
         let server_api = ServerApi::custom(&&worker_id);
 
         let scheduled_for = increment_datetime(now(), 200_000_000);
@@ -40,8 +42,8 @@ impl Guest for Component {
     }
 
     fn test3() {
-        let worker_id = get_self_metadata().worker_id;
-        let client_api = ClientApi::custom(&worker_id);
+        let agent_id = get_self_metadata().agent_id;
+        let client_api = ClientApi::custom(&agent_id);
 
         let scheduled_for = increment_datetime(now(), 200_000_000);
         client_api.schedule_inc_global_by(1, scheduled_for);
@@ -63,7 +65,10 @@ fn increment_datetime(start: WasiClocksDatetime, nanos: u32) -> WasiClocksDateti
     let total_nanos = start.nanoseconds + nanos;
     let seconds = start.seconds + (total_nanos / NANOS_PER_SECOND) as u64;
     let nanoseconds = total_nanos % NANOS_PER_SECOND;
-    WasiClocksDatetime { seconds, nanoseconds }
+    WasiClocksDatetime {
+        seconds,
+        nanoseconds,
+    }
 }
 
 fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {

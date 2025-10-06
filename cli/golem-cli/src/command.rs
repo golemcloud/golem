@@ -571,6 +571,9 @@ pub enum GolemCliSubcommand {
         /// Optional script_file to run, when defined the repl will execute the script and exit
         #[clap(long, conflicts_with_all = ["script"])]
         script_file: Option<PathBuf>,
+        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
+        #[clap(long)]
+        disable_stream: bool,
     },
     /// Generate shell completion
     Completion {
@@ -688,6 +691,9 @@ pub mod shared_args {
         /// Hide timestamp in stream output
         #[clap(long, short = 'T')]
         pub stream_no_timestamp: bool,
+        /// Only show entries coming from the agent, no output about invocation markers and stream status
+        #[clap(long)]
+        pub logs_only: bool,
     }
 
     #[derive(Debug, Args, Clone)]

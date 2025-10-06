@@ -132,7 +132,7 @@ impl Guest for Component {
 
     fn fork_test(input: String) -> String {
         let port = std::env::var("PORT").unwrap_or("9999".to_string());
-        let self_name = get_self_metadata().worker_id.worker_name;
+        let self_name = get_self_metadata().agent_id.agent_id;
         let client = Client::builder().build().unwrap();
 
         let url = format!("http://localhost:{port}/fork-test/step1/{self_name}/{input}");

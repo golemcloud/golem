@@ -4,15 +4,16 @@ package golem:api@1.1.7;
 /// the durability and transactional guarantees the executor provides.
 interface host {
     use wasi:clocks/monotonic-clock@0.2.3.{duration};
-    use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, worker-id};
+    use golem:rpc/types@0.2.2.{component-id, uuid, value-and-type, agent-id};
+    use wasi:io/poll@0.2.3.{pollable};
 
-    /// An index into the persistent log storing all performed operations of a worker
+    /// An index into the persistent log storing all performed operations of an agent
     type oplog-index = u64;
 
     /// A promise ID is a value that can be passed to an external Golem API to complete that promise
-    /// from an arbitrary external source, while Golem workers can await for this completion.
+    /// from an arbitrary external source, while Golem agents can await for this completion.
     record promise-id {
-        worker-id: worker-id,
+        agent-id: agent-id,
         oplog-idx: oplog-index,
     }
 
@@ -31,7 +32,7 @@ interface host {
 
     /// Configures how the executor retries failures
     record retry-policy {
-        /// The maximum number of retries before the worker becomes permanently failed
+        /// The maximum number of retries before the agent becomes permanently failed
         max-attempts: u32,
         /// The minimum delay between retries (applied to the first retry)
         min-delay: duration,
@@ -43,25 +44,26 @@ interface host {
         max-jitter-factor: option<f64>
     }
 
-    /// Configurable persistence level for workers
+    /// Configurable persistence level for agents
     variant persistence-level {
         persist-nothing,
         persist-remote-side-effects,
         smart
     }
 
-    /// Describes how to update a worker to a different component version
+    /// Describes how to update an agent to a different component version
     enum update-mode {
-        /// Automatic update tries to recover the worker using the new component version
+        /// Automatic update tries to recover the agent using the new component version
         /// and may fail if there is a divergence.
         automatic,
 
         /// Manual, snapshot-based update uses a user-defined implementation of the `save-snapshot` interface
-        /// to store the worker's state, and a user-defined implementation of the `load-snapshot` interface to
+        /// to store the agent's state, and a user-defined implementation of the `load-snapshot` interface to
         /// load it into the new version.
         snapshot-based
     }
 
+    /// Operators used in filtering enumerated agents
     enum filter-comparator {
         equal,
         not-equal,
@@ -71,6 +73,7 @@ interface host {
         less
     }
 
+    /// Operators used on strings in filtering enumerated agents
     enum string-filter-comparator {
         equal,
         not-equal,
@@ -79,10 +82,11 @@ interface host {
         starts-with
     }
 
-    enum worker-status {
-        /// The worker is running an invoked function
+    /// The current status of an agent
+    enum agent-status {
+        /// The agent is running an invoked function
         running,
-        /// The worker is ready to run an invoked function
+        /// The agent is ready to run an invoked function
         idle,
         /// An invocation is active but waiting for something (sleeping, waiting for a promise)
         suspended,
@@ -90,115 +94,137 @@ interface host {
         interrupted,
         /// The last invocation failed and a retry was scheduled
         retrying,
-        /// The last invocation failed and the worker can no longer be used
+        /// The last invocation failed and the agent can no longer be used
         failed,
-        /// The worker exited after a successful invocation and can no longer be invoked
+        /// The agent exited after a successful invocation and can no longer be invoked
         exited,
     }
 
-    record worker-name-filter {
+    /// Describes a filter condition on agent IDs when enumerating agents
+    record agent-name-filter {
         comparator: string-filter-comparator,
         value: string
     }
 
-    record worker-status-filter {
+    /// Describes a filter condition on the agent status when enumerating agents
+    record agent-status-filter {
         comparator: filter-comparator,
-        value: worker-status
+        value: agent-status
     }
 
-    record worker-version-filter {
-        comparator: filter-comparator,
-        value: u64
-    }
-
-    record worker-created-at-filter {
+    /// Describes a filter condition on the component version when enumerating agents
+    record agent-version-filter {
         comparator: filter-comparator,
         value: u64
     }
 
-    record worker-env-filter {
+    /// Describes a filter condition on the agent's creation time when enumerating agents
+    record agent-created-at-filter {
+        comparator: filter-comparator,
+        value: u64
+    }
+
+    /// Describes a filter condition on the agent's environment variables when enumerating agents
+    record agent-env-filter {
         name: string,
         comparator: string-filter-comparator,
         value: string
     }
 
-    record worker-wasi-config-vars-filter {
+    /// Describes a filter condition on the agent's configuration variables when enumerating agents
+    record agent-config-vars-filter {
         name: string,
         comparator: string-filter-comparator,
         value: string
     }
 
-    variant worker-property-filter {
-        name(worker-name-filter),
-        status(worker-status-filter),
-        version(worker-version-filter),
-        created-at(worker-created-at-filter),
-        env(worker-env-filter),
-        wasi-config-vars(worker-wasi-config-vars-filter)
+    /// Describes one filter condition for enumerating agents
+    variant agent-property-filter {
+        name(agent-name-filter),
+        status(agent-status-filter),
+        version(agent-version-filter),
+        created-at(agent-created-at-filter),
+        env(agent-env-filter),
+        wasi-config-vars(agent-config-vars-filter)
     }
 
-    record worker-all-filter {
-        filters: list<worker-property-filter>
+    /// Combines multiple filter conditions with an `AND` relationship for enumerating agents
+    record agent-all-filter {
+        filters: list<agent-property-filter>
     }
 
-    record worker-any-filter {
-        filters: list<worker-all-filter>
+    /// Combines multiple groups of filter conditions with an `OR` relationship for enumerating agents
+    record agent-any-filter {
+        filters: list<agent-all-filter>
     }
 
-    record worker-metadata {
-        worker-id: worker-id,
+    /// Metadata about an agent
+    record agent-metadata {
+        /// The agent ID, consists of the component ID, agent type and agent parameters
+        agent-id: agent-id,
+        /// Command line arguments seen by the agent
         args: list<string>,
+        /// Environment variables seen by the agent
         env: list<tuple<string, string>>,
-        wasi-config-vars: list<tuple<string, string>>,
-        status: worker-status,
+        /// Configuration variables seen by the agent
+        config-vars: list<tuple<string, string>>,
+        /// The current agent status
+        status: agent-status,
+        /// The component version the agent is running with
         component-version: u64,
+        /// The agent's current retry count
         retry-count: u64
     }
 
-    resource get-workers {
-        constructor(component-id: component-id, filter: option<worker-any-filter>, precise: bool);
+    /// Creates an agent enumeration
+    resource get-agents {
+        /// Creates an agent enumeration request. It is going to enumerate all agents of all the agent types
+        /// defined in `component-id`, filtered by the conditions given by `filter`. If `precise` is true,
+        /// the server will calculate the most recent state of all the returned agents, otherwise the returned
+        /// metadata will be not guaranteed to be up-to-date.
+        constructor(component-id: component-id, filter: option<agent-any-filter>, precise: bool);
 
-        get-next: func() -> option<list<worker-metadata>>;
+        /// Retrieves the next batch of agent metadata.
+        get-next: func() -> option<list<agent-metadata>>;
     }
 
-    /// Target parameter for the `revert-worker` operation
-    variant revert-worker-target {
+    /// Target parameter for the `revert-agent` operation
+    variant revert-agent-target {
         /// Revert to a specific oplog index. The given index will be the last one to be kept.
         revert-to-oplog-index(oplog-index),
         /// Revert the last N invocations.
         revert-last-invocations(u64)
     }
 
-    /// Indicates which worker the code is running on after `fork`
+    /// Indicates which agent the code is running on after `fork`
     enum fork-result {
-        /// The original worker that called `fork`
+        /// The original agent that called `fork`
         original,
-        /// The new worker
+        /// The new agent
         forked
+    }
+
+    resource get-promise-result {
+      /// Returns a pollable that can be used to wait for the promise to become ready.j
+      subscribe: func() -> pollable;
+      /// Poll the result of the promise, returning none if it is not yet ready.
+      get: func() -> option<list<u8>>;
     }
 
     /// Create a new promise
     create-promise: func() -> promise-id;
 
-    /// Suspends execution until the given promise gets completed, and returns the payload passed to
-    /// the promise completion.
-    await-promise: func(promise-id: promise-id) -> list<u8>;
-
-    /// Checks whether the given promise is completed. If not, it returns None. If the promise is completed,
-    /// it returns the payload passed to the promise completion.
-    poll-promise: func(promise-id: promise-id) -> option<list<u8>>;
+    /// Gets a handle to the result of the promise. Can only be called in the same agent that orignally created the promise.
+    get-promise: func(promise-id: promise-id) -> get-promise-result;
 
     /// Completes the given promise with the given payload. Returns true if the promise was completed, false
-    /// if the promise was already completed. The payload is passed to the worker that is awaiting the promise.
+    /// if the promise was already completed. The payload is passed to the agent that is awaiting the promise.
     complete-promise: func(promise-id: promise-id, data: list<u8>) -> bool;
-
-    /// Deletes the given promise
-    delete-promise: func(promise-id: promise-id);
 
     /// Returns the current position in the persistent op log
     get-oplog-index: func() -> oplog-index;
 
-    /// Makes the current worker travel back in time and continue execution from the given position in the persistent
+    /// Makes the current agent travel back in time and continue execution from the given position in the persistent
     /// op log.
     set-oplog-index: func(oplog-idx: oplog-index);
 
@@ -216,17 +242,17 @@ interface host {
     /// with the same parameter will do nothing.
     mark-end-operation: func(begin: oplog-index);
 
-    /// Gets the current retry policy associated with the worker
+    /// Gets the current retry policy associated with the agent
     get-retry-policy: func() -> retry-policy;
 
-    /// Overrides the current retry policy associated with the worker. Following this call, `get-retry-policy` will return the
+    /// Overrides the current retry policy associated with the agent. Following this call, `get-retry-policy` will return the
     /// new retry policy.
     set-retry-policy: func(new-retry-policy: retry-policy);
 
-    /// Gets the worker's current persistence level.
+    /// Gets the agent's current persistence level.
     get-oplog-persistence-level: func() -> persistence-level;
 
-    /// Sets the worker's current persistence level. This can increase the performance of execution in cases where durable
+    /// Sets the agent's current persistence level. This can increase the performance of execution in cases where durable
     /// execution is not required.
     set-oplog-persistence-level: func(new-persistence-level: persistence-level);
 
@@ -235,7 +261,7 @@ interface host {
 
     /// Sets the current idempotence mode. The default is true.
     /// True means side-effects are treated idempotent and Golem guarantees at-least-once semantics.
-    /// In case of false the executor provides at-most-once semantics, failing the worker in case it is
+    /// In case of false the executor provides at-most-once semantics, failing the agent in case it is
     /// not known if the side effect was already executed.
     set-idempotence-mode: func(idempotent: bool);
 
@@ -244,21 +270,21 @@ interface host {
     /// to introduce idempotence.
     generate-idempotency-key: func() -> uuid;
 
-    /// Initiates an update attempt for the given worker. The function returns immediately once the request has been processed,
-    /// not waiting for the worker to get updated.
-    update-worker:  func(worker-id: worker-id, target-version: component-version, mode: update-mode);
+    /// Initiates an update attempt for the given agent. The function returns immediately once the request has been processed,
+    /// not waiting for the agent to get updated.
+    update-agent:  func(agent-id: agent-id, target-version: component-version, mode: update-mode);
 
-    /// Get current worker metadata
-    get-self-metadata: func() -> worker-metadata;
+    /// Get the current agent's metadata
+    get-self-metadata: func() -> agent-metadata;
 
-    /// Get worker metadata
-    get-worker-metadata: func(worker-id: worker-id) -> option<worker-metadata>;
+    /// Get agent metadata
+    get-agent-metadata: func(agent-id: agent-id) -> option<agent-metadata>;
 
-    /// Fork a worker to another worker at a given oplog index
-    fork-worker: func(source-worker-id: worker-id, target-worker-id: worker-id, oplog-idx-cut-off: oplog-index);
+    /// Fork an agent to another agent at a given oplog index
+    fork-agent: func(source-agent-id: agent-id, target-agent-id: agent-id, oplog-idx-cut-off: oplog-index);
 
-    /// Revert a worker to a previous state
-    revert-worker: func(worker-id: worker-id, revert-target: revert-worker-target);
+    /// Revert an agent to a previous state
+    revert-agent: func(agent-id: agent-id, revert-target: revert-agent-target);
 
     /// Get the component-id for a given component reference.
     /// Returns none when no component with the specified reference exists.
@@ -271,31 +297,31 @@ interface host {
     ///     3: "{account_id}/{project_name}/{component_name}"
     resolve-component-id: func(component-reference: string) -> option<component-id>;
 
-    /// Get the worker-id for a given component and worker name.
+    /// Get the agent-id for a given component and agent name.
     /// Returns none when no component for the specified reference exists.
-    resolve-worker-id: func(component-reference: string, worker-name: string) -> option<worker-id>;
+    resolve-agent-id: func(component-reference: string, agent-name: string) -> option<agent-id>;
 
-    /// Get the worker-id for a given component and worker name.
-    /// Returns none when no component for the specified component-reference or no worker with the specified worker-name exists.
-    resolve-worker-id-strict: func(component-reference: string, worker-name: string) -> option<worker-id>;
+    /// Get the agent-id for a given component and agent-name.
+    /// Returns none when no component for the specified component-reference or no agent with the specified agent-name exists.
+    resolve-agent-id-strict: func(component-reference: string, agent-name: string) -> option<agent-id>;
 
-    /// Forks the current worker at the current execution point. The new worker gets the `new-name` worker name,
-    /// and this worker continues running as well. The return value is going to be different in this worker and
-    /// the forked worker.
+    /// Forks the current agent at the current execution point. The new agent gets the `new-name` agent ID,
+    /// and this agent continues running as well. The return value is going to be different in this agent and
+    /// the forked agent.
     fork: func(new-name: string) -> fork-result;
 }
 
-/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
 /// when the new component incompatible with the old one.
 interface save-snapshot {
     /// Saves the component's state into a user-defined snapshot
     save: func() -> list<u8>;
 }
 
-/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+/// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
 /// when the new component incompatible with the old one.
 interface load-snapshot {
-    /// Tries to load a user-defined snapshot, setting up the worker's state based on it.
+    /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
     /// The function can return with a failure to indicate that the update is not possible.
     load: func(bytes: list<u8>) -> result<_, string>;
 }

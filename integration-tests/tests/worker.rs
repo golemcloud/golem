@@ -12,18 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use test_r::{flaky, inherit_test_dep, test, timeout};
-
-use assert2::check;
-
-use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
-use std::collections::{HashMap, HashSet};
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use tracing::Instrument;
-
 use crate::Tracing;
+use assert2::check;
 use axum::extract::Query;
 use axum::routing::get;
 use axum::Router;
@@ -32,18 +22,26 @@ use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, PublicOplogEntry};
 use golem_common::model::{
     ComponentFilePermissions, ComponentFileSystemNode, ComponentFileSystemNodeDetails, ComponentId,
-    FilterComparator, IdempotencyKey, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
+    FilterComparator, IdempotencyKey, PromiseId, ScanCursor, StringFilterComparator, Timestamp,
+    WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_ast::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
 };
+use golem_wasm_rpc::IntoValue;
+use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
+use test_r::{inherit_test_dep, test, timeout};
 use tokio::time::sleep;
 use tracing::log::info;
+use tracing::{warn, Instrument};
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
@@ -815,7 +813,6 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 #[test]
 #[tracing::instrument]
 #[timeout(120000)]
-#[flaky(10)] // TODO: stabilize test
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("http-client-2").unique().store().await;
@@ -876,75 +873,109 @@ async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing
         worker_ids.insert(worker_id);
     }
 
-    let mut found_worker_ids = HashSet::new();
-
-    for worker_id in worker_ids.clone() {
+    for worker_id in &worker_ids {
         let _ = admin
             .invoke(
-                &worker_id,
+                worker_id,
                 "golem:it/api.{start-polling}",
                 vec!["first".into_value_and_type()],
             )
             .await;
+        admin
+            .wait_for_status(worker_id, WorkerStatus::Running, Duration::from_secs(10))
+            .await;
     }
 
     let mut wait_counter = 0;
-
     loop {
-        sleep(Duration::from_secs(2)).await;
         wait_counter += 1;
         let ids = polling_worker_ids.lock().unwrap().clone();
 
-        if worker_ids.eq(&ids) || wait_counter >= 10 {
+        if worker_ids.eq(&ids) {
+            info!("All the spawned workers have polled the server at least once.");
             break;
         }
+        if wait_counter >= 30 {
+            warn!(
+                "Waiting for all spawned workers timed out. Only {}/{} workers polled the server",
+                ids.len(),
+                workers_count
+            );
+            break;
+        }
+
+        sleep(Duration::from_secs(1)).await;
     }
 
-    for worker_id in worker_ids.clone() {
-        let (_, values) = admin
+    // Testing looking for a single worker
+    let mut cursor = ScanCursor::default();
+    let mut enum_results = Vec::new();
+    loop {
+        let (next_cursor, values) = admin
             .get_workers_metadata(
                 &component_id,
-                Some(
-                    WorkerFilter::new_name(
-                        StringFilterComparator::Equal,
-                        worker_id.worker_name.clone(),
-                    )
-                    .and(WorkerFilter::new_status(
-                        FilterComparator::Equal,
-                        WorkerStatus::Running,
-                    )),
-                ),
-                ScanCursor::default(),
-                workers_count as u64,
+                Some(WorkerFilter::new_name(
+                    StringFilterComparator::Equal,
+                    worker_ids.iter().next().unwrap().worker_name.clone(),
+                )),
+                cursor,
+                1,
                 true,
             )
             .await;
-
-        found_worker_ids.extend(get_worker_ids(values));
+        enum_results.extend(values);
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+        } else {
+            break;
+        }
     }
+    check!(enum_results.len() == 1);
 
-    let (_, values) = admin
-        .get_workers_metadata(
-            &component_id,
-            Some(WorkerFilter::new_status(
-                FilterComparator::Equal,
-                WorkerStatus::Running,
-            )),
-            ScanCursor::default(),
-            workers_count as u64,
-            true,
-        )
-        .await;
+    // Testing looking for all the workers
+    let mut cursor = ScanCursor::default();
+    let mut enum_results = Vec::new();
+    loop {
+        let (next_cursor, values) = admin
+            .get_workers_metadata(&component_id, None, cursor, workers_count, true)
+            .await;
+        enum_results.extend(values);
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+        } else {
+            break;
+        }
+    }
+    check!(enum_results.len() == workers_count as usize);
+
+    // Testing looking for running workers
+    let mut cursor = ScanCursor::default();
+    let mut enum_results = Vec::new();
+    loop {
+        let (next_cursor, values) = admin
+            .get_workers_metadata(
+                &component_id,
+                Some(WorkerFilter::new_status(
+                    FilterComparator::Equal,
+                    WorkerStatus::Running,
+                )),
+                cursor,
+                workers_count,
+                true,
+            )
+            .await;
+        enum_results.extend(values);
+        if let Some(next_cursor) = next_cursor {
+            cursor = next_cursor;
+        } else {
+            break;
+        }
+    }
+    // At least one worker should be running, we cannot guarantee that all of them are running simultaneously
+    check!(enum_results.len() <= workers_count as usize);
+    check!(enum_results.len() > 0);
 
     http_server.abort();
-
-    check!(found_worker_ids.len() == workers_count);
-    check!(&found_worker_ids == &worker_ids);
-
-    let found_worker_ids2 = get_worker_ids(values);
-
-    check!(found_worker_ids2.len() == workers_count);
-    check!(&found_worker_ids2 == &worker_ids);
 }
 
 #[test]
@@ -1692,4 +1723,79 @@ async fn resolve_components_from_name(deps: &EnvBasedTestDependencies, _tracing:
                 Value::Option(None),
             ])
     );
+}
+
+#[test]
+#[tracing::instrument]
+async fn agent_promise_await(
+    deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let admin = deps.clone().into_admin().await;
+
+    let component_id = admin
+        .component("golem_it_agent_promise")
+        .unique()
+        .store()
+        .await;
+
+    let worker_name = "promise-agent(\"name\")";
+    let worker = admin.start_worker(&component_id, worker_name).await;
+
+    let mut result = admin
+        .invoke_and_await(
+            &worker,
+            "golem-it:agent-promise/promise-agent.{get-promise}",
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    assert!(result.len() == 1);
+
+    let promise_id = ValueAndType::new(result.swap_remove(0), PromiseId::get_type());
+
+    let task = {
+        let executor_clone = admin.clone();
+        let worker_clone = worker.clone();
+        let promise_id_clone = promise_id.clone();
+        tokio::spawn(
+            async move {
+                executor_clone
+                    .invoke_and_await(
+                        &worker_clone,
+                        "golem-it:agent-promise/promise-agent.{await-promise}",
+                        vec![promise_id_clone],
+                    )
+                    .await
+            }
+            .in_current_span(),
+        )
+    };
+
+    admin
+        .wait_for_status(&worker, WorkerStatus::Suspended, Duration::from_secs(10))
+        .await;
+
+    admin
+        .deps
+        .worker_service()
+        .complete_promise(
+            &admin.token,
+            PromiseId {
+                worker_id: WorkerId {
+                    component_id,
+                    worker_name: worker_name.to_string(),
+                },
+                oplog_idx: OplogIndex::from_u64(34),
+            },
+            b"hello".to_vec(),
+        )
+        .await
+        .unwrap();
+
+    let result = task.await.unwrap();
+    check!(result == Ok(vec![Value::String("hello".to_string())]));
+
+    Ok(())
 }

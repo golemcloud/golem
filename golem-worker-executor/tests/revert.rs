@@ -14,7 +14,8 @@
 
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use assert2::check;
+use assert2::{check, let_assert};
+use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::OplogIndex;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_test_framework::config::TestDependencies;
@@ -207,6 +208,71 @@ async fn revert_failed_worker(
     check!(result2.is_err());
     check!(result3.is_err());
     check!(result4.is_ok());
+}
+
+#[test]
+#[tracing::instrument]
+async fn revert_failed_worker_to_invoke_of_failed_inocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("failing-component").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "revert_failed_worker")
+        .await;
+
+    let result1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{add}",
+            vec![5u64.into_value_and_type()],
+        )
+        .await;
+
+    let result2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:component/api.{add}",
+            vec![50u64.into_value_and_type()],
+        )
+        .await;
+
+    let revert_target = {
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
+        tracing::warn!("oplog: {oplog:?}");
+        oplog
+            .iter()
+            .rfind(|op| matches!(op.entry, PublicOplogEntry::ExportedFunctionInvoked(_)))
+            .cloned()
+            .unwrap()
+    };
+
+    executor
+        .revert(
+            &worker_id,
+            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                last_oplog_index: revert_target.oplog_index,
+            }),
+        )
+        .await;
+
+    let result3 = executor
+        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
+        .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    check!(result1.is_ok());
+    check!(result2.is_err());
+    {
+        let_assert!(Err(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError { error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvocationFailed(golem_api_grpc::proto::golem::worker::v1::InvocationFailed { stderr, .. })) })) = result3);
+        assert2::assert!(stderr.contains("value is too large"));
+        assert2::assert!(!stderr.contains("Oplog"));
+    }
 }
 
 #[test]

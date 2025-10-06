@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::command::shared_args::DeployArgs;
+use crate::command::shared_args::{DeployArgs, StreamArgs};
 use crate::command_handler::Handlers;
-use crate::context::Context;
+use crate::context::{Context, RibReplState};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{logln, set_log_output, Output};
@@ -25,9 +25,10 @@ use crate::model::{
     ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
     WorkerName,
 };
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
+use golem_common::model::agent::AgentId;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
@@ -37,17 +38,22 @@ use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct RibReplHandler {
     ctx: Arc<Context>,
+    stream_logs: Arc<AtomicBool>,
 }
 
 impl RibReplHandler {
     pub fn new(ctx: Arc<Context>) -> Self {
-        Self { ctx }
+        Self {
+            ctx,
+            stream_logs: Arc::new(AtomicBool::new(true)),
+        }
     }
 
     pub async fn cmd_repl(
@@ -57,7 +63,11 @@ impl RibReplHandler {
         deploy_args: Option<&DeployArgs>,
         script: Option<String>,
         script_file: Option<PathBuf>,
+        stream_logs: bool,
     ) -> anyhow::Result<()> {
+        self.stream_logs
+            .store(stream_logs, std::sync::atomic::Ordering::Release);
+
         let script_input = {
             if let Some(script) = script {
                 Some(script)
@@ -107,35 +117,54 @@ impl RibReplHandler {
 
         // The REPL has to know about the custom instance parameters
         // to support creating instances using agent interface names.
-        let custom_instance_spec = component
-            .metadata
-            .agent_types()
-            .iter()
-            .map(|agent_type| {
-                rib::CustomInstanceSpec::new(
-                    agent_type.type_name.to_string(),
-                    agent_type.constructor.wit_arg_types(),
-                    Some(rib::InterfaceName {
-                        name: agent_type.type_name.to_string(),
-                        version: None,
-                    }),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut custom_instance_spec = Vec::new();
+
+        for agent_type in component.metadata.agent_types() {
+            let wrapper_function = component
+                .metadata
+                .find_wrapper_function_by_agent_constructor(&agent_type.type_name)
+                .map_err(|err| anyhow!(err))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Missing static WIT wrapper for constructor of agent type {}",
+                        agent_type.type_name
+                    )
+                })?;
+
+            custom_instance_spec.push(rib::CustomInstanceSpec {
+                instance_name: agent_type.wrapper_type_name(),
+                parameter_types: wrapper_function
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| p.typ.clone())
+                    .collect(),
+                interface_name: Some(rib::InterfaceName {
+                    name: agent_type.wrapper_type_name(),
+                    version: None,
+                }),
+            });
+        }
 
         self.ctx
-            .set_rib_repl_dependencies(ReplComponentDependencies {
-                component_dependencies: vec![ComponentDependency::new(
-                    component_dependency_key,
-                    component.metadata.exports().to_vec(),
-                )],
-                custom_instance_spec,
+            .set_rib_repl_state(RibReplState {
+                dependencies: ReplComponentDependencies {
+                    component_dependencies: vec![ComponentDependency::new(
+                        component_dependency_key,
+                        component.metadata.exports().to_vec(),
+                    )],
+                    custom_instance_spec,
+                },
+                component_metadata: component.metadata.clone(),
             })
             .await;
 
         let mut command_registry = CommandRegistry::default();
 
         command_registry.register(Agents);
+        command_registry.register(Logs {
+            stream_logs: self.stream_logs.clone(),
+        });
 
         let mut repl = RibRepl::bootstrap(RibReplConfig {
             history_file: Some(self.ctx.rib_repl_history_file().await?),
@@ -181,6 +210,51 @@ impl RibReplHandler {
 
         Ok(())
     }
+}
+
+pub struct Logs {
+    stream_logs: Arc<AtomicBool>,
+}
+
+impl Command for Logs {
+    type Input = bool;
+    type Output = bool;
+    type InputParseError = String;
+    type ExecutionError = ();
+
+    fn parse(
+        &self,
+        input: &str,
+        _repl_context: &ReplContext,
+    ) -> Result<Self::Input, Self::InputParseError> {
+        input
+            .parse::<bool>()
+            .map_err(|err| format!("Failed to parse parameter: {err}; must be 'true' or 'false'"))
+    }
+
+    fn execute(
+        &self,
+        input: Self::Input,
+        _repl_context: &mut ReplContext,
+    ) -> Result<Self::Output, Self::ExecutionError> {
+        self.stream_logs
+            .store(input, std::sync::atomic::Ordering::Release);
+        Ok(input)
+    }
+
+    fn print_output(&self, output: Self::Output, _repl_context: &ReplContext) {
+        if output {
+            println!("Log streaming enabled");
+        } else {
+            println!("Log streaming disabled");
+        }
+    }
+
+    fn print_input_parse_error(&self, error: Self::InputParseError, _repl_context: &ReplContext) {
+        println!("{}", error.red());
+    }
+
+    fn print_execution_error(&self, _error: Self::ExecutionError, _repl_context: &ReplContext) {}
 }
 
 pub struct Agents;
@@ -248,7 +322,13 @@ impl WorkerFunctionInvoke for RibReplHandler {
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let worker_name = WorkerName::from(worker_name);
+        let worker_name: WorkerName = AgentId::parse(
+            worker_name,
+            &self.ctx.get_rib_repl_component_metadata().await,
+        )
+        .map_err(|err| anyhow!(err))?
+        .to_string()
+        .into();
 
         let component = self
             .ctx
@@ -256,9 +336,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .component(
                 None,
                 component_id.into(),
-                Some(ComponentVersionSelection::ByWorkerName(&WorkerName(
-                    worker_name.to_string(),
-                ))),
+                Some(ComponentVersionSelection::ByWorkerName(&worker_name)),
             )
             .await?;
 
@@ -272,6 +350,16 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .map(|vat| vat.try_into().unwrap())
             .collect();
 
+        let stream_args = if self.stream_logs.load(std::sync::atomic::Ordering::Acquire) {
+            Some(StreamArgs {
+                stream_no_log_level: false,
+                stream_no_timestamp: false,
+                logs_only: true,
+            })
+        } else {
+            None
+        };
+
         let result = self
             .ctx
             .worker_handler()
@@ -282,7 +370,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
                 arguments,
                 IdempotencyKey::new(),
                 false,
-                None,
+                stream_args,
             )
             .await?
             .unwrap();

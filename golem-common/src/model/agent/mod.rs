@@ -14,12 +14,14 @@
 
 mod conversions;
 
+pub mod compact_value_formatter;
 #[cfg(feature = "agent-extraction")]
 pub mod extraction;
 #[cfg(feature = "protobuf")]
 mod protobuf;
 #[cfg(test)]
 mod tests;
+pub mod wit_naming;
 
 pub mod bindings {
     wasmtime::component::bindgen!({
@@ -34,19 +36,19 @@ pub mod bindings {
     });
 }
 
+use crate::model::agent::compact_value_formatter::ToCompactString;
+use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::model::ComponentId;
 use async_trait::async_trait;
 use base64::Engine;
 use bincode::{Decode, Encode};
 use golem_wasm_ast::analysis::analysed_type::{case, str, tuple, variant};
-use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair, TypeStr};
+use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::future::Future;
-use std::pin::Pin;
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.
@@ -60,47 +62,6 @@ pub struct AgentConstructor {
     pub description: String,
     pub prompt_hint: Option<String>,
     pub input_schema: DataSchema,
-}
-
-impl AgentConstructor {
-    pub fn wit_arg_types(&self) -> Vec<AnalysedType> {
-        match &self.input_schema {
-            DataSchema::Tuple(element_schemas) => element_schemas
-                .elements
-                .iter()
-                .map(|named_schema| Self::get_analysed_type(&named_schema.schema))
-                .collect::<Vec<AnalysedType>>(),
-            DataSchema::Multimodal(named_element_schemas) => {
-                // the value is wrapped in names
-                named_element_schemas
-                    .elements
-                    .iter()
-                    .map(|named_schema| {
-                        let name = &named_schema.name;
-
-                        let analysed_type = Self::get_analysed_type(&named_schema.schema);
-
-                        let name_and_type = NameOptionTypePair {
-                            name: name.clone(),
-                            typ: Some(analysed_type),
-                        };
-
-                        variant(vec![name_and_type])
-                    })
-                    .collect::<Vec<_>>()
-            }
-        }
-    }
-
-    fn get_analysed_type(schema: &ElementSchema) -> AnalysedType {
-        match schema {
-            ElementSchema::ComponentModel(component_model_elem_schema) => {
-                component_model_elem_schema.element_type.clone()
-            }
-            ElementSchema::UnstructuredText(_) => AnalysedType::Str(TypeStr),
-            ElementSchema::UnstructuredBinary(_) => AnalysedType::Str(TypeStr),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
@@ -171,6 +132,12 @@ pub struct AgentType {
     pub constructor: AgentConstructor,
     pub methods: Vec<AgentMethod>,
     pub dependencies: Vec<AgentDependency>,
+}
+
+impl AgentType {
+    pub fn wrapper_type_name(&self) -> String {
+        self.type_name.to_wit_naming()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
@@ -695,19 +662,24 @@ pub struct RegisteredAgentType {
 pub struct AgentId {
     pub agent_type: String,
     pub parameters: DataValue,
+    wrapper_agent_type: String,
 }
 
 impl AgentId {
-    pub async fn parse(
-        s: impl AsRef<str>,
-        resolver: impl AgentTypeResolver,
-    ) -> Result<Self, String> {
-        Self::parse_and_resolve_type(s, resolver)
-            .await
-            .map(|(agent_id, _)| agent_id)
+    pub fn new(agent_type: String, parameters: DataValue) -> Self {
+        let wrapper_agent_type = agent_type.to_wit_naming();
+        Self {
+            agent_type,
+            parameters,
+            wrapper_agent_type,
+        }
     }
 
-    pub async fn parse_and_resolve_type(
+    pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
+        Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
+    }
+
+    pub fn parse_and_resolve_type(
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
     ) -> Result<(Self, AgentType), String> {
@@ -715,11 +687,12 @@ impl AgentId {
 
         if let Some((agent_type, param_list)) = s.split_once('(') {
             if let Some(param_list) = param_list.strip_suffix(')') {
-                let agent_type = resolver.resolve_agent_type(agent_type).await?;
+                let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type)?;
                 let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
                 Ok((
                     AgentId {
                         agent_type: agent_type.type_name.clone(),
+                        wrapper_agent_type: agent_type.type_name.to_wit_naming(),
                         parameters: value,
                     },
                     agent_type,
@@ -743,35 +716,34 @@ impl AgentId {
             Err("Unexpected agent-id format - must be agent-type(...)".to_string())
         }
     }
+
+    pub fn wrapper_agent_type(&self) -> &str {
+        self.wrapper_agent_type.as_str()
+    }
 }
 
 impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.agent_type, self.parameters)
+        write!(
+            f,
+            "{}({})",
+            self.wrapper_agent_type,
+            self.parameters.to_compact_string()
+        )
     }
 }
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String>;
-}
-
-#[async_trait]
-impl<F> AgentTypeResolver for F
-where
-    F: for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<AgentType, String>> + 'a + Send>>
-        + Send
-        + Sync,
-{
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        self(agent_type).await
-    }
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String>;
 }
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        let result = self.find_agent_type(agent_type).await?;
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
+        let result = self
+            .find_agent_type_by_wrapper_name(agent_type)?
+            .to_wit_naming();
         result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

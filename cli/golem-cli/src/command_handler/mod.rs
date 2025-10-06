@@ -355,6 +355,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 deploy_args,
                 script,
                 script_file,
+                disable_stream,
             } => {
                 self.ctx
                     .rib_repl_handler()
@@ -364,6 +365,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         deploy_args.as_ref(),
                         script,
                         script_file,
+                        !disable_stream,
                     )
                     .await
             }
