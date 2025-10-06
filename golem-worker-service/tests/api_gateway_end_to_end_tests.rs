@@ -2833,22 +2833,29 @@ mod internal {
     }
 
     pub(crate) fn get_weather_agent_exports() -> Vec<AnalysedExport> {
-        // Exist in only amazon:shopping-cart/api1
-        let analysed_function_in_api1 = AnalysedFunction {
-            name: "get-weather".to_string(),
-            parameters: vec![AnalysedFunctionParameter {
-                name: "arg1".to_string(),
-                typ: str(),
-            }],
-            result: Some(AnalysedFunctionResult { typ: str() }),
-        };
-
-        let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+        let weather_agent_wrapper = AnalysedExport::Instance(AnalysedInstance {
             name: "my:agent/weather-agent".to_string(),
-            functions: vec![analysed_function_in_api1],
+            functions: vec![
+                AnalysedFunction {
+                    name: "initialize".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "location".to_string(),
+                        typ: str(),
+                    }],
+                    result: None,
+                },
+                AnalysedFunction {
+                    name: "get-weather".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: str(),
+                    }],
+                    result: Some(AnalysedFunctionResult { typ: str() }),
+                },
+            ],
         });
 
-        vec![analysed_export1]
+        vec![weather_agent_wrapper]
     }
 
     pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
