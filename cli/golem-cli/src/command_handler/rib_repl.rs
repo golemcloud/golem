@@ -111,6 +111,7 @@ impl RibReplHandler {
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
             component_id: component.versioned_component_id.component_id,
+            component_version: component.versioned_component_id.version,
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };

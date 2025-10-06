@@ -371,9 +371,9 @@ impl DefaultGatewayInputExecutor {
             None
         };
 
-        // We prefer to take idempotency key from the rib script,
-        // if that is not available we fall back to our custom header.
-        // If neither are available, the worker-executor will later generate an idempotency key.
+        // We prefer to take the idempotency key from the rib script,
+        // if that is not available, we fall back to our custom header.
+        // If neither is available, the worker-executor will later generate an idempotency key.
         let idempotency_key = if let Some(idempotency_key_compiled) = idempotency_key_compiled {
             let result = self
                 .evaluate_idempotency_key_rib_script(idempotency_key_compiled, request)
@@ -444,6 +444,7 @@ impl DefaultGatewayInputExecutor {
 
         Ok(WorkerDetails {
             component_id: component_id.component_id,
+            component_version: component_id.version,
             worker_name,
             idempotency_key,
             invocation_context,
@@ -526,6 +527,7 @@ impl DefaultGatewayInputExecutor {
                 Ok(MiddlewareSuccess::Redirect(response)) => Err(response)?,
                 Ok(MiddlewareSuccess::PassThrough { .. }) => Ok(request),
                 Err(err) => {
+                    error!("Middleware error: {}", err.to_safe_string());
                     let response = err.to_response_from_safe_display(|error| match error {
                         MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
                         MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
@@ -860,7 +862,10 @@ async fn maybe_apply_middlewares_out(
         let result = middlewares.process_middleware_out(&mut response).await;
         match result {
             Ok(_) => response,
-            Err(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
+            Err(err) => {
+                error!("Middleware error: {}", err.to_safe_string());
+                err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     } else {
         response

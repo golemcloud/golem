@@ -25,8 +25,10 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
@@ -35,6 +37,7 @@ use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::model::{Component, ComponentName};
 use http::Uri;
+use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -81,6 +84,91 @@ pub trait ComponentService: Send + Sync {
         constraints: &[FunctionSignature],
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints>;
+}
+
+pub struct CachedComponentService {
+    inner: Arc<dyn ComponentService>,
+    cache: Cache<VersionedComponentId, (), Component, ComponentServiceError>,
+}
+
+#[async_trait]
+impl ComponentService for CachedComponentService {
+    async fn get_by_version(
+        &self,
+        component_id: &ComponentId,
+        version: u64,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        let inner_clone = self.inner.clone();
+        self.cache
+            .get_or_insert_simple(
+                &VersionedComponentId {
+                    component_id: component_id.clone(),
+                    version,
+                },
+                || async {
+                    inner_clone
+                        .get_by_version(component_id, version, auth_ctx)
+                        .await
+                },
+            )
+            .await
+    }
+
+    async fn get_latest(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        self.inner.get_latest(component_id, auth_ctx).await
+    }
+
+    async fn get_by_name(
+        &self,
+        component_id: &ComponentName,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        self.inner
+            .get_by_name(component_id, namespace, auth_ctx)
+            .await
+    }
+
+    async fn create_or_update_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: FunctionConstraints,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        self.inner
+            .create_or_update_constraints(component_id, constraints, auth_ctx)
+            .await
+    }
+
+    async fn delete_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: &[FunctionSignature],
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        self.inner
+            .delete_constraints(component_id, constraints, auth_ctx)
+            .await
+    }
+}
+
+impl CachedComponentService {
+    pub fn new(inner: Arc<dyn ComponentService>, cache_capacity: usize) -> Self {
+        Self {
+            inner,
+            cache: Cache::new(
+                Some(cache_capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "component-metadata-cache",
+            ),
+        }
+    }
 }
 
 #[derive(Clone)]

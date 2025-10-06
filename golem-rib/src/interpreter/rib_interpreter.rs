@@ -4990,6 +4990,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5039,6 +5040,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5100,6 +5102,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5192,6 +5195,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5355,6 +5359,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5836,6 +5841,7 @@ mod tests {
                 let component_info = ComponentDependencyKey {
                     component_name: "foo".to_string(),
                     component_id: Uuid::new_v4(),
+                    component_version: 0,
                     root_package_name: None,
                     root_package_version: None,
                 };
@@ -5970,6 +5976,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };

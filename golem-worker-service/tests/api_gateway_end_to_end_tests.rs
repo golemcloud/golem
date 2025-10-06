@@ -2919,6 +2919,7 @@ mod internal {
             component_info: ComponentDependencyKey {
                 component_name: "agent-component".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             },
@@ -2956,6 +2957,7 @@ mod internal {
             component_info: ComponentDependencyKey {
                 component_name: "test-component".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             },
