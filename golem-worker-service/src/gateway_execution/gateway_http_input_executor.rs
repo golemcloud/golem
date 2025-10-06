@@ -527,6 +527,7 @@ impl DefaultGatewayInputExecutor {
                 Ok(MiddlewareSuccess::Redirect(response)) => Err(response)?,
                 Ok(MiddlewareSuccess::PassThrough { .. }) => Ok(request),
                 Err(err) => {
+                    error!("Middleware error: {}", err.to_safe_string());
                     let response = err.to_response_from_safe_display(|error| match error {
                         MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
                         MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
@@ -861,7 +862,10 @@ async fn maybe_apply_middlewares_out(
         let result = middlewares.process_middleware_out(&mut response).await;
         match result {
             Ok(_) => response,
-            Err(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
+            Err(err) => {
+                error!("Middleware error: {}", err.to_safe_string());
+                err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     } else {
         response

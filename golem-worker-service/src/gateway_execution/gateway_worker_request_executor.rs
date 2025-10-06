@@ -98,9 +98,11 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
             )
             .await
             .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
+        let raw_worker_name = resolved_worker_request.worker_name.to_string();
         let worker_name = AgentId::parse(resolved_worker_request.worker_name, &component.metadata)
-            .map_err(WorkerRequestExecutorError)?
-            .to_string();
+            .ok()
+            .map(|agent_id| agent_id.to_string())
+            .unwrap_or(raw_worker_name);
 
         WorkerId::validate_worker_name(&worker_name)?;
         debug!(

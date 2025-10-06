@@ -251,6 +251,7 @@ impl SafeDisplay for ComponentServiceConfig {
         let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "cache capacity: {}", self.cache_capacity);
         result
     }
 }
