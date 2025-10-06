@@ -1120,6 +1120,7 @@ mod compiler_error_tests {
                 component_dependency_key: ComponentDependencyKey {
                     component_name: "some_name".to_string(),
                     component_id: Uuid::new_v4(),
+                    component_version: 0,
                     root_package_name: None,
                     root_package_version: None,
                 },
