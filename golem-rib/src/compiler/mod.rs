@@ -174,7 +174,7 @@ impl RibCompilerConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentDependency {
     component_dependency_key: ComponentDependencyKey,
     component_exports: Vec<AnalysedExport>,

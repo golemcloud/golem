@@ -22,9 +22,10 @@ use uuid::Uuid;
 
 // A wrapper over ComponentDependency which is coming from rib-module
 // to attach agent types to it.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentDependencyWithAgentInfo {
-    component_metadata: ComponentMetadata,
-    component_dependency: ComponentDependency,
+    pub component_metadata: ComponentMetadata,
+    pub component_dependency: ComponentDependency,
 }
 
 impl ComponentDependencyWithAgentInfo {

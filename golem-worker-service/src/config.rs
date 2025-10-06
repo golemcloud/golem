@@ -223,6 +223,7 @@ pub struct ComponentServiceConfig {
     pub access_token: Uuid,
     pub retries: RetryConfig,
     pub connect_timeout: Duration,
+    pub cache_capacity: usize,
 }
 
 impl ComponentServiceConfig {
@@ -263,6 +264,7 @@ impl Default for ComponentServiceConfig {
                 .expect("invalid UUID"),
             retries: RetryConfig::max_attempts_3(),
             connect_timeout: Duration::from_secs(10),
+            cache_capacity: 1000,
         }
     }
 }
