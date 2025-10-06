@@ -155,6 +155,16 @@ impl ComponentMetadata {
             .unwrap()
             .find_agent_type_by_wrapper_name(&self.data, agent_type)
     }
+
+    pub fn find_wrapper_function_by_agent_constructor(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        self.cache
+            .lock()
+            .unwrap()
+            .find_wrapper_function_by_agent_constructor(&self.data, agent_type)
+    }
 }
 
 impl Debug for ComponentMetadata {
@@ -419,6 +429,43 @@ impl ComponentMetadataInnerData {
             .cloned())
     }
 
+    pub fn find_wrapper_function_by_agent_constructor(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        let agent_type = self
+            .find_agent_type_by_name(agent_type)?
+            .ok_or_else(|| format!("Agent type {} not found", agent_type))?;
+
+        let root_package_name = self
+            .root_package_name
+            .as_ref()
+            .ok_or("Agents must have a root package name")?;
+        let (namespace, package) = root_package_name
+            .split_once(':')
+            .ok_or("Root package name must be in the form namespace:package")?;
+        let version = self
+            .root_package_version
+            .as_ref()
+            .map(|v| SemVer::parse(v))
+            .transpose()?;
+
+        let interface = agent_type.wrapper_type_name();
+        let function = ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: namespace.to_string(),
+                package: package.to_string(),
+                interface,
+                version,
+            },
+            ParsedFunctionReference::Function {
+                function: "initialize".to_string(),
+            },
+        );
+
+        self.find_parsed_function(&function)
+    }
+
     /// Finds a function ignoring the function site's version. Returns None if it was not found.
     fn find_parsed_function_ignoring_version(
         &self,
@@ -572,6 +619,7 @@ struct ComponentMetadataInnerCache {
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
     agent_types_by_type_name: HashMap<String, Result<Option<AgentType>, String>>,
     agent_types_by_wrapper_type_name: HashMap<String, Result<Option<AgentType>, String>>,
+    functions_by_agent_constructor: HashMap<String, Result<Option<InvokableFunction>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -656,6 +704,21 @@ impl ComponentMetadataInnerCache {
         } else {
             let result = data.find_agent_type_by_wrapper_name(agent_type);
             self.agent_types_by_wrapper_type_name
+                .insert(agent_type.to_string(), result.clone());
+            result
+        }
+    }
+
+    pub fn find_wrapper_function_by_agent_constructor(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        agent_type: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = self.functions_by_agent_constructor.get(agent_type) {
+            cached.clone()
+        } else {
+            let result = data.find_wrapper_function_by_agent_constructor(agent_type);
+            self.functions_by_agent_constructor
                 .insert(agent_type.to_string(), result.clone());
             result
         }
@@ -1072,7 +1135,7 @@ fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
 }
 
 fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
-    // Some interfaces like the golem/http:incoming-handler do not exist on the component,
+    // Some interfaces like the golem/http:incoming-handler do not exist on the component
     // but are dynamically created by the worker executor based on other existing interfaces.
 
     if virtual_exports::http_incoming_handler::implements_required_interfaces(exports) {
