@@ -134,6 +134,7 @@ function getMethodProxy(
         const types = typeInfoInternal.types;
 
         const values: Value.Value[] = [];
+
         if (Array.isArray(arg)) {
           for (const elem of arg) {
             const index = types.findIndex((type) => {

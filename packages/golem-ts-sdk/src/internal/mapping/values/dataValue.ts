@@ -25,6 +25,7 @@ import {
 import {
   castTsValueToBinaryReference,
   castTsValueToTextReference,
+  matchesType,
 } from './serializer';
 import { getLanguageCodes, getMimeTypes } from '../../schema';
 import { UnstructuredText } from '../../../newTypes/textInput';
@@ -32,6 +33,7 @@ import { UnstructuredBinary } from '../../../newTypes/binaryInput';
 import * as util from 'node:util';
 
 import * as Value from '../values/Value';
+import { b } from 'vitest/dist/chunks/suite.d.FvehnV49';
 
 export type ParameterDetail = {
   parameterName: string;
@@ -216,6 +218,7 @@ export function deserializeDataValue(
   }
 }
 
+// Used to serialize the return type of a method back to DataValue
 export function serializeToDataValue(
   tsValue: any,
   typeInfoInternal: TypeInfoInternal,
@@ -243,9 +246,16 @@ export function serializeToDataValue(
 
     // TODO;
     case 'multimodal':
-      return Either.left(
-        'Serialization of multimodal type is not supported here',
+      const multiModalTypeInfo = typeInfoInternal.types;
+      const nameAndElementValues = serializeMultimodalToDataValue(
+        tsValue,
+        multiModalTypeInfo,
       );
+
+      return Either.right({
+        tag: 'multimodal',
+        val: nameAndElementValues,
+      });
   }
 }
 
@@ -276,4 +286,70 @@ function serializeTextReferenceToDataValue(value: any): DataValue {
     tag: 'tuple',
     val: [elementValue],
   };
+}
+
+function serializeMultimodalToDataValue(
+  value: any,
+  typeInfoInternal: [string, TypeInfoInternal][],
+): [string, ElementValue][] {
+  let namesAndElements: [string, ElementValue][] = [];
+
+  if (Array.isArray(value)) {
+    for (const elem of value) {
+      const index = typeInfoInternal.findIndex((type) => {
+        const [, internal] = type;
+        switch (internal.tag) {
+          case 'analysed':
+            return matchesType(elem, internal.val);
+
+          case 'unstructured-binary':
+            const isObjectBinary = typeof elem === 'object' && elem !== null;
+            const keysBinary = Object.keys(elem);
+            return (
+              isObjectBinary &&
+              keysBinary.includes('tag') &&
+              (elem['tag'] === 'url' || elem['tag'] === 'inline')
+            );
+
+          case 'unstructured-text':
+            const isObject = typeof elem === 'object' && elem !== null;
+            const keys = Object.keys(elem);
+            return (
+              isObject &&
+              keys.includes('tag') &&
+              (elem['tag'] === 'url' || elem['tag'] === 'inline')
+            );
+
+          case 'multimodal':
+            throw new Error(`Nested multimodal types are not supported`);
+        }
+      });
+
+      const result = serializeToDataValue(
+        value[index],
+        typeInfoInternal[index][1],
+      );
+
+      if (Either.isLeft(result)) {
+        throw new Error(
+          `Failed to serialize multimodal element: ${util.format(value[index])} at index ${index}`,
+        );
+      }
+
+      const dataValue = result.val;
+
+      switch (dataValue.tag) {
+        case 'tuple':
+          const element = dataValue.val[0];
+          namesAndElements.push([typeInfoInternal[index][0], element]);
+          break;
+        case 'multimodal':
+          throw new Error(`Nested multimodal types are not supported`);
+      }
+    }
+
+    return namesAndElements;
+  } else {
+    throw new Error(`Multimodal argument should be an array of values`);
+  }
 }
