@@ -346,8 +346,19 @@ export function buildOutputSchema(
   agentClassName: AgentClassName,
   returnType: Type.Type,
 ): Either.Either<[TypeDetails, DataSchema], string> {
-  if (returnType.name === 'Multimodal' && returnType.kind === 'array') {
-    const elementType = returnType.element;
+  const multiModalTarget =
+    returnType.kind === 'promise' && returnType.element.name === 'Multimodal'
+      ? returnType.element
+      : returnType.name === 'Multimodal'
+        ? returnType
+        : null;
+
+  if (
+    multiModalTarget &&
+    multiModalTarget.name === 'Multimodal' &&
+    multiModalTarget.kind === 'array'
+  ) {
+    const elementType = multiModalTarget.element;
 
     const multimodalTypes =
       elementType.kind === 'union' ? elementType.typeParams : [elementType];

@@ -322,8 +322,10 @@ class BarAgent extends BaseAgent {
     console.log('Hello World');
   };
 
-  async fun23(myMultimodalInput: Multimodal<Text | Image>): Promise<string> {
-    return this.getId().value;
+  async fun23(
+    myMultimodalInput: Multimodal<Text | Image>,
+  ): Promise<Multimodal<Text | Image>> {
+    return myMultimodalInput;
   }
 }
 
