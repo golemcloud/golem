@@ -533,6 +533,11 @@ function createInputDataValue(
             tag: 'unstructured-binary',
             val: binaryReference,
           };
+
+        case 'multimodal':
+          throw new Error(
+            `Test failure: multimodal parameter not supported in test data`,
+          );
       }
     },
   );

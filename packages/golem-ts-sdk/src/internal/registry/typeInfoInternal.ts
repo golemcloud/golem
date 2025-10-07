@@ -21,4 +21,5 @@ import { Type } from '@golemcloud/golem-ts-types-core';
 export type TypeInfoInternal =
   | { tag: 'analysed'; val: AnalysedType; tsType: Type.Type }
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
-  | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type };
+  | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
+  | { tag: 'multimodal'; tsType: Type.Type };

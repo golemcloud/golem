@@ -240,6 +240,10 @@ export function serializeToDataValue(
       return Either.right(serializeTextReferenceToDataValue(tsValue));
     case 'unstructured-binary':
       return Either.right(serializeBinaryReferenceToDataValue(tsValue));
+
+    // TODO;
+    case 'multimodal':
+      return Either.left("Serialization of multimodal type is not supported here");
   }
 }
 

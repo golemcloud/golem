@@ -23,7 +23,7 @@ import { makeAgentId, parseAgentId } from 'golem:agent/host';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
-export { prompt, description, agent, multimodal } from './decorators';
+export { prompt, description, agent } from './decorators';
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';

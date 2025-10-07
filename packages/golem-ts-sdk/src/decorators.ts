@@ -15,17 +15,14 @@
 import { AgentType, DataValue, AgentError } from 'golem:agent/common';
 import { AgentInternal } from './internal/agentInternal';
 import { ResolvedAgent } from './internal/resolvedAgent';
-import { TypeMetadata, Type } from '@golemcloud/golem-ts-types-core';
+import { TypeMetadata } from '@golemcloud/golem-ts-types-core';
 import { getRemoteClient } from './internal/clientGeneration';
 import { BaseAgent } from './baseAgent';
 import { AgentTypeRegistry } from './internal/registry/agentTypeRegistry';
-import * as WitValue from './internal/mapping/values/WitValue';
 import * as Either from './newTypes/either';
 import {
   getAgentMethodSchema,
   getConstructorDataSchema,
-  getLanguageCodes,
-  getMimeTypes,
 } from './internal/schema';
 import * as Option from './newTypes/option';
 import { AgentMethodRegistry } from './internal/registry/agentMethodRegistry';
@@ -37,11 +34,6 @@ import { createCustomError } from './internal/agentError';
 import { AgentConstructorParamRegistry } from './internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './internal/registry/agentMethodParamRegistry';
 import { AgentConstructorRegistry } from './internal/registry/agentConstructorRegistry';
-import { UnstructuredText } from './newTypes/textInput';
-import { UnstructuredBinary } from './newTypes/binaryInput';
-import * as Value from './internal/mapping/values/Value';
-import * as util from 'node:util';
-import { TypeInfoInternal } from './internal/registry/typeInfoInternal';
 import {
   deserializeDataValue,
   ParameterDetail,
@@ -284,56 +276,6 @@ export function agent(customName?: string) {
         };
       },
     });
-  };
-}
-
-/**
- * Marks a class or method as **multimodal**.
- *
- * Usage:
- *
- * ```ts
- * @multimodal()
- * class ImageTextAgent {
- *   @multimodal()
- *   process(query: [string], image: [string]): string {
- *     // ...
- *   }
- * }
- * ```
- */
-export function multimodal() {
-  return function (
-    target: Object | Function,
-    propertyKey?: string | symbol,
-    descriptor?: PropertyDescriptor,
-  ) {
-    if (propertyKey === undefined) {
-      const className = (target as Function).name;
-      const agentClassName = new AgentClassName(className);
-
-      const classMetadata = TypeMetadata.get(agentClassName.value);
-      if (!classMetadata) {
-        throw new Error(
-          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
-        );
-      }
-
-      AgentConstructorRegistry.setAsMultiModal(agentClassName);
-    } else {
-      const agentClassName = new AgentClassName(target.constructor.name);
-
-      const classMetadata = TypeMetadata.get(agentClassName.value);
-      if (!classMetadata) {
-        throw new Error(
-          `Class metadata not found for agent ${agentClassName}. Ensure metadata is generated.`,
-        );
-      }
-
-      const methodName = String(propertyKey);
-
-      AgentMethodRegistry.setAsMultimodal(agentClassName, methodName);
-    }
   };
 }
 

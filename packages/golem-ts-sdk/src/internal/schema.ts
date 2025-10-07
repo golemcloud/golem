@@ -33,7 +33,6 @@ import {
 import { TypeMappingScope } from './mapping/types/scope';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
-import { AgentConstructorRegistry } from './registry/agentConstructorRegistry';
 import { AnalysedType, tuple } from './mapping/types/AnalysedType';
 
 export function getConstructorDataSchema(
@@ -43,10 +42,408 @@ export function getConstructorDataSchema(
   const constructorParamInfos: readonly ConstructorArg[] =
     classType.constructorArgs;
 
+  if (
+    constructorParamInfos.length === 1 &&
+    constructorParamInfos[0].type.name === 'Multimodal'
+  ) {
+    const paramType = constructorParamInfos[0].type;
+
+    if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
+      const elementType = paramType.element;
+      const multimodalTypes: Type.Type[] =
+        elementType.kind === 'union' ? elementType.typeParams : [elementType];
+
+      const multiModalDetails = getMultimodalDetails(
+        agentClassName,
+        multimodalTypes,
+      );
+
+      if (Either.isLeft(multiModalDetails)) {
+        return Either.left(
+          `Failed to get multimodal details: ${multiModalDetails.val}`,
+        );
+      }
+
+      AgentConstructorParamRegistry.setType(
+        agentClassName,
+        constructorParamInfos[0].name,
+        {
+          tag: 'multimodal',
+          tsType: paramType,
+        },
+      );
+
+      return Either.right({
+        tag: 'multimodal',
+        val: multiModalDetails.val,
+      });
+    }
+  }
+
+  // For other type other than multimodal
   const constructDataSchemaResult: Either.Either<
     [string, ElementSchema][],
     string
-  > = Either.all(
+  > = getParameterNameAndElementSchema(agentClassName, constructorParamInfos);
+
+  return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
+    return {
+      tag: 'tuple',
+      val: nameAndElementSchema,
+    };
+  });
+}
+
+export function getAgentMethodSchema(
+  classMetadata: ClassMetadata,
+  agentClassName: AgentClassName,
+): Either.Either<AgentMethod[], string> {
+  if (!classMetadata) {
+    return Either.left(
+      `No metadata found for agent class ${agentClassName.value}`,
+    );
+  }
+
+  const methodMetadata = Array.from(classMetadata.methods.entries());
+
+  return Either.all(
+    methodMetadata.map((methodInfo) => {
+      const methodName = methodInfo[0];
+      const signature = methodInfo[1];
+
+      const parameters: MethodParams = signature.methodParams;
+
+      const returnType: Type.Type = signature.returnType;
+
+      const baseMeta =
+        AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
+
+      const inputSchemaEither = buildMethodInputSchema(
+        agentClassName,
+        methodName,
+        parameters,
+      );
+
+      if (Either.isLeft(inputSchemaEither)) {
+        return Either.left(inputSchemaEither.val);
+      }
+
+      const inputSchema = inputSchemaEither.val;
+
+      const outputSchemaEither: Either.Either<
+        [Option.Option<AnalysedType>, DataSchema],
+        string
+      > = buildOutputSchema(agentClassName, returnType);
+
+      if (Either.isLeft(outputSchemaEither)) {
+        return Either.left(
+          `Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${outputSchemaEither.val}.`,
+        );
+      }
+
+      const [analysedType, outputSchema] = outputSchemaEither.val;
+
+      // analysed-type exists for all types except unstructured types and binary
+      if (Option.isSome(analysedType)) {
+        AgentMethodRegistry.setReturnType(agentClassName, methodName, {
+          tag: 'analysed',
+          val: analysedType.val,
+          tsType: returnType,
+        });
+      } else {
+        // Special handling for unstructured types to set metadata in the param registry
+        switch (outputSchema.tag) {
+          case 'tuple':
+            const value = outputSchema.val[0][1];
+
+            switch (value.tag) {
+              case 'component-model':
+                break;
+              case 'unstructured-text':
+                AgentMethodRegistry.setReturnType(agentClassName, methodName, {
+                  tag: 'unstructured-text',
+                  val: value.val,
+                  tsType: returnType,
+                });
+                break;
+              case 'unstructured-binary':
+                AgentMethodRegistry.setReturnType(agentClassName, methodName, {
+                  tag: 'unstructured-binary',
+                  val: value.val,
+                  tsType: returnType,
+                });
+                break;
+            }
+
+            break;
+
+          case 'multimodal':
+            AgentMethodRegistry.setReturnType(agentClassName, methodName, {
+              tag: 'multimodal',
+              tsType: returnType,
+            });
+            break;
+        }
+      }
+
+      return Either.right({
+        name: methodName,
+        description: baseMeta.description ?? '',
+        promptHint: baseMeta.prompt ?? '',
+        inputSchema: inputSchema,
+        outputSchema: outputSchema,
+      });
+    }),
+  );
+}
+
+export function buildMethodInputSchema(
+  agentClassName: AgentClassName,
+  methodName: string,
+  paramTypes: MethodParams,
+): Either.Either<DataSchema, string> {
+  const paramTypesArray = Array.from(paramTypes);
+
+  if (
+    paramTypesArray.length === 1 &&
+    paramTypesArray[0][1].name === 'Multimodal'
+  ) {
+
+    const paramType = paramTypesArray[0][1];
+
+    if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
+      const elementType = paramType.element;
+      const multimodalTypes =
+        elementType.kind === 'union' ? elementType.typeParams : [elementType];
+
+      const multiModalDetails = getMultimodalDetails(
+        agentClassName,
+        multimodalTypes,
+      );
+
+      if (Either.isLeft(multiModalDetails)) {
+        return Either.left(
+          `Failed to get multimodal details: ${multiModalDetails.val}`,
+        );
+      }
+
+      AgentMethodParamRegistry.setType(
+        agentClassName,
+        methodName,
+        paramTypesArray[0][0],
+        {
+          tag: 'multimodal',
+          tsType: paramType,
+        },
+      );
+
+      return Either.right({
+        tag: 'multimodal',
+        val: multiModalDetails.val,
+      });
+    } else {
+      return Either.left('Multimodal type is not an array');
+    }
+  }
+
+  const result = Either.all(
+    paramTypesArray.map((parameterInfo) =>
+      Either.mapBoth(
+        convertToElementSchema(
+          agentClassName,
+          methodName,
+          parameterInfo[0],
+          parameterInfo[1],
+          Option.some(
+            TypeMappingScope.method(
+              methodName,
+              parameterInfo[0],
+              parameterInfo[1].optional,
+            ),
+          ),
+        ),
+        (result) => {
+          return [parameterInfo[0], result] as [string, ElementSchema];
+        },
+        (err) =>
+          `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
+      ),
+    ),
+  );
+
+  const agentClass = AgentMethodRegistry.get(agentClassName);
+
+  const isMultiModal = agentClass?.get(methodName)?.multimodal ?? false;
+
+  if (isMultiModal) {
+    return Either.map(result, (res) => {
+      return {
+        tag: 'multimodal',
+        val: res,
+      };
+    });
+  }
+
+  return Either.map(result, (res) => {
+    return {
+      tag: 'tuple',
+      val: res,
+    };
+  });
+}
+
+export function buildOutputSchema(
+  agentClassName: AgentClassName,
+  returnType: Type.Type,
+): Either.Either<[Option.Option<AnalysedType>, DataSchema], string> {
+  if (returnType.name === 'Multimodal' && returnType.kind === 'array') {
+    const elementType = returnType.element;
+    const multimodalTypes =
+      elementType.kind === 'union' ? elementType.typeParams : [elementType];
+    const multiModalDetails = getMultimodalDetails(
+      agentClassName,
+      multimodalTypes,
+    );
+    if (Either.isLeft(multiModalDetails)) {
+      return Either.left(
+        `Failed to get multimodal details: ${multiModalDetails.val}`,
+      );
+    }
+
+    return Either.right([
+      Option.none(),
+      {
+        tag: 'multimodal',
+        val: multiModalDetails.val,
+      },
+    ]);
+  }
+
+  const undefinedSchema = handleUndefinedReturnType(returnType);
+  if (Option.isSome(undefinedSchema)) {
+    return Either.right([
+      Option.some(tuple(undefined, 'undefined', [])),
+      undefinedSchema.val,
+    ]);
+  }
+
+  const unstructuredText = handleUnstructuredCase(
+    returnType,
+    'UnstructuredText',
+    (t) =>
+      Either.map(getTextDescriptor(t), (desc) => ({
+        tag: 'unstructured-text',
+        val: desc,
+      })),
+  );
+  if (Either.isRight(unstructuredText)) {
+    return unstructuredText;
+  }
+
+  const unstructuredBinary = handleUnstructuredCase(
+    returnType,
+    'UnstructuredBinary',
+    (t) =>
+      Either.map(getBinaryDescriptor(t), (desc) => ({
+        tag: 'unstructured-binary',
+        val: desc,
+      })),
+  );
+
+  if (Either.isRight(unstructuredBinary)) {
+    return unstructuredBinary;
+  }
+
+  const schema: Either.Either<
+    [Option.Option<AnalysedType>, ElementSchema],
+    string
+  > = Either.map(WitType.fromTsType(returnType, Option.none()), (typeInfo) => {
+    const witType = typeInfo[0];
+    const analysedType = typeInfo[1];
+
+    return [
+      Option.some(analysedType),
+      {
+        tag: 'component-model',
+        val: witType,
+      },
+    ];
+  });
+
+  return Either.map(schema, (result) => [
+    result[0],
+    { tag: 'tuple', val: [['return-value', result[1]]] },
+  ]);
+}
+
+function getMultimodalDetails(
+  agentClassName: AgentClassName,
+  types: Type.Type[],
+): Either.Either<[string, ElementSchema][], string> {
+  return Either.all(
+    types.map((paramType) => {
+      const paramTypeName = paramType.name;
+
+      if (!paramTypeName) {
+        return Either.left(
+          'types in multimodal cannot be anonymous and must have a type name',
+        );
+      }
+
+      if (paramTypeName && paramTypeName === 'UnstructuredText') {
+        const textDescriptor = getTextDescriptor(paramType);
+
+        if (Either.isLeft(textDescriptor)) {
+          return Either.left(
+            `Failed to get text descriptor for unstructured-text parameter ${paramTypeName}: ${textDescriptor.val}`,
+          );
+        }
+
+        const elementSchema: ElementSchema = {
+          tag: 'unstructured-text',
+          val: textDescriptor.val,
+        };
+
+        return Either.right([paramTypeName, elementSchema]);
+      }
+
+      if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
+        const binaryDescriptor = getBinaryDescriptor(paramType);
+
+        if (Either.isLeft(binaryDescriptor)) {
+          return Either.left(
+            `Failed to get binary descriptor for unstructured-binary parameter ${paramTypeName}: ${binaryDescriptor.val}`,
+          );
+        }
+
+        const elementSchema: ElementSchema = {
+          tag: 'unstructured-binary',
+          val: binaryDescriptor.val,
+        };
+
+        return Either.right([paramTypeName, elementSchema]);
+      }
+
+      const witType = WitType.fromTsType(paramType, Option.none());
+
+      return Either.map(witType, (typeInfo) => {
+        const witType = typeInfo[0];
+
+        const elementSchema: ElementSchema = {
+          tag: 'component-model',
+          val: witType,
+        };
+        return [paramTypeName, elementSchema];
+      });
+    }),
+  );
+}
+
+function getParameterNameAndElementSchema(
+  agentClassName: AgentClassName,
+  constructorParamInfos: readonly ConstructorArg[],
+): Either.Either<[string, ElementSchema][], string> {
+  return Either.all(
     constructorParamInfos.map((paramInfo) => {
       const paramType = paramInfo.type;
 
@@ -127,235 +524,6 @@ export function getConstructorDataSchema(
       });
     }),
   );
-
-  const constructorParam = AgentConstructorRegistry.lookup(agentClassName);
-
-  const isMultiModal = constructorParam?.multimodal ?? false;
-
-  if (isMultiModal) {
-    return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
-      return {
-        tag: 'multimodal',
-        val: nameAndElementSchema,
-      };
-    });
-  }
-
-  return Either.map(constructDataSchemaResult, (nameAndElementSchema) => {
-    return {
-      tag: 'tuple',
-      val: nameAndElementSchema,
-    };
-  });
-}
-
-export function getAgentMethodSchema(
-  classMetadata: ClassMetadata,
-  agentClassName: AgentClassName,
-): Either.Either<AgentMethod[], string> {
-  if (!classMetadata) {
-    return Either.left(
-      `No metadata found for agent class ${agentClassName.value}`,
-    );
-  }
-
-  const methodMetadata = Array.from(classMetadata.methods.entries());
-
-  return Either.all(
-    methodMetadata.map((methodInfo) => {
-      const methodName = methodInfo[0];
-      const signature = methodInfo[1];
-
-      const parameters: MethodParams = signature.methodParams;
-
-      const returnType: Type.Type = signature.returnType;
-
-      const baseMeta =
-        AgentMethodRegistry.get(agentClassName)?.get(methodName) ?? {};
-
-      const inputSchemaEither = buildMethodInputSchema(
-        agentClassName,
-        methodName,
-        parameters,
-      );
-
-      if (Either.isLeft(inputSchemaEither)) {
-        return Either.left(inputSchemaEither.val);
-      }
-
-      const inputSchema = inputSchemaEither.val;
-
-      const outputSchemaEither: Either.Either<
-        [Option.Option<AnalysedType>, DataSchema],
-        string
-      > = buildOutputSchema(returnType);
-
-      if (Either.isLeft(outputSchemaEither)) {
-        return Either.left(
-          `Failed to construct output schema for method ${methodName} with return type ${returnType.name}: ${outputSchemaEither.val}.`,
-        );
-      }
-
-      const [analysedType, outputSchema] = outputSchemaEither.val;
-
-      // analysed-type exists for all types except unstructured types and binary
-      if (Option.isSome(analysedType)) {
-        AgentMethodRegistry.setReturnType(agentClassName, methodName, {
-          tag: 'analysed',
-          val: analysedType.val,
-          tsType: returnType,
-        });
-      } else {
-        // Special handling for unstructured types to set metadata in the param registry
-        switch (outputSchema.tag) {
-          case 'tuple':
-            const value = outputSchema.val[0][1];
-
-            switch (value.tag) {
-              case 'component-model':
-                break;
-              case 'unstructured-text':
-                AgentMethodRegistry.setReturnType(agentClassName, methodName, {
-                  tag: 'unstructured-text',
-                  val: value.val,
-                  tsType: returnType,
-                });
-                break;
-              case 'unstructured-binary':
-                AgentMethodRegistry.setReturnType(agentClassName, methodName, {
-                  tag: 'unstructured-binary',
-                  val: value.val,
-                  tsType: returnType,
-                });
-                break;
-            }
-            break;
-
-          case 'multimodal':
-            break;
-        }
-      }
-
-      return Either.right({
-        name: methodName,
-        description: baseMeta.description ?? '',
-        promptHint: baseMeta.prompt ?? '',
-        inputSchema: inputSchema,
-        outputSchema: outputSchema,
-      });
-    }),
-  );
-}
-
-export function buildMethodInputSchema(
-  agentClassName: AgentClassName,
-  methodName: string,
-  paramTypes: MethodParams,
-): Either.Either<DataSchema, string> {
-  const result = Either.all(
-    Array.from(paramTypes).map((parameterInfo) =>
-      Either.mapBoth(
-        convertToElementSchema(
-          agentClassName,
-          methodName,
-          parameterInfo[0],
-          parameterInfo[1],
-          Option.some(
-            TypeMappingScope.method(
-              methodName,
-              parameterInfo[0],
-              parameterInfo[1].optional,
-            ),
-          ),
-        ),
-        (result) => {
-          return [parameterInfo[0], result] as [string, ElementSchema];
-        },
-        (err) =>
-          `Method: \`${methodName}\`, Parameter: \`${parameterInfo[0]}\`. Error: ${err}`,
-      ),
-    ),
-  );
-
-  const agentClass = AgentMethodRegistry.get(agentClassName);
-
-  const isMultiModal = agentClass?.get(methodName)?.multimodal ?? false;
-
-  if (isMultiModal) {
-    return Either.map(result, (res) => {
-      return {
-        tag: 'multimodal',
-        val: res,
-      };
-    });
-  }
-
-  return Either.map(result, (res) => {
-    return {
-      tag: 'tuple',
-      val: res,
-    };
-  });
-}
-
-export function buildOutputSchema(
-  returnType: Type.Type,
-): Either.Either<[Option.Option<AnalysedType>, DataSchema], string> {
-  const undefinedSchema = handleUndefinedReturnType(returnType);
-  if (Option.isSome(undefinedSchema)) {
-    return Either.right([
-      Option.some(tuple(undefined, 'undefined', [])),
-      undefinedSchema.val,
-    ]);
-  }
-
-  const unstructuredText = handleUnstructuredCase(
-    returnType,
-    'UnstructuredText',
-    (t) =>
-      Either.map(getTextDescriptor(t), (desc) => ({
-        tag: 'unstructured-text',
-        val: desc,
-      })),
-  );
-  if (Either.isRight(unstructuredText)) {
-    return unstructuredText;
-  }
-
-  const unstructuredBinary = handleUnstructuredCase(
-    returnType,
-    'UnstructuredBinary',
-    (t) =>
-      Either.map(getBinaryDescriptor(t), (desc) => ({
-        tag: 'unstructured-binary',
-        val: desc,
-      })),
-  );
-
-  if (Either.isRight(unstructuredBinary)) {
-    return unstructuredBinary;
-  }
-
-  const schema: Either.Either<
-    [Option.Option<AnalysedType>, ElementSchema],
-    string
-  > = Either.map(WitType.fromTsType(returnType, Option.none()), (typeInfo) => {
-    const witType = typeInfo[0];
-    const analysedType = typeInfo[1];
-
-    return [
-      Option.some(analysedType),
-      {
-        tag: 'component-model',
-        val: witType,
-      },
-    ];
-  });
-
-  return Either.map(schema, (result) => [
-    result[0],
-    { tag: 'tuple', val: [['return-value', result[1]]] },
-  ]);
 }
 
 function handleUnstructuredCase(

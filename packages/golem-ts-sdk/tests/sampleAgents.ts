@@ -30,7 +30,6 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { multimodal } from '../src/decorators';
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -323,11 +322,13 @@ class BarAgent extends BaseAgent {
     console.log('Hello World');
   };
 
-  @multimodal()
-  async fun23(text: [string]): Promise<string> {
+  async fun23(myMultimodalInput: Multimodal<Text | Image>): Promise<string> {
     return this.getId().value;
   }
 }
+
+type Text = string;
+type Image = Uint8Array;
 
 // If this class is decorated with agent, it will fail
 // This is kept here to ensure that any internal user class is not part of metadata generation.

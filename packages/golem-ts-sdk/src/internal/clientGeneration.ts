@@ -137,6 +137,11 @@ function getMethodProxy(
 
           case 'unstructured-binary':
             return Either.right(WitValue.fromTsValueBinaryReference(fnArg));
+
+          // TODO; implement the wit-value conversion for multimodals
+          case 'multimodal':
+            return Either.left("Multimodal parameters are not supported in remote calls");
+
         }
       }),
     );
@@ -290,6 +295,9 @@ function getAgentId(
               });
 
             return elementValueBinary;
+
+          case 'multimodal':
+            return Either.left("Multimodal constructor parameters are not supported in remote calls");
         }
       }),
     );
