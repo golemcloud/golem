@@ -69,6 +69,7 @@ pub struct Context {
     // Readonly
     config_dir: PathBuf,
     format: Format,
+    help_mode: bool,
     local_server_auto_start: bool,
     deploy_args: DeployArgs,
     profile_name: ProfileName,
@@ -94,6 +95,7 @@ pub struct Context {
     templates: std::sync::OnceLock<
         BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>,
     >,
+    selected_profile_logging: std::sync::OnceLock<()>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -204,21 +206,6 @@ impl Context {
 
         set_log_output(log_output);
 
-        log_action(
-            "Selected",
-            format!(
-                "profile: {}{}",
-                profile.name.0.log_color_highlight(),
-                project
-                    .as_ref()
-                    .map(|project| format!(
-                        ", project: {}",
-                        project.to_string().log_color_highlight()
-                    ))
-                    .unwrap_or_else(|| "".to_string())
-            ),
-        );
-
         let client_config = ClientConfig::from(&profile.profile);
         let file_download_client =
             new_reqwest_client(&client_config.file_download_http_client_config)?;
@@ -226,6 +213,7 @@ impl Context {
         Ok(Self {
             config_dir,
             format,
+            help_mode: log_output_for_help.is_some(),
             local_server_auto_start,
             deploy_args,
             profile_name: profile.name,
@@ -245,6 +233,7 @@ impl Context {
             golem_clients: tokio::sync::OnceCell::new(),
             file_download_client,
             templates: std::sync::OnceLock::new(),
+            selected_profile_logging: std::sync::OnceLock::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 app_source_mode,
@@ -304,6 +293,7 @@ impl Context {
     }
 
     pub fn profile_name(&self) -> &ProfileName {
+        self.log_selected_profile_once();
         &self.profile_name
     }
 
@@ -316,6 +306,7 @@ impl Context {
     }
 
     pub fn profile_project(&self) -> Option<&ProjectReference> {
+        self.log_selected_profile_once();
         self.project.as_ref()
     }
 
@@ -326,6 +317,8 @@ impl Context {
     pub async fn golem_clients(&self) -> anyhow::Result<&GolemClients> {
         self.golem_clients
             .get_or_try_init(|| async {
+                self.log_selected_profile_once();
+
                 let clients = GolemClients::new(
                     self.client_config.clone(),
                     self.auth_token_override,
@@ -538,6 +531,27 @@ impl Context {
                 Ok((account_id, name, version))
             }
         }
+    }
+
+    fn log_selected_profile_once(&self) {
+        self.selected_profile_logging.get_or_init(|| {
+            if !self.help_mode {
+                log_action(
+                    "Selected",
+                    format!(
+                        "profile: {}{}",
+                        self.profile_name.0.log_color_highlight(),
+                        self.project
+                            .as_ref()
+                            .map(|project| format!(
+                                ", project: {}",
+                                project.to_string().log_color_highlight()
+                            ))
+                            .unwrap_or_else(|| "".to_string())
+                    ),
+                );
+            }
+        });
     }
 }
 
