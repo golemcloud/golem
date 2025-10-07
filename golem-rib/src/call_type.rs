@@ -183,6 +183,7 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             let component_name = value.component_name;
             let component_id = value.value.ok_or("Missing component id")?;
+            let component_version = value.component_version;
 
             let root_package_name = value.root_package_name;
 
@@ -191,6 +192,7 @@ mod protobuf {
             Ok(ComponentDependencyKey {
                 component_name,
                 component_id: component_id.into(),
+                component_version,
                 root_package_name,
                 root_package_version,
             })
@@ -201,6 +203,7 @@ mod protobuf {
         fn from(value: ComponentDependencyKey) -> Self {
             golem_api_grpc::proto::golem::rib::ComponentDependencyKey {
                 component_name: value.component_name,
+                component_version: value.component_version,
                 value: Some(value.component_id.into()),
                 root_package_name: value.root_package_name,
                 root_package_version: value.root_package_version,

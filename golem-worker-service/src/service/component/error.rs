@@ -20,9 +20,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_common::SafeDisplay;
 
-// The dependents of golem-worker-service-base is expected
-// to have a component service internally that can depend on this base error
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ComponentServiceError {
     #[error("Unauthorized: {0}")]
     Unauthorized(String),
@@ -39,7 +37,7 @@ pub enum ComponentServiceError {
     #[error("Internal error: {0}")]
     FailedGrpcStatus(Status),
     #[error("Internal error: {0}")]
-    FailedTransport(tonic::transport::Error),
+    FailedTransport(String),
 }
 
 impl SafeDisplay for ComponentServiceError {
@@ -65,7 +63,7 @@ impl From<Status> for ComponentServiceError {
 
 impl From<tonic::transport::Error> for ComponentServiceError {
     fn from(error: tonic::transport::Error) -> Self {
-        ComponentServiceError::FailedTransport(error)
+        ComponentServiceError::FailedTransport(error.to_string())
     }
 }
 
