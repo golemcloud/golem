@@ -30,7 +30,8 @@
  *
  * processInput(["text", new Uint8Array([137, 80, 78, 71])]);
  *
- * You can also tag the types for better clarity:
+ * It is recommended to use tagged unions to distinguish between different types of inputs.
+ * This will also ensure the internals of golem can name these inputs based on the value of the `tag` property.
  *
  * Example:
  *
