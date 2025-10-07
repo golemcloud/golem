@@ -994,7 +994,7 @@ function serializeTupleTsValue(
   );
 }
 
-function matchesType(value: any, type: AnalysedType): boolean {
+export function matchesType(value: any, type: AnalysedType): boolean {
   switch (type.kind) {
     case 'bool':
       return typeof value === 'boolean';

@@ -243,7 +243,9 @@ export function serializeToDataValue(
 
     // TODO;
     case 'multimodal':
-      return Either.left("Serialization of multimodal type is not supported here");
+      return Either.left(
+        'Serialization of multimodal type is not supported here',
+      );
   }
 }
 

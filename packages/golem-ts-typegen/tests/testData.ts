@@ -161,7 +161,7 @@ class MyAgent {
     recursiveType: RecursiveType,
     objectWithTypeParameter: ObjectWithTypeParameter<["en", "de"]>,
     unionWithTypeParameter: UnionWithTypeParameter<["en", "de"]>,
-    multimodal: MultimodalType<string | boolean>
+    multimodal: MultimodalType<string | boolean>,
   ): PromiseType {
     return Promise.resolve(`Weather for ${location} is sunny!`);
   }

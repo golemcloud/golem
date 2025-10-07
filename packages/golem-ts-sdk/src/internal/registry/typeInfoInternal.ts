@@ -22,4 +22,8 @@ export type TypeInfoInternal =
   | { tag: 'analysed'; val: AnalysedType; tsType: Type.Type }
   | { tag: 'unstructured-text'; val: TextDescriptor; tsType: Type.Type }
   | { tag: 'unstructured-binary'; val: BinaryDescriptor; tsType: Type.Type }
-  | { tag: 'multimodal'; tsType: Type.Type };
+  | {
+      tag: 'multimodal';
+      types: [string, TypeInfoInternal][];
+      tsType: Type.Type;
+    };
