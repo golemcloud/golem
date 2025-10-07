@@ -101,6 +101,42 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(elementSchema1).toEqual(expected);
   });
 
+  it('should handle Multimodal in method params', () => {
+    const multimodalAgentMethod = complexAgent.methods.find(
+      (method) => method.name === 'fun23',
+    );
+
+    if (!multimodalAgentMethod) {
+      throw new Error('fun23 method not found in BarAgent');
+    }
+
+    expect(multimodalAgentMethod.inputSchema.tag).toEqual('multimodal');
+
+    const expected = [
+      [
+        'string',
+        {
+          tag: 'component-model',
+          val: { nodes: [{ type: { tag: 'prim-string-type' } }] },
+        },
+      ],
+      [
+        'Uint8Array',
+        {
+          tag: 'component-model',
+          val: {
+            nodes: [
+              { type: { tag: 'list-type', val: 1 } },
+              { type: { tag: 'prim-u8-type' } },
+            ],
+          },
+        },
+      ],
+    ];
+
+    expect(multimodalAgentMethod.inputSchema.val).toEqual(expected);
+  });
+
   it('should handle UnstructuredBinary in constructor params', () => {
     const elementSchema1 = getElementSchema(
       barAgentConstructor.inputSchema,
@@ -526,7 +562,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(complexAgent.methods.length).toEqual(24);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(complexAgent.typeName).toEqual('my-complex-agent');
-    expect(simpleAgent.methods.length).toEqual(17);
+    expect(simpleAgent.methods.length).toEqual(18);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 
@@ -567,6 +603,27 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
 }
 
 function getElementSchema(inputSchema: DataSchema, parameterName: string) {
+  const schema: [string, ElementSchema] | undefined = inputSchema.val.find(
+    ([name]) => name === parameterName,
+  );
+
+  if (!schema) {
+    throw new Error(
+      `${parameterName} not found in scheme ${util.format(inputSchema)}`,
+    );
+  }
+
+  return schema[1];
+}
+
+function getMultimodalElementSchema(
+  inputSchema: DataSchema,
+  parameterName: string,
+) {
+  if (inputSchema.tag !== 'multimodal') {
+    throw new Error('Input schema is not multimodal');
+  }
+
   const schema: [string, ElementSchema] | undefined = inputSchema.val.find(
     ([name]) => name === parameterName,
   );

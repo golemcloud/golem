@@ -12,4 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-type Multimodal<T> = T[];
+/**
+ * Multimodal type represents a value that holds multiple types of inputs.
+ *
+ * Example:
+ *
+ * ```ts
+ *
+ * import { Multimodal } from '@golemcloud/golem-ts-sdk';
+ *
+ * type Text = string;
+ * type Image = Uint8Array;
+ *
+ * type Input = Multimodal<Text | Image>;
+ *
+ * function processInput(input: Input) { }
+ *
+ * processInput(["text", new Uint8Array([137, 80, 78, 71])]);
+ *
+ * You can also tag the types for better clarity:
+ *
+ * Example:
+ *
+ * ```ts
+ * type TaggedInput = Multimodal<{ tag: 'text'; val: string } | { tag: 'image'; val: Uint8Array }>;
+ *
+ * processInput([{ tag: 'text', val: "hello" }, { tag: 'image', val: new Uint8Array([137, 80, 78, 71]) }]);
+ *
+ * ```
+ */
+export type Multimodal<T> = T[];

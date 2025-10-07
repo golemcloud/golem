@@ -52,7 +52,7 @@ export function getConstructorDataSchema(
     if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
       const elementType = paramType.element;
       const multimodalTypes: Type.Type[] =
-        elementType.kind === 'union' ? elementType.typeParams : [elementType];
+        elementType.kind === 'union' ? elementType.unionTypes : [elementType];
 
       const multiModalDetails = getMultimodalDetails(
         agentClassName,
@@ -248,8 +248,9 @@ export function buildMethodInputSchema(
 
     if (paramType.name === 'Multimodal' && paramType.kind === 'array') {
       const elementType = paramType.element;
+
       const multimodalTypes =
-        elementType.kind === 'union' ? elementType.typeParams : [elementType];
+        elementType.kind === 'union' ? elementType.unionTypes : [elementType];
 
       const multiModalDetails = getMultimodalDetails(
         agentClassName,
@@ -361,7 +362,7 @@ export function buildOutputSchema(
     const elementType = multiModalTarget.element;
 
     const multimodalTypes =
-      elementType.kind === 'union' ? elementType.typeParams : [elementType];
+      elementType.kind === 'union' ? elementType.unionTypes : [elementType];
 
     const multiModalDetails = getMultimodalDetails(
       agentClassName,
@@ -452,13 +453,7 @@ function getMultimodalDetails(
 ): Either.Either<[string, ElementSchema, TypeInfoInternal][], string> {
   return Either.all(
     types.map((paramType) => {
-      const paramTypeName = paramType.name;
-
-      if (!paramTypeName) {
-        return Either.left(
-          'types in multimodal cannot be anonymous and must have a type name',
-        );
-      }
+      const paramTypeName = paramType.name ?? paramType.kind; // For primitive types, aliases are not preserved
 
       if (paramTypeName && paramTypeName === 'UnstructuredText') {
         const textDescriptor = getTextDescriptor(paramType);

@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, BaseAgent, UnstructuredBinary, UnstructuredText } from '../src';
+import {
+  agent,
+  BaseAgent,
+  Multimodal,
+  UnstructuredBinary,
+  UnstructuredText,
+} from '../src';
 import * as Types from './testTypes';
 import {
   EitherX,
@@ -150,6 +156,12 @@ class FooAgent extends BaseAgent {
   async fun17(
     param: UnstructuredBinary<['application/json']>,
   ): Promise<UnstructuredBinary<['application/json']>> {
+    return param;
+  }
+
+  async fun18(
+    param: Multimodal<Text | Image>,
+  ): Promise<Multimodal<Text | Image>> {
     return param;
   }
 
@@ -323,9 +335,9 @@ class BarAgent extends BaseAgent {
   };
 
   async fun23(
-    myMultimodalInput: Multimodal<Text | Image>,
+    multimodalInput: Multimodal<Text | Image>,
   ): Promise<Multimodal<Text | Image>> {
-    return myMultimodalInput;
+    return multimodalInput;
   }
 }
 
