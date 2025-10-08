@@ -390,6 +390,8 @@ pub struct TimestampParameter {
 pub struct ErrorParameters {
     pub timestamp: Timestamp,
     pub error: String,
+    #[wit_field(skip)]
+    pub retry_from: OplogIndex
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]

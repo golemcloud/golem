@@ -614,12 +614,25 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                         incoming_response,
                     )?)
                 }
-                Ok(Some(Err(_))) => SerializableResponse::InternalError(None),
+                Ok(Some(Err(_))) => {
+                    SerializableResponse::InternalError(None)
+                },
                 Ok(Some(Ok(Err(error_code)))) => {
                     SerializableResponse::HttpError(error_code.clone().into())
                 }
-                Err(err) => SerializableResponse::InternalError(Some(err.into())),
+                Err(err) => {
+                    SerializableResponse::InternalError(Some(err.into()))
+                },
             };
+
+            if matches!(serializable_response, SerializableResponse::InternalError(_) | SerializableResponse::HttpError(_)) {
+                tracing::error!("!!! error in get(): serializable_response = {:?}", serializable_response);
+                tracing::error!("!!! replay target: {}", self.state.replay_state.replay_target());
+                tracing::error!("!!! current oplog index: {}", self.state.current_oplog_index().await);
+                tracing::error!("!!! trailing error count: {}", self.trailing_error_count().await);
+                self.state.current_retry_point = begin_index;
+                return Err(anyhow!("retry!!!")); // TODO
+            }
 
             if self.state.snapshotting_mode.is_none() {
                 self.state

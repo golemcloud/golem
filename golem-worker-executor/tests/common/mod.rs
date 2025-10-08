@@ -584,6 +584,10 @@ impl InvocationHooks for TestWorkerCtx {
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
     }
+
+    async fn get_current_retry_point(&self) -> OplogIndex {
+        self.durable_ctx.get_current_retry_point().await
+    }
 }
 
 #[async_trait]

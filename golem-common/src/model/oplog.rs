@@ -287,6 +287,11 @@ pub enum OplogEntry {
     Error {
         timestamp: Timestamp,
         error: WorkerError,
+        /// Points to the oplog index where the retry should start from. Normally this can be just the
+        /// current oplog index (after the last persisted side-effect). When failing in an atomic region
+        /// or batched remote writes, this should point to the start of the region.
+        /// When counting the number of retries for a specific error, the error entries are grouped by this index.
+        retry_from: OplogIndex
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
@@ -455,22 +460,27 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         level: PersistenceLevel,
     },
+    /// Marks the beginning of a remote transaction
     BeginRemoteTransaction {
         timestamp: Timestamp,
         transaction_id: TransactionId,
     },
+    /// Marks the point before a remote transaction is committed
     PreCommitRemoteTransaction {
         timestamp: Timestamp,
         begin_index: OplogIndex,
     },
+    /// Marks the point before a remote transaction is rolled back
     PreRollbackRemoteTransaction {
         timestamp: Timestamp,
         begin_index: OplogIndex,
     },
+    /// Marks the point after a remote transaction is committed
     CommittedRemoteTransaction {
         timestamp: Timestamp,
         begin_index: OplogIndex,
     },
+    /// Marks the point after a remote transaction is rolled back
     RolledBackRemoteTransaction {
         timestamp: Timestamp,
         begin_index: OplogIndex,
@@ -526,10 +536,12 @@ impl OplogEntry {
         }
     }
 
-    pub fn error(error: WorkerError) -> OplogEntry {
+    pub fn error(error: WorkerError, retry_from: OplogIndex) -> OplogEntry {
+        tracing::warn!("!!! Created ERROR oplog entry with retry_from={retry_from}");
         OplogEntry::Error {
             timestamp: Timestamp::now_utc(),
             error,
+            retry_from
         }
     }
 

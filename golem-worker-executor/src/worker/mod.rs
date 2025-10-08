@@ -1154,7 +1154,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 InvocationResult::Cached {
                     result:
                         Err(FailedInvocationResult {
-                            trap_type: TrapType::Error(error),
+                            trap_type: TrapType::Error { error, .. },
                             stderr,
                         }),
                     ..
@@ -1903,9 +1903,9 @@ impl InvocationResult {
 
                     Ok(value)
                 }
-                OplogEntry::Error { error, .. } => {
+                OplogEntry::Error { error,retry_from, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
-                    Err(FailedInvocationResult { trap_type: TrapType::Error(error), stderr })
+                    Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
                 }
                 OplogEntry::Interrupted { .. } => Err(FailedInvocationResult { trap_type: TrapType::Interrupt(InterruptKind::Interrupt), stderr: "".to_string() }),
                 OplogEntry::Exited { .. } => Err(FailedInvocationResult { trap_type: TrapType::Exit, stderr: "".to_string() }),

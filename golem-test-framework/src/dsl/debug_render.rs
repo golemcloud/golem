@@ -106,6 +106,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "ERROR");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}error:             {}", &params.error);
+            let _ = writeln!(result, "{pad}retry from:        {}", &params.retry_from);
         }
         PublicOplogEntry::NoOp(params) => {
             let _ = writeln!(result, "NOP");
