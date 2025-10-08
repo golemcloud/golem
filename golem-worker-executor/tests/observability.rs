@@ -90,9 +90,8 @@ async fn get_oplog_1(
     let oplog2 = executor.get_oplog(&worker_id, OplogIndex::NONE).await;
     drop(executor);
 
-    // Whether there is an "enqueued invocation" entry or just directly started invocation
-    // depends on timing
-    assert!(oplog.len() >= 12 && oplog.len() <= 14);
+    tracing::warn!("oplog: {oplog:?}");
+    assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(oplog[0].entry, PublicOplogEntry::Create(_)));
 
@@ -207,9 +206,9 @@ async fn search_oplog_1(
 
     drop(executor);
 
-    assert_eq!(result1.len(), 5); // two invocations and two log messages and the get-cart-contents result
+    assert_eq!(result1.len(), 7); // two invocations and two log messages and the get-cart-contents result
     assert_eq!(result2.len(), 1); // get_random_bytes
-    assert_eq!(result3.len(), 3); // two invocations and the get-cart-contents result
+    assert_eq!(result3.len(), 5); // two invocations and the get-cart-contents result
 }
 
 #[test]
@@ -289,7 +288,7 @@ async fn get_oplog_starting_with_updated_component(
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
     check!(result[0] == Value::U64(11));
-    assert_eq!(oplog.len(), 3);
+    assert_eq!(oplog.len(), 4);
 }
 
 #[test]

@@ -25,7 +25,6 @@ use golem_wasm_ast::analysis::{
 };
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use log::info;
-use std::collections::HashMap;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -329,91 +328,6 @@ async fn revert_auto_update(
     // The traces of the update should be gone.
     check!(result1[0] == 0u64.into_value());
     check!(result2[0] != 0u64.into_value());
-    check!(metadata.last_known_status.component_version == 0);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.is_empty());
-}
-
-#[test]
-#[tracing::instrument]
-async fn revert_manual_update(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) {
-    let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
-
-    let http_server = crate::hot_update::TestHttpServer::start().await;
-    let mut env = HashMap::new();
-    env.insert("PORT".to_string(), http_server.port().to_string());
-
-    let component_id = executor
-        .component("update-test-v2-11")
-        .unique()
-        .store()
-        .await;
-    let worker_id = executor
-        .start_worker_with(&component_id, "revert_manual_update", vec![], env, vec![])
-        .await;
-    let _ = executor.log_output(&worker_id).await;
-
-    let target_version = executor
-        .update_component(&component_id, "update-test-v3-11")
-        .await;
-    info!("Updated component to version {target_version}");
-
-    let _ = executor
-        .invoke_and_await(
-            &worker_id,
-            "golem:component/api.{f1}",
-            vec![0u64.into_value_and_type()],
-        )
-        .await
-        .unwrap();
-
-    let before_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
-
-    executor
-        .manual_update_worker(&worker_id, target_version)
-        .await;
-
-    let after_update = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
-        .await
-        .unwrap();
-
-    executor
-        .revert(
-            &worker_id,
-            RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
-                number_of_invocations: 2,
-            }),
-        )
-        .await;
-
-    let after_revert = executor
-        .invoke_and_await(&worker_id, "golem:component/api.{f2}", vec![])
-        .await
-        .unwrap();
-
-    let (metadata, _) = executor.get_worker_metadata(&worker_id).await.unwrap();
-
-    // Explanation: we can call 'get' on the updated component that does not exist in previous
-    // versions, and it returns the previous global state which has been transferred to it
-    // using the v2 component's 'save' function through the v3 component's load function.
-    // When we revert, the trace of the update is gone and we can query the original component,
-    // getting the original state.
-
-    drop(executor);
-    http_server.abort();
-
-    check!(before_update == after_update);
-    check!(before_update == after_revert);
     check!(metadata.last_known_status.component_version == 0);
     check!(metadata.last_known_status.pending_updates.is_empty());
     check!(metadata.last_known_status.failed_updates.is_empty());

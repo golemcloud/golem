@@ -157,7 +157,7 @@ pub trait OplogService: Debug + Send + Sync {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CommitLevel {
     /// Always commit immediately and do not return until it is done
-    Immediate,
+    Always,
     /// Only commit immediately if the worker is durable
     DurableOnly,
 }
@@ -167,6 +167,11 @@ pub enum CommitLevel {
 pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds a single entry to the oplog (possibly buffered)
     async fn add(&self, entry: OplogEntry);
+
+    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+        self.add(entry).await;
+        Ok(())
+    }
 
     /// Drop a chunk of entries from the beginning of the oplog
     ///
@@ -194,7 +199,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Adds an entry to the oplog and immediately commits it
     async fn add_and_commit(&self, entry: OplogEntry) -> OplogIndex {
         self.add(entry).await;
-        self.commit(CommitLevel::Immediate).await;
+        self.commit(CommitLevel::Always).await;
         self.current_oplog_index().await
     }
 

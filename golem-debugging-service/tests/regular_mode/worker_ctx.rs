@@ -7,8 +7,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId,
-    WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{

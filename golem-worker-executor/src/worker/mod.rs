@@ -967,6 +967,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.add_and_commit_oplog(OplogEntry::revert(region)).await;
             self.reattach_worker_status().await;
 
+            // TODO: we also need to invalidate the queue here, as we might have reverted to before the invocations were
+            // ever enqueued.
+
             Ok(())
         }
     }
@@ -1097,7 +1100,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         fail_pending_invocations: Option<WorkerExecutorError>,
     ) {
         if let WorkerInstance::Running(running) = instance.unload() {
-            debug!("Stopping running worker ({called_from_invocation_loop})");
+            debug!(
+                "Stopping running worker ({called_from_invocation_loop}) ({})",
+                fail_pending_invocations.is_some()
+            );
             if let Some(fail_pending_invocations) = fail_pending_invocations {
                 let queued_items = running
                     .queue
@@ -1397,14 +1403,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
         self.add_to_oplog(entry).await;
-        self.commit_oplog_and_update_state(CommitLevel::Immediate)
+        self.commit_oplog_and_update_state(CommitLevel::Always)
             .await
     }
 
-    async fn reattach_worker_status(&self) {
+    // TODO: should be private, exposed for the invocation loop for now.
+    pub async fn reattach_worker_status(&self) {
         let update_state_lock_guard = self.update_state_lock.lock().await;
 
-        self.commit_and_update_state_inner(CommitLevel::Immediate)
+        self.commit_and_update_state_inner(CommitLevel::Always)
             .await;
         if self
             .last_known_status_detached
@@ -1432,27 +1439,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let new_entries = self.oplog.commit(commit_level).await;
 
         if !self.last_known_status_detached.load(Ordering::Acquire) {
-            let updated_status = {
-                let old_status = self.last_known_status.read().await.clone();
-                tracing::debug!("Current worker status {:?}", old_status);
-                tracing::debug!(
-                    "Computing new worker status based on entries {:?}",
-                    new_entries
-                );
-                update_status_with_new_entries(old_status, new_entries, &self.config().retry)
-            };
+            let old_status = self.last_known_status.read().await.clone();
+
+            let updated_status = update_status_with_new_entries(
+                old_status.clone(),
+                new_entries,
+                &self.config().retry,
+            );
 
             if let Some(updated_status) = updated_status {
-                tracing::debug!("Updating worker status to {:?}", updated_status);
-                *self.last_known_status.write().await = updated_status.clone();
-                // TODO: We should do this in the background on a timer instead of on every commit.
-                self.worker_service()
-                    .update_cached_status(
-                        &self.owned_worker_id,
-                        &updated_status,
-                        self.component_type(),
-                    )
-                    .await;
+                if updated_status != old_status {
+                    tracing::debug!("Updating worker status to {:?}", updated_status);
+                    *self.last_known_status.write().await = updated_status.clone();
+                    // TODO: We should do this in the background on a timer instead of on every commit.
+                    self.worker_service()
+                        .update_cached_status(
+                            &self.owned_worker_id,
+                            &updated_status,
+                            self.component_type(),
+                        )
+                        .await;
+                };
             } else {
                 // The status can no longer be incrementally computed by adding the new oplog entries, instead a full reload needs to be performed.
                 // This can happen during a revert or a snapshot update for example.

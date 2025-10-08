@@ -316,6 +316,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .worker()
                         .add_and_commit_oplog(OplogEntry::jump(deleted_region))
                         .await;
+
+                    // TODO: this recomputation should not be necessary.
+                    self.public_state.worker().reattach_worker_status().await;
                 }
             }
 
@@ -413,6 +416,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         .worker()
                         .add_and_commit_oplog(OplogEntry::jump(deleted_region))
                         .await;
+
+                    // TODO: this recomputation should not be necessary.
+                    self.public_state.worker().reattach_worker_status().await;
                 }
             }
 
@@ -725,7 +731,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 component_id: self.owned_worker_id.component_id(),
                 worker_name: new_name.clone(),
             };
-            let oplog_index_cut_off = self.state.current_oplog_index().await;
+            let oplog_index_cut_off = self
+                .public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
 
             let created_by = self.created_by();
             let fork_result = self

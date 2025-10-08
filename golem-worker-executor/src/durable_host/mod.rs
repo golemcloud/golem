@@ -567,6 +567,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .worker()
                             .add_and_commit_oplog(OplogEntry::jump(deleted_region))
                             .await;
+
+                        // TODO: this recomputation should not be necessary.
+                        self.public_state.worker().reattach_worker_status().await;
                     }
 
                     Ok(begin_index)
@@ -718,6 +721,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .add_and_commit_oplog(OplogEntry::jump(deleted_region))
                         .await;
 
+                    // TODO: this recomputation should not be necessary.
+                    self.public_state.worker().reattach_worker_status().await;
+
                     let (tx_id, tx) = handler.create_new().await?;
                     let begin_index = self
                         .public_state
@@ -738,9 +744,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
             Ok(())
         } else {
@@ -757,9 +771,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
             Ok(())
         } else {
@@ -776,9 +798,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::committed_remote_transaction(begin_index))
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
             Ok(())
         } else {
@@ -795,9 +825,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
     ) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
             self.public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
             Ok(())
         } else {
@@ -1235,29 +1273,33 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
             self.public_state
                 .worker()
-                .commit_oplog_and_update_state(CommitLevel::Immediate)
+                .commit_oplog_and_update_state(CommitLevel::Always)
                 .await;
         }
         Ok(())
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        let oplog_entry = match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
-            TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
-            TrapType::Interrupt(InterruptKind::Jump) => None,
-            TrapType::Interrupt(InterruptKind::Restart) => None,
-            TrapType::Exit => Some(OplogEntry::exited()),
-            TrapType::Error(WorkerError::InvalidRequest(_)) => None,
-            TrapType::Error(error) => Some(OplogEntry::error(error.clone())),
-        };
+        {
+            let oplog_entry = match trap_type {
+                TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
+                TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
+                TrapType::Interrupt(InterruptKind::Jump) => None,
+                TrapType::Interrupt(InterruptKind::Restart) => None,
+                TrapType::Exit => Some(OplogEntry::exited()),
+                TrapType::Error(WorkerError::InvalidRequest(_)) => None,
+                TrapType::Error(error) => Some(OplogEntry::error(error.clone())),
+            };
 
-        if let Some(entry) = oplog_entry {
-            let oplog_idx = self.public_state.worker().add_and_commit_oplog(entry).await;
-            Some(oplog_idx)
-        } else {
-            None
-        };
+            if let Some(entry) = oplog_entry {
+                self.public_state.worker().add_and_commit_oplog(entry).await;
+            };
+        }
+
+        // special case. We are jumping, so we will always have a detached status here.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            return RetryDecision::Immediate;
+        }
 
         let latest_status = self
             .public_state
@@ -1265,7 +1307,13 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .get_non_detached_last_known_status()
             .await;
 
-        if latest_status.status == WorkerStatus::Failed {
+        let giving_up = matches!(trap_type, TrapType::Error(WorkerError::InvalidRequest(_)))
+            || matches!(
+                latest_status.status,
+                WorkerStatus::Failed | WorkerStatus::Interrupted | WorkerStatus::Exited
+            );
+
+        if giving_up {
             // Giving up, associating the stored result with the current and upcoming invocations
             if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                 self.public_state
@@ -1316,7 +1364,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
 
                 self.public_state
                     .worker()
-                    .commit_oplog_and_update_state(CommitLevel::Immediate)
+                    .commit_oplog_and_update_state(CommitLevel::Always)
                     .await;
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {

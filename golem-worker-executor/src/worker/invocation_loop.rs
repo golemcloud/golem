@@ -223,7 +223,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .data()
             .get_public_state()
             .worker()
-            .commit_oplog_and_update_state(CommitLevel::Immediate)
+            .commit_oplog_and_update_state(CommitLevel::Always)
             .await;
     }
 }

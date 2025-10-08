@@ -85,9 +85,7 @@ use golem_worker_executor::services::worker_enumeration::{
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{
-    rdbms, resource_limits, All, HasAll,
-};
+use golem_worker_executor::services::{rdbms, resource_limits, All, HasAll};
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
@@ -1173,6 +1171,9 @@ impl TestOplog {
                         self.owned_worker_id.worker_id.clone(),
                         entry_name.to_string(),
                     );
+
+                    tracing::info!("Failing worker as it hit marked oplog entry");
+
                     Err(format!(
                         "worker {worker_name} failed on {entry_name} {} times",
                         failed_before + 1
@@ -1189,8 +1190,12 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
+        self.check_oplog_add(&entry)?;
+        self.oplog.add_safe(entry).await
+    }
+
     async fn add(&self, entry: OplogEntry) {
-        self.check_oplog_add(&entry).unwrap();
         self.oplog.add(entry).await
     }
 

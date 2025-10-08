@@ -412,7 +412,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -481,7 +481,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -566,7 +566,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     });
     oplog.add(entry4.clone()).await;
 
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -688,7 +688,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     });
     oplog.add(entry4.clone()).await;
 
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -848,7 +848,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 .await
                 .unwrap(),
         );
-        oplog.commit(CommitLevel::Immediate).await;
+        oplog.commit(CommitLevel::Always).await;
         entries.push(entry);
     }
 
@@ -984,7 +984,7 @@ async fn read_from_archive_impl(use_blob: bool) {
     for entry in &entries {
         oplog.add(entry.clone()).await;
     }
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -1235,7 +1235,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     for entry in &entries {
         oplog.add(entry.clone()).await;
     }
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -1306,10 +1306,10 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
     for (n, entry) in entries.iter().enumerate() {
         oplog.add(entry.clone()).await;
         if n % 100 == 0 {
-            oplog.commit(CommitLevel::Immediate).await;
+            oplog.commit(CommitLevel::Always).await;
         }
     }
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let primary_length = primary_oplog_service
@@ -1374,7 +1374,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             error: WorkerError::Unknown("last".to_string()),
         }))
         .await;
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
     drop(oplog);
 
     let entry1 = oplog_service
@@ -1502,7 +1502,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         for entry in &entries {
             oplog.add(entry.clone()).await;
         }
-        oplog.commit(CommitLevel::Immediate).await;
+        oplog.commit(CommitLevel::Always).await;
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
@@ -1612,7 +1612,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
         for entry in &entries {
             oplog.add(entry.clone()).await;
         }
-        oplog.commit(CommitLevel::Immediate).await;
+        oplog.commit(CommitLevel::Always).await;
 
         let result = MultiLayerOplog::try_archive(&oplog).await;
         drop(oplog);

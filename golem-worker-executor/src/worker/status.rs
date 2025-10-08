@@ -76,6 +76,7 @@ pub fn update_status_with_new_entries(
 ) -> Option<WorkerStatusRecord> {
     let deleted_regions =
         calculate_deleted_regions(last_known.deleted_regions.clone(), &new_entries);
+
     let skipped_regions = calculate_skipped_regions(
         last_known.skipped_regions.clone(),
         &deleted_regions,
@@ -87,9 +88,31 @@ pub fn update_status_with_new_entries(
     // (Note that this is a rare case - for Jumps, this is not happening if the executor successfully writes out
     // the new status before performing the jump; for Reverts, the status is recalculated anyway, but only once, when
     // the revert is applied)
-    // TODO: do we need to check here whether _any_ past oplog index was reverted?
     if skipped_regions.is_in_deleted_region(last_known.oplog_idx) {
-        return None;
+        let last_known_skipped_regions_without_overrides =
+            if last_known.skipped_regions.is_overridden() {
+                let mut cloned = last_known.skipped_regions.clone();
+                cloned.merge_override();
+                cloned
+            } else {
+                last_known.skipped_regions.clone()
+            };
+
+        let new_skipped_regions_without_overrides = if skipped_regions.is_overridden() {
+            let mut cloned = skipped_regions.clone();
+            cloned.merge_override();
+            cloned
+        } else {
+            skipped_regions.clone()
+        };
+
+        let effective_skipped_regions_changed =
+            new_skipped_regions_without_overrides != last_known_skipped_regions_without_overrides;
+        // We might have already calculated the status with these skipped regions as an override during a snapshot update.
+        // No need to recompute in this case, we are already up to date.
+        if effective_skipped_regions_changed {
+            return None;
+        }
     }
 
     let active_plugins = last_known.active_plugins.clone();
@@ -431,6 +454,19 @@ fn calculate_pending_invocations(
                 } => version != target_version,
                 _ => true,
             }),
+            OplogEntry::FailedUpdate { target_version, .. } => {
+                result.retain(|invocation| match invocation {
+                    TimestampedWorkerInvocation {
+                        invocation:
+                            WorkerInvocation::ManualUpdate {
+                                target_version: version,
+                                ..
+                            },
+                        ..
+                    } => version != target_version,
+                    _ => true,
+                })
+            }
             OplogEntry::CancelPendingInvocation {
                 idempotency_key, ..
             } => {
@@ -809,7 +845,7 @@ mod test {
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_update(&update1)
+            .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .exported_function_completed(&'x', k1)
             .build();
@@ -828,8 +864,8 @@ mod test {
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_update(&update1)
-            .pending_update(&update2)
+            .pending_update(&update1, |_| {})
+            .pending_update(&update2, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
@@ -855,7 +891,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
-            .pending_update(&update1)
+            .pending_update(&update1, |status| status.total_linear_memory_size = 200)
             .successful_update(update1, 2000, &HashSet::new())
             .exported_function_invoked("c", &0, k2.clone())
             .exported_function_completed(&'y', k2)
@@ -880,8 +916,30 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
-            .pending_update(&update1)
+            .pending_update(&update1, |_| {})
             .failed_update(update1)
+            .exported_function_invoked("c", &0, k2.clone())
+            .exported_function_completed(&'y', k2)
+            .build();
+
+        run_test_case(test_case).await;
+    }
+
+    #[test]
+    async fn single_manual_failed_update_during_snapshot() {
+        let k1 = IdempotencyKey::fresh();
+        let k2 = IdempotencyKey::fresh();
+        let update2 = UpdateDescription::SnapshotBased {
+            target_version: 2,
+            payload: OplogPayload::Inline(vec![]),
+        };
+
+        let test_case = TestCase::builder(1)
+            .exported_function_invoked("a", &0, k1.clone())
+            .grow_memory(10)
+            .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
+            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .failed_update(update2)
             .exported_function_invoked("c", &0, k2.clone())
             .exported_function_completed(&'y', k2)
             .build();
@@ -900,8 +958,8 @@ mod test {
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_update(&update1)
-            .pending_update(&update2)
+            .pending_update(&update1, |_| {})
+            .pending_update(&update2, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .jump(OplogIndex::from_u64(4))
             .successful_update(update2, 3000, &HashSet::new())
@@ -928,7 +986,7 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
-            .pending_update(&update1)
+            .pending_update(&update1, |_| {})
             .successful_update(update1, 2000, &HashSet::new())
             .exported_function_invoked("c", &0, k2.clone())
             .exported_function_completed(&'y', k2)
@@ -958,12 +1016,12 @@ mod test {
             .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
-            .pending_update(&update1)
+            .pending_update(&update1, |_| {})
             .failed_update(update1)
             .exported_function_invoked("c", &0, k2.clone())
             .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
             .exported_function_completed(&'y', k2)
-            .pending_update(&update2)
+            .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
             .revert(OplogIndex::from_u64(5))
             .build();
@@ -1269,7 +1327,11 @@ mod test {
             })
         }
 
-        pub fn pending_update(self, update_description: &UpdateDescription) -> Self {
+        pub fn pending_update(
+            self,
+            update_description: &UpdateDescription,
+            extra_status_updates: impl Fn(&mut WorkerStatusRecord),
+        ) -> Self {
             let entry = rounded(OplogEntry::pending_update(update_description.clone()));
             let oplog_idx = OplogIndex::from_u64(self.entries.len() as u64 + 1);
             self.add(entry.clone(), move |mut status| {
@@ -1292,6 +1354,8 @@ mod test {
                             OplogRegion::from_index_range(OplogIndex::INITIAL.next()..=oplog_idx),
                         ]));
                 }
+
+                extra_status_updates(&mut status);
 
                 status
             })
@@ -1353,6 +1417,23 @@ mod test {
                 if status.skipped_regions.is_overridden() {
                     status.skipped_regions.drop_override();
                 }
+
+                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                {
+                    status
+                        .pending_invocations
+                        .retain(|invocation| match invocation {
+                            TimestampedWorkerInvocation {
+                                invocation:
+                                    WorkerInvocation::ManualUpdate {
+                                        target_version: version,
+                                        ..
+                                    },
+                                ..
+                            } => *version != target_version,
+                            _ => true,
+                        });
+                };
 
                 status
             })

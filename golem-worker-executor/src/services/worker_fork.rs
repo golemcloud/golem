@@ -425,6 +425,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_worker_call("fork");
 
+        tracing::debug!("Copying source oplog of worker {fork_account_id}/{source_worker_id} to {target_worker_id} up to index {oplog_index_cut_off}");
+
         let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
                 &source_worker_id.project_id,
@@ -523,7 +525,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
             )
             .await?;
 
-        new_oplog.commit(CommitLevel::Immediate).await;
+        new_oplog.commit(CommitLevel::Always).await;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,
@@ -581,7 +583,7 @@ impl<Ctx: WorkerCtx> WorkerForkService for DefaultWorkerFork<Ctx> {
                 ))
             });
 
-        new_oplog.commit(CommitLevel::Immediate).await;
+        new_oplog.commit(CommitLevel::Always).await;
 
         // We go through worker proxy to resume the worker
         // as we need to make sure as it may live in another worker executor,

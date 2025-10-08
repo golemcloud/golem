@@ -124,7 +124,7 @@ impl Oplog for EphemeralOplog {
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("commit");
         match level {
-            CommitLevel::Immediate => {
+            CommitLevel::Always => {
                 let mut state = self.state.lock().await;
                 state.commit().await
             }
