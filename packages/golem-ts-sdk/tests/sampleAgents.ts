@@ -12,7 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import { agent, BaseAgent, UnstructuredBinary, UnstructuredText } from '../src';
+import {
+  agent,
+  BaseAgent,
+  Multimodal,
+  UnstructuredBinary,
+  UnstructuredText,
+} from '../src';
 import * as Types from './testTypes';
 import {
   EitherX,
@@ -30,7 +36,6 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact2,
 } from './testTypes';
-import { multimodal } from '../src/decorators';
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -151,6 +156,12 @@ class FooAgent extends BaseAgent {
   async fun17(
     param: UnstructuredBinary<['application/json']>,
   ): Promise<UnstructuredBinary<['application/json']>> {
+    return param;
+  }
+
+  async fun18(
+    param: Multimodal<Text | Image>,
+  ): Promise<Multimodal<Text | Image>> {
     return param;
   }
 
@@ -323,11 +334,15 @@ class BarAgent extends BaseAgent {
     console.log('Hello World');
   };
 
-  @multimodal()
-  async fun23(text: [string]): Promise<string> {
-    return this.getId().value;
+  async fun23(
+    multimodalInput: Multimodal<Text | Image>,
+  ): Promise<Multimodal<Text | Image>> {
+    return multimodalInput;
   }
 }
+
+export type Text = string;
+export type Image = Uint8Array;
 
 // If this class is decorated with agent, it will fail
 // This is kept here to ensure that any internal user class is not part of metadata generation.

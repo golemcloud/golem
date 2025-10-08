@@ -38,7 +38,13 @@ import { deserialize } from './mapping/values/deserializer';
 import {
   castTsValueToBinaryReference,
   castTsValueToTextReference,
+  matchesType,
+  serializeBinaryReferenceTsValue,
+  serializeDefaultTsValue,
+  serializeTextReferenceTsValue,
 } from './mapping/values/serializer';
+import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { match } from 'node:assert';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -110,6 +116,84 @@ function getMethodProxy(
     methodName,
   );
 
+  function getValue(
+    arg: any,
+    typeInfoInternal: TypeInfoInternal,
+  ): Either.Either<Value.Value, string> {
+    switch (typeInfoInternal.tag) {
+      case 'analysed':
+        return serializeDefaultTsValue(arg, typeInfoInternal.val);
+
+      case 'unstructured-text':
+        return Either.right(serializeTextReferenceTsValue(arg));
+
+      case 'unstructured-binary':
+        return Either.right(serializeBinaryReferenceTsValue(arg));
+
+      case 'multimodal':
+        const types = typeInfoInternal.types;
+
+        const values: Value.Value[] = [];
+
+        if (Array.isArray(arg)) {
+          for (const elem of arg) {
+            const index = types.findIndex((type) => {
+              const [, internal] = type;
+              switch (internal.tag) {
+                case 'analysed':
+                  return matchesType(elem, internal.val);
+
+                case 'unstructured-binary':
+                  const isObjectBinary =
+                    typeof elem === 'object' && elem !== null;
+                  const keysBinary = Object.keys(elem);
+                  return (
+                    isObjectBinary &&
+                    keysBinary.includes('tag') &&
+                    (elem['tag'] === 'url' || elem['tag'] === 'inline')
+                  );
+
+                case 'unstructured-text':
+                  const isObject = typeof elem === 'object' && elem !== null;
+                  const keys = Object.keys(elem);
+                  return (
+                    isObject &&
+                    keys.includes('tag') &&
+                    (elem['tag'] === 'url' || elem['tag'] === 'inline')
+                  );
+
+                case 'multimodal':
+                  throw new Error(`Nested multimodal types are not supported`);
+              }
+            });
+
+            const result = getValue(arg[index], types[index][1]);
+
+            if (Either.isLeft(result)) {
+              return Either.left(
+                `Failed to serialize multimodal element: ${result.val}`,
+              );
+            }
+
+            values.push({
+              kind: 'variant',
+              caseIdx: index,
+              caseValue: result.val,
+            });
+          }
+        } else {
+          return Either.left(
+            `Multimodal argument should be an array of values`,
+          );
+        }
+
+        return Either.right({
+          kind: 'list',
+          value: values,
+        });
+    }
+  }
+
   function serializeArgs(fnArgs: any[]): WitValue.WitValue[] {
     const parameterWitValuesEither = Either.all(
       fnArgs.map((fnArg, index) => {
@@ -128,18 +212,12 @@ function getMethodProxy(
           );
         }
 
-        switch (typeInfo.tag) {
-          case 'analysed':
-            return WitValue.fromTsValueDefault(fnArg, typeInfo.val);
+        const value = getValue(fnArg, typeInfo);
 
-          case 'unstructured-text':
-            return Either.right(WitValue.fromTsValueTextReference(fnArg));
-
-          case 'unstructured-binary':
-            return Either.right(WitValue.fromTsValueBinaryReference(fnArg));
-        }
+        return Either.map(value, (v) => Value.toWitValue(v));
       }),
     );
+
     if (Either.isLeft(parameterWitValuesEither)) {
       throw new Error('Failed to encode args: ' + parameterWitValuesEither.val);
     }
@@ -290,6 +368,11 @@ function getAgentId(
               });
 
             return elementValueBinary;
+
+          case 'multimodal':
+            return Either.left(
+              'Multimodal constructor parameters are not supported in remote calls',
+            );
         }
       }),
     );

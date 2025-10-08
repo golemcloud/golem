@@ -270,12 +270,21 @@ function getTypeFromTsMorphInternal(
 
   if (type.isArray()) {
     const elementType = type.getArrayElementType();
-    if (!elementType) {
+
+    let resolvedElementType;
+
+    if (elementType?.isTypeParameter()) {
+      resolvedElementType = tsMorphType.getAliasTypeArguments()[0];
+    } else {
+      resolvedElementType = elementType;
+    }
+
+    if (!resolvedElementType) {
       throw new Error("Array type without element type");
     }
 
     const element = getTypeFromTsMorphInternal(
-      elementType,
+      resolvedElementType,
       false,
       visitedTypes,
     );

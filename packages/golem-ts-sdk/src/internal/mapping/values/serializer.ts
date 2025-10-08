@@ -16,6 +16,7 @@ import {
   AnalysedType,
   NameOptionTypePair,
   NameTypePair,
+  TypedArrayKind,
 } from '../types/AnalysedType';
 import * as Either from '../../../newTypes/either';
 import * as Option from '../../../newTypes/option';
@@ -994,7 +995,7 @@ function serializeTupleTsValue(
   );
 }
 
-function matchesType(value: any, type: AnalysedType): boolean {
+export function matchesType(value: any, type: AnalysedType): boolean {
   switch (type.kind) {
     case 'bool':
       return typeof value === 'boolean';
@@ -1040,8 +1041,9 @@ function matchesType(value: any, type: AnalysedType): boolean {
       );
 
     case 'list':
+      const isTypedArray = type.typedArray;
       const elemType = type.value.inner;
-      const result = matchesArray(value, elemType);
+      const result = matchesArray(value, elemType, isTypedArray);
 
       if (result) {
         return true;
@@ -1172,8 +1174,38 @@ function matchesTuple(
   return value.every((v, idx) => matchesType(v, tupleTypes[idx]));
 }
 
-function matchesArray(value: any, elementType: AnalysedType): boolean {
+function matchesArray(
+  value: any,
+  elementType: AnalysedType,
+  typedArray: TypedArrayKind | undefined,
+): boolean {
+  if (typedArray) {
+    switch (typedArray) {
+      case 'u8':
+        return value instanceof Uint8Array;
+      case 'u16':
+        return value instanceof Uint16Array;
+      case 'u32':
+        return value instanceof Uint32Array;
+      case 'big-u64':
+        return value instanceof BigUint64Array;
+      case 'i8':
+        return value instanceof Int8Array;
+      case 'i16':
+        return value instanceof Int16Array;
+      case 'i32':
+        return value instanceof Int32Array;
+      case 'big-i64':
+        return value instanceof BigInt64Array;
+      case 'f32':
+        return value instanceof Float32Array;
+      case 'f64':
+        return value instanceof Float64Array;
+    }
+  }
+
   if (!Array.isArray(value)) return false;
+
   return value.every((item) => matchesType(item, elementType));
 }
 

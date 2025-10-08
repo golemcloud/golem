@@ -25,6 +25,7 @@ import {
 import {
   castTsValueToBinaryReference,
   castTsValueToTextReference,
+  matchesType,
 } from './serializer';
 import { getLanguageCodes, getMimeTypes } from '../../schema';
 import { UnstructuredText } from '../../../newTypes/textInput';
@@ -126,21 +127,32 @@ export function deserializeDataValue(
     case 'multimodal':
       const multiModalElements = dataValue.val;
 
-      return Either.all(
+      const typeInfo = paramTypes[0].parameterTypeInfo;
+
+      if (typeInfo.tag !== 'multimodal') {
+        throw new Error(
+          `Internal error: Expected multimodal type info for parameter ${paramTypes[0].parameterName}, got ${util.format(typeInfo)}`,
+        );
+      }
+
+      const multimodalParamTypes = typeInfo.types;
+
+      // These are not separate parameters, but a single parameter of multimodal type
+      const multiModalValue: Either.Either<any[], string> = Either.all(
         multiModalElements.map(([name, elem]) => {
           switch (elem.tag) {
             case 'unstructured-text':
-              const parameterDetail = paramTypes.find(
-                (paramDetail) => paramDetail.parameterName === name,
+              const parameterDetail = multimodalParamTypes.find(
+                (paramDetail) => paramDetail[0] === name,
               );
 
               if (!parameterDetail) {
                 throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
                 );
               }
 
-              const type = parameterDetail.parameterTypeInfo;
+              const type = parameterDetail[1];
 
               const textRef = elem.val;
 
@@ -160,17 +172,17 @@ export function deserializeDataValue(
               );
 
             case 'unstructured-binary':
-              const binaryParameterDetail = paramTypes.find(
-                (paramDetail) => paramDetail.parameterName === name,
+              const binaryParameterDetail = multimodalParamTypes.find(
+                (paramDetail) => paramDetail[0] === name,
               );
 
               if (!binaryParameterDetail) {
                 throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                  `Unable to process multimodal input of elem ${util.format(elem.val)}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
                 );
               }
 
-              const binaryType = binaryParameterDetail.parameterTypeInfo;
+              const binaryType = binaryParameterDetail[1];
 
               const binaryRef = elem.val;
 
@@ -191,17 +203,17 @@ export function deserializeDataValue(
             case 'component-model':
               const witValue = elem.val;
 
-              const paramDetail = paramTypes.find(
-                (paramDetail) => paramDetail.parameterName === name,
+              const paramDetail = multimodalParamTypes.find(
+                (paramDetail) => paramDetail[0] === name,
               );
 
               if (!paramDetail) {
                 throw new Error(
-                  `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => JSON.stringify(p)).join(', ')}`,
+                  `Unable to process multimodal input of elem ${util.format(Value.fromWitValue(elem.val))}. Unknown parameter \`${name}\` in multimodal input. Available: ${paramTypes.map((p) => util.format(p)).join(', ')}`,
                 );
               }
 
-              const paramType = paramDetail.parameterTypeInfo;
+              const paramType = paramDetail[1];
 
               if (paramType.tag !== 'analysed') {
                 throw new Error(
@@ -213,9 +225,12 @@ export function deserializeDataValue(
           }
         }),
       );
+
+      return Either.map(multiModalValue, (v) => [v]);
   }
 }
 
+// Used to serialize the return type of a method back to DataValue
 export function serializeToDataValue(
   tsValue: any,
   typeInfoInternal: TypeInfoInternal,
@@ -236,10 +251,25 @@ export function serializeToDataValue(
           };
         },
       );
+
     case 'unstructured-text':
       return Either.right(serializeTextReferenceToDataValue(tsValue));
+
     case 'unstructured-binary':
       return Either.right(serializeBinaryReferenceToDataValue(tsValue));
+
+    case 'multimodal':
+      const multiModalTypeInfo = typeInfoInternal.types;
+
+      const nameAndElementValues = serializeMultimodalToDataValue(
+        tsValue,
+        multiModalTypeInfo,
+      );
+
+      return Either.right({
+        tag: 'multimodal',
+        val: nameAndElementValues,
+      });
   }
 }
 
@@ -270,4 +300,79 @@ function serializeTextReferenceToDataValue(value: any): DataValue {
     tag: 'tuple',
     val: [elementValue],
   };
+}
+
+function serializeMultimodalToDataValue(
+  value: any,
+  typeInfoInternal: [string, TypeInfoInternal][],
+): [string, ElementValue][] {
+  let namesAndElements: [string, ElementValue][] = [];
+
+  if (Array.isArray(value)) {
+    for (const elem of value) {
+      const index = typeInfoInternal.findIndex((type) => {
+        const [, internal] = type;
+        switch (internal.tag) {
+          case 'analysed':
+            return matchesType(elem, internal.val);
+
+          case 'unstructured-binary':
+            const isObjectBinary = typeof elem === 'object' && elem !== null;
+            const keysBinary = Object.keys(elem);
+            return (
+              isObjectBinary &&
+              keysBinary.includes('tag') &&
+              (elem['tag'] === 'url' || elem['tag'] === 'inline')
+            );
+
+          case 'unstructured-text':
+            const isObject = typeof elem === 'object' && elem !== null;
+            const keys = Object.keys(elem);
+            return (
+              isObject &&
+              keys.includes('tag') &&
+              (elem['tag'] === 'url' || elem['tag'] === 'inline')
+            );
+
+          case 'multimodal':
+            throw new Error(`Nested multimodal types are not supported`);
+        }
+      });
+
+      if (index === -1)
+        throw new Error(
+          `Unable to process multimodal input of elem ${util.format(elem)}. No matching type found in multimodal definition: ${typeInfoInternal
+            .map((t) => t[0])
+            .join(', ')}`,
+        );
+
+      const result = serializeToDataValue(
+        value[index],
+        typeInfoInternal[index][1],
+      );
+
+      if (Either.isLeft(result)) {
+        throw new Error(
+          `Failed to serialize multimodal element: ${util.format(value[index])} at index ${index}`,
+        );
+      }
+
+      const dataValue = result.val;
+
+      switch (dataValue.tag) {
+        case 'tuple':
+          const element = dataValue.val[0];
+          namesAndElements.push([typeInfoInternal[index][0], element]);
+          break;
+        case 'multimodal':
+          throw new Error(`Nested multimodal types are not supported`);
+      }
+    }
+
+    return namesAndElements;
+  } else {
+    throw new Error(
+      `Unable to serialize multimodal value ${util.format(value)}. Multimodal argument should be an array of values`,
+    );
+  }
 }

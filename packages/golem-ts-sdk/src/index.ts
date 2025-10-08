@@ -23,11 +23,12 @@ import { makeAgentId, parseAgentId } from 'golem:agent/host';
 
 export { BaseAgent } from './baseAgent';
 export { AgentId } from './agentId';
-export { prompt, description, agent, multimodal } from './decorators';
+export { prompt, description, agent } from './decorators';
 export * from './newTypes/either';
 export * from './newTypes/agentClassName';
 export * from './newTypes/textInput';
 export * from './newTypes/binaryInput';
+export * from './newTypes/multimodal';
 
 export { WithRemoteMethods } from './baseAgent';
 export { AgentClassName } from './newTypes/agentClassName';
