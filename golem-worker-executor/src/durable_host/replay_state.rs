@@ -43,7 +43,7 @@ pub struct ExportedFunctionInvoked {
     pub invocation_context: InvocationContextStack,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReplayState {
     owned_worker_id: OwnedWorkerId,
     oplog_service: Arc<dyn OplogService>,
@@ -55,7 +55,7 @@ pub struct ReplayState {
     has_seen_logs: Arc<AtomicBool>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct InternalReplayState {
     pub skipped_regions: DeletedRegions,
     pub next_skipped_region: Option<OplogRegion>,
@@ -110,16 +110,6 @@ impl ReplayState {
 
     pub fn set_replay_target(&mut self, new_target: OplogIndex) {
         self.replay_target.set(new_target)
-    }
-
-    pub async fn skipped_regions(&self) -> DeletedRegions {
-        let internal = self.internal.read().await;
-        internal.skipped_regions.clone()
-    }
-
-    pub async fn add_skipped_region(&mut self, region: OplogRegion) {
-        let mut internal = self.internal.write().await;
-        internal.skipped_regions.add(region);
     }
 
     pub async fn is_in_skipped_region(&self, oplog_index: OplogIndex) -> bool {

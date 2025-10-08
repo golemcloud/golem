@@ -463,7 +463,7 @@ pub struct WorkerMetadataView {
     pub env: HashMap<String, String>,
     pub status: golem_client::model::WorkerStatus,
     pub component_version: u64,
-    pub retry_count: u64,
+    pub retry_count: u32,
 
     pub pending_invocation_count: u64,
     pub updates: Vec<golem_client::model::UpdateRecord>,
@@ -516,7 +516,7 @@ pub struct WorkerMetadata {
     pub env: HashMap<String, String>,
     pub status: golem_client::model::WorkerStatus,
     pub component_version: u64,
-    pub retry_count: u64,
+    pub retry_count: u32,
     pub pending_invocation_count: u64,
     pub updates: Vec<golem_client::model::UpdateRecord>,
     pub created_at: DateTime<Utc>,

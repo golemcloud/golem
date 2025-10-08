@@ -185,6 +185,7 @@ impl DeletedRegions {
     }
 
     pub fn merge_override(&mut self) {
+        tracing::info!("Merge override before: {self:?}");
         if let Some(regions) = self.regions.pop() {
             let current = self.regions.pop().unwrap();
             let mut builder = DeletedRegionsBuilder::from_regions(current.into_values());
@@ -194,6 +195,7 @@ impl DeletedRegions {
             let mut temp = builder.build().regions;
             self.regions.push(temp.pop().unwrap());
         }
+        tracing::info!("Merge override after: {self:?}");
     }
 
     pub fn is_empty(&self) -> bool {

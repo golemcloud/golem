@@ -440,7 +440,7 @@ async fn promise(
             promise_id: Some(
                 PromiseId {
                     worker_id: worker_id.clone(),
-                    oplog_idx: OplogIndex::from_u64(3),
+                    oplog_idx: OplogIndex::from_u64(4),
                 }
                 .into(),
             ),

@@ -27,6 +27,7 @@ use crate::preview2::golem_api_1_x::oplog::{
 use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
+use crate::services::worker::GetWorkerMetadataResult;
 use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
@@ -234,13 +235,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             };
 
             // Write an oplog entry with the new jump and then restart the worker
-            self.state
-                .replay_state
-                .add_skipped_region(jump.clone())
-                .await;
-            self.state
-                .oplog
-                .add_and_commit(OplogEntry::jump(jump))
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::jump(jump))
                 .await;
 
             debug!("Interrupting live execution for jumping from {jump_source} to {jump_target}",);
@@ -314,13 +311,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         start: begin_index.next(), // need to keep the BeginAtomicRegion entry
                         end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                     };
-                    self.state
-                        .replay_state
-                        .add_skipped_region(deleted_region.clone())
-                        .await;
-                    self.state
-                        .oplog
-                        .add_and_commit(OplogEntry::jump(deleted_region))
+
+                    self.public_state
+                        .worker()
+                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
                         .await;
                 }
             }
@@ -394,7 +388,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     .oplog
                     .add(OplogEntry::change_persistence_level(new_persistence_level))
                     .await;
-                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
             } else {
                 let oplog_index_before = self.state.current_oplog_index().await;
                 let (_, _) =
@@ -411,13 +408,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         start: oplog_index_before.next(), // need to keep the BeginAtomicRegion entry
                         end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                     };
-                    self.state
-                        .replay_state
-                        .add_skipped_region(deleted_region.clone())
-                        .await;
-                    self.state
-                        .oplog
-                        .add_and_commit(OplogEntry::jump(deleted_region))
+
+                    self.public_state
+                        .worker()
+                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
                         .await;
                 }
             }
@@ -514,8 +508,13 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_self_metadata(&mut self) -> anyhow::Result<golem_api_1_x::host::AgentMetadata> {
+        // TODO: needs to be durable
         self.observe_function_call("golem::api", "get_self_metadata");
-        let metadata = self.public_state.worker().get_metadata()?;
+        let metadata = self
+            .public_state
+            .worker()
+            .get_latest_worker_metadata()
+            .await;
         Ok(metadata.into())
     }
 
@@ -523,21 +522,25 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         &mut self,
         worker_id: golem_api_1_x::host::AgentId,
     ) -> anyhow::Result<Option<golem_api_1_x::host::AgentMetadata>> {
+        // TODO: needs to be durable
+
         self.observe_function_call("golem::api", "get_worker_metadata");
         let worker_id: WorkerId = worker_id.into();
         let owned_worker_id = OwnedWorkerId::new(&self.owned_worker_id.project_id, &worker_id);
         let metadata = self.state.worker_service.get(&owned_worker_id).await;
 
         match metadata {
-            Some(metadata) => {
-                let last_known_status = self.get_worker_status_record();
+            Some(GetWorkerMetadataResult {
+                initial_worker_metadata,
+                last_known_status: Some(last_known_status),
+            }) => {
                 let updated_metadata = golem_common::model::WorkerMetadata {
                     last_known_status,
-                    ..metadata
+                    ..initial_worker_metadata
                 };
                 Ok(Some(updated_metadata.into()))
             }
-            None => Ok(None),
+            _ => Ok(None),
         }
     }
 

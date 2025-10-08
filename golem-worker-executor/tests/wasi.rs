@@ -877,6 +877,8 @@ async fn file_update_1(
 
         check!(content_after_crash[0] == Value::String("baz\n".to_string()));
     }
+
+    executor.delete_worker(&worker_id).await;
 }
 
 #[test]

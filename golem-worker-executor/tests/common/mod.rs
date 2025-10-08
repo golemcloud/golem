@@ -13,11 +13,13 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
+use golem_common::model::oplog::{
+    OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
+};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentId, ComponentVersion, GetFileSystemNodeResult,
     IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig,
-    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
+    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -84,7 +86,7 @@ use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::{DefaultWorkerFork, WorkerForkService};
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
 use golem_worker_executor::services::{
-    rdbms, resource_limits, All, HasAll, HasConfig, HasOplogService,
+    rdbms, resource_limits, All, HasAll,
 };
 use golem_worker_executor::wasi_host::create_linker;
 use golem_worker_executor::worker::{RetryDecision, Worker};
@@ -420,19 +422,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         .await
     }
 
-    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::compute_latest_worker_status(
-            this,
-            owned_worker_id,
-            metadata,
-        )
-        .await
-    }
-
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
         instance: &Instance,
@@ -475,23 +464,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     ) -> Result<(), Error> {
         DurableWorkerCtx::<TestWorkerCtx>::on_shard_assignment_changed(this).await
     }
-
-    async fn on_worker_update_failed_to_start<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::on_worker_update_failed_to_start(
-            this,
-            account_id,
-            owned_worker_id,
-            target_version,
-            details,
-        )
-        .await
-    }
 }
 
 #[async_trait]
@@ -532,28 +504,12 @@ impl StatusManagement for TestWorkerCtx {
         self.durable_ctx.check_interrupt()
     }
 
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_suspended().await
+    fn set_suspended(&self) {
+        self.durable_ctx.set_suspended()
     }
 
     fn set_running(&self) {
         self.durable_ctx.set_running()
-    }
-
-    async fn get_worker_status(&self) -> WorkerStatus {
-        self.durable_ctx.get_worker_status().await
-    }
-
-    async fn store_worker_status(&self, status: WorkerStatus) {
-        self.durable_ctx.store_worker_status(status).await
-    }
-
-    async fn update_pending_invocations(&self) {
-        self.durable_ctx.update_pending_invocations().await
-    }
-
-    async fn update_pending_updates(&self) {
-        self.durable_ctx.update_pending_updates().await
     }
 }
 
@@ -675,6 +631,7 @@ impl WorkerCtx for TestWorkerCtx {
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
         let oplog = Arc::new(TestOplog::new(
             owned_worker_id.clone(),
@@ -708,6 +665,7 @@ impl WorkerCtx for TestWorkerCtx {
             project_service,
             agent_types_service,
             shard_service,
+            pending_update,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -1231,12 +1189,8 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
-    async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
-        self.check_oplog_add(&entry)?;
-        self.oplog.add_safe(entry).await
-    }
-
     async fn add(&self, entry: OplogEntry) {
+        self.check_oplog_add(&entry).unwrap();
         self.oplog.add(entry).await
     }
 
@@ -1244,7 +1198,7 @@ impl Oplog for TestOplog {
         self.oplog.drop_prefix(last_dropped_id).await
     }
 
-    async fn commit(&self, level: CommitLevel) {
+    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         self.oplog.commit(level).await
     }
 

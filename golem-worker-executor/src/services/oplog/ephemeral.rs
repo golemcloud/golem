@@ -20,11 +20,10 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::OwnedWorkerId;
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::Instrument;
 
 pub struct EphemeralOplog {
     owned_worker_id: OwnedWorkerId,
@@ -51,17 +50,20 @@ impl EphemeralOplogState {
         self.last_oplog_idx = self.last_oplog_idx.next();
     }
 
-    async fn commit(&mut self) {
+    async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
         let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
 
+        let mut result = BTreeMap::new();
         let mut pairs = Vec::new();
         for entry in entries {
             let oplog_idx = self.last_committed_idx.next();
+            result.insert(oplog_idx, entry.clone());
             pairs.push((oplog_idx, entry));
             self.last_committed_idx = oplog_idx;
         }
 
-        self.target.append(pairs).await
+        self.target.append(pairs).await;
+        result
     }
 }
 
@@ -119,24 +121,14 @@ impl Oplog for EphemeralOplog {
         self.target.drop_prefix(last_dropped_id).await;
     }
 
-    async fn commit(&self, level: CommitLevel) {
+    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("commit");
         match level {
             CommitLevel::Immediate => {
                 let mut state = self.state.lock().await;
                 state.commit().await
             }
-            CommitLevel::Always => {
-                let clone = self.state.clone();
-                tokio::spawn(
-                    async move {
-                        let mut state = clone.lock().await;
-                        state.commit().await
-                    }
-                    .in_current_span(),
-                );
-            }
-            CommitLevel::DurableOnly => {}
+            CommitLevel::DurableOnly => BTreeMap::new(),
         }
     }
 
