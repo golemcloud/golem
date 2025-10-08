@@ -103,7 +103,6 @@ pub struct Worker<Ctx: WorkerCtx> {
     stopping: AtomicBool,
     worker_estimate_coefficient: f64,
 
-    // always acquire this before any writes to last_known_status, invocation_results, queue, execution_status or oplog commits.
     instance: Arc<tokio::sync::Mutex<WorkerInstance>>,
     oom_retry_config: RetryConfig,
 }
