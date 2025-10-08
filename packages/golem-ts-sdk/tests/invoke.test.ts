@@ -51,7 +51,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { UnstructuredText } from '../src';
+import { Multimodal, UnstructuredText } from '../src';
 import { AgentClassName } from '../src';
 import {
   castTsValueToBinaryReference,
@@ -61,6 +61,7 @@ import {
   deserializeDataValue,
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
+import { Image, Text } from './sampleAgents';
 
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -105,13 +106,13 @@ test('An agent can be successfully initiated and all of its methods can be invok
       ) => {
         overrideSelfMetadataImpl(FooAgentClassName);
 
-        const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
+        const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
-        if (!typeRegistry) {
+        if (!classMetadata) {
           throw new Error('FooAgent type metadata not found');
         }
 
-        const resolvedAgent = initiateFooAgent(arbString, typeRegistry);
+        const resolvedAgent = initiateFooAgent(arbString, classMetadata);
 
         // Invoking function with string type
         testInvoke(
@@ -119,6 +120,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', arbString]],
           resolvedAgent,
           'Weather in ' + arbString + ' is sunny!',
+          false,
         );
 
         // Invoking function with multiple primitive types
@@ -135,6 +137,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           ],
           resolvedAgent,
           `Weather in ${arbString} is sunny!`,
+          false,
         );
 
         // Invoking function with object type
@@ -151,6 +154,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           ],
           resolvedAgent,
           `Weather in ${arbString} is sunny!`,
+          false,
         );
 
         // Invoking function with return type not specified
@@ -167,6 +171,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           ],
           resolvedAgent,
           undefined,
+          false,
         );
 
         // Arrow function
@@ -175,10 +180,17 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', arbString]],
           resolvedAgent,
           `Weather in ${arbString} is sunny!`,
+          false,
         );
 
         // Void return type
-        testInvoke('fun6', [['param', arbString]], resolvedAgent, undefined);
+        testInvoke(
+          'fun6',
+          [['param', arbString]],
+          resolvedAgent,
+          undefined,
+          false,
+        );
 
         // Invoking with various kind of optional types embedded in union type
         testInvoke(
@@ -202,6 +214,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
             param6: stringOrUndefined,
             param7: unionOrUndefined,
           },
+          false,
         );
 
         // Invoking with union with literals
@@ -210,6 +223,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['a', unionWithLiterals]],
           resolvedAgent,
           unionWithLiterals,
+          false,
         );
 
         // Invoking with tagged union
@@ -218,6 +232,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', taggedUnion]],
           resolvedAgent,
           taggedUnion,
+          false,
         );
 
         // Invoking with union with only literals
@@ -226,6 +241,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', unionWithOnlyLiterals]],
           resolvedAgent,
           unionWithOnlyLiterals,
+          false,
         );
 
         // Invoking with result type
@@ -234,6 +250,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', resultTypeExactBoth]],
           resolvedAgent,
           resultTypeExactBoth,
+          false,
         );
 
         // invoking with result-like type
@@ -242,6 +259,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', resultTypeNonExact]],
           resolvedAgent,
           resultTypeNonExact,
+          false,
         );
 
         // invoking with another result-like type
@@ -250,6 +268,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', resultTypeNonExact2]],
           resolvedAgent,
           resultTypeNonExact2,
+          false,
         );
 
         // Invoking with unstructured text
@@ -258,6 +277,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', unstructuredText]],
           resolvedAgent,
           unstructuredText,
+          false,
         );
 
         // Invoking with unstructured text with language code
@@ -266,6 +286,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', unstructuredTextWithLC]],
           resolvedAgent,
           unstructuredTextWithLC,
+          false,
         );
 
         // Invoking with unstructured binary with mime type
@@ -274,6 +295,7 @@ test('An agent can be successfully initiated and all of its methods can be invok
           [['param', unstructuredBinaryWithMimeType]],
           resolvedAgent,
           unstructuredBinaryWithMimeType,
+          false,
         );
       },
     ),
@@ -376,18 +398,45 @@ test('BarAgent can be successfully initiated', () => {
   );
 });
 
+test('Invoke function that takes and returns multimodal types', () => {
+  overrideSelfMetadataImpl(FooAgentClassName);
+
+  overrideSelfMetadataImpl(FooAgentClassName);
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  const multimodalInput: Multimodal<Text | Image> = [
+    'my-string-input',
+    new Uint8Array([137, 80, 78, 71]),
+  ];
+
+  testInvoke(
+    'fun18',
+    [['param', multimodalInput]],
+    resolvedAgent,
+    multimodalInput,
+    true,
+  );
+});
+
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
 test('Invoke function that takes unstructured-text and returns unstructured-text', () => {
   overrideSelfMetadataImpl(FooAgentClassName);
 
-  const typeRegistry = TypeMetadata.get(FooAgentClassName.value);
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
 
-  if (!typeRegistry) {
+  if (!classMetadata) {
     throw new Error('FooAgent type metadata not found');
   }
 
-  const resolvedAgent = initiateFooAgent('foo', typeRegistry);
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
   const validUnstructuredText: UnstructuredText<['en', 'de']> = {
     tag: 'inline',
@@ -400,6 +449,7 @@ test('Invoke function that takes unstructured-text and returns unstructured-text
     [['param', validUnstructuredText]],
     resolvedAgent,
     validUnstructuredText,
+    false,
   );
 
   // fun16 doesn't support language code `pl`. We dynamically invoke with it to see
@@ -413,6 +463,7 @@ test('Invoke function that takes unstructured-text and returns unstructured-text
   const dataValue = createInputDataValue(
     [['param', invalidUnstructuredText]],
     'fun16',
+    false,
   );
 
   resolvedAgent.invoke('fun16', dataValue).then((invokeResult) => {
@@ -468,11 +519,16 @@ function testInvoke(
   parameterNameAndValues: [string, any][],
   resolvedAgent: ResolvedAgent,
   expectedOutput: any,
+  multimodal: boolean,
 ) {
   // We need to first manually form the data-value to test the dynamic invoke.
   // For this, we first convert the original ts-value to data value and do a round trip to ensure
   // data matches exact.
-  const dataValue = createInputDataValue(parameterNameAndValues, methodName);
+  const dataValue = createInputDataValue(
+    parameterNameAndValues,
+    methodName,
+    multimodal,
+  );
 
   resolvedAgent.invoke(methodName, dataValue).then((invokeResult) => {
     const resultDataValue =
@@ -494,7 +550,35 @@ function testInvoke(
 function createInputDataValue(
   parameterNameAndValues: [string, any][],
   methodName: string,
+  multimodal: boolean,
 ): DataValue {
+  if (multimodal) {
+    expect(parameterNameAndValues.length).toBe(1);
+    const [paramName, value] = parameterNameAndValues[0];
+    const paramAnalysedType = AgentMethodParamRegistry.getParamType(
+      FooAgentClassName,
+      methodName,
+      paramName,
+    );
+
+    if (!paramAnalysedType) {
+      throw new Error(
+        `Unresolved type for \`${paramName}\` in method \`${methodName}\``,
+      );
+    }
+
+    if (paramAnalysedType.tag !== 'multimodal') {
+      throw new Error(
+        `Test failure: expected multimodal type for parameter \`${paramName}\` in method \`${methodName}\``,
+      );
+    }
+
+    return Either.getOrThrowWith(
+      serializeToDataValue(value, paramAnalysedType),
+      (error) => new Error(error),
+    );
+  }
+
   const elementValues: ElementValue[] = parameterNameAndValues.map(
     ([paramName, value]) => {
       const paramAnalysedType = AgentMethodParamRegistry.getParamType(
@@ -536,7 +620,7 @@ function createInputDataValue(
 
         case 'multimodal':
           throw new Error(
-            `Test failure: multimodal parameter not supported in test data`,
+            'test failure: multimodal types should not be part of other parameters',
           );
       }
     },

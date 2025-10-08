@@ -341,8 +341,8 @@ class BarAgent extends BaseAgent {
   }
 }
 
-type Text = string;
-type Image = Uint8Array;
+export type Text = string;
+export type Image = Uint8Array;
 
 // If this class is decorated with agent, it will fail
 // This is kept here to ensure that any internal user class is not part of metadata generation.
