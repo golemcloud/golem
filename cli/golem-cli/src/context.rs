@@ -547,7 +547,7 @@ impl Context {
                                 ", project: {}",
                                 project.to_string().log_color_highlight()
                             ))
-                            .unwrap_or_else(|| "".to_string())
+                            .unwrap_or_default()
                     ),
                 );
             }

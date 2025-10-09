@@ -26,7 +26,7 @@ class ChatAgent extends BaseAgent {
   }
 
   @description("Show full chat history")
-  async history(question: string): Promise<llm.ChatEvent> {
+  async history(question: string): Promise<llm.Event> {
     return this.session.events
   }
 }
