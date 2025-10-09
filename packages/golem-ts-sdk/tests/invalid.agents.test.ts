@@ -20,6 +20,7 @@ import * as AnalysedType from '../src/internal/mapping/types/AnalysedType';
 import { TypeMappingScope } from '../src/internal/mapping/types/scope';
 import * as Option from '../src/newTypes/option';
 import * as Either from '../src/newTypes/either';
+import { agent, AgentId, BaseAgent } from '../src';
 
 const invalidAgent = TypeMetadata.getAll().get('InvalidAgent');
 const fun1Params = invalidAgent?.methods.get('fun1')?.methodParams;
@@ -223,6 +224,38 @@ describe('Invalid types in agents', () => {
   });
 });
 
+test('Undecorated agent that extends BaseAgent throws reasonable error messages', () => {
+  // This is to simulate the idea that a non-agentic class extends BaseAgent and using its functionalities
+
+  expect(() => UndecoratedAgent.get()).toThrowError(
+    'Remote client creation failed: `UndecoratedAgent` must be decorated with @agent()',
+  );
+
+  const undecorated = new UndecoratedAgent();
+
+  expect(() => undecorated.getId()).toThrowError(
+    'AgentId is not available for `UndecoratedAgent`. Ensure the class is decorated with @agent()',
+  );
+
+  expect(() => undecorated.getAgentType()).toThrowError(
+    'Agent type metadata is not available for \`UndecoratedAgent\`. Ensure the class is decorated with @agent()',
+  );
+});
+
+test('Agent without BaseAgent throws reasonable error messages', () => {
+  // new AgentWithoutBaseAgent will result in calling decorators that fails
+  expect(() => {
+    @agent()
+    class AgentWithoutBaseAgent {
+      async foo(): Promise<void> {
+        return;
+      }
+    }
+  }).toThrowError(
+    'Invalid agent declaration: `AgentWithoutBaseAgent` must extend `BaseAgent` to be decorated with @agent()',
+  );
+});
+
 function getAnalysedTypeInFun1(
   parameterName: string,
 ): Either.Either<AnalysedType.AnalysedType, string> {
@@ -231,4 +264,10 @@ function getAnalysedTypeInFun1(
     type,
     Option.some(TypeMappingScope.method('fun1', parameterName, type.optional)),
   );
+}
+
+export class UndecoratedAgent extends BaseAgent {
+  async foo(): Promise<AgentId> {
+    return this.getId();
+  }
 }

@@ -16,9 +16,9 @@ import { agent, BaseAgent } from '../src';
 import * as Types from './testTypes';
 import { RecursiveType } from './testTypes';
 
-// This is a set of invalid agents
-// Note that this file is not "imported" anywhere like `sampleAgents.ts`
-// as decorators will fail and none of the tests will run
+// !!! This is a set of invalid agents
+// Note that this file is not (and shouldn't be) "imported" anywhere else directly
+// as decorators will fail and none of the tests will run.
 
 @agent()
 class InvalidAgent extends BaseAgent {

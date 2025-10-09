@@ -22,7 +22,7 @@ import { Datetime } from 'golem:rpc/types@0.2.2';
 /**
  * BaseAgent is the foundational class for defining agent implementations.
  *
- * All agents must extend this class and **must** be decorated with the `@Agent()` decorator.
+ * **Important: ** Classes that extend `BaseAgent`  **must** be decorated with the `@agent()` decorator.
  * Do **not** need to override the methods and manually implement them in this class.
  * The `@agent()` decorator handles all runtime wiring (e.g., `getId()`, `createRemote()`, etc.).
  *
@@ -31,8 +31,8 @@ import { Datetime } from 'golem:rpc/types@0.2.2';
  * ```ts
  * @agent()
  * class AssistantAgent extends BaseAgent {
- *   @Prompt("Ask your question")
- *   @Description("This method allows the agent to answer your question")
+ *   @prompt("Ask your question")
+ *   @description("This method allows the agent to answer your question")
  *   async ask(name: string): Promise<string> {
  *      return `Hello ${name}, I'm the assistant agent (${this.getId()})!`;
  *   }
@@ -43,12 +43,15 @@ export class BaseAgent {
   /**
    * Returns the unique `AgentId` for this agent instance.
    *
-   * This is automatically populated by the `@agent()` decorator at runtime.
+   * Automatically set by the `@agent()` decorator at runtime.
    *
    * @throws Will throw if accessed before the agent is initialized.
    */
   getId(): AgentId {
-    throw new Error('An agent ID will be created at runtime');
+    throw new Error(
+      `AgentId is not available for \`${this.constructor.name}\`. ` +
+        `Ensure the class is decorated with @agent()`,
+    );
   }
 
   /**
@@ -66,7 +69,8 @@ export class BaseAgent {
 
     if (Option.isNone(agentType)) {
       throw new Error(
-        `Failed to find agent type for ${this.constructor.name}. Ensure it is decorated with @Agent() and registered properly.`,
+        `Agent type metadata is not available for \`${this.constructor.name}\`. ` +
+          `Ensure the class is decorated with @agent()`,
       );
     }
 
@@ -79,14 +83,18 @@ export class BaseAgent {
    * @throws String Can throw a string describing the load error.
    */
   loadSnapshot(bytes: Uint8Array): Promise<void> {
-    throw new Error('loadSnapshot is not implemented for this agent type');
+    throw new Error(
+      `\`loadSnapshot\` is not implemented for ${this.constructor.name}`,
+    );
   }
 
   /**
    * Saves the agent's current state into a binary snapshot.
    */
   saveSnapshot(): Promise<Uint8Array> {
-    throw new Error('saveSnapshot is not implemented for this agent type');
+    throw new Error(
+      `\`saveSnapshot\` is not implemented for ${this.constructor.name}`,
+    );
   }
 
   /**
@@ -95,18 +103,36 @@ export class BaseAgent {
    * This remote client will communicate with an agent instance running
    * in a separate container, effectively offloading computation to that remote context.
    *
+   *
    * @param args - Constructor arguments for the agent
    * @returns A remote proxy instance of the agent
    *
-   * @example
-   * const remoteClient = MyAgent.get("arg1", "arg2") where `arg1`, `arg2` are the constructor arguments
-   * validated at compile time.
+   * Example:
+   *
+   * ```ts
+   *
+   * @agent()
+   * class MyAgent extends BaseAgent {
+   *  constructor(arg1: string, arg2: number) { ... }
+   *
+   *  async myMethod(input: string): Promise<void> { ... }
+   * }
+   *
+   * const remoteClient = MyAgent.get("arg1", "arg2")
+   * remoteClient.myMethod("input")
+   * ```
+   *
+   * The type of `remoteClient` is `WithRemoteMethods<MyAgent>` exposing more functionalities
+   * such as `trigger` and `schedule`. See `WithRemoteMethods` documentation for details.
+   *
    */
   static get<T extends new (...args: any[]) => BaseAgent>(
     this: T,
     ...args: ConstructorParameters<T>
   ): WithRemoteMethods<InstanceType<T>> {
-    throw new Error('A remote client will be created at runtime');
+    throw new Error(
+      `Remote client creation failed: \`${this.name}\` must be decorated with @agent()`,
+    );
   }
 }
 
