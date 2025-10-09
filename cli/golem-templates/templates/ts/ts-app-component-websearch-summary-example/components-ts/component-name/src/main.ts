@@ -3,12 +3,9 @@ import {
   agent,
   prompt,
   description,
-  atomically,
 } from '@golemcloud/golem-ts-sdk';
-import {
-  send as sendToLLM
-} from 'golem:llm/llm@1.0.0'
-import { startSearch } from 'golem:web-search/web-search@1.0.0';
+import * as llm from 'golem:llm/llm@1.0.0';
+import * as webSearch from 'golem:web-search/web-search@1.0.0';
 import { env } from 'node:process';
 
 type SearchResult = {
@@ -52,52 +49,43 @@ class ResearchAgent extends BaseAgent {
   async research(topic: string): Promise<string> {
     const searchResult = searchWebForTopic(topic)
 
-    const llmResponse = atomically(() => {
-      let result = sendToLLM(
-        [
-          {
+    let llmResult = llm.send(
+      [
+        {
+          tag: "message",
+          val: {
             role: "assistant",
             name: "research-agent",
             content: [
               {
                 tag: "text",
                 val: `
-                  I'm writing a report on the topic "${topic}",
+                  I'm writing a report on the topic "${ topic }",
                   Your job is to be a research-assistant and provide me an initial overview on the topic so I can dive into it in more detail.
                   At the bottom are top search results from a search engine in json format. Use your own knowledge and the snippets from the search results to create the overview.
                   Also include the best links to look into to learn more about the topic. Prioritize objective and reliable sources.
 
-                  Search results: ${JSON.stringify(searchResult)}
+                  Search results: ${ JSON.stringify(searchResult) }
                 `
               }
             ]
           }
-        ],
-        {
-          model: this.model,
-          tools: [],
-          toolChoice: undefined,
-          stopSequences: undefined,
-          maxTokens: undefined,
-          temperature: undefined,
-          providerOptions: []
         }
-      )
-
-      if (result.tag != 'message') {
-        throw "Unexpected chatevent tag from llm"
+      ],
+      {
+        model: this.model,
+        tools: [],
+        toolChoice: undefined,
+        stopSequences: undefined,
+        maxTokens: undefined,
+        temperature: undefined,
+        providerOptions: []
       }
+    );
 
-      let content = result.val.content[0]
+    const textResult = llmResult.content.filter((content) => content.tag === "text").join("\n");
 
-      if (content == null || content.tag != 'text') {
-        throw "Didn't receive expected text response from llm"
-      }
-
-      return content.val
-    })
-
-    return `Finished research for topic ${topic}:\n${llmResponse}`
+    return `Finished research for topic ${ topic }:\n${ textResult }`
   }
 }
 
@@ -105,17 +93,11 @@ function searchWebForTopic(topic: string): SearchResult[] {
   // get 30 results in total
   const pagesToRetrieve = 3
 
-  const session = startSearch({
+  const session = webSearch.startSearch({
     query: topic,
     language: "lang_en",
     safeSearch: "off",
-    region: undefined,
     maxResults: 10,
-    timeRange: undefined,
-    includeDomains: undefined,
-    excludeDomains: undefined,
-    includeImages: false,
-    includeHtml: false,
     advancedAnswer: true
   })
 
