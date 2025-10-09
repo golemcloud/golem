@@ -27,7 +27,7 @@ export function generateVariantCaseName(variantName: string | undefined, termIdx
   return `${kebabCasedVariantName}${termIdx}`
 }
 
-function convertVariantTypeNameToKebab(typeName: string): string{
+export function convertVariantTypeNameToKebab(typeName: string): string{
   return typeName
     .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')

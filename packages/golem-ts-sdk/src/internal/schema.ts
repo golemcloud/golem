@@ -35,6 +35,7 @@ import { AgentConstructorParamRegistry } from './registry/agentConstructorParamR
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
 import { AnalysedType, tuple } from './mapping/types/AnalysedType';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
+import { convertVariantTypeNameToKebab } from './mapping/types/name';
 
 export function getConstructorDataSchema(
   agentClassName: AgentClassName,
@@ -475,7 +476,11 @@ function getMultimodalDetails(
           val: textDescriptor.val,
         };
 
-        return Either.right([paramTypeName, elementSchema, typeInfoInternal]);
+        return Either.right([
+          convertVariantTypeNameToKebab(paramTypeName),
+          elementSchema,
+          typeInfoInternal,
+        ]);
       }
 
       if (paramTypeName && paramTypeName === 'UnstructuredBinary') {
@@ -498,7 +503,11 @@ function getMultimodalDetails(
           val: binaryDescriptor.val,
         };
 
-        return Either.right([paramTypeName, elementSchema, typeInfoInternal]);
+        return Either.right([
+          convertVariantTypeNameToKebab(paramTypeName),
+          elementSchema,
+          typeInfoInternal,
+        ]);
       }
 
       const witType = WitType.fromTsType(paramType, Option.none());
@@ -518,7 +527,11 @@ function getMultimodalDetails(
           tag: 'component-model',
           val: witType,
         };
-        return [paramTypeName, elementSchema, typeInfoInternal];
+        return [
+          convertVariantTypeNameToKebab(paramTypeName),
+          elementSchema,
+          typeInfoInternal,
+        ];
       });
     }),
   );

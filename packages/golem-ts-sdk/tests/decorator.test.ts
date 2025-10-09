@@ -121,7 +121,7 @@ describe('Agent decorator should register the agent class and its methods into A
         },
       ],
       [
-        'Uint8Array',
+        'uint8array',
         {
           tag: 'component-model',
           val: {
@@ -604,27 +604,6 @@ function getWitType(dataSchema: DataSchema, parameterName: string) {
 }
 
 function getElementSchema(inputSchema: DataSchema, parameterName: string) {
-  const schema: [string, ElementSchema] | undefined = inputSchema.val.find(
-    ([name]) => name === parameterName,
-  );
-
-  if (!schema) {
-    throw new Error(
-      `${parameterName} not found in scheme ${util.format(inputSchema)}`,
-    );
-  }
-
-  return schema[1];
-}
-
-function getMultimodalElementSchema(
-  inputSchema: DataSchema,
-  parameterName: string,
-) {
-  if (inputSchema.tag !== 'multimodal') {
-    throw new Error('Input schema is not multimodal');
-  }
-
   const schema: [string, ElementSchema] | undefined = inputSchema.val.find(
     ([name]) => name === parameterName,
   );
