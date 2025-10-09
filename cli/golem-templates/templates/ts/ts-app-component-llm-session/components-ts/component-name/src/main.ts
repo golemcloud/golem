@@ -5,6 +5,7 @@ import {
   description,
 } from '@golemcloud/golem-ts-sdk';
 import * as llm from 'golem:llm/llm@1.0.0';
+import * as webSearch from 'golem:web-search/web-search@1.0.0'
 
 @agent()
 class ChatAgent extends BaseAgent {
@@ -17,16 +18,34 @@ class ChatAgent extends BaseAgent {
     this.session = new LlmSession({
       model: "gpt-oss:20b",
     });
+    this.session.addMessage({
+      role: "system",
+      content: [{
+        tag: "text",
+        val: `You are a helpful and very funny assistant for a chat named ${ chatName }.`,
+      }]
+    });
   }
 
   @description("Ask questions")
   async ask(question: string): Promise<string> {
-    this.session.addMessage(question);
+    const result = webSearch.searchOnce({
+      query: "hello"
+    });
+
+    this.session.addMessage({
+      role: "user",
+      content: [{
+        tag: "text",
+        val: question,
+      }],
+    });
     let response = this.session.send();
+    return response.content.filter(contentPart => contentPart.tag === "text").join("\n");
   }
 
   @description("Show full chat history")
-  async history(question: string): Promise<llm.Event> {
+  async history(): Promise<llm.Event[]> {
     return this.session.events
   }
 }

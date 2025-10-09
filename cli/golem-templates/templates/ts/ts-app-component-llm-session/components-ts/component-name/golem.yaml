@@ -9,7 +9,7 @@ httpApi:
         path: /component-name-api/chat/{chat-name}/history
         binding:
           type: default
-          __cn__: componentname
+          componentName: app:agent
           response: |
             let name: string = request.path.chat-name;
             let agent = chat-agent(name);
@@ -19,7 +19,7 @@ httpApi:
         path: /component-name-api/chat/{chat-name}/ask
         binding:
           type: default
-          __cn__: componentname
+          componentName: app:agent
           response: |
             let name: string = request.path.chat-name;
             let agent = chat-agent(name);
