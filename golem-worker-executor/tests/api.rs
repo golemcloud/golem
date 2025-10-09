@@ -24,7 +24,11 @@ use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, RetryConfig, ScanCursor, StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus};
+use golem_common::model::{
+    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
+    ScanCursor, StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    WorkerResourceDescription, WorkerStatus,
+};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
@@ -41,8 +45,8 @@ use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use system_interface::fs::FileIoExt;
 use test_r::core::{DynamicTestRegistration, TestProperties};
@@ -1848,8 +1852,14 @@ async fn long_running_poll_loop_works_as_expected(
     http_server.abort();
 }
 
-async fn start_http_poll_server(response: Arc<Mutex<String>>, poll_count: Arc<AtomicUsize>, forced_port: Option<u16>) -> (u16, JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", forced_port.unwrap_or(0))).await.unwrap();
+async fn start_http_poll_server(
+    response: Arc<Mutex<String>>,
+    poll_count: Arc<AtomicUsize>,
+    forced_port: Option<u16>,
+) -> (u16, JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", forced_port.unwrap_or(0)))
+        .await
+        .unwrap();
 
     let host_http_port = listener.local_addr().unwrap().port();
 
@@ -1866,7 +1876,7 @@ async fn start_http_poll_server(response: Arc<Mutex<String>>, poll_count: Arc<At
 
             axum::serve(listener, route).await.unwrap();
         }
-            .in_current_span(),
+        .in_current_span(),
     );
 
     (host_http_port, http_server)
@@ -1890,13 +1900,18 @@ async fn long_running_poll_loop_http_failures_are_retried(
             max_delay: Duration::from_millis(500),
             multiplier: 1.5,
             max_jitter_factor: None,
-        })
-    ).await.unwrap().into_admin().await;
+        }),
+    )
+    .await
+    .unwrap()
+    .into_admin()
+    .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let poll_count = Arc::new(AtomicUsize::new(0));
 
-    let (host_http_port, http_server) = start_http_poll_server(response.clone(), poll_count.clone(), None).await;
+    let (host_http_port, http_server) =
+        start_http_poll_server(response.clone(), poll_count.clone(), None).await;
 
     let component_id = executor.component("http-client-2").store().await;
     let mut env = HashMap::new();
@@ -1948,7 +1963,8 @@ async fn long_running_poll_loop_http_failures_are_retried(
     info!("*** RESTARTING THE HTTP SERVER");
 
     // Restart the HTTP server (TODO: another test could have taken the port for now - we need to retry until we can bind again)
-    let (_, http_server) = start_http_poll_server(response.clone(), poll_count.clone(), Some(host_http_port)).await;
+    let (_, http_server) =
+        start_http_poll_server(response.clone(), poll_count.clone(), Some(host_http_port)).await;
 
     info!("*** WAITING FOR 3 MORE POLLS");
 

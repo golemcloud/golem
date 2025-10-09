@@ -291,7 +291,7 @@ pub enum OplogEntry {
         /// current oplog index (after the last persisted side-effect). When failing in an atomic region
         /// or batched remote writes, this should point to the start of the region.
         /// When counting the number of retries for a specific error, the error entries are grouped by this index.
-        retry_from: OplogIndex
+        retry_from: OplogIndex,
     },
     /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
     /// more predictable.
@@ -541,7 +541,7 @@ impl OplogEntry {
         OplogEntry::Error {
             timestamp: Timestamp::now_utc(),
             error,
-            retry_from
+            retry_from,
         }
     }
 

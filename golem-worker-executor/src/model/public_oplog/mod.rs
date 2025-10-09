@@ -419,7 +419,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             } => Ok(PublicOplogEntry::Error(ErrorParameters {
                 timestamp,
                 error: error.to_string(""),
-                retry_from
+                retry_from,
             })),
             OplogEntry::NoOp { timestamp } => {
                 Ok(PublicOplogEntry::NoOp(TimestampParameter { timestamp }))

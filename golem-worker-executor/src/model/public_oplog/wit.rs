@@ -112,12 +112,14 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::Suspend(TimestampParameter { timestamp }) => {
                 Self::Suspend(timestamp.into())
             }
-            PublicOplogEntry::Error(ErrorParameters { timestamp, error, retry_from: _ }) => {
-                Self::Error(oplog::ErrorParameters {
-                    timestamp: timestamp.into(),
-                    error: error.to_string(),
-                })
-            }
+            PublicOplogEntry::Error(ErrorParameters {
+                timestamp,
+                error,
+                retry_from: _,
+            }) => Self::Error(oplog::ErrorParameters {
+                timestamp: timestamp.into(),
+                error: error.to_string(),
+            }),
             PublicOplogEntry::NoOp(TimestampParameter { timestamp }) => {
                 Self::NoOp(timestamp.into())
             }

@@ -21,7 +21,10 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{AccountId, ComponentType, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord};
+use golem_common::model::{
+    AccountId, ComponentType, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
+    WorkerStatusRecord,
+};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -237,7 +240,7 @@ pub enum TrapType {
     /// Failed with an error
     Error {
         error: WorkerError,
-        retry_from: OplogIndex
+        retry_from: OplogIndex,
     },
 }
 
@@ -262,18 +265,24 @@ impl TrapType {
                             retry_from,
                         },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
-                            Some(WorkerExecutorError::InvalidRequest { details }) => TrapType::Error {
-                                error: WorkerError::InvalidRequest(details.clone()),
-                                retry_from,
-                            },
-                            Some(WorkerExecutorError::ParamTypeMismatch { details }) => TrapType::Error {
-                                error: WorkerError::InvalidRequest(details.clone()),
-                                retry_from,
-                            },
-                            Some(WorkerExecutorError::ValueMismatch { details }) => TrapType::Error {
-                                error: WorkerError::InvalidRequest(details.clone()),
-                                retry_from,
-                            },
+                            Some(WorkerExecutorError::InvalidRequest { details }) => {
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
+                            }
+                            Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
+                            }
+                            Some(WorkerExecutorError::ValueMismatch { details }) => {
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
+                            }
                             _ => TrapType::Error {
                                 error: WorkerError::Unknown(format!("{error:#}")),
                                 retry_from,

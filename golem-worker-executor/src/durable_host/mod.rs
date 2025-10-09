@@ -556,7 +556,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .emit_event(event.clone(), true);
 
                         if self.state.is_live()
-                            & &!self
+                            & !self
                                 .state
                                 .replay_state
                                 .seen_log(*level, context, message)

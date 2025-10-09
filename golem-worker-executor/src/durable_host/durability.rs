@@ -18,8 +18,9 @@ use crate::model::TrapType;
 use crate::preview2::golem::durability::durability;
 use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
 use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::worker::RetryDecision;
 use crate::workerctx::WorkerCtx;
-use anyhow::{anyhow, Error};
+use anyhow::Error;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use bytes::Bytes;
@@ -28,12 +29,11 @@ use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
-use crate::worker::RetryDecision;
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -484,14 +484,10 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             Self::get_recovery_decision_on_trap(&retry_config, previous_tries, &trap_type);
 
         match decision {
-            RetryDecision::Immediate |
-            RetryDecision::Delayed(_) |
-            RetryDecision::ReacquirePermits => {
-                Err(failure)
-            }
-            RetryDecision::None => {
-                Ok(())
-            }
+            RetryDecision::Immediate
+            | RetryDecision::Delayed(_)
+            | RetryDecision::ReacquirePermits => Err(failure),
+            RetryDecision::None => Ok(()),
         }
     }
 }
@@ -545,13 +541,13 @@ impl<SOk, SErr> Durability<SOk, SErr> {
     ///
     /// If retrying is not possible, the function returns Ok(()) and the host function
     /// can continue persisting the failed result permanently.
-    pub async fn try_trigger_retry<Ok, Err>(
+    pub async fn try_trigger_retry<Ok, Err: Display>(
         &self,
         ctx: &mut impl DurabilityHost,
         result: &Result<Ok, Err>,
     ) -> anyhow::Result<()> {
         if let Err(err) = result {
-            ctx.try_trigger_retry(anyhow!(err)).await
+            ctx.try_trigger_retry(Error::msg(err.to_string())).await
         } else {
             Ok(())
         }
