@@ -5,7 +5,6 @@ import {
   description,
 } from '@golemcloud/golem-ts-sdk';
 import * as llm from 'golem:llm/llm@1.0.0';
-import * as webSearch from 'golem:web-search/web-search@1.0.0'
 
 @agent()
 class ChatAgent extends BaseAgent {
@@ -29,10 +28,6 @@ class ChatAgent extends BaseAgent {
 
   @description("Ask questions")
   async ask(question: string): Promise<string> {
-    const result = webSearch.searchOnce({
-      query: "hello"
-    });
-
     this.session.addMessage({
       role: "user",
       content: [{
