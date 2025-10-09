@@ -25,7 +25,9 @@ use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
     ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
+    WorkerStatusRecord,
 };
+use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
 use std::cmp::min;
@@ -181,7 +183,8 @@ struct CreateOplogConstructor {
     service: MultiLayerOplogService,
     last_oplog_index: OplogIndex,
     initial_worker_metadata: WorkerMetadata,
-    execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+    execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
 }
 
 impl CreateOplogConstructor {
@@ -192,7 +195,8 @@ impl CreateOplogConstructor {
         service: MultiLayerOplogService,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Self {
         Self {
             owned_worker_id,
@@ -201,6 +205,7 @@ impl CreateOplogConstructor {
             service,
             last_oplog_index,
             initial_worker_metadata,
+            last_known_status,
             execution_status,
         }
     }
@@ -209,7 +214,7 @@ impl CreateOplogConstructor {
 #[async_trait]
 impl OplogConstructor for CreateOplogConstructor {
     async fn create_oplog(self, close: Box<dyn FnOnce() + Send + Sync>) -> Arc<dyn Oplog> {
-        let component_type = self.execution_status.read().unwrap().component_type();
+        let component_type = self.execution_status.read().component_type();
 
         match component_type {
             ComponentType::Durable => {
@@ -219,6 +224,7 @@ impl OplogConstructor for CreateOplogConstructor {
                             &self.owned_worker_id,
                             initial_entry,
                             self.initial_worker_metadata,
+                            self.last_known_status,
                             self.execution_status,
                         )
                         .await
@@ -228,6 +234,7 @@ impl OplogConstructor for CreateOplogConstructor {
                             &self.owned_worker_id,
                             self.last_oplog_index,
                             self.initial_worker_metadata,
+                            self.last_known_status,
                             self.execution_status,
                         )
                         .await
@@ -241,6 +248,7 @@ impl OplogConstructor for CreateOplogConstructor {
                         &self.owned_worker_id,
                         self.last_oplog_index,
                         self.initial_worker_metadata,
+                        self.last_known_status,
                         self.execution_status,
                     )
                     .await;
@@ -277,7 +285,8 @@ impl OplogService for MultiLayerOplogService {
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -289,6 +298,7 @@ impl OplogService for MultiLayerOplogService {
                     self.clone(),
                     OplogIndex::INITIAL,
                     initial_worker_metadata,
+                    last_known_status,
                     execution_status,
                 ),
             )
@@ -300,7 +310,8 @@ impl OplogService for MultiLayerOplogService {
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -312,6 +323,7 @@ impl OplogService for MultiLayerOplogService {
                     self.clone(),
                     last_oplog_index,
                     initial_worker_metadata,
+                    last_known_status,
                     execution_status,
                 ),
             )
@@ -735,8 +747,8 @@ impl Oplog for MultiLayerOplog {
         self.primary_length.store(new_length, Ordering::Release);
     }
 
-    async fn commit(&self, level: CommitLevel) {
-        self.primary.commit(level).await;
+    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        let result = self.primary.commit(level).await;
         let count = self.primary_length.load(Ordering::Acquire);
         if count >= self.multi_layer_oplog_service.entry_count_limit {
             let current_idx = self.primary.current_oplog_index().await;
@@ -749,6 +761,7 @@ impl Oplog for MultiLayerOplog {
             // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
             self.primary_length.store(0, Ordering::Release);
         }
+        result
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {

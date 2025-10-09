@@ -25,8 +25,9 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{
     ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
-    WorkerId, WorkerMetadata,
+    WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
+use golem_common::read_only_lock;
 use golem_common::serialization::{serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 pub use multilayer::{MultiLayerOplog, MultiLayerOplogService, OplogArchiveService};
@@ -70,14 +71,17 @@ pub trait OplogService: Debug + Send + Sync {
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
+
     async fn open(
         &self,
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog>;
 
     async fn get_last_index(&self, owned_worker_id: &OwnedWorkerId) -> OplogIndex;
@@ -153,8 +157,6 @@ pub trait OplogService: Debug + Send + Sync {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum CommitLevel {
     /// Always commit immediately and do not return until it is done
-    Immediate,
-    /// Always commit, both for durable and ephemeral workers, no guarantees that it awaits it
     Always,
     /// Only commit immediately if the worker is durable
     DurableOnly,
@@ -177,7 +179,7 @@ pub trait Oplog: Any + Debug + Send + Sync {
     async fn drop_prefix(&self, last_dropped_id: OplogIndex);
 
     /// Commits the buffered entries to the oplog
-    async fn commit(&self, level: CommitLevel);
+    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry>;
 
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
@@ -199,13 +201,6 @@ pub trait Oplog: Any + Debug + Send + Sync {
         self.add(entry).await;
         self.commit(CommitLevel::Always).await;
         self.current_oplog_index().await
-    }
-
-    async fn add_and_commit_safe(&self, entry: OplogEntry) -> Result<OplogIndex, String> {
-        self.add_safe(entry).await?;
-        self.commit(CommitLevel::Always).await;
-        let idx = self.current_oplog_index().await;
-        Ok(idx)
     }
 
     /// Uploads a big oplog payload and returns a reference to it

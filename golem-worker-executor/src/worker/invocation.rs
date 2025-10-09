@@ -20,7 +20,7 @@ use anyhow::anyhow;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_common::model::IdempotencyKey;
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, DecodeParamResult};
@@ -205,10 +205,6 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     }
 
     store.data_mut().set_running();
-    store
-        .data_mut()
-        .store_worker_status(WorkerStatus::Running)
-        .await;
 
     let metadata = component_metadata
         .find_parsed_function(&parsed)
@@ -241,7 +237,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
     };
 
-    store.data().set_suspended().await?;
+    store.data().set_suspended();
 
     call_result
 }
