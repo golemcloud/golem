@@ -83,7 +83,7 @@ class ResearchAgent extends BaseAgent {
       }
     );
 
-    const textResult = llmResult.content.filter((content) => content.tag === "text").join("\n");
+    const textResult = llmResult.content.filter(content => content.tag === "text").map(content => content.val).join("\n");
 
     return `Finished research for topic ${ topic }:\n${ textResult }`
   }
