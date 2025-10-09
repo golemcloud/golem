@@ -247,7 +247,7 @@ export function agent(customName?: string) {
 
         if (!rawAgentId.startsWith(agentTypeName.asWit)) {
           const error = createCustomError(
-            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", but got "${rawAgentId}"`,
+            `Expected the container name in which the agent is initiated to start with "${agentTypeName.asWit}", got "${rawAgentId}"`,
           );
 
           return {

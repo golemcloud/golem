@@ -165,6 +165,50 @@ class FooAgent extends BaseAgent {
     return param;
   }
 
+  async fun19(param: Uint8Array): Promise<Uint8Array> {
+    return param;
+  }
+
+  async fun20(param: Uint16Array): Promise<Uint16Array> {
+    return param;
+  }
+
+  async fun21(param: Float32Array): Promise<Float32Array> {
+    return param;
+  }
+
+  async fun22(param: BigInt64Array): Promise<BigInt64Array> {
+    return param;
+  }
+
+  async fun23(param: BigUint64Array): Promise<BigUint64Array> {
+    return param;
+  }
+
+  async fun24(param: Int8Array): Promise<Int8Array> {
+    return param;
+  }
+
+  async fun25(param: Int16Array): Promise<Int16Array> {
+    return param;
+  }
+
+  async fun26(param: Int32Array): Promise<Int32Array> {
+    return param;
+  }
+
+  async fun27(param: Uint32Array): Promise<Uint32Array> {
+    return param;
+  }
+
+  async fun28(param: Float64Array): Promise<Float64Array> {
+    return param;
+  }
+
+  async fun29(param: BigInt64Array): Promise<BigInt64Array> {
+    return param;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {

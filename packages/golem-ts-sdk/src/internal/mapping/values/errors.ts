@@ -15,14 +15,18 @@
 import * as Option from '../../../newTypes/option';
 import * as util from 'node:util';
 import { Value } from './Value';
-import { AnalysedType, NameOptionTypePair } from '../types/AnalysedType';
+import { NameOptionTypePair } from '../types/AnalysedType';
 
 // type mismatch in tsValue when converting from TS to WIT
 export function typeMismatchInSerialize(
   tsValue: any,
-  expectedType: AnalysedType,
+  expectedType: string,
 ): string {
-  return `Type mismatch. Expected \`${safeDisplay(expectedType.kind)}\`, but got \`${safeDisplay(tsValue)}\` which is of type \`${typeof tsValue}\``;
+  return `Type mismatch. Expected type \`${safeDisplay(expectedType)}\`, got \`${safeDisplay(tsValue)}\``;
+}
+
+export function customSerializationError(message: string): string {
+  return `Internal error: ${message}`;
 }
 
 // Unable to convert the value to the expected type in the output direction

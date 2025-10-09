@@ -42,7 +42,34 @@ import {
 
 import { AgentClassName, UnstructuredBinary, UnstructuredText } from '../src';
 
-export const stringOrNull = fc.oneof(fc.string(), fc.constant(null));
+export const uint8ArrayArb = fc.uint8Array({ minLength: 0, maxLength: 100 });
+
+export const uint16ArrayArb = fc.uint16Array({ minLength: 0, maxLength: 100 });
+
+export const uint32ArrayArb = fc.uint32Array({ minLength: 0, maxLength: 100 });
+
+export const uint64ArrayArb = fc.bigUint64Array({
+  minLength: 0,
+  maxLength: 100,
+});
+
+export const int8ArrayArb = fc.int8Array({ minLength: 0, maxLength: 100 });
+
+export const int16ArrayArb = fc.int16Array({ minLength: 0, maxLength: 100 });
+
+export const int32ArrayArb = fc.int32Array({ minLength: 0, maxLength: 100 });
+
+export const int64ArrayArb = fc.bigInt64Array({ minLength: 0, maxLength: 100 });
+
+export const float32ArrayArb = fc.float32Array({
+  minLength: 0,
+  maxLength: 100,
+});
+
+export const float64ArrayArb = fc.float64Array({
+  minLength: 0,
+  maxLength: 100,
+});
 
 export const stringOrNumberOrNull = fc.oneof(
   fc.string(),

@@ -26,6 +26,12 @@ import {
 import * as WitValue from '../src/internal/mapping/values/WitValue';
 import * as fc from 'fast-check';
 import {
+  float32ArrayArb,
+  float64ArrayArb,
+  int16ArrayArb,
+  int32ArrayArb,
+  int64ArrayArb,
+  int8ArrayArb,
   interfaceArb,
   objectWithUnionWithUndefined1Arb,
   objectWithUnionWithUndefined2Arb,
@@ -37,6 +43,10 @@ import {
   stringOrNumberOrNull,
   stringOrUndefined,
   taggedUnionArb,
+  uint16ArrayArb,
+  uint32ArrayArb,
+  uint64ArrayArb,
+  uint8ArrayArb,
   unionArb,
   unionWithLiteralArb,
   unionWithOnlyLiteralsArb,
@@ -425,6 +435,77 @@ test('Invoke function that takes and returns multimodal types', () => {
   );
 });
 
+test('Invoke function that takes and returns typed array', () => {
+  overrideSelfMetadataImpl(FooAgentClassName);
+
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  fc.assert(
+    fc.property(
+      uint8ArrayArb,
+      uint16ArrayArb,
+      uint32ArrayArb,
+      uint64ArrayArb,
+      int8ArrayArb,
+      int16ArrayArb,
+      int32ArrayArb,
+      int64ArrayArb,
+      float32ArrayArb,
+      float64ArrayArb,
+      (
+        uint8,
+        uint16,
+        uint32,
+        uint64,
+        int8,
+        int16,
+        int32,
+        int64,
+        float32,
+        float64,
+      ) => {
+        testInvoke('fun19', [['param', uint8]], resolvedAgent, uint8, false);
+
+        testInvoke('fun20', [['param', uint16]], resolvedAgent, uint16, false);
+
+        testInvoke('fun27', [['param', uint32]], resolvedAgent, uint32, false);
+
+        testInvoke('fun23', [['param', uint64]], resolvedAgent, uint64, false);
+
+        testInvoke('fun24', [['param', int8]], resolvedAgent, int8, false);
+
+        testInvoke('fun25', [['param', int16]], resolvedAgent, int16, false);
+
+        testInvoke('fun26', [['param', int32]], resolvedAgent, int32, false);
+
+        testInvoke('fun29', [['param', int64]], resolvedAgent, int64, false);
+
+        testInvoke(
+          'fun21',
+          [['param', float32]],
+          resolvedAgent,
+          float32,
+          false,
+        );
+
+        testInvoke(
+          'fun28',
+          [['param', float64]],
+          resolvedAgent,
+          float64,
+          false,
+        );
+      },
+    ),
+  );
+});
+
 // This is already in the above big test, but we keep it separate to have a clearer
 // view of how unstructured text is handled.
 test('Invoke function that takes unstructured-text and returns unstructured-text', () => {
@@ -554,6 +635,7 @@ function createInputDataValue(
 ): DataValue {
   if (multimodal) {
     expect(parameterNameAndValues.length).toBe(1);
+
     const [paramName, value] = parameterNameAndValues[0];
     const paramAnalysedType = AgentMethodParamRegistry.getParamType(
       FooAgentClassName,
@@ -563,7 +645,7 @@ function createInputDataValue(
 
     if (!paramAnalysedType) {
       throw new Error(
-        `Unresolved type for \`${paramName}\` in method \`${methodName}\``,
+        `Unresolved multimodal type for  \`${paramName}\` in method \`${methodName}\``,
       );
     }
 
@@ -620,7 +702,7 @@ function createInputDataValue(
 
         case 'multimodal':
           throw new Error(
-            'test failure: multimodal types should not be part of other parameters',
+            'Test failure: multimodal types should not be part of other parameters',
           );
       }
     },
