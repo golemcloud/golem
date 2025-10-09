@@ -162,6 +162,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     stack,
                 )
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist_serializable(self, input, result.clone().map_err(|err| (&err).into()))
                 .await?;
@@ -299,6 +300,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     stack,
                 )
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -880,6 +882,17 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                         )
                     }
                 };
+
+            let for_retry = match &result {
+                Err(err) => Err(anyhow!(err)),
+                Ok(Some(Err(err))) => Err(anyhow!(err)),
+                _ => Ok(()),
+            };
+
+            if let Err(err) = for_retry {
+                self.state.current_retry_point = begin_index;
+                self.try_trigger_retry(err).await?;
+            }
 
             if self.state.snapshotting_mode.is_none() {
                 self.state

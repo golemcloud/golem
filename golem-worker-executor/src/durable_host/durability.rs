@@ -33,6 +33,7 @@ use std::marker::PhantomData;
 use tracing::error;
 use wasmtime::component::Resource;
 use wasmtime_wasi::{dynamic_subscribe, DynPollable, DynamicPollable, Pollable};
+use crate::worker::RetryDecision;
 
 #[derive(Debug)]
 pub struct DurableExecutionState {
@@ -478,12 +479,20 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             .as_ref()
             .unwrap_or(default_retry_config)
             .clone();
-        let trap_type = TrapType::from_error(&failure, self.state.current_retry_point);
+        let trap_type = TrapType::from_error::<Ctx>(&failure, self.state.current_retry_point);
         let decision =
             Self::get_recovery_decision_on_trap(&retry_config, previous_tries, &trap_type);
 
-        // TODO
-        Err(failure)
+        match decision {
+            RetryDecision::Immediate |
+            RetryDecision::Delayed(_) |
+            RetryDecision::ReacquirePermits => {
+                Err(failure)
+            }
+            RetryDecision::None => {
+                Ok(())
+            }
+        }
     }
 }
 
@@ -542,7 +551,7 @@ impl<SOk, SErr> Durability<SOk, SErr> {
         result: &Result<Ok, Err>,
     ) -> anyhow::Result<()> {
         if let Err(err) = result {
-            ctx.try_trigger_retry(anyhow!(err)).await?;
+            ctx.try_trigger_retry(anyhow!(err)).await
         } else {
             Ok(())
         }
