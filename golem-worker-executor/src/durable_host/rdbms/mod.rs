@@ -481,7 +481,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
+        tracing::warn!("result: {result:?}");
         durability.try_trigger_retry(ctx, &result).await?;
+        tracing::warn!("after try trigger retry");
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await

@@ -537,7 +537,7 @@ impl OplogEntry {
     }
 
     pub fn error(error: WorkerError, retry_from: OplogIndex) -> OplogEntry {
-        tracing::warn!("!!! Created ERROR oplog entry with retry_from={retry_from}");
+        tracing::warn!("!!! Created ERROR oplog entry with retry_from={retry_from} ({error:?})");
         OplogEntry::Error {
             timestamp: Timestamp::now_utc(),
             error,

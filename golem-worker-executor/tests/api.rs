@@ -1895,7 +1895,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
         &context,
         None,
         Some(RetryConfig {
-            max_attempts: 10,
+            max_attempts: 30,
             min_delay: Duration::from_millis(100),
             max_delay: Duration::from_millis(500),
             multiplier: 1.5,
@@ -2177,7 +2177,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         *response = "first".to_string();
     }
 
-    // wait for first invocation to finish
+    // wait for the first invocation to finish
     {
         let mut found = false;
         while !found {
@@ -3123,6 +3123,8 @@ async fn stderr_returned_for_failed_component(
             vec![50u64.into_value_and_type()],
         )
         .await;
+
+    executor.check_oplog_is_queryable(&worker_id).await;
 
     let result3 = executor
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])

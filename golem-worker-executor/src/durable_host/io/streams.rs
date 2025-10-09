@@ -52,7 +52,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let result = HostInputStream::read(&mut self.as_wasi_view().0, self_, len).await;
                 durability
-                    .try_trigger_retry(self, &result)
+                    .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
                 durability.persist(self, request, result).await
@@ -89,7 +89,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let result =
                     HostInputStream::blocking_read(&mut self.as_wasi_view().0, self_, len).await;
                 durability
-                    .try_trigger_retry(self, &result)
+                    .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
                 durability.persist(self, request, result).await
@@ -121,7 +121,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let request = get_http_stream_request(self, handle)?;
                 let result = HostInputStream::skip(&mut self.as_wasi_view().0, self_, len).await;
                 durability
-                    .try_trigger_retry(self, &result)
+                    .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
                 durability.persist(self, request, result).await
@@ -159,7 +159,7 @@ impl<Ctx: WorkerCtx> HostInputStream for DurableWorkerCtx<Ctx> {
                 let result =
                     HostInputStream::blocking_skip(&mut self.as_wasi_view().0, self_, len).await;
                 durability
-                    .try_trigger_retry(self, &result)
+                    .try_trigger_retry(self, &ignore_closed_error(&result))
                     .await
                     .map_err(StreamError::Trap)?;
                 durability.persist(self, request, result).await
@@ -364,4 +364,14 @@ fn get_http_stream_request<Ctx: WorkerCtx>(
         ))
     })?;
     Ok(request_state.request.clone())
+}
+
+fn ignore_closed_error<T>(result: &Result<T, StreamError>) -> Result<(), &StreamError> {
+    if let Err(StreamError::Closed) = result {
+        Ok(())
+    } else if let Err(err) = result {
+        Err(err)
+    } else {
+        Ok(())
+    }
 }

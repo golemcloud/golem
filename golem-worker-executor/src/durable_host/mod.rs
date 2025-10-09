@@ -1197,7 +1197,11 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
     }
 
     async fn get_current_retry_point(&self) -> OplogIndex {
-        self.state.current_retry_point
+        if let Some(idx) = self.state.active_atomic_regions.last() {
+            *idx
+        } else {
+            self.state.current_retry_point
+        }
     }
 }
 
@@ -2239,10 +2243,13 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
         let mut first_retry_from = OplogIndex::NONE;
         let mut last_error_index = idx;
         loop {
+            warn!("*** Checking {idx}");
+
             if latest_worker_status
                 .deleted_regions
                 .is_in_deleted_region(idx)
             {
+                warn!("*** Checking {idx} -> it is in a deleted region");
                 if idx > OplogIndex::INITIAL {
                     idx = idx.previous();
                     continue;
@@ -2258,10 +2265,13 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                             error, retry_from, ..
                         },
                     )) => {
+                        warn!("*** Checking {idx} -> it is an error with retry_from={retry_from}");
                         if first_retry_from == OplogIndex::NONE || first_retry_from == *retry_from {
+                            warn!("*** Checking {idx} -> increased retry count");
                             retry_count += 1;
                             last_error_index = idx;
                             if first_error.is_none() {
+                                warn!("*** Checking {idx} -> stored as first_error");
                                 first_error = Some(error.clone());
                                 first_retry_from = *retry_from;
                             }
@@ -2272,11 +2282,13 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                                 break;
                             }
                         } else {
+                            warn!("*** Checking {idx} -> error belongs to another retry point");
                             // Found an error entry belonging to another retry point
                             break;
                         }
                     }
                     Some((_, entry)) if entry.is_hint() => {
+                        warn!("*** Checking {idx} -> skipping hint");
                         // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
                         if idx > OplogIndex::INITIAL {
                             idx = idx.previous();
@@ -2285,13 +2297,19 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                             break;
                         }
                     }
-                    Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => {
+                    Some((
+                        _,
+                        OplogEntry::ExportedFunctionInvoked { .. }
+                        | OplogEntry::ExportedFunctionCompleted { .. },
+                    )) => {
                         // Retry counting never get across invocation boundaries
+                        warn!("*** Checking {idx} -> reached invocation boundary");
                         break;
                     }
                     Some((_, _)) => {
                         // Skipping non-hint entries as well, but only up to the first error entry that's different, or the beginning
                         // of the last invocation
+                        warn!("*** Checking {idx} -> other, skipping");
                         if idx > OplogIndex::INITIAL {
                             idx = idx.previous();
                             continue;
@@ -2479,6 +2497,13 @@ struct PrivateDurableWorkerState {
     /// As the error can happen both in the host or in the user code, we attach the last known value every time,
     /// which normally points to the last persisted side effect or the beginning of a region.
     current_retry_point: OplogIndex,
+
+    /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
+    /// determine the effective retry point associated with an error; while `current_retry_point` is changed for each
+    /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
+    /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
+    /// from scratch.
+    active_atomic_regions: Vec<OplogIndex>,
 }
 
 impl PrivateDurableWorkerState {
@@ -2570,6 +2595,7 @@ impl PrivateDurableWorkerState {
             promise_backed_pollables: TRwLock::new(HashMap::new()),
             promise_dyn_pollables: TRwLock::new(HashMap::new()),
             current_retry_point: OplogIndex::INITIAL,
+            active_atomic_regions: Vec::new(),
         }
     }
 
@@ -2643,8 +2669,12 @@ impl PrivateDurableWorkerState {
                 }
             }
         } else {
-            let begin_index = self.oplog.current_oplog_index().await;
-            Ok(begin_index)
+            let begin_index = if self.replay_state.is_live() {
+                self.oplog.current_oplog_index().await
+            } else {
+                self.replay_state.last_replayed_index()
+            };
+            Ok(begin_index.next())
         }?;
 
         // Updating the current retry point attached for any error happening after this point
@@ -2659,6 +2689,10 @@ impl PrivateDurableWorkerState {
                 self.current_retry_point = result;
             }
         }
+        tracing::warn!(
+            "*** Current retry point set to {}",
+            self.current_retry_point
+        );
         Ok(result)
     }
 

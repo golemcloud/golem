@@ -284,6 +284,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .add(OplogEntry::begin_atomic_region())
                 .await;
             let begin_index = self.state.current_oplog_index().await;
+            self.state.active_atomic_regions.push(begin_index);
             Ok(begin_index.into())
         } else {
             let (begin_index, _) =
@@ -325,6 +326,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 }
             }
 
+            self.state.active_atomic_regions.push(begin_index);
             Ok(begin_index.into())
         }
     }
@@ -342,6 +344,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         } else {
             let (_, _) = get_oplog_entry!(self.state.replay_state, OplogEntry::EndAtomicRegion)?;
         }
+
+        self.state
+            .active_atomic_regions
+            .retain(|idx| *idx != OplogIndex::from_u64(begin));
 
         Ok(())
     }

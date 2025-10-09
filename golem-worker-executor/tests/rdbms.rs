@@ -564,6 +564,8 @@ async fn postgres_transaction_recovery_test(
     )
     .await;
 
+    let _ = executor.check_oplog_is_queryable(&worker_id).await;
+
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await;
