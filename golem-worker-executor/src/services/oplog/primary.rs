@@ -21,8 +21,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
 use golem_common::model::{
-    ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId, WorkerMetadata,
+    ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
+use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use std::collections::{BTreeMap, VecDeque};
@@ -158,7 +159,8 @@ impl OplogService for PrimaryOplogService {
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         record_oplog_call("create");
 
@@ -190,6 +192,7 @@ impl OplogService for PrimaryOplogService {
             owned_worker_id,
             OplogIndex::INITIAL,
             initial_worker_metadata,
+            last_known_status,
             execution_status,
         )
         .await
@@ -200,7 +203,8 @@ impl OplogService for PrimaryOplogService {
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         _initial_worker_metadata: WorkerMetadata,
-        _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        _last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         record_oplog_call("open");
 
@@ -465,9 +469,10 @@ struct PrimaryOplogState {
 }
 
 impl PrimaryOplogState {
-    async fn append(&mut self, entries: &[OplogEntry]) {
+    async fn append(&mut self, entries: Vec<OplogEntry>) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("append");
 
+        let mut result = BTreeMap::new();
         for entry in entries {
             let oplog_idx = self.last_committed_idx.next();
             self.indexed_storage
@@ -476,7 +481,7 @@ impl PrimaryOplogState {
                     IndexedStorageNamespace::OpLog,
                     &self.key,
                     oplog_idx.into(),
-                    entry,
+                    &entry,
                 )
                 .await
                 .unwrap_or_else(|err| {
@@ -485,8 +490,10 @@ impl PrimaryOplogState {
                         self.key
                     )
                 });
+            result.insert(oplog_idx, entry);
             self.last_committed_idx = oplog_idx;
         }
+        result
     }
 
     async fn add(&mut self, entry: OplogEntry) {
@@ -499,11 +506,11 @@ impl PrimaryOplogState {
         self.last_oplog_idx = self.last_oplog_idx.next();
     }
 
-    async fn commit(&mut self) {
+    async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
         record_oplog_call("commit");
 
         let entries = self.buffer.drain(..).collect::<Vec<OplogEntry>>();
-        self.append(&entries).await
+        self.append(entries).await
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
@@ -628,7 +635,7 @@ impl Oplog for PrimaryOplog {
         }
     }
 
-    async fn commit(&self, _level: CommitLevel) {
+    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let mut state = self.state.lock().await;
         state.commit().await
     }

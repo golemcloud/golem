@@ -443,7 +443,7 @@ async fn interpret_json_input<Ctx: WorkerCtx>(
     input_json_strings: &[String],
     worker: &Arc<Worker<Ctx>>,
 ) -> Result<Vec<Val>, WorkerExecutorError> {
-    let metadata = worker.get_metadata()?;
+    let metadata = worker.get_latest_worker_metadata().await;
     let assumed_component_version = assume_future_component_version(&metadata);
     let component_metadata = worker
         .component_service()

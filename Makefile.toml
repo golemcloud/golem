@@ -1071,7 +1071,7 @@ args = ["s3", "sync", "cli/schema.golem.cloud", "s3://schema.golem.cloud"]
 description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
 install_crate = "miniserve"
 command = "miniserve"
-args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
 
 ## Cleanup
 [tasks.clear-v8]

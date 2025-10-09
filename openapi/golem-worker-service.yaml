@@ -6228,7 +6228,7 @@ components:
           format: uint64
         retryCount:
           type: integer
-          format: uint64
+          format: uint32
         pendingInvocationCount:
           type: integer
           format: uint64
