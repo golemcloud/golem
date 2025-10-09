@@ -15,14 +15,12 @@ declare module 'golem:llm/llm@1.0.0' {
   export class ChatStream {
     /**
      * Polls for the next chunk of stream events
-     * @throws Error
      */
-    pollNext(): StreamEvent[] | undefined;
+    pollNext(): Result<StreamEvent, Error>[] | undefined;
     /**
      * Blocks until the next chunk of stream events is available
-     * @throws Error
      */
-    getNext(): StreamEvent[];
+    getNext(): Result<StreamEvent, Error>[];
   }
   /**
    * --- Roles, Error Codes, Finish Reasons ---
