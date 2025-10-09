@@ -14,7 +14,7 @@ httpApi:
             let name: string = request.path.chat-name;
             let agent = chat-agent(name);
             let response = agent.history();
-            { status: 200, body: { result: response } }
+            { status: 200, body: response }
       - method: POST
         path: /component-name-api/chat/{chat-name}/ask
         binding:
@@ -24,7 +24,7 @@ httpApi:
             let name: string = request.path.chat-name;
             let agent = chat-agent(name);
             let response = agent.ask(request.body);
-            { status: 200, body: { result: response } }
+            { status: 200, body: response }
 
   deployments:
     local:

@@ -36,7 +36,10 @@ class ChatAgent extends BaseAgent {
       }],
     });
     let response = this.session.send();
-    return response.content.filter(contentPart => contentPart.tag === "text").join("\n");
+    return response.content
+      .filter(contentPart => contentPart.tag === "text")
+      .map(contentPart => contentPart.val)
+      .join("\n");
   }
 
   @description("Show full chat history")
