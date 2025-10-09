@@ -332,7 +332,7 @@ impl<Ctx: WorkerCtx> PromiseService for DefaultPromiseService<Ctx> {
             };
 
             let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-                .await?
+                .await
                 .ok_or(WorkerExecutorError::worker_not_found(
                     owned_worker_id.worker_id(),
                 ))?;

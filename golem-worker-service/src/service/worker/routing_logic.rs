@@ -463,7 +463,7 @@ impl IsRetriableError for CallWorkerExecutorError {
 struct RetryState<'a> {
     started_at: Instant,
     attempt: u64,
-    retry_attempt: u64,
+    retry_attempt: u32,
     retry_config: &'a RetryConfig,
     op: &'a str,
 }

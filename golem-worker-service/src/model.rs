@@ -49,7 +49,7 @@ pub struct WorkerMetadata {
     pub wasi_config_vars: WasiConfigVars,
     pub status: WorkerStatus,
     pub component_version: ComponentVersion,
-    pub retry_count: u64,
+    pub retry_count: u32,
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
     pub created_at: Timestamp,

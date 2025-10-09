@@ -64,7 +64,7 @@ impl OplogIndexRange {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AtomicOplogIndex(Arc<AtomicU64>);
 
 impl AtomicOplogIndex {

@@ -201,7 +201,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
             let pairs = self.workers.iter().collect::<Vec<_>>();
             for (worker_id, worker) in pairs {
                 if worker.is_currently_idle_but_running().await {
-                    if let Ok(mem) = worker.memory_requirement() {
+                    if let Ok(mem) = worker.memory_requirement().await {
                         let last_changed = worker.last_execution_state_change();
                         possibilities.push((worker_id, worker, mem, last_changed));
                     }

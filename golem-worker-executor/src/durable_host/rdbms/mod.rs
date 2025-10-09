@@ -99,7 +99,6 @@ where
         .clone();
 
     let result = ctx
-        .state
         .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
             pool_key.clone(),
             ctx.state.owned_worker_id.worker_id.clone(),
@@ -550,8 +549,7 @@ where
     };
 
     if pre_result.is_ok() {
-        ctx.state
-            .pre_rollback_transaction_function(begin_oplog_idx)
+        ctx.pre_rollback_transaction_function(begin_oplog_idx)
             .await?;
     }
 
@@ -564,8 +562,7 @@ where
             };
 
             if result.is_ok() {
-                ctx.state
-                    .rolled_back_transaction_function(begin_oplog_idx)
+                ctx.rolled_back_transaction_function(begin_oplog_idx)
                     .await?;
             }
 
@@ -601,9 +598,7 @@ where
     };
 
     if pre_result.is_ok() {
-        ctx.state
-            .pre_commit_transaction_function(begin_oplog_idx)
-            .await?;
+        ctx.pre_commit_transaction_function(begin_oplog_idx).await?;
     }
 
     match pre_result {
@@ -615,9 +610,7 @@ where
             };
 
             if result.is_ok() {
-                ctx.state
-                    .committed_transaction_function(begin_oplog_idx)
-                    .await?;
+                ctx.committed_transaction_function(begin_oplog_idx).await?;
             }
 
             if ctx.durable_execution_state().is_live {
@@ -650,14 +643,12 @@ where
 
     if ctx.durable_execution_state().is_live {
         if let RdbmsTransactionState::Open(transaction) = entry.state {
-            ctx.state
-                .pre_rollback_transaction_function(entry.begin_index)
+            ctx.pre_rollback_transaction_function(entry.begin_index)
                 .await?;
 
             let _ = transaction.rollback_if_open().await;
 
-            ctx.state
-                .rolled_back_transaction_function(entry.begin_index)
+            ctx.rolled_back_transaction_function(entry.begin_index)
                 .await?;
 
             let _ = ctx
