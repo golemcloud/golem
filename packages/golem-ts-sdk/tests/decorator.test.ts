@@ -559,10 +559,11 @@ describe('Agent decorator should register the agent class and its methods into A
       () => new Error('FooAgent not found in AgentTypeRegistry'),
     );
 
+    // Ensures no functions or constructors are skipped
     expect(complexAgent.methods.length).toEqual(24);
     expect(complexAgent.constructor.inputSchema.val.length).toEqual(6);
     expect(complexAgent.typeName).toEqual('my-complex-agent');
-    expect(simpleAgent.methods.length).toEqual(18);
+    expect(simpleAgent.methods.length).toEqual(29);
     expect(simpleAgent.constructor.inputSchema.val.length).toEqual(1);
   });
 
