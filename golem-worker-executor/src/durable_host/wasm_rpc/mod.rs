@@ -72,10 +72,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let remote_worker_id: WorkerId = worker_id.into();
 
-        if remote_worker_id == *self.worker_id() {
-            return Err(anyhow!("RPC calls to the same agent are not supported"));
-        }
-
         construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
     }
 
@@ -88,10 +84,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
+        let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -224,10 +226,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
+        let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -329,6 +337,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
+        let own_worker_id = self.owned_worker_id().clone();
 
         let begin_index = self
             .begin_function(&DurableFunctionType::WriteRemote)
@@ -337,6 +346,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
