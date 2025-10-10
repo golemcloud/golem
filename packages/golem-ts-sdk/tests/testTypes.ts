@@ -83,6 +83,30 @@ export type ObjectWithUnionWithUndefined4 = {
   a?: string | undefined;
 };
 
+export type ObjectWithOption = {
+  a?: string
+}
+
+export type InterfaceWithUnionWithUndefined1 = {
+  a: string | undefined;
+};
+
+export type InterfaceWithUnionWithUndefined2 = {
+  a: string | number | undefined;
+};
+
+export type InterfaceWithUnionWithUndefined3 = {
+  a?: string | number | undefined;
+};
+
+export type InterfaceWithUnionWithUndefined4 = {
+  a?: string | undefined;
+};
+
+export type InterfaceWithOption = {
+  a?: string
+}
+
 export type UnionType = number | string | boolean | ObjectType;
 
 export type ListType = Array<string>;

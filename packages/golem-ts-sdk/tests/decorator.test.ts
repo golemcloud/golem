@@ -553,6 +553,46 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
+  it('object with optional prop works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      barAgentMethod.inputSchema,
+      'objectWithOption',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-option',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('interface with optional prop works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      barAgentMethod.inputSchema,
+      'interfaceWithOption',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'interface-with-option',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
   it('captures all methods and constructor with correct number of parameters', () => {
     const simpleAgent = Option.getOrThrowWith(
       AgentTypeRegistry.get(FooAgentClassName),
@@ -591,16 +631,16 @@ describe('Agent decorator should register the agent class and its methods into A
 function getWitType(dataSchema: DataSchema, parameterName: string) {
   const elementSchema = getElementSchema(dataSchema, parameterName);
 
-  const witTypeOpt =
+  const witType =
     elementSchema.tag === 'component-model' ? elementSchema.val : undefined;
 
-  if (!witTypeOpt) {
+  if (!witType) {
     throw new Error(
       `Test failed - ${parameterName} is not of component-model type in getWeather function in ${BarAgentClassName.value}`,
     );
   }
 
-  return witTypeOpt;
+  return witType;
 }
 
 function getElementSchema(inputSchema: DataSchema, parameterName: string) {
