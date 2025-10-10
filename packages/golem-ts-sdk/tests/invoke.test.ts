@@ -61,7 +61,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { Multimodal, UnstructuredText } from '../src';
+import { Multimodal, Result, UnstructuredText } from '../src';
 import { AgentClassName } from '../src';
 import {
   castTsValueToBinaryReference,
@@ -307,6 +307,16 @@ test('An agent can be successfully initiated and all of its methods can be invok
           unstructuredBinaryWithMimeType,
           false,
         );
+
+        // Invoking with result type
+
+        testInvoke(
+          'fun30',
+          [['param', Result.err('error message')]],
+          resolvedAgent,
+          Result.err('error message'),
+          false,
+        );
       },
     ),
   );
@@ -405,6 +415,24 @@ test('BarAgent can be successfully initiated', () => {
         expect(result.tag).toEqual('ok');
       },
     ),
+  );
+});
+
+test('Invoke function that takes and returns inbuilt result type', () => {
+  overrideSelfMetadataImpl(FooAgentClassName);
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  testInvoke(
+    'fun30',
+    [['param', Result.err('message')]],
+    resolvedAgent,
+    Result.err('message'),
+    false,
   );
 });
 
@@ -616,7 +644,7 @@ function testInvoke(
       invokeResult.tag === 'ok'
         ? invokeResult.val
         : (() => {
-            throw new Error(util.format(invokeResult.val));
+            throw new Error('Test failure: ' + util.format(invokeResult.val));
           })();
 
     // Unless it is an RPC call, we don't really need to deserialize the result

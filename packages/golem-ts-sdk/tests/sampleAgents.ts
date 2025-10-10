@@ -18,6 +18,7 @@ import {
   Multimodal,
   UnstructuredBinary,
   UnstructuredText,
+  Result,
 } from '../src';
 import * as Types from './testTypes';
 import {
@@ -206,6 +207,12 @@ class FooAgent extends BaseAgent {
   }
 
   async fun29(param: BigInt64Array): Promise<BigInt64Array> {
+    return param;
+  }
+
+  async fun30(
+    param: Result<boolean, string>,
+  ): Promise<Result<boolean, string>> {
     return param;
   }
 

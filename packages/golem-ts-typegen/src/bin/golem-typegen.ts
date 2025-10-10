@@ -75,6 +75,7 @@ program
       );
 
       console.log(logSymbols.info, chalk.yellow("Saving metadata…"));
+
       const filePath = saveAndClearInMemoryMetadata();
 
       console.log(

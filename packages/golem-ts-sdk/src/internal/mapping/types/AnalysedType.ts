@@ -18,7 +18,12 @@ import * as Option from "../../../newTypes/option";
 import { TypeMappingScope } from './scope';
 import { generateVariantCaseName } from './name';
 import { convertOptionalTypeNameToKebab, isKebabCase, isNumberString, trimQuotes } from './stringFormat';
-import { getTaggedUnion, getUnionOfLiterals, TaggedTypeMetadata, UserDefinedResultType } from './taggedUnion';
+import {
+  getTaggedUnion,
+  getUnionOfLiterals,
+  TaggedTypeMetadata,
+  UserDefinedResultType,
+} from './taggedUnion';
 
 type TsType = CoreType.Type;
 
@@ -32,21 +37,21 @@ export interface NameOptionTypePair {
   typ?: AnalysedType;
 }
 
-export type TypedArrayKind = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
+export type TypedArray = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
 export type EmptyType = 'null' | 'void' | 'undefined' | 'question-mark';
-
+export type ResultType = {tag: 'custom', okValueName: string | undefined, errValueName: string | undefined} | {tag: 'inbuilt'};
 
 // This is similar to internal analyzed-type in wasm-rpc (golem)
 // while having extra information useful for WIT -> WIT type and value mapping
 export type AnalysedType =
     | { kind: 'variant'; value: TypeVariant, taggedTypes: TaggedTypeMetadata[] }
-    | { kind: 'result'; value: TypeResult, okValueName: string | undefined, errValueName: string | undefined }
+    | { kind: 'result'; value: TypeResult, resultType: ResultType }
     | { kind: 'option'; value: TypeOption, emptyType: EmptyType }
     | { kind: 'enum'; value: TypeEnum }
     | { kind: 'flags'; value: TypeFlags }
     | { kind: 'record'; value: TypeRecord }
     | { kind: 'tuple'; value: TypeTuple, emptyType: EmptyType | undefined }
-    | { kind: 'list'; value: TypeList, typedArray: TypedArrayKind | undefined, mapType: { keyType: AnalysedType, valueType: AnalysedType } | undefined }
+    | { kind: 'list'; value: TypeList, typedArray: TypedArray | undefined, mapType: { keyType: AnalysedType, valueType: AnalysedType } | undefined }
     | { kind: 'string' }
     | { kind: 'chr' }
     | { kind: 'f64'  }
@@ -218,7 +223,7 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const u8 =  (): AnalysedType => ({ kind: 'u8' });
  export const s8 =  (): AnalysedType => ({ kind: 's8' });
 
- export const list = (name: string | undefined, typedArrayKind: TypedArrayKind | undefined, mapType: {keyType: AnalysedType, valueType: AnalysedType} | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, mapType: mapType,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
+ export const list = (name: string | undefined, typedArrayKind: TypedArray | undefined, mapType: {keyType: AnalysedType, valueType: AnalysedType} | undefined, inner: AnalysedType): AnalysedType => ({ kind: 'list', typedArray: typedArrayKind, mapType: mapType,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
  export const option = (name: string| undefined, emptyType: EmptyType, inner: AnalysedType): AnalysedType => ({ kind: 'option',  emptyType: emptyType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, inner } });
  export const tuple =  (name: string | undefined, emptyType: EmptyType | undefined, items: AnalysedType[]): AnalysedType => ({ kind: 'tuple',   emptyType: emptyType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, items } });
  export const record = ( name: string | undefined, fields: NameTypePair[]): AnalysedType => ({ kind: 'record',  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, fields } });
@@ -226,8 +231,8 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
  export const variant = (name: string | undefined, taggedTypes: TaggedTypeMetadata[],  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
 
- export const result = (name: string | undefined, okValueName: string| undefined, errValueName: string | undefined, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
-      ({ kind: 'result', okValueName, errValueName, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, ok, err } });
+ export const result = (name: string | undefined, resultType: ResultType,  ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
+      ({ kind: 'result', resultType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, ok, err } });
 
 
  export const handle =  (name: string | undefined, resourceId: AnalysedResourceId, mode: AnalysedResourceMode): AnalysedType =>
@@ -319,6 +324,16 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
 
 
         return Either.right(analysedType);
+      }
+
+      const inbuiltResultType =
+        getInbuiltResultType(type.name, type.typeParams);
+
+      if (inbuiltResultType) {
+        if (!type.name && Either.isRight(inbuiltResultType) ) {
+          unionTypeMapRegistry.set(hash, inbuiltResultType.val);
+        }
+        return inbuiltResultType;
       }
 
       let fieldIdx = 1;
@@ -777,8 +792,7 @@ function convertUserDefinedResultToWitResult(typeName: string | undefined, resul
   return Either.right(
     result(
       typeName,
-      okValueName,
-      errValueName,
+      {tag: 'custom', okValueName, errValueName},
       okTypeResult ? okTypeResult.val : undefined,
       errTypeResult ? errTypeResult.val : undefined
     )
@@ -827,4 +841,24 @@ function filterUndefinedTypes(
   }
 
   return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: [] });
+}
+
+
+export function getInbuiltResultType(
+  typeName: string | undefined,
+  typeParams: TsType[],
+): Either.Either<AnalysedType, string> | undefined {
+
+  if (typeName && typeName === 'Result' && typeParams.length === 2) {
+    const okType = typeParams[0];
+    const errType = typeParams[1];
+
+    const okAnalysed = fromTsTypeInternal(okType, Option.none());
+    const errAnalysed = fromTsTypeInternal(errType, Option.none());
+
+    return Either.map(Either.zipBoth(okAnalysed, errAnalysed), ([ok, err]) => {
+      return result(undefined, {tag: 'inbuilt'}, ok, err);
+    });
+  }
+
 }

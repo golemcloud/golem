@@ -76,6 +76,7 @@ export const TaggedUnion = {
   }
 }
 
+
 export function getTaggedUnion(
   unionTypes: TsType[]
 ): Either.Either<Option.Option<TaggedUnion>, string> {
