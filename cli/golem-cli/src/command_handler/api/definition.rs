@@ -921,6 +921,7 @@ impl ApiDefinitionCommandHandler {
             .deploy(
                 project,
                 used_component_names,
+                false,
                 None,
                 &ApplicationComponentSelectMode::All,
                 deploy_args,

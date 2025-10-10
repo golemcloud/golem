@@ -645,7 +645,7 @@ pub mod shared_args {
         pub language: GuestLanguage,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Clone)]
     pub struct ForceBuildArg {
         /// When set to true will skip modification time based up-to-date checks, defaults to false
         #[clap(long, default_value = "false")]

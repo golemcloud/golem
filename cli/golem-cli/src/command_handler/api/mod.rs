@@ -96,6 +96,7 @@ impl ApiCommandHandler {
                     .deploy(
                         project.as_ref(),
                         used_component_names,
+                        false,
                         None,
                         &ApplicationComponentSelectMode::All,
                         &deploy_args,
