@@ -73,6 +73,102 @@ import {
 } from '../src/internal/mapping/values/dataValue';
 import { Image, Text } from './sampleAgents';
 
+test('BarAgent can be successfully initiated', () => {
+  fc.assert(
+    fc.property(
+      interfaceArb,
+      fc.oneof(fc.string(), fc.constant(null)),
+      fc.oneof(unionArb, fc.constant(null)),
+      (interfaceValue, stringValue, unionValue) => {
+        overrideSelfMetadataImpl(BarAgentCustomClassName);
+
+        const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
+
+        if (!typeRegistry) {
+          throw new Error('BarAgent type metadata not found');
+        }
+
+        // TestInterfaceType
+        const arg0 = AgentConstructorParamRegistry.getParamType(
+          BarAgentClassName,
+          typeRegistry.constructorArgs[0].name,
+        );
+
+        // string | null
+        const arg1 = AgentConstructorParamRegistry.getParamType(
+          BarAgentClassName,
+          typeRegistry.constructorArgs[1].name,
+        );
+
+        // UnionType | null
+        const arg2 = AgentConstructorParamRegistry.getParamType(
+          BarAgentClassName,
+          typeRegistry.constructorArgs[2].name,
+        );
+
+        if (
+          !arg0 ||
+          !arg1 ||
+          !arg2 ||
+          arg0.tag !== 'analysed' ||
+          arg1.tag !== 'analysed' ||
+          arg2.tag !== 'analysed'
+        ) {
+          throw new Error(
+            'Test failure: unresolved type in BarAgent constructor',
+          );
+        }
+
+        const interfaceWit = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(interfaceValue, arg0.val),
+          (error) => new Error(error),
+        );
+
+        const optionalStringWit = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(stringValue, arg1.val),
+          (error) => new Error(error),
+        );
+
+        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
+
+        const optionalUnionWit = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(unionValue, arg2.val),
+          (error) => new Error(error),
+        );
+
+        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
+
+        const dataValue: DataValue = {
+          tag: 'tuple',
+          val: [
+            {
+              tag: 'component-model',
+              val: interfaceWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalStringWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalUnionWit,
+            },
+          ],
+        };
+
+        const agentInitiator = Option.getOrThrowWith(
+          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
+          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
+        );
+
+        const result = agentInitiator.initiate(dataValue);
+
+        expect(result.tag).toEqual('ok');
+      },
+    ),
+  );
+});
+
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
     fc.property(
@@ -307,112 +403,6 @@ test('An agent can be successfully initiated and all of its methods can be invok
           unstructuredBinaryWithMimeType,
           false,
         );
-
-        // Invoking with result type
-
-        testInvoke(
-          'fun30',
-          [['param', Result.err('error message')]],
-          resolvedAgent,
-          Result.err('error message'),
-          false,
-        );
-      },
-    ),
-  );
-});
-
-test('BarAgent can be successfully initiated', () => {
-  fc.assert(
-    fc.property(
-      interfaceArb,
-      fc.oneof(fc.string(), fc.constant(null)),
-      fc.oneof(unionArb, fc.constant(null)),
-      (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(BarAgentCustomClassName);
-
-        const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
-
-        if (!typeRegistry) {
-          throw new Error('BarAgent type metadata not found');
-        }
-
-        // TestInterfaceType
-        const arg0 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
-          typeRegistry.constructorArgs[0].name,
-        );
-
-        // string | null
-        const arg1 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
-          typeRegistry.constructorArgs[1].name,
-        );
-
-        // UnionType | null
-        const arg2 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
-          typeRegistry.constructorArgs[2].name,
-        );
-
-        if (
-          !arg0 ||
-          !arg1 ||
-          !arg2 ||
-          arg0.tag !== 'analysed' ||
-          arg1.tag !== 'analysed' ||
-          arg2.tag !== 'analysed'
-        ) {
-          throw new Error(
-            'Test failure: unresolved type in BarAgent constructor',
-          );
-        }
-
-        const interfaceWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(interfaceValue, arg0.val),
-          (error) => new Error(error),
-        );
-
-        const optionalStringWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(stringValue, arg1.val),
-          (error) => new Error(error),
-        );
-
-        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
-
-        const optionalUnionWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(unionValue, arg2.val),
-          (error) => new Error(error),
-        );
-
-        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
-
-        const dataValue: DataValue = {
-          tag: 'tuple',
-          val: [
-            {
-              tag: 'component-model',
-              val: interfaceWit,
-            },
-            {
-              tag: 'component-model',
-              val: optionalStringWit,
-            },
-            {
-              tag: 'component-model',
-              val: optionalUnionWit,
-            },
-          ],
-        };
-
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
-          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
-        );
-
-        const result = agentInitiator.initiate(dataValue);
-
-        expect(result.tag).toEqual('ok');
       },
     ),
   );
@@ -434,6 +424,14 @@ test('Invoke function that takes and returns inbuilt result type', () => {
     Result.err('message'),
     false,
   );
+
+  testInvoke(
+    'fun30',
+    [['param', Result.ok(true)]],
+    resolvedAgent,
+    Result.ok(true),
+    false,
+  );
 });
 
 test('Invoke function that takes and returns multimodal types', () => {
@@ -453,6 +451,24 @@ test('Invoke function that takes and returns multimodal types', () => {
     'my-string-input',
     new Uint8Array([137, 80, 78, 71]),
   ];
+
+  fc.assert(
+    fc.property(
+      fc.string(),
+      fc.uint8Array({ minLength: 1, maxLength: 10 }),
+      (text, imageData) => {
+        const multimodalInput: Multimodal<Text | Image> = [text, imageData];
+
+        testInvoke(
+          'fun18',
+          [['param', multimodalInput]],
+          resolvedAgent,
+          multimodalInput,
+          true,
+        );
+      },
+    ),
+  );
 
   testInvoke(
     'fun18',
