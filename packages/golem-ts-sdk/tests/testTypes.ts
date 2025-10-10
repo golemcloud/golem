@@ -84,8 +84,8 @@ export type ObjectWithUnionWithUndefined4 = {
 };
 
 export type ObjectWithOption = {
-  a?: string
-}
+  a?: string;
+};
 
 export type InterfaceWithUnionWithUndefined1 = {
   a: string | undefined;
@@ -104,8 +104,8 @@ export type InterfaceWithUnionWithUndefined4 = {
 };
 
 export type InterfaceWithOption = {
-  a?: string
-}
+  a?: string;
+};
 
 export type UnionType = number | string | boolean | ObjectType;
 

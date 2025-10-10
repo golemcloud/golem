@@ -39,7 +39,9 @@ import {
   ObjectWithOption,
   InterfaceWithUnionWithUndefined1,
   InterfaceWithUnionWithUndefined2,
-  InterfaceWithUnionWithUndefined3, InterfaceWithUnionWithUndefined4, InterfaceWithOption,
+  InterfaceWithUnionWithUndefined3,
+  InterfaceWithUnionWithUndefined4,
+  InterfaceWithOption,
 } from './testTypes';
 
 @agent()
