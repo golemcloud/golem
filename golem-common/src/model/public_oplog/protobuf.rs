@@ -137,9 +137,9 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                 component_version: ComponentRevision(create.component_version),
                 args: create.args,
                 env: create.env.into_iter().collect(),
-                project_id: create
-                    .project_id
-                    .ok_or("Missing project_id field")?
+                environment_id: create
+                    .environment_id
+                    .ok_or("Missing environment_id field")?
                     .try_into()?,
                 created_by: create
                     .created_by
@@ -496,7 +496,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         args: create.args,
                         env: create.env.into_iter().collect(),
                         created_by: Some(create.created_by.into()),
-                        project_id: Some(create.project_id.into()),
+                        environment_id: Some(create.environment_id.into()),
                         wasi_config_vars: Some(create.wasi_config_vars.into()),
                         parent: create.parent.map(Into::into),
                         component_size: create.component_size,
