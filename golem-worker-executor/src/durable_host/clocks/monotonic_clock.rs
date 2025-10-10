@@ -17,6 +17,7 @@ use wasmtime::component::Resource;
 use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx};
 use crate::services::oplog::CommitLevel;
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use golem_common::model::oplog::DurableFunctionType;
 use wasmtime_wasi::p2::bindings::clocks::monotonic_clock::{Duration, Host, Instant, Pollable};
@@ -82,7 +83,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             }
         }?;
 
-        self.state.oplog.commit(CommitLevel::DurableOnly).await;
+        self.public_state
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+            .await;
         let when = now.saturating_add(duration);
         Host::subscribe_instant(&mut self.as_wasi_view(), when).await
     }

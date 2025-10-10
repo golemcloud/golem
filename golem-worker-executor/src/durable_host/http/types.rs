@@ -20,6 +20,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
@@ -651,7 +652,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
             }
 
             if !matches!(serializable_response, SerializableResponse::Pending) {

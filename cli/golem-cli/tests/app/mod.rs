@@ -794,7 +794,7 @@ async fn adding_and_changing_rpc_deps_retriggers_build() {
 }
 
 #[test]
-async fn build_all_templates() {
+async fn build_and_deploy_all_templates() {
     let mut ctx = TestContext::new();
     let app_name = "all-templates-app";
 
@@ -844,7 +844,12 @@ async fn build_all_templates() {
     }
 
     let outputs = ctx.cli([cmd::APP, cmd::BUILD]).await;
-    assert!(outputs.success())
+    assert!(outputs.success());
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::DEPLOY, flag::YES]).await;
+    assert!(outputs.success());
 }
 
 #[test]

@@ -47,7 +47,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::RwLock;
-use tracing::{debug, error, span, warn, Instrument, Level};
+use tracing::{debug, span, warn, Instrument, Level};
 use wasmtime::component::Instance;
 use wasmtime::{AsContext, Store};
 
@@ -58,7 +58,7 @@ pub struct InvocationLoop<Ctx: WorkerCtx> {
     pub owned_worker_id: OwnedWorkerId,
     pub parent: Arc<Worker<Ctx>>, // parent must not be dropped until the invocation_loop is running
     pub waiting_for_command: Arc<AtomicBool>,
-    pub oom_retry_count: u64,
+    pub oom_retry_count: u32,
 }
 
 impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
@@ -178,11 +178,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     ) -> Option<RetryDecision> {
         let mut store = store.lock().await;
 
-        store
-            .data()
-            .set_suspended()
-            .await
-            .expect("Initial set_suspended should never fail");
+        store.data().set_suspended();
+
         let span = span!(
             Level::INFO,
             "invocation",
@@ -205,9 +202,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             }
             Err(err) => {
                 warn!("Failed to start the worker: {err}");
-                if let Err(err2) = store.data().set_suspended().await {
-                    warn!("Additional error during startup of the worker: {err2}");
-                }
+                store.data().set_suspended();
 
                 self.parent.stop_internal(true, Some(err)).await;
                 None // early return, we can't retry this
@@ -218,9 +213,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
     /// Suspends the worker after the invocation loop exited
     async fn suspend_worker(&self, store: &Mutex<Store<Ctx>>) {
         // Marking the worker as suspended
-        if let Err(err) = store.lock().await.data().set_suspended().await {
-            error!("Failed to set the worker to suspended state at the end of the invocation loop: {err}");
-        }
+        store.lock().await.data().set_suspended();
 
         // Making sure all pending commits are flushed
         // Make sure all pending commits are done
@@ -229,8 +222,8 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .await
             .data()
             .get_public_state()
-            .oplog()
-            .commit(CommitLevel::Immediate)
+            .worker()
+            .commit_oplog_and_update_state(CommitLevel::Always)
             .await;
     }
 }
@@ -318,9 +311,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             Ok(decision) => CommandOutcome::BreakInnerLoop(decision),
             Err(err) => {
                 warn!("Failed to resume replay: {err}");
-                if let Err(err2) = store.data().set_suspended().await {
-                    warn!("Additional error during resume of replay of worker: {err2}");
-                }
+                store.data().set_suspended();
 
                 self.parent.stop_internal(true, Some(err)).await;
                 CommandOutcome::BreakOuterLoop
@@ -538,10 +529,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 .store_invocation_resuming(&idempotency_key)
                 .await;
         }
-
-        // Make sure to update the pending invocation queue in the status record before
-        // the invocation writes the invocation start oplog entry
-        self.store.data().update_pending_invocations().await;
 
         let result = invoke_observed_and_traced(
             full_function_name.to_string(),
@@ -770,9 +757,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 Ok(update_description) => {
                                     // Enqueue the update
                                     self.parent.enqueue_update(update_description).await;
-
-                                    // Make sure to update the pending updates queue
-                                    self.store.data().update_pending_updates().await;
 
                                     // Reactivate the worker
                                     CommandOutcome::BreakInnerLoop(RetryDecision::Immediate)

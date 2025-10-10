@@ -23,7 +23,6 @@ use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{
     AccountId, ComponentType, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
-    WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -136,24 +135,20 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 #[derive(Clone, Debug)]
 pub enum ExecutionStatus {
     Loading {
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
     Running {
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
     Suspended {
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
     Interrupting {
         interrupt_kind: InterruptKind,
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
@@ -162,40 +157,6 @@ pub enum ExecutionStatus {
 impl ExecutionStatus {
     pub fn is_running(&self) -> bool {
         matches!(self, ExecutionStatus::Running { .. })
-    }
-
-    pub fn last_known_status(&self) -> &WorkerStatusRecord {
-        match self {
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => last_known_status,
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => last_known_status,
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => last_known_status,
-            ExecutionStatus::Interrupting {
-                last_known_status, ..
-            } => last_known_status,
-        }
-    }
-
-    pub fn set_last_known_status(&mut self, status: WorkerStatusRecord) {
-        match self {
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Interrupting {
-                last_known_status, ..
-            } => *last_known_status = status,
-        }
     }
 
     pub fn timestamp(&self) -> Timestamp {
@@ -322,17 +283,12 @@ impl TrapType {
 pub struct LastError {
     pub error: WorkerError,
     pub stderr: String,
-    pub retry_count: u64,
+    pub retry_from: OplogIndex,
 }
 
 impl Display for LastError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}, retried {} times",
-            self.error.to_string(&self.stderr),
-            self.retry_count
-        )
+        write!(f, "{}", self.error.to_string(&self.stderr))
     }
 }
 
