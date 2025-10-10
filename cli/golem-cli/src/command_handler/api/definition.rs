@@ -100,6 +100,10 @@ impl ApiDefinitionCommandHandler {
             .opt_select_project(None)
             .await?;
 
+        if deploy_args.reset {
+            self.delete_all_for_reset_once(project.as_ref()).await?;
+        }
+
         if let Some(name) = name.as_ref() {
             let app_ctx = self.ctx.app_context_lock().await;
             let app_ctx = app_ctx.some_or_err()?;
@@ -559,6 +563,99 @@ impl ApiDefinitionCommandHandler {
         }
 
         Ok(latest_api_definition_versions)
+    }
+
+    pub async fn delete_all_for_reset_once(
+        &self,
+        project: Option<&ProjectRefAndId>,
+    ) -> anyhow::Result<()> {
+        self.ctx
+            .reset_http_api_definitions_once(|| async { self.delete_all_for_reset(project).await })
+            .await
+    }
+
+    async fn delete_all_for_reset(&self, project: Option<&ProjectRefAndId>) -> anyhow::Result<()> {
+        let api_definitions = {
+            let app_ctx = self.ctx.app_context_lock().await;
+            let app_ctx = app_ctx.some_or_err()?;
+            app_ctx.application.http_api_definitions().clone()
+        };
+
+        let clients = self.ctx.golem_clients().await?;
+
+        let project = &self
+            .ctx
+            .cloud_project_handler()
+            .selected_project_id_or_default(project)
+            .await?;
+
+        let all_deployed_api_definitions = clients
+            .api_definition
+            .list_definitions(&project.0, None)
+            .await
+            .map_service_error()?;
+
+        let (to_redeploy, to_delete): (Vec<_>, Vec<_>) = all_deployed_api_definitions
+            .into_iter()
+            .partition(|api_definition| {
+                api_definitions
+                    .contains_key(&HttpApiDefinitionName::from(api_definition.id.as_str()))
+            });
+
+        let steps = to_delete
+            .iter()
+            .map(|api_definition| {
+                format!(
+                    "- {} API definition {}@{}",
+                    "Delete".log_color_warn(),
+                    api_definition.id.as_str().log_color_highlight(),
+                    api_definition.version.as_str().log_color_highlight()
+                )
+            })
+            .chain(to_redeploy.iter().map(|api_definition| {
+                format!(
+                    "- {} and {} API definition {}@{}",
+                    "Delete".log_color_warn(),
+                    "redeploy".log_color_ok_highlight(),
+                    api_definition.id.as_str().log_color_highlight(),
+                    api_definition.version.as_str().log_color_highlight()
+                )
+            }))
+            .collect::<Vec<_>>();
+
+        if steps.is_empty() {
+            return Ok(());
+        }
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_reset_http_api_defs(&steps)?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        log_action("Deleting", "HTTP API definitions");
+        let _indent = LogIndent::new();
+
+        for api_def in to_redeploy.iter().chain(to_delete.iter()) {
+            clients
+                .api_definition
+                .delete_definition(&project.0, &api_def.id, &api_def.version)
+                .await
+                .map_service_error()?;
+
+            log_warn_action(
+                "Deleted",
+                format!(
+                    "API definition: {}/{}",
+                    api_def.id.log_color_highlight(),
+                    api_def.version.log_color_highlight()
+                ),
+            );
+        }
+
+        Ok(())
     }
 
     pub async fn deploy_api_definition(

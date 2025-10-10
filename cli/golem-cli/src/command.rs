@@ -700,7 +700,7 @@ pub mod shared_args {
         /// Delete and recreate agents and HTTP APIs
         #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
         pub redeploy_all: bool,
-        /// Delete agents and redeploy HTTP APIs
+        /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
         #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
         pub reset: bool,
     }

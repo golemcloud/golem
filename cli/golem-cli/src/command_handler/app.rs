@@ -422,6 +422,13 @@ impl AppCommandHandler {
             .opt_select_project(None)
             .await?;
 
+        if deploy_args.reset {
+            self.ctx
+                .api_handler()
+                .delete_all_for_reset_once(project.as_ref())
+                .await?;
+        }
+
         let components = self
             .ctx
             .component_handler()

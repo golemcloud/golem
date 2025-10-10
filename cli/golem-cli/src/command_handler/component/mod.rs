@@ -596,6 +596,13 @@ impl ComponentCommandHandler {
         default_component_select_mode: &ApplicationComponentSelectMode,
         deploy_args: &DeployArgs,
     ) -> anyhow::Result<Vec<Component>> {
+        if deploy_args.reset {
+            self.ctx
+                .api_handler()
+                .delete_all_for_reset_once(project)
+                .await?;
+        }
+
         self.ctx
             .app_handler()
             .build(
