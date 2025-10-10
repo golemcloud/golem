@@ -108,7 +108,10 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_reset_http_deployments(&self, rendered_steps: &[String]) -> anyhow::Result<bool> {
+    pub fn confirm_reset_http_deployments(
+        &self,
+        rendered_steps: &[String],
+    ) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!(
