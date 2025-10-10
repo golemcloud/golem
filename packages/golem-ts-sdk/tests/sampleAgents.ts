@@ -36,6 +36,12 @@ import {
   ResultTypeNonExact,
   ResultTypeExactBoth,
   ResultTypeNonExact2,
+  ObjectWithOption,
+  InterfaceWithUnionWithUndefined1,
+  InterfaceWithUnionWithUndefined2,
+  InterfaceWithUnionWithUndefined3,
+  InterfaceWithUnionWithUndefined4,
+  InterfaceWithOption,
 } from './testTypes';
 
 @agent()
@@ -276,6 +282,12 @@ class BarAgent extends BaseAgent {
     objectWithUnionWithUndefined2: ObjectWithUnionWithUndefined2,
     objectWithUnionWithUndefined3: ObjectWithUnionWithUndefined3,
     objectWithUnionWithUndefined4: ObjectWithUnionWithUndefined4,
+    objectWithOption: ObjectWithOption,
+    interfaceWithUnionWithUndefined1: InterfaceWithUnionWithUndefined1,
+    interfaceWithUnionWithUndefined2: InterfaceWithUnionWithUndefined2,
+    interfaceWithUnionWithUndefined3: InterfaceWithUnionWithUndefined3,
+    interfaceWithUnionWithUndefined4: InterfaceWithUnionWithUndefined4,
+    interfaceWithOption: InterfaceWithOption,
     optionalStringType: string | undefined,
     optionalUnionType: UnionType | undefined,
     taggedUnionType: TaggedUnion,

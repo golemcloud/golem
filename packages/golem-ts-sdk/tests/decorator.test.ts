@@ -453,7 +453,7 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(unionWithNullType).toEqual(expected);
   });
 
-  it('object with \`a: string | undefined\` works', () => {
+  it('object with a: string | undefined works', () => {
     const objectWithUnionWithNull = getWitType(
       barAgentMethod.inputSchema,
       'objectWithUnionWithUndefined1',
@@ -473,7 +473,27 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull).toEqual(expected);
   });
 
-  it('object with \`a: string | number | undefined\` works', () => {
+  it('interface with a: string | undefined works', () => {
+    const witType = getWitType(
+      barAgentMethod.inputSchema,
+      'interfaceWithUnionWithUndefined1',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'interface-with-union-with-undefined1',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(witType).toEqual(expected);
+  });
+
+  it('object with a: string | number | undefined works', () => {
     const objectWithUnionWithNull2 = getWitType(
       barAgentMethod.inputSchema,
       'objectWithUnionWithUndefined2',
@@ -501,6 +521,36 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('interface with a: string | number | undefined works', () => {
+    const witType = getWitType(
+      barAgentMethod.inputSchema,
+      'interfaceWithUnionWithUndefined2',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'interface-with-union-with-undefined2',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 3],
+              ['case2', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-f64-type' } },
+      ],
+    };
+
+    expect(witType).toEqual(expected);
   });
 
   it('object with a?: string | number | undefined works', () => {
@@ -533,6 +583,36 @@ describe('Agent decorator should register the agent class and its methods into A
     expect(objectWithUnionWithNull2).toEqual(expected);
   });
 
+  it('interface with a?: string | number | undefined works', () => {
+    const witType = getWitType(
+      barAgentMethod.inputSchema,
+      'interfaceWithUnionWithUndefined3',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'interface-with-union-with-undefined3',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        {
+          type: {
+            tag: 'variant-type',
+            val: [
+              ['case1', 3],
+              ['case2', 4],
+            ],
+          },
+        },
+        { type: { tag: 'prim-string-type' } },
+        { type: { tag: 'prim-f64-type' } },
+      ],
+    };
+
+    expect(witType).toEqual(expected);
+  });
+
   it('object with `a?: string | undefined` works', () => {
     const objectWithUnionWithNull2 = getWitType(
       barAgentMethod.inputSchema,
@@ -551,6 +631,66 @@ describe('Agent decorator should register the agent class and its methods into A
     };
 
     expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('interface with `a?: string | undefined` works', () => {
+    const witType = getWitType(
+      barAgentMethod.inputSchema,
+      'interfaceWithUnionWithUndefined4',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'interface-with-union-with-undefined4',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(witType).toEqual(expected);
+  });
+
+  it('object with optional prop works', () => {
+    const objectWithUnionWithNull2 = getWitType(
+      barAgentMethod.inputSchema,
+      'objectWithOption',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'object-with-option',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(objectWithUnionWithNull2).toEqual(expected);
+  });
+
+  it('interface with optional prop works', () => {
+    const witType = getWitType(
+      barAgentMethod.inputSchema,
+      'interfaceWithOption',
+    );
+
+    const expected = {
+      nodes: [
+        {
+          name: 'interface-with-option',
+          type: { tag: 'record-type', val: [['a', 1]] },
+        },
+        { type: { tag: 'option-type', val: 2 } },
+        { type: { tag: 'prim-string-type' } },
+      ],
+    };
+
+    expect(witType).toEqual(expected);
   });
 
   it('captures all methods and constructor with correct number of parameters', () => {
@@ -591,16 +731,16 @@ describe('Agent decorator should register the agent class and its methods into A
 function getWitType(dataSchema: DataSchema, parameterName: string) {
   const elementSchema = getElementSchema(dataSchema, parameterName);
 
-  const witTypeOpt =
+  const witType =
     elementSchema.tag === 'component-model' ? elementSchema.val : undefined;
 
-  if (!witTypeOpt) {
+  if (!witType) {
     throw new Error(
       `Test failed - ${parameterName} is not of component-model type in getWeather function in ${BarAgentClassName.value}`,
     );
   }
 
-  return witTypeOpt;
+  return witType;
 }
 
 function getElementSchema(inputSchema: DataSchema, parameterName: string) {

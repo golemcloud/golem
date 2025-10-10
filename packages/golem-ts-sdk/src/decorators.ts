@@ -119,13 +119,6 @@ import {
  */
 export function agent(customName?: string) {
   return function <T extends new (...args: any[]) => any>(ctor: T) {
-    console.log(
-      'Registering agent:',
-      ctor.name,
-      'with custom name:',
-      customName,
-    );
-
     if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
       throw new Error(
         `Invalid agent declaration: \`${ctor.name}\` must extend \`BaseAgent\` to be decorated with @agent()`,

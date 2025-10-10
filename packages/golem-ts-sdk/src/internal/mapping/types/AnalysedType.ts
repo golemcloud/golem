@@ -270,6 +270,45 @@ export function fromTsType(tsType: TsType, scope: Option.Option<TypeMappingScope
 
 export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappingScope>): Either.Either<AnalysedType, string> {
 
+  if (type.name === 'String') {
+    return Either.left(
+      "Unsupported type `String`, use `string` instead"
+    )
+  }
+
+  if (type.name === 'Boolean') {
+    return Either.left(
+      "Unsupported type `Boolean`, use `boolean` instead"
+    )
+  }
+
+  if (type.name === 'BigInt') {
+    return Either.left(
+      "Unsupported type `BigInt`, use `bigint` instead"
+    )
+  }
+
+  if (type.name === 'Number') {
+    return Either.left(
+      "Unsupported type `Number`, use `number` instead"
+    )
+  }
+
+  if (type.name === 'Symbol') {
+    return Either.left(
+      "Unsupported type `Symbol`, use `string` if possible"
+    )
+  }
+
+  if (type.name === 'Date') {
+    return Either.left("Unsupported type `Date`. Use a `string` if possible");
+  }
+
+  if (type.name === 'RegExp') {
+    return Either.left("Unsupported type `RegExp`. Use a `string` if possible");
+  }
+
+
   const scopeName = Option.isSome(scope) ? scope.val.name : undefined;
 
   const parameterInScope: Option.Option<string> =
@@ -397,8 +436,8 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           type.name,
           type,
           type.unionTypes,
+          type.typeParams
         );
-
 
         if (Either.isLeft(filteredTypes)) {
           return Either.left(filteredTypes.val);
@@ -543,77 +582,49 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       return Either.left(`${message}. Use object instead.`)
 
     case "interface":
-
-      if (type.name === 'String') {
-        return Either.left(
-          "Unsupported type `String`, use `string` instead"
-        )
-      }
-
-      if (type.name === 'Boolean') {
-        return Either.left(
-          "Unsupported type `Boolean`, use `boolean` instead"
-        )
-      }
-
-      if (type.name === 'BigInt') {
-        return Either.left(
-          "Unsupported type `BigInt`, use `bigint` instead"
-        )
-      }
-
-      if (type.name === 'Number') {
-        return Either.left(
-          "Unsupported type `Number`, use `number` instead"
-        )
-      }
-
-      if (type.name === 'Symbol') {
-        return Either.left(
-          "Unsupported type `Symbol`, use `string` if possible"
-        )
-      }
-
-      if (type.name === 'Date') {
-        return Either.left("Unsupported type `Date`. Use a `string` if possible");
-      }
-
-      if (type.name === 'RegExp') {
-        return Either.left("Unsupported type `RegExp`. Use a `string` if possible");
-      }
-
-
       const interfaceResult = Either.all(type.properties.map((prop) => {
         const internalType = prop.getTypeAtLocation(prop.getValueDeclarationOrThrow());
+
         const nodes: Node[] = prop.getDeclarations();
         const node = nodes[0];
 
+        const entityName = type.name ?? type.kind;
 
         if ((Node.isPropertySignature(node) || Node.isPropertyDeclaration(node)) && node.hasQuestionToken()) {
-          const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
-            internalType.name ?? internalType.kind,
+          const tsType = fromTsType(internalType, Option.some(TypeMappingScope.interface(
+            entityName,
             prop.getName(),
             true
           )));
 
           return Either.map(tsType, (analysedType) => {
-            return field(prop.getName(), option(undefined, "undefined", analysedType))
+            return field(prop.getName(), analysedType)
           });
         }
 
-        const tsType =
-          fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
-            type.name ?? type.kind,
-            prop.getName(),
-            false
-          )));
+        const tsType = fromTsTypeInternal(internalType, Option.some(TypeMappingScope.interface(
+          entityName,
+          prop.getName(),
+          false
+        )));
 
         return Either.map(tsType, (analysedType) => {
           return field(prop.getName(), analysedType)
         })
       }));
 
-      return Either.map(interfaceResult, (fields) => record(type.name, fields));
+      if (Either.isLeft(interfaceResult)) {
+        return Either.left(interfaceResult.val);
+      }
+
+      const interfaceFields = interfaceResult.val;
+
+      if (interfaceFields.length === 0) {
+        return Either.left(`Type ${type.name} is an object but has no properties. Object types must define at least one property.`);
+
+      }
+
+      return Either.right(record(type.name, interfaceFields))
 
     case "promise":
       const inner = type.element;
@@ -810,6 +821,7 @@ function filterUndefinedTypes(
   unionTypeName: string | undefined,
   type: TsType,
   unionTypes: TsType[],
+  typeParams: TsType[]
 ): Either.Either<TsType, string> {
 
   const scopeName = getScopeName(scope);
@@ -840,7 +852,7 @@ function filterUndefinedTypes(
     return Either.right(alternateTypes[0]);
   }
 
-  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: [] });
+  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: typeParams });
 }
 
 
