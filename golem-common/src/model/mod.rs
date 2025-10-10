@@ -1838,8 +1838,7 @@ mod tests {
         AccountId, ComponentId, FilterComparator, IdempotencyKey, StringFilterComparator,
         Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
-    use bincode::{Decode, Encode};
-    use serde::{Deserialize, Serialize};
+
     use std::collections::BTreeMap;
     use std::str::FromStr;
     use std::vec;
@@ -1854,11 +1853,6 @@ mod tests {
         let ts2: Timestamp = prost_ts.into();
 
         assert_eq!(ts2, ts);
-    }
-
-    #[derive(Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-    struct ExampleWithAccountId {
-        account_id: AccountId,
     }
 
     #[test]
