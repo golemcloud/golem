@@ -119,6 +119,19 @@ import {
  */
 export function agent(customName?: string) {
   return function <T extends new (...args: any[]) => any>(ctor: T) {
+    console.log(
+      'Registering agent:',
+      ctor.name,
+      'with custom name:',
+      customName,
+    );
+
+    if (!Object.prototype.isPrototypeOf.call(BaseAgent, ctor)) {
+      throw new Error(
+        `Invalid agent declaration: \`${ctor.name}\` must extend \`BaseAgent\` to be decorated with @agent()`,
+      );
+    }
+
     const agentClassName = new AgentClassName(ctor.name);
 
     if (AgentTypeRegistry.exists(agentClassName)) {
@@ -132,7 +145,7 @@ export function agent(customName?: string) {
           .map(([key, _]) => key)
           .join(', ');
         throw new Error(
-          `Agent class ${agentClassName.value} is not registered in TypeMetadata. Available agents are ${availableAgents}. Please ensure the class ${ctor.name} is decorated with @agent()`,
+          `Agent class ${agentClassName.value} is not registered. Available agents are ${availableAgents}. Please ensure the class ${ctor.name} is decorated with @agent()`,
         );
       },
     );
@@ -401,9 +414,11 @@ function getAgentInternal(
     getId: () => {
       return uniqueAgentId;
     },
+
     getParameters(): DataValue {
       return constructorInput;
     },
+
     getAgentType: () => {
       const agentType = AgentTypeRegistry.get(agentClassName);
 
@@ -415,12 +430,15 @@ function getAgentInternal(
 
       return agentType.val;
     },
+
     loadSnapshot(bytes: Uint8Array): Promise<void> {
       return (agentInstance as BaseAgent).loadSnapshot(bytes);
     },
+
     saveSnapshot(): Promise<Uint8Array> {
       return (agentInstance as BaseAgent).saveSnapshot();
     },
+
     invoke: async (methodName, methodArgs) => {
       const agentMethod = agentInstance[methodName];
 
