@@ -170,6 +170,6 @@ export type WithRemoteMethods<T> = {
 
 export type RemoteMethod<Args extends any[], R> = {
   (...args: Args): Promise<R>;
-  trigger: (...args: Args) => Promise<R>;
-  schedule: (ts: Datetime, ...args: Args) => Promise<R>;
+  trigger: (...args: Args) => void;
+  schedule: (ts: Datetime, ...args: Args) => void;
 };

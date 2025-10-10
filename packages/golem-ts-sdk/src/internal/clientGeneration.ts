@@ -261,13 +261,13 @@ function getMethodProxy(
     return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed.val);
   }
 
-  async function invokeFireAndForget(...fnArgs: any[]) {
+  function invokeFireAndForget(...fnArgs: any[]) {
     const parameterWitValues = serializeArgs(fnArgs);
     const wasmRpc = new WasmRpc(agentId);
     wasmRpc.invoke(functionName, parameterWitValues);
   }
 
-  async function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
+  function invokeSchedule(ts: Datetime, ...fnArgs: any[]) {
     const parameterWitValues = serializeArgs(fnArgs);
     const wasmRpc = new WasmRpc(agentId);
     wasmRpc.scheduleInvocation(ts, functionName, parameterWitValues);
