@@ -327,7 +327,7 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       }
 
       const inbuiltResultType =
-        getInbuiltResultType(type.name, type.typeParams);
+        getInbuiltResultType(type.name, type.unionTypes, type.typeParams);
 
       if (inbuiltResultType) {
         if (!type.name && Either.isRight(inbuiltResultType) ) {
@@ -846,19 +846,18 @@ function filterUndefinedTypes(
 
 export function getInbuiltResultType(
   typeName: string | undefined,
+  unionTypes: TsType[],
   typeParams: TsType[],
 ): Either.Either<AnalysedType, string> | undefined {
+    if (typeName && typeName === 'Result' && typeParams.length === 2 && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
+      const okType = typeParams[0];
+      const errType = typeParams[1];
 
-  if (typeName && typeName === 'Result' && typeParams.length === 2) {
-    const okType = typeParams[0];
-    const errType = typeParams[1];
+      const okAnalysed = fromTsTypeInternal(okType, Option.none());
+      const errAnalysed = fromTsTypeInternal(errType, Option.none());
 
-    const okAnalysed = fromTsTypeInternal(okType, Option.none());
-    const errAnalysed = fromTsTypeInternal(errType, Option.none());
-
-    return Either.map(Either.zipBoth(okAnalysed, errAnalysed), ([ok, err]) => {
-      return result(undefined, {tag: 'inbuilt'}, ok, err);
-    });
-  }
-
+      return Either.map(Either.zipBoth(okAnalysed, errAnalysed), ([ok, err]) => {
+        return result(undefined, { tag: 'inbuilt' }, ok, err);
+      });
+    }
 }
