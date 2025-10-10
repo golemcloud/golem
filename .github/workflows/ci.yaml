@@ -248,7 +248,7 @@ jobs:
     - uses: actions/checkout@v4
     - uses: useblacksmith/rust-cache@v3
       with:
-        prefix-key: v1-golem-rust
+        prefix-key: v2-golem-rust
         shared-key: debug
         cache-all-crates: true
         save-if: false
