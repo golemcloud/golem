@@ -8,7 +8,7 @@ rust_test_components=("write-stdout" "write-stderr" "read-stdin" "clocks" "shopp
 
 rust_test_apps=("auction-example" "rpc" "rust-service/rpc" "custom-durability" "invocation-context" "scheduled-invocation" "high-volume-logging")
 c_test_components=("large-initial-memory" "large-dynamic-memory")
-ts_test_apps=("agent-constructor-parameter-echo" "agent-promise")
+ts_test_apps=("agent-constructor-parameter-echo" "agent-promise" "agent-self-rpc")
 
 # Optional arguments:
 # - rebuild: clean all projects before building them
