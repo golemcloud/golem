@@ -87,25 +87,25 @@ export type ObjectWithOption = {
   a?: string;
 };
 
-export type InterfaceWithUnionWithUndefined1 = {
+export interface InterfaceWithUnionWithUndefined1 {
   a: string | undefined;
-};
+}
 
-export type InterfaceWithUnionWithUndefined2 = {
+export interface InterfaceWithUnionWithUndefined2 {
   a: string | number | undefined;
-};
+}
 
-export type InterfaceWithUnionWithUndefined3 = {
+export interface InterfaceWithUnionWithUndefined3 {
   a?: string | number | undefined;
-};
+}
 
-export type InterfaceWithUnionWithUndefined4 = {
+export interface InterfaceWithUnionWithUndefined4 {
   a?: string | undefined;
-};
+}
 
-export type InterfaceWithOption = {
+export interface InterfaceWithOption {
   a?: string;
-};
+}
 
 export type UnionType = number | string | boolean | ObjectType;
 

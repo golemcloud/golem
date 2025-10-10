@@ -43,39 +43,39 @@ export const TypeMappingScope = {
 
   },
 
-  interface(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
+  interface(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
     return {
       scope: 'interface',
       name,
       parameterName,
-      hasQuestionMark: questionMarkOptional,
+      hasQuestionMark: hasQuestionMark,
     };
   },
 
-  object(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
+  object(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
     return {
       scope: 'object',
       name,
       parameterName,
-      hasQuestionMark: questionMarkOptional,
+      hasQuestionMark: hasQuestionMark,
     };
   },
 
-  method(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
+  method(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
     return {
       scope: 'method',
       name,
       parameterName,
-      hasQuestionMark: questionMarkOptional,
+      hasQuestionMark: hasQuestionMark,
     };
   },
 
-  constructor(name: string, parameterName: string, questionMarkOptional: boolean): TypeMappingScope {
+  constructor(name: string, parameterName: string, hasQuestionMark: boolean): TypeMappingScope {
     return {
       scope: 'constructor',
       name: name,
       parameterName: parameterName,
-      hasQuestionMark: questionMarkOptional,
+      hasQuestionMark: hasQuestionMark,
     }
 
   },
