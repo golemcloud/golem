@@ -296,6 +296,14 @@ impl ApiDeploymentCommandHandler {
             bail!(NonSuccessfulExit);
         }
 
+        for api_deployment in to_redeploy.iter().chain(to_delete.iter()) {
+            clients
+                .api_deployment
+                .delete_deployment(&project.0, &api_deployment.site.host)
+                .await
+                .map_service_error()?;
+        }
+
         Ok(())
     }
 
