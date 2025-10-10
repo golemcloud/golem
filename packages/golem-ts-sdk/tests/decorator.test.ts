@@ -474,7 +474,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with a: string | undefined works', () => {
-    const objectWithUnionWithNull = getWitType(
+    const witType = getWitType(
       barAgentMethod.inputSchema,
       'interfaceWithUnionWithUndefined1',
     );
@@ -490,7 +490,7 @@ describe('Agent decorator should register the agent class and its methods into A
       ],
     };
 
-    expect(objectWithUnionWithNull).toEqual(expected);
+    expect(witType).toEqual(expected);
   });
 
   it('object with a: string | number | undefined works', () => {
@@ -524,7 +524,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with a: string | number | undefined works', () => {
-    const objectWithUnionWithNull2 = getWitType(
+    const witType = getWitType(
       barAgentMethod.inputSchema,
       'interfaceWithUnionWithUndefined2',
     );
@@ -550,7 +550,7 @@ describe('Agent decorator should register the agent class and its methods into A
       ],
     };
 
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    expect(witType).toEqual(expected);
   });
 
   it('object with a?: string | number | undefined works', () => {
@@ -584,7 +584,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with a?: string | number | undefined works', () => {
-    const objectWithUnionWithNull2 = getWitType(
+    const witType = getWitType(
       barAgentMethod.inputSchema,
       'interfaceWithUnionWithUndefined3',
     );
@@ -610,7 +610,7 @@ describe('Agent decorator should register the agent class and its methods into A
       ],
     };
 
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    expect(witType).toEqual(expected);
   });
 
   it('object with `a?: string | undefined` works', () => {
@@ -634,7 +634,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with `a?: string | undefined` works', () => {
-    const objectWithUnionWithNull2 = getWitType(
+    const witType = getWitType(
       barAgentMethod.inputSchema,
       'interfaceWithUnionWithUndefined4',
     );
@@ -650,7 +650,7 @@ describe('Agent decorator should register the agent class and its methods into A
       ],
     };
 
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    expect(witType).toEqual(expected);
   });
 
   it('object with optional prop works', () => {
@@ -674,7 +674,7 @@ describe('Agent decorator should register the agent class and its methods into A
   });
 
   it('interface with optional prop works', () => {
-    const objectWithUnionWithNull2 = getWitType(
+    const witType = getWitType(
       barAgentMethod.inputSchema,
       'interfaceWithOption',
     );
@@ -690,7 +690,7 @@ describe('Agent decorator should register the agent class and its methods into A
       ],
     };
 
-    expect(objectWithUnionWithNull2).toEqual(expected);
+    expect(witType).toEqual(expected);
   });
 
   it('captures all methods and constructor with correct number of parameters', () => {
