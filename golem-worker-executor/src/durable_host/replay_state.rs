@@ -337,9 +337,13 @@ impl ReplayState {
         begin_idx: OplogIndex,
         check: impl Fn(&OplogEntry, OplogIndex) -> bool,
     ) -> Option<OplogIndex> {
-        self.lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
+        match self
+            .lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
             .await
-            .map(|(idx, _)| idx)
+        {
+            OplogEntryLookupResult::Found { index, .. } => Some(index),
+            OplogEntryLookupResult::NotFound { .. } => None,
+        }
     }
 
     pub async fn lookup_oplog_entry_with_condition(
@@ -347,13 +351,32 @@ impl ReplayState {
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Option<(OplogIndex, OplogEntry)> {
+    ) -> OplogEntryLookupResult {
+        self.lookup_oplog_entry_with_condition_and_state(
+            begin_idx,
+            |entry, idx, ()| end_check(entry, idx),
+            |entry, idx, ()| for_all_intermediate(entry, idx),
+            (),
+            |_, _, ()| {},
+        )
+        .await
+    }
+
+    pub async fn lookup_oplog_entry_with_condition_and_state<State>(
+        &self,
+        begin_idx: OplogIndex,
+        end_check: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
+        for_all_intermediate: impl Fn(&OplogEntry, OplogIndex, &State) -> bool,
+        mut state: State,
+        mut update_state: impl FnMut(&OplogEntry, OplogIndex, &mut State),
+    ) -> OplogEntryLookupResult {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
 
         const CHUNK_SIZE: u64 = 1024;
 
         let mut current_next_skip_region = self.internal.read().await.next_skipped_region.clone();
+        let mut violation = false;
 
         while start < replay_target {
             let entries = self
@@ -382,16 +405,30 @@ impl ReplayState {
                         .skipped_regions
                         .find_next_deleted_region(idx.next());
                 }
-                if end_check(entry, begin_idx) {
-                    return Some((*idx, entry.clone()));
-                } else if !for_all_intermediate(entry, begin_idx) {
-                    return None;
+
+                update_state(entry, *idx, &mut state);
+
+                if end_check(entry, begin_idx, &state) {
+                    return OplogEntryLookupResult::Found {
+                        index: *idx,
+                        entry: Box::new(entry.clone()),
+                        violates_for_all: violation,
+                    };
+                }
+
+                if !for_all_intermediate(entry, begin_idx, &state) {
+                    tracing::warn!(
+                        "!!! Violation of condition at idx {idx} for_all_intermediate: {entry:?}"
+                    );
+                    violation = true;
                 }
             }
             start = start.range_end(entries.len() as u64).next();
         }
 
-        None
+        OplogEntryLookupResult::NotFound {
+            violates_for_all: violation,
+        }
     }
 
     // TODO: can we rewrite this on top of get_oplog_entry?
@@ -514,4 +551,16 @@ impl ReplayState {
             .into_values()
             .collect()
     }
+}
+
+#[allow(dead_code)]
+pub enum OplogEntryLookupResult {
+    Found {
+        index: OplogIndex,
+        entry: Box<OplogEntry>,
+        violates_for_all: bool,
+    },
+    NotFound {
+        violates_for_all: bool,
+    },
 }

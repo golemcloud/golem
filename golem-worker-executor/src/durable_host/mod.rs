@@ -37,7 +37,7 @@ pub mod wasm_rpc;
 use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -558,49 +558,69 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     *function_type,
                     DurableFunctionType::WriteRemoteBatched(None)
                 ) {
-                    let end_index = self
+                    let lookup_result = self
                         .state
                         .replay_state
-                        .lookup_oplog_entry_with_condition(
+                        .lookup_oplog_entry_with_condition_and_state(
                             begin_index,
-                            OplogEntry::is_end_remote_write,
+                            OplogEntry::is_end_remote_write_s::<PersistenceLevel>,
                             OplogEntry::no_concurrent_side_effect,
+                            self.state.persistence_level,
+                            OplogEntry::track_persistence_level,
                         )
                         .await;
-                    if end_index.is_none() {
-                        // We need to jump to the end of the oplog
-                        self.state.replay_state.switch_to_live().await;
+                    match lookup_result {
+                        OplogEntryLookupResult::Found { index, .. } => {
+                            debug!("Remote write operation {begin_index} already completed at {index}, continue replaying");
+                            Ok(begin_index)
+                        }
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: true,
+                        } => {
+                            // Must switch to live mode before failing to be able to commit an Error entry
+                            self.state.replay_state.switch_to_live().await;
+                            Err(WorkerExecutorError::runtime(
+                                "Non-idempotent remote write operation was not completed, cannot retry",
+                            ))
+                        }
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: false,
+                        } => {
+                            tracing::warn!(
+                                "!!! SWITCHING TO LIVE AND IGNORING REGION FROM {begin_index}"
+                            );
+                            // We need to jump to the end of the oplog
+                            self.state.replay_state.switch_to_live().await;
 
-                        // But this is not enough, because if the retried batched write operation succeeds,
-                        // and later we replay it, we need to skip the first attempt and only replay the second.
-                        // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
-                        };
+                            // But this is not enough, because if the retried batched write operation succeeds,
+                            // and later we replay it, we need to skip the first attempt and only replay the second.
+                            // Se we add a Jump entry to the oplog that registers a deleted region.
+                            let deleted_region = OplogRegion {
+                                start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                                end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                            };
 
-                        self.public_state
-                            .worker()
-                            .add_and_commit_oplog(OplogEntry::jump(deleted_region))
-                            .await;
+                            self.public_state
+                                .worker()
+                                .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                                .await;
 
-                        // TODO: this recomputation should not be necessary.
-                        self.public_state.worker().reattach_worker_status().await;
+                            // TODO: this recomputation should not be necessary.
+                            self.public_state.worker().reattach_worker_status().await;
+                            Ok(begin_index)
+                        }
                     }
-
-                    Ok(begin_index)
                 } else {
                     Ok(begin_index)
                 }
             }
         } else {
-            let begin_index = self
-                .public_state
-                .worker()
-                .oplog()
-                .current_oplog_index()
-                .await;
-            Ok(begin_index)
+            let begin_index = if self.state.replay_state.is_live() {
+                self.state.oplog.current_oplog_index().await
+            } else {
+                self.state.replay_state.last_replayed_index()
+            };
+            Ok(begin_index.next())
         }?;
 
         // Updating the current retry point attached for any error happening after this point
@@ -675,16 +695,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let pre_entry = self
                 .state
                 .replay_state
-                .lookup_oplog_entry_with_condition(
+                .lookup_oplog_entry_with_condition_and_state(
                     begin_index,
-                    OplogEntry::is_pre_remote_transaction,
-                    |entry, index| {
-                        if !assume_idempotence {
-                            entry.no_concurrent_side_effect(index)
-                        } else {
-                            true
-                        }
-                    },
+                    OplogEntry::is_pre_remote_transaction_s,
+                    OplogEntry::no_concurrent_side_effect,
+                    self.state.persistence_level,
+                    OplogEntry::track_persistence_level,
                 )
                 .await;
 
@@ -701,36 +717,61 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
             let mut should_restart = false;
 
-            if let Some((_, pre_entry)) = pre_entry {
-                let end_entry = self
-                    .state
-                    .replay_state
-                    .lookup_oplog_entry_with_condition(
-                        begin_index,
-                        OplogEntry::is_end_remote_transaction,
-                        |entry, index| {
-                            if !assume_idempotence {
-                                entry.no_concurrent_side_effect(index)
-                            } else {
-                                true
-                            }
-                        },
-                    )
-                    .await;
+            match pre_entry {
+                OplogEntryLookupResult::Found {
+                    entry: pre_entry, ..
+                } => {
+                    let end_entry = self
+                        .state
+                        .replay_state
+                        .lookup_oplog_entry_with_condition_and_state(
+                            begin_index,
+                            OplogEntry::is_end_remote_transaction_s,
+                            OplogEntry::no_concurrent_side_effect,
+                            self.state.persistence_level,
+                            OplogEntry::track_persistence_level,
+                        )
+                        .await;
 
-                if end_entry.is_none() {
-                    if pre_entry.is_pre_commit_remote_transaction(begin_index) {
-                        // if we can not confirm the transaction was committed, we need to restart
-                        should_restart = !handler.is_committed(&tx_id).await?;
-                    } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
-                        // if we can not confirm the transaction was rolled back, we need to restart
-                        should_restart = !handler.is_rolled_back(&tx_id).await?;
+                    match end_entry {
+                        OplogEntryLookupResult::Found { .. } => {}
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: false,
+                        } => {
+                            if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                                // if we can not confirm the transaction was committed, we need to restart
+                                should_restart = !handler.is_committed(&tx_id).await?;
+                            } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                                // if we can not confirm the transaction was rolled back, we need to restart
+                                should_restart = !handler.is_rolled_back(&tx_id).await?;
+                            }
+                        }
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: true,
+                        } => {
+                            // Must switch to live mode before failing to be able to commit an Error entry
+                            self.state.replay_state.switch_to_live().await;
+                            return Err(WorkerExecutorError::runtime(
+                                "Transaction overlapped with other side effects was not completed, cannot retry",
+                            ).into());
+                        }
                     }
                 }
-            } else {
-                // if pre entry is not found, we need to restart
-                should_restart = true;
-            }
+                OplogEntryLookupResult::NotFound {
+                    violates_for_all: false,
+                } => {
+                    should_restart = true;
+                }
+                OplogEntryLookupResult::NotFound {
+                    violates_for_all: true,
+                } => {
+                    // Must switch to live mode before failing to be able to commit an Error entry
+                    self.state.replay_state.switch_to_live().await;
+                    return Err(WorkerExecutorError::runtime(
+                        "Transaction overlapped with other side effects was not completed, cannot retry",
+                    ).into());
+                }
+            };
 
             if should_restart {
                 // We need to jump to the end of the oplog
