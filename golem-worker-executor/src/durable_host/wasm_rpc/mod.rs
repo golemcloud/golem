@@ -72,6 +72,10 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
 
         let remote_worker_id: WorkerId = worker_id.into();
 
+        if remote_worker_id == *self.worker_id() {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         construct_wasm_rpc_resource(self, remote_worker_id, &args, &env, wasi_config_vars).await
     }
 
