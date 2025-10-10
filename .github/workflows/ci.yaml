@@ -146,8 +146,8 @@ jobs:
       fail-fast: false
       matrix:
         group:
-#        - name: integration-tests-group1
-#          description: "Full integration tests"
+        - name: integration-tests-group1
+          description: "Full integration tests"
 #        - name: integration-tests-group2
 #          description: "Component service integration tests"
 #        - name: integration-tests-group3
