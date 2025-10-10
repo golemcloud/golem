@@ -14,12 +14,12 @@
 
 use super::plan::{PlanError, PlanService};
 use crate::config::AccountsConfig;
-use crate::model::auth::{AuthCtx, AuthorizationError, SYSTEM_ACCOUNT_ID};
+use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use anyhow::anyhow;
-use golem_common::model::PlanId;
+use golem_common::model::account::PlanId;
 use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate};
 use golem_common::model::auth::{AccountAction, AccountRole, GlobalAction, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
@@ -227,7 +227,7 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         auth.authorize_global_action(GlobalAction::CreateAccount)?;
 
-        if id == SYSTEM_ACCOUNT_ID {
+        if id == AccountId::SYSTEM {
             Err(anyhow!("Cannot create account with reserved account id"))?
         };
 

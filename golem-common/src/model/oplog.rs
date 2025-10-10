@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::environment::EnvironmentId;
 pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{
     AccountId, ComponentRevision, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
     WorkerInvocation,
 };
-use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -385,7 +386,7 @@ pub enum OplogEntry {
         component_version: ComponentRevision,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
@@ -464,7 +465,7 @@ impl OplogEntry {
         args: Vec<String>,
         env: Vec<(String, String)>,
         wasi_config_vars: BTreeMap<String, String>,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
@@ -477,7 +478,7 @@ impl OplogEntry {
             component_version,
             args,
             env,
-            project_id,
+            environment_id,
             created_by,
             parent,
             component_size,
@@ -807,7 +808,7 @@ impl OplogEntry {
                 component_version,
                 args,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,
@@ -821,7 +822,7 @@ impl OplogEntry {
                 component_version: *component_version,
                 args: args.clone(),
                 env: env.clone(),
-                project_id: project_id.clone(),
+                environment_id: environment_id.clone(),
                 created_by: created_by.clone(),
                 parent: parent.clone(),
                 component_size: *component_size,
