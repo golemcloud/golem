@@ -16,6 +16,7 @@ import { typeMismatchInDeserialize } from './errors';
 import { Value } from './Value';
 import { AnalysedType } from '../types/AnalysedType';
 import * as Option from '../../../newTypes/option';
+import { Result } from '../../../host/result';
 
 /**
  * converts a Value to a TypeScript value, based on AnalysedType
@@ -281,56 +282,74 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
 
     case 'result':
       if (value.kind === 'result') {
-        const okName = analysedType.okValueName;
-        const errName = analysedType.errValueName;
-        const okType = analysedType.value.ok;
-        const errType = analysedType.value.err;
+        switch (analysedType.resultType.tag) {
+          case 'inbuilt':
+            const inbuiltOkType = analysedType.value.ok;
+            const inbuiltErrType = analysedType.value.err;
 
-        // ok and err together
-        if (okName && errName && okType && errType) {
-          if (value.value.ok) {
-            return {
-              tag: 'ok',
-              [okName]: deserialize(value.value.ok, okType),
-            };
-          }
+            if (inbuiltOkType && value.value.ok) {
+              return Result.ok(deserialize(value.value.ok, inbuiltOkType));
+            }
 
-          if (value.value.err) {
-            return {
-              tag: 'err',
-              [errName]: deserialize(value.value.err, errType),
-            };
-          }
-        }
+            if (inbuiltErrType && value.value.err) {
+              return Result.err(deserialize(value.value.err, inbuiltErrType));
+            }
 
-        if (okName && okType && !errType) {
-          if (value.value.ok) {
-            return {
-              tag: 'ok',
-              [okName]: deserialize(value.value.ok, okType),
-            };
-          } else {
-            return {
-              tag: 'err',
-            };
-          }
-        }
+            throw new Error(typeMismatchInDeserialize(value, 'result'));
 
-        if (errName && errType && !okType) {
-          if (value.value.err) {
-            return {
-              tag: 'err',
-              [errName]: deserialize(value.value.err, errType),
-            };
-          } else {
-            return {
-              tag: 'ok',
-            };
-          }
+          case 'custom':
+            const okName = analysedType.resultType.okValueName;
+            const errName = analysedType.resultType.errValueName;
+            const okType = analysedType.value.ok;
+            const errType = analysedType.value.err;
+
+            // ok and err together
+            if (okName && errName && okType && errType) {
+              if (value.value.ok) {
+                return {
+                  tag: 'ok',
+                  [okName]: deserialize(value.value.ok, okType),
+                };
+              }
+
+              if (value.value.err) {
+                return {
+                  tag: 'err',
+                  [errName]: deserialize(value.value.err, errType),
+                };
+              }
+            }
+
+            if (okName && okType && !errType) {
+              if (value.value.ok) {
+                return {
+                  tag: 'ok',
+                  [okName]: deserialize(value.value.ok, okType),
+                };
+              } else {
+                return {
+                  tag: 'err',
+                };
+              }
+            }
+
+            if (errName && errType && !okType) {
+              if (value.value.err) {
+                return {
+                  tag: 'err',
+                  [errName]: deserialize(value.value.err, errType),
+                };
+              } else {
+                return {
+                  tag: 'ok',
+                };
+              }
+            }
         }
       }
 
       throw new Error(typeMismatchInDeserialize(value, 'result'));
+
     case 'variant':
       if (value.kind === 'variant') {
         const taggedMetadata = analysedType.taggedTypes;

@@ -61,7 +61,7 @@ import * as util from 'node:util';
 import { AgentConstructorParamRegistry } from '../src/internal/registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from '../src/internal/registry/agentMethodParamRegistry';
 import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistry';
-import { Multimodal, UnstructuredText } from '../src';
+import { Multimodal, Result, UnstructuredText } from '../src';
 import { AgentClassName } from '../src';
 import {
   castTsValueToBinaryReference,
@@ -72,6 +72,102 @@ import {
   serializeToDataValue,
 } from '../src/internal/mapping/values/dataValue';
 import { Image, Text } from './sampleAgents';
+
+test('BarAgent can be successfully initiated', () => {
+  fc.assert(
+    fc.property(
+      interfaceArb,
+      fc.oneof(fc.string(), fc.constant(null)),
+      fc.oneof(unionArb, fc.constant(null)),
+      (interfaceValue, stringValue, unionValue) => {
+        overrideSelfMetadataImpl(BarAgentCustomClassName);
+
+        const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
+
+        if (!typeRegistry) {
+          throw new Error('BarAgent type metadata not found');
+        }
+
+        // TestInterfaceType
+        const arg0 = AgentConstructorParamRegistry.getParamType(
+          BarAgentClassName,
+          typeRegistry.constructorArgs[0].name,
+        );
+
+        // string | null
+        const arg1 = AgentConstructorParamRegistry.getParamType(
+          BarAgentClassName,
+          typeRegistry.constructorArgs[1].name,
+        );
+
+        // UnionType | null
+        const arg2 = AgentConstructorParamRegistry.getParamType(
+          BarAgentClassName,
+          typeRegistry.constructorArgs[2].name,
+        );
+
+        if (
+          !arg0 ||
+          !arg1 ||
+          !arg2 ||
+          arg0.tag !== 'analysed' ||
+          arg1.tag !== 'analysed' ||
+          arg2.tag !== 'analysed'
+        ) {
+          throw new Error(
+            'Test failure: unresolved type in BarAgent constructor',
+          );
+        }
+
+        const interfaceWit = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(interfaceValue, arg0.val),
+          (error) => new Error(error),
+        );
+
+        const optionalStringWit = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(stringValue, arg1.val),
+          (error) => new Error(error),
+        );
+
+        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
+
+        const optionalUnionWit = Either.getOrThrowWith(
+          WitValue.fromTsValueDefault(unionValue, arg2.val),
+          (error) => new Error(error),
+        );
+
+        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
+
+        const dataValue: DataValue = {
+          tag: 'tuple',
+          val: [
+            {
+              tag: 'component-model',
+              val: interfaceWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalStringWit,
+            },
+            {
+              tag: 'component-model',
+              val: optionalUnionWit,
+            },
+          ],
+        };
+
+        const agentInitiator = Option.getOrThrowWith(
+          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
+          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
+        );
+
+        const result = agentInitiator.initiate(dataValue);
+
+        expect(result.tag).toEqual('ok');
+      },
+    ),
+  );
+});
 
 test('An agent can be successfully initiated and all of its methods can be invoked', () => {
   fc.assert(
@@ -312,99 +408,29 @@ test('An agent can be successfully initiated and all of its methods can be invok
   );
 });
 
-test('BarAgent can be successfully initiated', () => {
-  fc.assert(
-    fc.property(
-      interfaceArb,
-      fc.oneof(fc.string(), fc.constant(null)),
-      fc.oneof(unionArb, fc.constant(null)),
-      (interfaceValue, stringValue, unionValue) => {
-        overrideSelfMetadataImpl(BarAgentCustomClassName);
+test('Invoke function that takes and returns inbuilt result type', () => {
+  overrideSelfMetadataImpl(FooAgentClassName);
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
 
-        const typeRegistry = TypeMetadata.get(BarAgentClassName.value);
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
 
-        if (!typeRegistry) {
-          throw new Error('BarAgent type metadata not found');
-        }
+  testInvoke(
+    'fun30',
+    [['param', Result.err('message')]],
+    resolvedAgent,
+    Result.err('message'),
+    false,
+  );
 
-        // TestInterfaceType
-        const arg0 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
-          typeRegistry.constructorArgs[0].name,
-        );
-
-        // string | null
-        const arg1 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
-          typeRegistry.constructorArgs[1].name,
-        );
-
-        // UnionType | null
-        const arg2 = AgentConstructorParamRegistry.getParamType(
-          BarAgentClassName,
-          typeRegistry.constructorArgs[2].name,
-        );
-
-        if (
-          !arg0 ||
-          !arg1 ||
-          !arg2 ||
-          arg0.tag !== 'analysed' ||
-          arg1.tag !== 'analysed' ||
-          arg2.tag !== 'analysed'
-        ) {
-          throw new Error(
-            'Test failure: unresolved type in BarAgent constructor',
-          );
-        }
-
-        const interfaceWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(interfaceValue, arg0.val),
-          (error) => new Error(error),
-        );
-
-        const optionalStringWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(stringValue, arg1.val),
-          (error) => new Error(error),
-        );
-
-        expect(Value.fromWitValue(optionalStringWit).kind).toEqual('option');
-
-        const optionalUnionWit = Either.getOrThrowWith(
-          WitValue.fromTsValueDefault(unionValue, arg2.val),
-          (error) => new Error(error),
-        );
-
-        expect(Value.fromWitValue(optionalUnionWit).kind).toEqual('option');
-
-        const dataValue: DataValue = {
-          tag: 'tuple',
-          val: [
-            {
-              tag: 'component-model',
-              val: interfaceWit,
-            },
-            {
-              tag: 'component-model',
-              val: optionalStringWit,
-            },
-            {
-              tag: 'component-model',
-              val: optionalUnionWit,
-            },
-          ],
-        };
-
-        const agentInitiator = Option.getOrThrowWith(
-          AgentInitiatorRegistry.lookup(BarAgentCustomClassName.value),
-          () => new Error('BarAgent not found in AgentInitiatorRegistry'),
-        );
-
-        const result = agentInitiator.initiate(dataValue);
-
-        expect(result.tag).toEqual('ok');
-      },
-    ),
+  testInvoke(
+    'fun30',
+    [['param', Result.ok(true)]],
+    resolvedAgent,
+    Result.ok(true),
+    false,
   );
 });
 
@@ -425,6 +451,24 @@ test('Invoke function that takes and returns multimodal types', () => {
     'my-string-input',
     new Uint8Array([137, 80, 78, 71]),
   ];
+
+  fc.assert(
+    fc.property(
+      fc.string(),
+      fc.uint8Array({ minLength: 1, maxLength: 10 }),
+      (text, imageData) => {
+        const multimodalInput: Multimodal<Text | Image> = [text, imageData];
+
+        testInvoke(
+          'fun18',
+          [['param', multimodalInput]],
+          resolvedAgent,
+          multimodalInput,
+          true,
+        );
+      },
+    ),
+  );
 
   testInvoke(
     'fun18',
@@ -616,7 +660,7 @@ function testInvoke(
       invokeResult.tag === 'ok'
         ? invokeResult.val
         : (() => {
-            throw new Error(util.format(invokeResult.val));
+            throw new Error('Test failure: ' + util.format(invokeResult.val));
           })();
 
     // Unless it is an RPC call, we don't really need to deserialize the result

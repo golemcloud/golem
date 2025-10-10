@@ -16,7 +16,7 @@ import {
   AnalysedType,
   NameOptionTypePair,
   NameTypePair,
-  TypedArrayKind,
+  TypedArray,
 } from '../types/AnalysedType';
 import * as Either from '../../../newTypes/either';
 import * as Option from '../../../newTypes/option';
@@ -463,63 +463,114 @@ export function serializeDefaultTsValue(
         return Either.left(missingObjectKey(tsValue, 'tag'));
       }
 
-      const okValueName = analysedType.okValueName;
-      const errValueName = analysedType.errValueName;
+      switch (analysedType.resultType.tag) {
+        case 'inbuilt':
+          const keys = Object.keys(tsValue);
 
-      if (tsValue['tag'] === 'ok') {
-        if (okType) {
-          if (!okValueName) {
-            return Either.left(
-              customSerializationError('unresolved key name for ok value'),
+          if (!keys.includes('tag')) {
+            return Either.left(missingObjectKey('tag', tsValue));
+          }
+
+          if (!keys.includes('val')) {
+            return Either.left(missingObjectKey('val', tsValue));
+          }
+
+          if (tsValue['tag'] === 'ok') {
+            if (!okType) {
+              return Either.left(
+                customSerializationError('unresolved ok type'),
+              );
+            }
+
+            return Either.map(
+              serializeDefaultTsValue(tsValue['val'], okType),
+              (v) => ({
+                kind: 'result',
+                value: {
+                  ok: v,
+                },
+              }),
             );
           }
 
-          return Either.map(
-            serializeDefaultTsValue(tsValue[okValueName], okType),
-            (v) => ({
-              kind: 'result',
-              value: {
-                ok: v,
-              },
-            }),
-          );
-        }
+          if (tsValue['tag'] === 'err') {
+            if (!errType) {
+              return Either.left(
+                customSerializationError('unresolved err type'),
+              );
+            }
 
-        return Either.right({
-          kind: 'result',
-          value: {
-            ok: undefined,
-          },
-        });
-      } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
-        if (errType) {
-          if (!errValueName) {
-            return Either.left(
-              customSerializationError('unresolved key name for err value'),
+            return Either.map(
+              serializeDefaultTsValue(tsValue['val'], errType),
+              (v) => ({
+                kind: 'result',
+                value: {
+                  err: v,
+                },
+              }),
             );
           }
 
-          return Either.map(
-            serializeDefaultTsValue(tsValue[errValueName], errType),
-            (v) => ({
+          return Either.left(typeMismatchInSerialize(tsValue, 'Result'));
+        case 'custom':
+          const okValueName = analysedType.resultType.okValueName;
+          const errValueName = analysedType.resultType.errValueName;
+
+          if (tsValue['tag'] === 'ok') {
+            if (okType) {
+              if (!okValueName) {
+                return Either.left(
+                  customSerializationError('unresolved key name for ok value'),
+                );
+              }
+
+              return Either.map(
+                serializeDefaultTsValue(tsValue[okValueName], okType),
+                (v) => ({
+                  kind: 'result',
+                  value: {
+                    ok: v,
+                  },
+                }),
+              );
+            }
+
+            return Either.right({
               kind: 'result',
               value: {
-                err: v,
+                ok: undefined,
               },
-            }),
-          );
-        }
+            });
+          } else if (typeof tsValue === 'object' && tsValue['tag'] === 'err') {
+            if (errType) {
+              if (!errValueName) {
+                return Either.left(
+                  customSerializationError('unresolved key name for err value'),
+                );
+              }
 
-        return Either.right({
-          kind: 'result',
-          value: {
-            err: undefined,
-          },
-        });
-      } else {
-        return Either.left(
-          typeMismatchInSerialize(tsValue, 'object with tag property'),
-        );
+              return Either.map(
+                serializeDefaultTsValue(tsValue[errValueName], errType),
+                (v) => ({
+                  kind: 'result',
+                  value: {
+                    err: v,
+                  },
+                }),
+              );
+            }
+
+            return Either.right({
+              kind: 'result',
+              value: {
+                err: undefined,
+              },
+            });
+          } else {
+            return Either.left(
+              typeMismatchInSerialize(tsValue, 'object with tag property'),
+            );
+          }
       }
   }
 }
@@ -1170,7 +1221,7 @@ function matchesTuple(
 function matchesArray(
   value: any,
   elementType: AnalysedType,
-  typedArray: TypedArrayKind | undefined,
+  typedArray: TypedArray | undefined,
 ): boolean {
   if (typedArray) {
     switch (typedArray) {

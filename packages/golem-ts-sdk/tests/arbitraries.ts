@@ -35,9 +35,6 @@ import {
   ResultTypeExactBoth,
   ResultTypeNonExact,
   ResultTypeNonExact2,
-  ResultTypeInvalid1,
-  ResultTypeInvalid2,
-  ResultTypeInvalid3,
 } from './testTypes';
 
 import { AgentClassName, UnstructuredBinary, UnstructuredText } from '../src';
