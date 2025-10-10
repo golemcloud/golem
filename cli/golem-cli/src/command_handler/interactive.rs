@@ -97,6 +97,31 @@ impl InteractiveHandler {
         )
     }
 
+    pub fn confirm_reset_http_api_defs(&self, rendered_steps: &[String]) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Resetting HTTP API definitions will apply the following changes:\n{}\nDo you want to continue?",
+                rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_reset_http_deployments(
+        &self,
+        rendered_steps: &[String],
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Resetting HTTP API definitions will apply the following changes:\n{}\nDo you want to continue?",
+                rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
+            ),
+            None,
+        )
+    }
+
     pub fn confirm_redeploy_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
         self.confirm(
             true,

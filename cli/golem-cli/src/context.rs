@@ -56,6 +56,7 @@ use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
@@ -96,6 +97,8 @@ pub struct Context {
         BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>>,
     >,
     selected_profile_logging: std::sync::OnceLock<()>,
+    http_api_reset: tokio::sync::OnceCell<()>,
+    http_deployment_reset: tokio::sync::OnceCell<()>,
 
     // Directly mutable
     app_context_state: tokio::sync::RwLock<ApplicationContextState>,
@@ -234,6 +237,8 @@ impl Context {
             file_download_client,
             templates: std::sync::OnceLock::new(),
             selected_profile_logging: std::sync::OnceLock::new(),
+            http_api_reset: tokio::sync::OnceCell::new(),
+            http_deployment_reset: tokio::sync::OnceCell::new(),
             app_context_state: tokio::sync::RwLock::new(ApplicationContextState::new(
                 yes,
                 app_source_mode,
@@ -552,6 +557,24 @@ impl Context {
                 );
             }
         });
+    }
+
+    pub async fn reset_http_api_definitions_once<F, Fut>(&self, f: F) -> anyhow::Result<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        self.http_api_reset.get_or_try_init(f).await?;
+        Ok(())
+    }
+
+    pub async fn reset_http_deployments_once<F, Fut>(&self, f: F) -> anyhow::Result<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        self.http_deployment_reset.get_or_try_init(f).await?;
+        Ok(())
     }
 }
 
