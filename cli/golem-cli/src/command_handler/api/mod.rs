@@ -96,6 +96,7 @@ impl ApiCommandHandler {
                     .deploy(
                         project.as_ref(),
                         used_component_names,
+                        false,
                         None,
                         &ApplicationComponentSelectMode::All,
                         &deploy_args,
@@ -125,6 +126,13 @@ impl ApiCommandHandler {
         deploy_args: &DeployArgs,
         latest_component_versions: &BTreeMap<String, Component>,
     ) -> anyhow::Result<()> {
+        if deploy_args.reset {
+            self.ctx
+                .api_handler()
+                .delete_all_for_reset_once(project)
+                .await?;
+        }
+
         let latest_api_definition_versions = self
             .ctx
             .api_definition_handler()
@@ -134,6 +142,23 @@ impl ApiCommandHandler {
         self.ctx
             .api_deployment_handler()
             .deploy(project, deploy_mode, &latest_api_definition_versions)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn delete_all_for_reset_once(
+        &self,
+        project: Option<&ProjectRefAndId>,
+    ) -> anyhow::Result<()> {
+        self.ctx
+            .api_deployment_handler()
+            .delete_all_for_reset_once(project)
+            .await?;
+
+        self.ctx
+            .api_definition_handler()
+            .delete_all_for_reset_once(project)
             .await?;
 
         Ok(())
