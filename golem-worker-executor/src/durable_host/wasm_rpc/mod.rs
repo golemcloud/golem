@@ -25,6 +25,7 @@ use crate::get_oplog_entry;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::services::rpc::{RpcDemand, RpcError};
+use crate::services::HasWorker;
 use crate::workerctx::{
     HasWasiConfigVars, InvocationContextManagement, InvocationManagement, WorkerCtx,
 };
@@ -83,10 +84,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
+        let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -95,7 +102,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .get_current_idempotency_key()
             .await
             .unwrap_or(IdempotencyKey::fresh());
-        let oplog_index = self.state.current_oplog_index().await;
+        let oplog_index = self.state.oplog.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let durability = Durability::<(u64, u64), SerializableError>::new(
@@ -219,10 +226,16 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
+        let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -231,7 +244,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .get_current_idempotency_key()
             .await
             .unwrap_or(IdempotencyKey::fresh());
-        let oplog_index = self.state.current_oplog_index().await;
+        let oplog_index = self.state.oplog.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let durability = Durability::<(u64, u64), SerializableError>::new(
@@ -324,15 +337,20 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
+        let own_worker_id = self.owned_worker_id().clone();
 
         let begin_index = self
-            .state
             .begin_function(&DurableFunctionType::WriteRemote)
             .await?;
 
         let entry = self.table().get(&this)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -341,7 +359,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             .get_current_idempotency_key()
             .await
             .unwrap_or(IdempotencyKey::fresh());
-        let oplog_index = self.state.current_oplog_index().await;
+        let oplog_index = self.state.oplog.current_oplog_index().await;
 
         // NOTE: Now that IdempotencyKey::derived is used, we no longer need to persist this, but we do to avoid breaking existing oplogs
         let durability = Durability::<(u64, u64), SerializableError>::new(
@@ -439,8 +457,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         };
 
         if result.is_err() {
-            self.state
-                .end_function(&DurableFunctionType::WriteRemote, begin_index)
+            self.end_function(&DurableFunctionType::WriteRemote, begin_index)
                 .await?;
         }
 
@@ -487,7 +504,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 .get_current_idempotency_key()
                 .expect("Expected to get an idempotency key as we are inside an invocation");
 
-            let current_oplog_index = self.state.current_oplog_index().await;
+            let current_oplog_index = self.state.oplog.current_oplog_index().await;
 
             let idempotency_key =
                 IdempotencyKey::derived(&current_idempotency_key, current_oplog_index);
@@ -897,14 +914,16 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     serializable_invoke_result,
                     SerializableInvokeResult::Pending
                 ) {
-                    self.state
-                        .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
                         .await?;
 
                     self.finish_span(&span_id).await?;
                 }
 
-                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
             }
 
             match result {
@@ -961,8 +980,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                 let begin_index = entry.begin_index();
 
                 if !matches!(serialized_invoke_result, SerializableInvokeResult::Pending) {
-                    self.state
-                        .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
                         .await?;
 
                     self.finish_span(&span_id).await?;
@@ -1016,8 +1034,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
                     serialized_invoke_result,
                     SerializableInvokeResultV1::Pending
                 ) {
-                    self.state
-                        .end_function(&DurableFunctionType::WriteRemote, begin_index)
+                    self.end_function(&DurableFunctionType::WriteRemote, begin_index)
                         .await?;
                 }
 

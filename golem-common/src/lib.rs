@@ -59,6 +59,8 @@ pub mod retries;
 #[cfg(feature = "serialization")]
 pub mod serialization;
 
+pub mod read_only_lock;
+
 #[cfg(feature = "observability")]
 pub mod tracing;
 

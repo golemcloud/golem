@@ -1133,9 +1133,7 @@ async fn get_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
     let oplog = admin.get_oplog(&worker_id, OplogIndex::INITIAL).await;
 
-    // Whether there is an "enqueued invocation" entry or just directly started invocation
-    // depends on oplog
-    assert!(oplog.len() >= 12 && oplog.len() <= 14);
+    assert_eq!(oplog.len(), 16);
     assert_eq!(oplog[0].oplog_index, OplogIndex::INITIAL);
     assert!(matches!(&oplog[0].entry, PublicOplogEntry::Create(_)));
     assert_eq!(
@@ -1239,9 +1237,9 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
         .search_oplog(&worker_id, "product-id:G1001 OR product-id:G1000")
         .await;
 
-    assert_eq!(result1.len(), 5); // two invocations and two log messages, and the get-cart-contents results
+    assert_eq!(result1.len(), 7); // two invocations and two log messages, and the get-cart-contents results
     assert_eq!(result2.len(), 1); // get_random_bytes
-    assert_eq!(result3.len(), 3); // two invocations, and the get-cart-contents results
+    assert_eq!(result3.len(), 5); // two invocations, and the get-cart-contents results
 }
 
 #[test]
@@ -1787,7 +1785,7 @@ async fn agent_promise_await(
                     component_id,
                     worker_name: worker_name.to_string(),
                 },
-                oplog_idx: OplogIndex::from_u64(34),
+                oplog_idx: OplogIndex::from_u64(35),
             },
             b"hello".to_vec(),
         )

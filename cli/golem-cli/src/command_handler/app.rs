@@ -422,12 +422,32 @@ impl AppCommandHandler {
             .opt_select_project(None)
             .await?;
 
+        self.ctx
+            .app_handler()
+            .build(
+                component_name.component_name.clone(),
+                Some(BuildArgs {
+                    step: vec![],
+                    force_build: force_build.clone(),
+                }),
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
+
+        if deploy_args.reset {
+            self.ctx
+                .api_handler()
+                .delete_all_for_reset_once(project.as_ref())
+                .await?;
+        }
+
         let components = self
             .ctx
             .component_handler()
             .deploy(
                 project.as_ref(),
                 component_name.component_name,
+                true,
                 Some(force_build),
                 &ApplicationComponentSelectMode::All,
                 &deploy_args,

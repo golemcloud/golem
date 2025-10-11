@@ -625,6 +625,7 @@ pub struct WorkerStatusRecord {
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
     pub component_version_for_replay: ComponentVersion,
+    pub current_retry_count: u32,
 }
 
 impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
@@ -647,6 +648,7 @@ impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
             active_plugins: Decode::decode(decoder)?,
             deleted_regions: Decode::decode(decoder)?,
             component_version_for_replay: Decode::decode(decoder)?,
+            current_retry_count: Decode::decode(decoder)?,
         })
     }
 }
@@ -672,6 +674,7 @@ impl<'de, Context> BorrowDecode<'de, Context> for WorkerStatusRecord {
             active_plugins: BorrowDecode::borrow_decode(decoder)?,
             deleted_regions: BorrowDecode::borrow_decode(decoder)?,
             component_version_for_replay: BorrowDecode::borrow_decode(decoder)?,
+            current_retry_count: BorrowDecode::borrow_decode(decoder)?,
         })
     }
 }
@@ -696,6 +699,7 @@ impl Default for WorkerStatusRecord {
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_version_for_replay: 0,
+            current_retry_count: 0,
         }
     }
 }

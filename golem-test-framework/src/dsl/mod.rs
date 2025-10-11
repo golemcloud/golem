@@ -2143,6 +2143,7 @@ pub fn to_worker_metadata(
                         .map(|id| id.try_into().expect("invalid plugin installation id")),
                 ),
                 deleted_regions: DeletedRegions::new(),
+                current_retry_count: metadata.retry_count,
                 component_version_for_replay: metadata.component_version,
             },
             parent: None,

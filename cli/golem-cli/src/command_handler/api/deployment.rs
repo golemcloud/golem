@@ -75,6 +75,10 @@ impl ApiDeploymentCommandHandler {
             .opt_select_project(None)
             .await?;
 
+        if deploy_args.reset {
+            self.delete_all_for_reset_once(project.as_ref()).await?;
+        }
+
         let api_deployments = self.merge_manifest_api_deployments().await?;
         let api_deployments = match &host_or_site {
             Some(host_or_site) => api_deployments
@@ -211,6 +215,94 @@ impl ApiDeploymentCommandHandler {
             .map_service_error()?;
 
         log_warn_action("Deleted", format!("site {}", site.log_color_highlight()));
+
+        Ok(())
+    }
+
+    pub async fn delete_all_for_reset_once(
+        &self,
+        project: Option<&ProjectRefAndId>,
+    ) -> anyhow::Result<()> {
+        self.ctx
+            .reset_http_deployments_once(|| async { self.delete_all_for_reset(project).await })
+            .await
+    }
+
+    async fn delete_all_for_reset(&self, project: Option<&ProjectRefAndId>) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .selected_project_id_or_default(project)
+            .await?;
+
+        let api_deployments = self.merge_manifest_api_deployments().await?;
+
+        let all_api_deployments: Vec<ApiDeployment> = clients
+            .api_deployment
+            .list_deployments(&project.0, None)
+            .await
+            .map_service_error()?
+            .into_iter()
+            .map(ApiDeployment::from)
+            .collect::<Vec<_>>();
+
+        let (to_redeploy, to_delete): (Vec<_>, Vec<_>) =
+            all_api_deployments.into_iter().partition(|api_deployment| {
+                api_deployments.contains_key(&HttpApiDeploymentSite {
+                    host: api_deployment.site.host.clone(),
+                    subdomain: api_deployment.site.subdomain.clone(),
+                })
+            });
+
+        let steps = to_delete
+            .iter()
+            .map(|api_deployment| {
+                format!(
+                    "- {} deployment {}",
+                    "Delete".log_color_warn(),
+                    HttpApiDeploymentSite {
+                        host: api_deployment.site.host.clone(),
+                        subdomain: api_deployment.site.subdomain.clone(),
+                    }
+                    .to_string()
+                    .log_color_highlight()
+                )
+            })
+            .chain(to_redeploy.iter().map(|api_deployment| {
+                format!(
+                    "- {} and {} deployment {}",
+                    "Delete".log_color_warn(),
+                    "redeploy".log_color_ok_highlight(),
+                    HttpApiDeploymentSite {
+                        host: api_deployment.site.host.clone(),
+                        subdomain: api_deployment.site.subdomain.clone(),
+                    }
+                    .to_string()
+                    .log_color_highlight()
+                )
+            }))
+            .collect::<Vec<_>>();
+
+        if steps.is_empty() {
+            return Ok(());
+        }
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_reset_http_deployments(&steps)?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        for api_deployment in to_redeploy.iter().chain(to_delete.iter()) {
+            clients
+                .api_deployment
+                .delete_deployment(&project.0, &api_deployment.site.host)
+                .await
+                .map_service_error()?;
+        }
 
         Ok(())
     }

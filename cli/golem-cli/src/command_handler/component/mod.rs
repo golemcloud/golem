@@ -286,6 +286,7 @@ impl ComponentCommandHandler {
                 .await?
                 .as_ref(),
             component_name.component_name,
+            false,
             Some(force_build),
             &ApplicationComponentSelectMode::CurrentDir,
             &deploy_args,
@@ -592,21 +593,24 @@ impl ComponentCommandHandler {
         &self,
         project: Option<&ProjectRefAndId>,
         component_names: Vec<ComponentName>,
+        skip_build: bool, // NOTE: this can be removed with atomic deployments
         force_build: Option<ForceBuildArg>,
         default_component_select_mode: &ApplicationComponentSelectMode,
         deploy_args: &DeployArgs,
     ) -> anyhow::Result<Vec<Component>> {
-        self.ctx
-            .app_handler()
-            .build(
-                component_names,
-                force_build.map(|force_build| BuildArgs {
-                    step: vec![],
-                    force_build,
-                }),
-                default_component_select_mode,
-            )
-            .await?;
+        if !skip_build {
+            self.ctx
+                .app_handler()
+                .build(
+                    component_names,
+                    force_build.map(|force_build| BuildArgs {
+                        step: vec![],
+                        force_build,
+                    }),
+                    default_component_select_mode,
+                )
+                .await?;
+        }
 
         let selected_component_names = {
             let app_ctx = self.ctx.app_context_lock().await;
@@ -1163,6 +1167,7 @@ impl ComponentCommandHandler {
                 .deploy(
                     project,
                     vec![component_name.clone()],
+                    false,
                     None,
                     &ApplicationComponentSelectMode::CurrentDir,
                     &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
@@ -1216,6 +1221,7 @@ impl ComponentCommandHandler {
                         .deploy(
                             project,
                             vec![component_name.clone()],
+                            false,
                             None,
                             &ApplicationComponentSelectMode::CurrentDir,
                             &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
