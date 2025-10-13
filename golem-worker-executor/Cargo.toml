@@ -102,6 +102,7 @@ golem-test-framework = { workspace = true }
 assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = { workspace = true }
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }

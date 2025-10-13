@@ -206,6 +206,11 @@ fn calculate_latest_worker_status(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (WorkerStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
     for (idx, entry) in entries {
+        // Skipping entries in skipped regions, as they are skipped during replay too
+        if skipped_regions.is_in_deleted_region(*idx) {
+            continue;
+        }
+
         // Errors are counted in skipped regions too (but not in deleted ones),
         // otherwise we would not be able to know how many times we retried failures in atomic regions
         if !deleted_regions.is_in_deleted_region(*idx) {
@@ -231,15 +236,8 @@ fn calculate_latest_worker_status(
                         current_status = WorkerStatus::Failed;
                     }
                 }
-                _ => {
-                    current_status = WorkerStatus::Running;
-                }
+                _ => {}
             }
-        }
-
-        // Skipping entries in skipped regions, as they are skipped during replay too
-        if skipped_regions.is_in_deleted_region(*idx) {
-            continue;
         }
 
         match entry {
@@ -791,6 +789,7 @@ mod test {
     use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_wasm_rpc::Value;
+    use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
