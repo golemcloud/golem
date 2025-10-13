@@ -677,7 +677,7 @@ impl Drop for ForwardingOplog {
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
-    async fn add(&self, entry: OplogEntry) {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let mut state = self.state.lock().await;
         state.buffer.push_back(entry.clone());
         state.last_oplog_idx = state.last_oplog_idx.next();
@@ -700,6 +700,10 @@ impl Oplog for ForwardingOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.inner.current_oplog_index().await
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        self.inner.last_added_non_hint_entry().await
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

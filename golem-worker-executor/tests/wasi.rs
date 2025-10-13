@@ -1660,8 +1660,9 @@ async fn sleep_and_awaiting_parallel_responses(
 
     executor.check_oplog_is_queryable(&worker_id).await;
 
-    server.abort();
     drop(executor);
+    server.abort();
+
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
@@ -1677,6 +1678,8 @@ async fn sleep_and_awaiting_parallel_responses(
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
         .await
         .unwrap();
+
+    // server.abort();
 
     check!(duration.as_secs() >= 10);
     check!(duration.as_secs() < 20);

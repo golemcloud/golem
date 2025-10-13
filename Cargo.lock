@@ -4805,6 +4805,7 @@ dependencies = [
  "md5",
  "metrohash",
  "nonempty-collections",
+ "pretty_assertions",
  "prometheus 0.13.4",
  "proptest",
  "prost 0.14.1",

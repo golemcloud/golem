@@ -812,7 +812,7 @@ async fn get_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
 
 #[test]
 #[tracing::instrument]
-#[timeout(120000)]
+#[timeout("5m")]
 async fn get_running_workers(deps: &EnvBasedTestDependencies, _tracing: &Tracing) {
     let admin = deps.admin().await;
     let component_id = admin.component("http-client-2").unique().store().await;

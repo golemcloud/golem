@@ -1682,8 +1682,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             wasi_config_vars: Some(metadata.wasi_config_vars.into()),
             component_version: latest_status.component_version,
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
-            retry_count: latest_status.current_retry_count,
-
+            retry_count: last_error_and_retry_count
+                .as_ref()
+                .and_then(|last_error| {
+                    latest_status
+                        .current_retry_count
+                        .get(&last_error.retry_from)
+                        .copied()
+                })
+                .unwrap_or_default(),
             pending_invocation_count: latest_status.pending_invocations.len() as u64,
             updates,
             created_at: Some(metadata.created_at.into()),

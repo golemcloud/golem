@@ -538,6 +538,10 @@ impl InvocationHooks for TestWorkerCtx {
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
     }
+
+    async fn get_current_retry_point(&self) -> OplogIndex {
+        self.durable_ctx.get_current_retry_point().await
+    }
 }
 
 #[async_trait]
@@ -1190,13 +1194,13 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        self.oplog.add(entry).await
+    }
+
     async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
         self.check_oplog_add(&entry)?;
         self.oplog.add_safe(entry).await
-    }
-
-    async fn add(&self, entry: OplogEntry) {
-        self.oplog.add(entry).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
@@ -1209,6 +1213,10 @@ impl Oplog for TestOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.oplog.current_oplog_index().await
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        self.oplog.last_added_non_hint_entry().await
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

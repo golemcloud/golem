@@ -734,9 +734,10 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
-    async fn add(&self, entry: OplogEntry) {
-        self.primary.add(entry).await;
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        let result = self.primary.add(entry).await;
         self.primary_length.fetch_add(1, Ordering::AcqRel);
+        result
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
@@ -766,6 +767,10 @@ impl Oplog for MultiLayerOplog {
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.primary.current_oplog_index().await
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        self.primary.last_added_non_hint_entry().await
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

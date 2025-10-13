@@ -31,7 +31,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack},
-    GetFileSystemNodeResult,
+    GetFileSystemNodeResult, OplogIndex,
 };
 use golem_common::model::{
     ComponentFilePath, ComponentType, ComponentVersion, IdempotencyKey, OwnedWorkerId,
@@ -590,9 +590,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     Err(error) => {
                         self.store
                             .data_mut()
-                            .on_invocation_failure(&TrapType::Error(WorkerError::Unknown(
-                                error.to_string(),
-                            )))
+                            .on_invocation_failure(&TrapType::Error {
+                                error: WorkerError::Unknown(error.to_string()),
+                                retry_from: OplogIndex::INITIAL,
+                            })
                             .await;
                         CommandOutcome::BreakInnerLoop(RetryDecision::None)
                     }
@@ -602,9 +603,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Ok(None) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error(WorkerError::InvalidRequest(
-                        "Function not found".to_string(),
-                    )))
+                    .on_invocation_failure(&TrapType::Error {
+                        error: WorkerError::InvalidRequest("Function not found".to_string()),
+                        retry_from: OplogIndex::INITIAL,
+                    })
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
@@ -612,9 +614,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             Err(err) => {
                 self.store
                     .data_mut()
-                    .on_invocation_failure(&TrapType::Error(WorkerError::InvalidRequest(format!(
-                        "Failed analysing function: {err}"
-                    ))))
+                    .on_invocation_failure(&TrapType::Error {
+                        error: WorkerError::InvalidRequest(format!(
+                            "Failed analysing function: {err}"
+                        )),
+                        retry_from: OplogIndex::INITIAL,
+                    })
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
             }
@@ -657,7 +662,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 }
             }
             Err(error) => {
-                let trap_type = TrapType::from_error::<Ctx>(&anyhow!(error));
+                let trap_type = TrapType::from_error::<Ctx>(&anyhow!(error), OplogIndex::INITIAL);
 
                 self.store
                     .data_mut()
@@ -675,7 +680,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
     ) -> CommandOutcome {
         let trap_type = match result {
             Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-            Err(error) => Some(TrapType::from_error::<Ctx>(&anyhow!(error))),
+            Err(error) => Some(TrapType::from_error::<Ctx>(
+                &anyhow!(error),
+                OplogIndex::INITIAL,
+            )),
         };
         let decision = match trap_type {
             Some(trap_type) => {
@@ -730,9 +738,9 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     self.store,
                     self.instance,
                     &component_metadata,
-                    true
+                    true,
                 )
-                .await;
+                    .await;
                 self.store.data_mut().end_call_snapshotting_function();
 
                 match result {
@@ -785,7 +793,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             target_version,
                             format!("failed to get a snapshot for manual update: {error}"),
                         )
-                        .await
+                            .await
                     }
                     Ok(InvokeResult::Exited { .. }) => {
                         self.fail_update(
@@ -793,7 +801,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                             "failed to get a snapshot for manual update: it called exit"
                                 .to_string(),
                         )
-                        .await
+                            .await
                     }
                     Ok(InvokeResult::Interrupted { interrupt_kind, .. }) => {
                         self.fail_update(
@@ -802,14 +810,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 "failed to get a snapshot for manual update: {interrupt_kind:?}"
                             ),
                         )
-                        .await
+                            .await
                     }
                     Err(error) => {
                         self.fail_update(
                             target_version,
                             format!("failed to get a snapshot for manual update: {error:?}"),
                         )
-                        .await
+                            .await
                     }
                 }
             }
@@ -819,14 +827,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     "failed to get a snapshot for manual update: save-snapshot is not exported"
                         .to_string(),
                 )
-                .await
+                    .await
             }
             Err(error) => {
                 self.fail_update(
                     target_version,
                     format!("failed to get a snapshot for manual update: error while finding the exported save-snapshot function: {error}"),
                 )
-                .await
+                    .await
             }
         }
     }

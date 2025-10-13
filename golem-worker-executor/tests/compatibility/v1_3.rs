@@ -127,6 +127,7 @@ pub fn oplog_entry() {
     let oe6 = OplogEntry::Error {
         timestamp: Timestamp::from(1724701938466),
         error: WorkerError::OutOfMemory,
+        retry_from: OplogIndex::from_u64(100),
     };
 
     let oe7 = OplogEntry::NoOp {

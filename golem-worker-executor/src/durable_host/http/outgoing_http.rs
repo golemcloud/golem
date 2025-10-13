@@ -133,7 +133,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     },
                 );
             }
-            Err(_) => {
+            Err(err) => {
+                tracing::error!("!!! ERROR FROM handle(): {err:?}");
                 self.end_durable_function(
                     &DurableFunctionType::WriteRemoteBatched(None),
                     begin_index,

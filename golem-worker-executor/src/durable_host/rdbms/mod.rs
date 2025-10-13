@@ -140,6 +140,7 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -173,6 +174,7 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -214,6 +216,7 @@ where
 
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
+        durability.try_trigger_retry(ctx, &result).await?;
         let input = result.clone().ok();
         durability.persist(ctx, input, result).await
     } else {
@@ -307,6 +310,7 @@ where
             Ok(query_stream) => query_stream.deref().get_columns().await,
             Err(error) => Err(error),
         };
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, (), result).await
     } else {
         durability.replay(ctx).await
@@ -356,6 +360,7 @@ where
             Ok(query_stream) => query_stream.deref().get_next().await,
             Err(error) => Err(error),
         };
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, (), result).await
     } else {
         durability.replay(ctx).await
@@ -434,6 +439,7 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -474,6 +480,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
+        tracing::warn!("result: {result:?}");
+        durability.try_trigger_retry(ctx, &result).await?;
+        tracing::warn!("after try trigger retry");
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -507,6 +516,7 @@ where
 
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
+        durability.try_trigger_retry(ctx, &result).await?;
         let input = result.clone().ok();
         durability.persist(ctx, input, result).await
     } else {
