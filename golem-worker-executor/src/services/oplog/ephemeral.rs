@@ -39,15 +39,20 @@ struct EphemeralOplogState {
     last_committed_idx: OplogIndex,
     max_operations_before_commit: u64,
     target: Arc<dyn OplogArchive + Send + Sync>,
+    last_added_non_hint_entry: Option<OplogIndex>,
 }
 
 impl EphemeralOplogState {
     async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
+        let is_hint = entry.is_hint();
         self.buffer.push_back(entry);
         if self.buffer.len() > self.max_operations_before_commit as usize {
             self.commit().await;
         }
         self.last_oplog_idx = self.last_oplog_idx.next();
+        if !is_hint {
+            self.last_added_non_hint_entry = Some(self.last_oplog_idx);
+        }
         self.last_oplog_idx
     }
 
@@ -87,6 +92,7 @@ impl EphemeralOplog {
                 last_committed_idx: last_oplog_idx,
                 max_operations_before_commit,
                 target,
+                last_added_non_hint_entry: None,
             })),
             close_fn: Some(close),
         }
@@ -137,6 +143,12 @@ impl Oplog for EphemeralOplog {
         record_oplog_call("current_oplog_index");
         let state = self.state.lock().await;
         state.last_oplog_idx
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        record_oplog_call("last_added_non_hint_entry");
+        let state = self.state.lock().await;
+        state.last_added_non_hint_entry
     }
 
     async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {

@@ -766,6 +766,10 @@ mod tests {
             unimplemented!()
         }
 
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+            unimplemented!()
+        }
+
         async fn wait_for_replicas(&self, _replicas: u8, _timeout: Duration) -> bool {
             unimplemented!()
         }

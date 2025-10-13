@@ -184,6 +184,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Returns the current oplog index
     async fn current_oplog_index(&self) -> OplogIndex;
 
+    /// Returns the index of the last non-hint entry which was added in this session with `add`. If
+    /// there is no such entry, returns `None`.
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex>;
+
     /// Waits until indexed store writes all changes into at least `replicas` replicas (or the maximum
     /// available).
     /// Returns true if the maximum possible number of replicas is reached within the timeout,

@@ -139,7 +139,7 @@ pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
     pub public_state: PublicDurableWorkerState<Ctx>,
     state: PrivateDurableWorkerState,
     temp_dir: Arc<TempDir>,
-    execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    execution_status: Arc<RwLock<ExecutionStatus>>,
 }
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
@@ -523,13 +523,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        let result = if (*function_type == DurableFunctionType::WriteRemote
-            && !self.state.assume_idempotence)
+        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
             || matches!(
                 *function_type,
                 DurableFunctionType::WriteRemoteBatched(None)
-            ) {
-            if self.is_live() {
+            )
+        {
+            let result = if self.is_live() {
                 let begin_index = self
                     .public_state
                     .worker()
@@ -580,8 +580,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // Must switch to live mode before failing to be able to commit an Error entry
                             self.state.replay_state.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
-                                "Non-idempotent remote write operation was not completed, cannot retry",
-                            ))
+                                    "Non-idempotent remote write operation was not completed, cannot retry",
+                                ))
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
@@ -610,30 +610,39 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 } else {
                     Ok(begin_index)
                 }
-            }
+            }?;
+
+            // The current retry point will point to the BeginRemoteWrite entry
+            self.state.current_retry_point = result;
+            Ok(result)
         } else {
+            // When there is no BeginRemoteWrite entry, the current retry point can only
+            // point to the last written non-hint entry. Hint entries must be ignored
+            // because they are nondeterministic.
+            // If the entry belongs to an open batched write or transaction, we need to
+            // set the current retry point to the index of the begin entry.
+            // The returned index, however, is going to be the current / last replayed index.
+
             let begin_index = if self.state.replay_state.is_live() {
                 self.state.oplog.current_oplog_index().await
             } else {
-                self.state.replay_state.last_replayed_index()
+                self.state.replay_state.last_replayed_non_hint_index()
             };
-            Ok(begin_index.next())
-        }?;
 
-        // Updating the current retry point attached for any error happening after this point
-        match function_type {
-            DurableFunctionType::WriteRemoteBatched(Some(idx)) => {
-                self.state.current_retry_point = *idx;
-            }
-            DurableFunctionType::WriteRemoteTransaction(Some(idx)) => {
-                self.state.current_retry_point = *idx;
-            }
-            _ => {
-                self.state.current_retry_point = result;
-            }
+            let new_retry_point = match function_type {
+                DurableFunctionType::WriteRemoteBatched(Some(idx)) => *idx,
+                DurableFunctionType::WriteRemoteTransaction(Some(idx)) => *idx,
+                _ => self
+                    .state
+                    .oplog
+                    .last_added_non_hint_entry()
+                    .await
+                    .unwrap_or(self.state.replay_state.last_replayed_non_hint_index()),
+            };
+            self.state.current_retry_point = new_retry_point;
+
+            Ok(begin_index)
         }
-
-        Ok(result)
     }
 
     pub async fn end_function(

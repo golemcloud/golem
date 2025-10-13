@@ -448,6 +448,7 @@ impl PrimaryOplog {
                 last_committed_idx: last_oplog_idx,
                 last_oplog_idx,
                 owned_worker_id,
+                last_added_non_hint_entry: None,
             })),
             key,
             close: Some(close),
@@ -466,6 +467,7 @@ struct PrimaryOplogState {
     last_oplog_idx: OplogIndex,
     last_committed_idx: OplogIndex,
     owned_worker_id: OwnedWorkerId,
+    last_added_non_hint_entry: Option<OplogIndex>,
 }
 
 impl PrimaryOplogState {
@@ -499,11 +501,15 @@ impl PrimaryOplogState {
     async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
         record_oplog_call("add");
 
+        let is_hint = entry.is_hint();
         self.buffer.push_back(entry);
         if self.buffer.len() > self.max_operations_before_commit as usize {
             self.commit().await;
         }
         self.last_oplog_idx = self.last_oplog_idx.next();
+        if !is_hint {
+            self.last_added_non_hint_entry = Some(self.last_oplog_idx);
+        }
         self.last_oplog_idx
     }
 
@@ -644,6 +650,11 @@ impl Oplog for PrimaryOplog {
     async fn current_oplog_index(&self) -> OplogIndex {
         let state = self.state.lock().await;
         state.last_oplog_idx
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        let state = self.state.lock().await;
+        state.last_added_non_hint_entry
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

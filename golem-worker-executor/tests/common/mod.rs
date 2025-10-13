@@ -1215,6 +1215,10 @@ impl Oplog for TestOplog {
         self.oplog.current_oplog_index().await
     }
 
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        self.oplog.last_added_non_hint_entry().await
+    }
+
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         self.oplog.wait_for_replicas(replicas, timeout).await
     }

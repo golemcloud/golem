@@ -51,6 +51,8 @@ pub struct ReplayState {
     replay_target: AtomicOplogIndex,
     /// The oplog index of the last replayed entry
     last_replayed_index: AtomicOplogIndex,
+    /// The oplog index of the last non-hint entry read
+    last_replayed_non_hint_index: AtomicOplogIndex,
     internal: Arc<RwLock<InternalReplayState>>,
     has_seen_logs: Arc<AtomicBool>,
 }
@@ -79,6 +81,7 @@ impl ReplayState {
             oplog_service,
             oplog,
             last_replayed_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
+            last_replayed_non_hint_index: AtomicOplogIndex::from_oplog_index(OplogIndex::NONE),
             replay_target: AtomicOplogIndex::from_oplog_index(last_oplog_index),
             internal: Arc::new(RwLock::new(InternalReplayState {
                 skipped_regions,
@@ -102,6 +105,10 @@ impl ReplayState {
 
     pub fn last_replayed_index(&self) -> OplogIndex {
         self.last_replayed_index.get()
+    }
+
+    pub fn last_replayed_non_hint_index(&self) -> OplogIndex {
+        self.last_replayed_non_hint_index.get()
     }
 
     pub fn replay_target(&self) -> OplogIndex {
@@ -217,6 +224,7 @@ impl ReplayState {
 
         if condition(&entry) {
             self.skip_forward().await;
+            self.last_replayed_non_hint_index.set(read_idx);
 
             Some((read_idx, entry))
         } else {
@@ -252,7 +260,7 @@ impl ReplayState {
                         logs.insert(hash);
                     }
 
-                    // Moving the replay pointer
+                    // Moving the replay pointer. Leaving last_replayed_non_hint_index unchanged, because this is a hint entry.
                     self.last_replayed_index.set(last_read_idx);
                     // TODO: what to do with next_skipped_region if we jumped forward to end of persist-nothing zone?
                 }

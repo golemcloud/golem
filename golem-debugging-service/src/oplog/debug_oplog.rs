@@ -99,6 +99,10 @@ impl Oplog for DebugOplog {
         }
     }
 
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        None
+    }
+
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
         self.inner.wait_for_replicas(replicas, timeout).await
     }

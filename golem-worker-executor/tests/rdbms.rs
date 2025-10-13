@@ -16,10 +16,6 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_common::model::public_oplog::{
-    ImportedFunctionInvokedParameters, JumpParameters, PublicDurableFunctionType, PublicOplogEntry,
-    RemoteTransactionParameters, WriteRemoteTransactionParameters,
-};
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;

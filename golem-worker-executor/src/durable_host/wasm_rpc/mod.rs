@@ -90,10 +90,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        if remote_worker_id == own_worker_id {
-            return Err(anyhow!("RPC calls to the same agent are not supported"));
-        }
-
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -137,6 +133,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             DurableFunctionType::WriteRemote,
         )
         .await?;
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let result: Result<Option<WitValue>, RpcError> = if durability.is_live() {
             let input = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
@@ -233,10 +234,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        if remote_worker_id == own_worker_id {
-            return Err(anyhow!("RPC calls to the same agent are not supported"));
-        }
-
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -281,6 +278,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             DurableFunctionType::WriteRemote,
         )
         .await?;
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let result: Result<(), RpcError> = if durability.is_live() {
             let input = SerializableInvokeRequest {
                 remote_worker_id: remote_worker_id.worker_id(),
@@ -349,10 +351,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
         let remote_worker_id = payload.remote_worker_id().clone();
 
-        if remote_worker_id == own_worker_id {
-            return Err(anyhow!("RPC calls to the same agent are not supported"));
-        }
-
         let connection_span_id = payload.span_id().clone();
 
         Self::add_self_parameter_if_needed(&mut function_params, payload);
@@ -371,6 +369,11 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             DurableFunctionType::ReadLocal,
         )
         .await?;
+
+        if remote_worker_id == own_worker_id {
+            return Err(anyhow!("RPC calls to the same agent are not supported"));
+        }
+
         let uuid = if durability.is_live() {
             let key = IdempotencyKey::derived(&current_idempotency_key, oplog_index);
             let uuid = Uuid::parse_str(&key.value.to_string())?; // this is guaranteed to be a uuid
