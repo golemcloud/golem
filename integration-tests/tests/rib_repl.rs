@@ -334,6 +334,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
+            component_version: 0,
             root_package_name: metadata.root_package_name().clone(),
             root_package_version: metadata.root_package_version().clone(),
         };

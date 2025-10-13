@@ -14,7 +14,7 @@
 
 use crate::command::shared_args::{DeployArgs, StreamArgs};
 use crate::command_handler::Handlers;
-use crate::context::Context;
+use crate::context::{Context, RibReplState};
 use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{logln, set_log_output, Output};
@@ -25,9 +25,10 @@ use crate::model::{
     ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
     WorkerName,
 };
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use colored::Colorize;
+use golem_common::model::agent::AgentId;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
@@ -110,35 +111,52 @@ impl RibReplHandler {
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
             component_id: component.versioned_component_id.component_id,
+            component_version: component.versioned_component_id.version,
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };
 
         // The REPL has to know about the custom instance parameters
         // to support creating instances using agent interface names.
-        let custom_instance_spec = component
-            .metadata
-            .agent_types()
-            .iter()
-            .map(|agent_type| {
-                rib::CustomInstanceSpec::new(
-                    agent_type.type_name.to_string(),
-                    agent_type.constructor.wit_arg_types(),
-                    Some(rib::InterfaceName {
-                        name: agent_type.type_name.to_string(),
-                        version: None,
-                    }),
-                )
-            })
-            .collect::<Vec<_>>();
+        let mut custom_instance_spec = Vec::new();
+
+        for agent_type in component.metadata.agent_types() {
+            let wrapper_function = component
+                .metadata
+                .find_wrapper_function_by_agent_constructor(&agent_type.type_name)
+                .map_err(|err| anyhow!(err))?
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Missing static WIT wrapper for constructor of agent type {}",
+                        agent_type.type_name
+                    )
+                })?;
+
+            custom_instance_spec.push(rib::CustomInstanceSpec {
+                instance_name: agent_type.wrapper_type_name(),
+                parameter_types: wrapper_function
+                    .analysed_export
+                    .parameters
+                    .iter()
+                    .map(|p| p.typ.clone())
+                    .collect(),
+                interface_name: Some(rib::InterfaceName {
+                    name: agent_type.wrapper_type_name(),
+                    version: None,
+                }),
+            });
+        }
 
         self.ctx
-            .set_rib_repl_dependencies(ReplComponentDependencies {
-                component_dependencies: vec![ComponentDependency::new(
-                    component_dependency_key,
-                    component.metadata.exports().to_vec(),
-                )],
-                custom_instance_spec,
+            .set_rib_repl_state(RibReplState {
+                dependencies: ReplComponentDependencies {
+                    component_dependencies: vec![ComponentDependency::new(
+                        component_dependency_key,
+                        component.metadata.exports().to_vec(),
+                    )],
+                    custom_instance_spec,
+                },
+                component_metadata: component.metadata.clone(),
             })
             .await;
 
@@ -305,7 +323,13 @@ impl WorkerFunctionInvoke for RibReplHandler {
         args: Vec<ValueAndType>,
         _return_type: Option<AnalysedType>,
     ) -> anyhow::Result<Option<ValueAndType>> {
-        let worker_name = WorkerName::from(worker_name);
+        let worker_name: WorkerName = AgentId::parse(
+            worker_name,
+            &self.ctx.get_rib_repl_component_metadata().await,
+        )
+        .map_err(|err| anyhow!(err))?
+        .to_string()
+        .into();
 
         let component = self
             .ctx
@@ -313,9 +337,7 @@ impl WorkerFunctionInvoke for RibReplHandler {
             .component(
                 None,
                 component_id.into(),
-                Some(ComponentVersionSelection::ByWorkerName(&WorkerName(
-                    worker_name.to_string(),
-                ))),
+                Some(ComponentVersionSelection::ByWorkerName(&worker_name)),
             )
             .await?;
 

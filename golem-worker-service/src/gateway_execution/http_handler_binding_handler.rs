@@ -77,6 +77,7 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
 
         let resolved_request = GatewayResolvedWorkerRequest {
             component_id,
+            component_version: worker_detail.component_version,
             worker_name: worker_detail
                 .worker_name
                 .as_ref()

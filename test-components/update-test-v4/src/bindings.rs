@@ -6,7 +6,7 @@
 pub mod exports {
     pub mod golem {
         pub mod api {
-            /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of workers
+            /// Interface providing user-defined snapshotting capability. This can be used to perform manual update of agents
             /// when the new component incompatible with the old one.
             #[allow(dead_code, async_fn_in_trait, unused_imports, clippy::all)]
             pub mod load_snapshot {
@@ -64,7 +64,7 @@ pub mod exports {
                     }
                 }
                 pub trait Guest {
-                    /// Tries to load a user-defined snapshot, setting up the worker's state based on it.
+                    /// Tries to load a user-defined snapshot, setting up the agent's state based on it.
                     /// The function can return with a failure to indicate that the update is not possible.
                     fn load(bytes: _rt::Vec<u8>) -> Result<(), _rt::String>;
                 }

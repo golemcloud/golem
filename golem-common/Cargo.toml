@@ -102,6 +102,7 @@ heck = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
 iso8601-timestamp = { workspace = true }
+itertools = { workspace = true }
 lazy_static = { workspace = true }
 nonempty-collections = { workspace = true }
 poem = { workspace = true, optional = true }
@@ -131,6 +132,7 @@ uuid = { workspace = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
+wasm-wave = { workspace = true }
 
 [dev-dependencies]
 anyhow = { workspace = true }

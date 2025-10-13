@@ -9672,9 +9672,13 @@ components:
           format: date-time
         error:
           type: string
+        retryFrom:
+          type: integer
+          format: uint64
       required:
       - timestamp
       - error
+      - retryFrom
     ExportedFunctionCompletedParameters:
       title: ExportedFunctionCompletedParameters
       type: object
@@ -11793,7 +11797,7 @@ components:
           format: uint64
         retryCount:
           type: integer
-          format: uint64
+          format: uint32
         pendingInvocationCount:
           type: integer
           format: uint64

@@ -148,21 +148,15 @@ array_push ${components} http-client
 array_push ${components} ifs-update
 array_push ${components} ifs-update-inside-exported-function
 array_push ${components} invocation-context
-array_push ${components} js-1
-array_push ${components} js-4
 array_push ${components} key-value-service
 array_push ${components} networking
 array_push ${components} oplog-processor
 array_push ${components} promise
-array_push ${components} python-http-client
 array_push ${components} rdbms-service
 array_push ${components} rpc
 array_push ${components} runtime-service
 array_push ${components} scheduled-invocation
 array_push ${components} shopping-cart
-array_push ${components} tinygo-wasi
-array_push ${components} tinygo-wasi-http
-array_push ${components} ts-rpc
 array_push ${components} update-test-env-var
 array_push ${components} update-test-v2-11
 array_push ${components} update-test-v3-11
@@ -487,10 +481,11 @@ dependencies = [
 [tasks.integration-tests-group1]
 description = "Runs integration tests only"
 dependencies = ["build-bins"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "debug", "RUST_BACKTRACE" = "1" }
 script = '''
-cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
+cargo test --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time
 '''
+# cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
 
 [tasks.integration-tests-group2]
 description = "Runs component service integration tests only"
@@ -1077,7 +1072,7 @@ args = ["s3", "sync", "cli/schema.golem.cloud", "s3://schema.golem.cloud"]
 description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
 install_crate = "miniserve"
 command = "miniserve"
-args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
 
 ## Cleanup
 [tasks.clear-v8]

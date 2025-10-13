@@ -561,10 +561,7 @@ pub trait ComponentService: Send + Sync {
                         "Missing response from golem-component-service for create-component"
                             .to_string(),
                     )),
-                    Some(create_component_response::Result::Success(component)) => {
-                        info!("Created component (GRPC) {component:?}");
-                        Ok(component)
-                    }
+                    Some(create_component_response::Result::Success(component)) => Ok(component),
                     Some(create_component_response::Result::Error(error)) => match error.error {
                         Some(component_error::Error::AlreadyExists(_)) => {
                             Err(AddComponentError::AlreadyExists)

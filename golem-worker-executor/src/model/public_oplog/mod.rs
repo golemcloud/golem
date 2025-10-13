@@ -364,7 +364,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let function = metadata.metadata.find_function(&function_name).await?.ok_or(
+                let function = metadata.metadata.find_function(&function_name)?.ok_or(
                     format!("Exported function {function_name} not found in component {} version {component_version}", owned_worker_id.component_id())
                 )?;
 
@@ -412,12 +412,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Suspend { timestamp } => {
                 Ok(PublicOplogEntry::Suspend(TimestampParameter { timestamp }))
             }
-            OplogEntry::Error { timestamp, error } => {
-                Ok(PublicOplogEntry::Error(ErrorParameters {
-                    timestamp,
-                    error: error.to_string(""),
-                }))
-            }
+            OplogEntry::Error {
+                timestamp,
+                error,
+                retry_from,
+            } => Ok(PublicOplogEntry::Error(ErrorParameters {
+                timestamp,
+                error: error.to_string(""),
+                retry_from,
+            })),
             OplogEntry::NoOp { timestamp } => {
                 Ok(PublicOplogEntry::NoOp(TimestampParameter { timestamp }))
             }
@@ -484,7 +487,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                             .await
                             .map_err(|err| err.to_string())?;
 
-                        let function = metadata.metadata.find_function(&full_function_name).await?;
+                        let function = metadata.metadata.find_function(&full_function_name)?;
 
                         // It is not guaranteed that we can resolve the enqueued invocation's parameter types because
                         // we only know the current component version. If the client enqueued an update earlier and assumes
@@ -754,6 +757,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,
+                ..
             } => Ok(PublicOplogEntry::BeginRemoteTransaction(
                 BeginRemoteTransactionParameters {
                     timestamp,
@@ -822,9 +826,7 @@ async fn try_resolve_agent_id(
         .get_metadata(&worker_id.component_id, None)
         .await
     {
-        AgentId::parse(&worker_id.worker_name, &component.metadata)
-            .await
-            .ok()
+        AgentId::parse(&worker_id.worker_name, &component.metadata).ok()
     } else {
         None
     }

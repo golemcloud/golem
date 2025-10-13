@@ -2580,6 +2580,7 @@ mod internal {
     };
     use golem_common::model::auth::Namespace;
     use golem_common::model::component::VersionedComponentId;
+    use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
@@ -2832,22 +2833,29 @@ mod internal {
     }
 
     pub(crate) fn get_weather_agent_exports() -> Vec<AnalysedExport> {
-        // Exist in only amazon:shopping-cart/api1
-        let analysed_function_in_api1 = AnalysedFunction {
-            name: "get-weather".to_string(),
-            parameters: vec![AnalysedFunctionParameter {
-                name: "arg1".to_string(),
-                typ: str(),
-            }],
-            result: Some(AnalysedFunctionResult { typ: str() }),
-        };
-
-        let analysed_export1 = AnalysedExport::Instance(AnalysedInstance {
+        let weather_agent_wrapper = AnalysedExport::Instance(AnalysedInstance {
             name: "my:agent/weather-agent".to_string(),
-            functions: vec![analysed_function_in_api1],
+            functions: vec![
+                AnalysedFunction {
+                    name: "initialize".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "location".to_string(),
+                        typ: str(),
+                    }],
+                    result: None,
+                },
+                AnalysedFunction {
+                    name: "get-weather".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: str(),
+                    }],
+                    result: Some(AnalysedFunctionResult { typ: str() }),
+                },
+            ],
         });
 
-        vec![analysed_export1]
+        vec![weather_agent_wrapper]
     }
 
     pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
@@ -2880,15 +2888,13 @@ mod internal {
         exports.extend(get_bigw_shopping_metadata_with_resource());
         exports.extend(get_golem_shopping_cart_metadata());
 
-        let component_details = ComponentDetails {
-            component_info: ComponentDependencyKey {
-                component_name: "agent-component".to_string(),
-                component_id: Uuid::new_v4(),
-                root_package_name: None,
-                root_package_version: None,
-            },
-            metadata: exports,
-            agent_types: vec![AgentType {
+        let metadata = ComponentMetadata::from_parts(
+            exports,
+            vec![],
+            HashMap::new(),
+            Some("my:agent".to_string()),
+            None,
+            vec![AgentType {
                 type_name: "weather-agent".to_string(),
                 description: "".to_string(),
                 constructor: AgentConstructor {
@@ -2907,6 +2913,17 @@ mod internal {
                 methods: vec![],
                 dependencies: vec![],
             }],
+        );
+
+        let component_details = ComponentDetails {
+            component_info: ComponentDependencyKey {
+                component_name: "agent-component".to_string(),
+                component_id: Uuid::new_v4(),
+                component_version: 0,
+                root_package_name: None,
+                root_package_version: None,
+            },
+            metadata,
         };
 
         metadata_dict.insert(versioned_component_id, component_details);
@@ -2927,15 +2944,24 @@ mod internal {
         exports.extend(get_bigw_shopping_metadata_with_resource());
         exports.extend(get_golem_shopping_cart_metadata());
 
+        let metadata = ComponentMetadata::from_parts(
+            exports,
+            vec![],
+            HashMap::new(),
+            Some("my:agent".to_string()),
+            None,
+            vec![],
+        );
+
         let component_details = ComponentDetails {
             component_info: ComponentDependencyKey {
                 component_name: "test-component".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             },
-            metadata: exports,
-            agent_types: vec![],
+            metadata,
         };
 
         metadata_dict.insert(versioned_component_id, component_details);

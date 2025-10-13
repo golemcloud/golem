@@ -4,7 +4,7 @@ mod bindings;
 use crate::bindings::exports::rpc::caller_exports::caller_inline_functions::{Guest, TimelineNode};
 use crate::bindings::rpc::counters_client::counters_client::{Api, Counter};
 use crate::bindings::rpc::ephemeral_client::ephemeral_client::Api as EphemeralApi;
-use golem_rust::wasm_rpc::{ComponentId, WorkerId};
+use golem_rust::wasm_rpc::{AgentId, ComponentId};
 use std::env;
 use uuid::Uuid;
 
@@ -28,9 +28,9 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-        let worker_id = WorkerId {
+        let worker_id = AgentId {
             component_id: component_id.into(),
-            worker_name: "counters_test1".to_string(),
+            agent_id: "counters_test1".to_string(),
         };
 
         create_use_and_drop_counters(&worker_id);
@@ -50,9 +50,9 @@ impl Guest for Component {
                 let component_id =
                     env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
                 let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-                let worker_id = WorkerId {
+                let worker_id = AgentId {
                     component_id: component_id.into(),
-                    worker_name: "counters_test2".to_string(),
+                    agent_id: "counters_test2".to_string(),
                 };
 
                 let counter = Counter::custom(&worker_id, "counter");
@@ -68,9 +68,9 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-        let worker_id = WorkerId {
+        let worker_id = AgentId {
             component_id: component_id.into(),
-            worker_name: "counters_test3".to_string(),
+            agent_id: "counters_test3".to_string(),
         };
 
         let api = Api::custom(&worker_id);
@@ -82,9 +82,9 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-        let worker_id = WorkerId {
+        let worker_id = AgentId {
             component_id: component_id.into(),
-            worker_name: "counters_test4".to_string(),
+            agent_id: "counters_test4".to_string(),
         };
         let counter = Counter::custom(&worker_id, "counter-test4");
         (counter.blocking_get_args(), counter.blocking_get_env())
@@ -106,9 +106,9 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-        let worker_id = WorkerId {
+        let worker_id = AgentId {
             component_id: component_id.into(),
-            worker_name: "bug32".to_string(),
+            agent_id: "bug32".to_string(),
         };
         let api = Api::custom(&worker_id);
         api.blocking_bug_wasm_rpc_i32(in_)
@@ -119,18 +119,18 @@ impl Guest for Component {
             env::var("EPHEMERAL_COMPONENT_ID").expect("EPHEMERAL_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
         let component_id: ComponentId = component_id.into();
-        let api1 = EphemeralApi::custom(&WorkerId {
+        let api1 = EphemeralApi::custom(&AgentId {
             component_id: component_id.clone(),
-            worker_name: "eph1".to_string(),
+            agent_id: "eph1".to_string(),
         });
         let name1: String = api1.blocking_get_worker_name();
         let key1 = api1.blocking_get_idempotency_key();
         let name2 = api1.blocking_get_worker_name();
         let key2 = api1.blocking_get_idempotency_key();
 
-        let api2 = EphemeralApi::custom(&WorkerId {
+        let api2 = EphemeralApi::custom(&AgentId {
             component_id: component_id.clone(),
-            worker_name: "eph2".to_string(),
+            agent_id: "eph2".to_string(),
         });
         let name3: String = api2.blocking_get_worker_name();
         let key3: String = api2.blocking_get_idempotency_key();
@@ -143,16 +143,16 @@ impl Guest for Component {
         let component_id =
             env::var("COUNTERS_COMPONENT_ID").expect("COUNTERS_COMPONENT_ID not set");
         let component_id: Uuid = Uuid::parse_str(&component_id).unwrap();
-        let worker_id = WorkerId {
+        let worker_id = AgentId {
             component_id: component_id.into(),
-            worker_name: "bug1265".to_string(),
+            agent_id: "bug1265".to_string(),
         };
         let api = Api::custom(&worker_id);
         api.blocking_bug_golem1265(&s)
     }
 }
 
-fn create_use_and_drop_counters(worker_id: &WorkerId) {
+fn create_use_and_drop_counters(worker_id: &AgentId) {
     let counter1 = Counter::custom(worker_id, "counter1");
     let counter2 = Counter::custom(worker_id, "counter2");
     let counter3 = Counter::custom(worker_id, "counter3");
@@ -176,23 +176,23 @@ fn create_use_and_drop_counters(worker_id: &WorkerId) {
 
 fn create_use_and_drop_counters_non_blocking(component_id: &ComponentId) -> [u64; 3] {
     let counter1 = Counter::custom(
-        &WorkerId {
+        &AgentId {
             component_id: component_id.clone(),
-            worker_name: "counters_test51".to_string(),
+            agent_id: "counters_test51".to_string(),
         },
         "counter",
     );
     let counter2 = Counter::custom(
-        &WorkerId {
+        &AgentId {
             component_id: component_id.clone(),
-            worker_name: "counters_test52".to_string(),
+            agent_id: "counters_test52".to_string(),
         },
         "counter2",
     );
     let counter3 = Counter::custom(
-        &WorkerId {
+        &AgentId {
             component_id: component_id.clone(),
-            worker_name: "counters_test53".to_string(),
+            agent_id: "counters_test53".to_string(),
         },
         "counter3",
     );

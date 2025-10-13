@@ -20,16 +20,15 @@ use anyhow::anyhow;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_common::model::{IdempotencyKey, OplogIndex};
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm_rpc::Value;
-use heck::ToKebabCase;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error, Instrument};
 use wasmtime::component::{Func, Val};
-use wasmtime::{AsContextMut, StoreContextMut};
+use wasmtime::{AsContext, AsContextMut, StoreContextMut};
 use wasmtime_wasi_http::bindings::Proxy;
 use wasmtime_wasi_http::WasiHttpView;
 
@@ -206,14 +205,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     }
 
     store.data_mut().set_running();
-    store
-        .data_mut()
-        .store_worker_status(WorkerStatus::Running)
-        .await;
 
     let metadata = component_metadata
         .find_parsed_function(&parsed)
-        .await
         .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| {
             WorkerExecutorError::invalid_request(format!(
@@ -243,7 +237,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
     };
 
-    store.data().set_suspended().await?;
+    store.data().set_suspended();
 
     call_result
 }
@@ -256,7 +250,7 @@ fn verify_agent_invocation(
         if invocation.agent_method_or_constructor.is_some() {
             if let Some(interface_name) = invocation.name.site.interface_name() {
                 // interface_name is the kebab-cased agent type name from the static wrapper
-                let agent_type = agent_id.agent_type.to_kebab_case();
+                let agent_type = agent_id.wrapper_agent_type();
                 if interface_name != agent_type {
                     Err(WorkerExecutorError::invalid_request(
                         format!("Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}")
@@ -395,7 +389,14 @@ async fn invoke<Ctx: WorkerCtx>(
                 }
             }
         }
-        Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
+        Err(err) => {
+            let retry_from = store.data().get_current_retry_point().await;
+            Ok(InvokeResult::from_error::<Ctx>(
+                consumed_fuel,
+                &err,
+                retry_from,
+            ))
+        }
     }
 }
 
@@ -490,7 +491,14 @@ async fn invoke_http_handler<Ctx: WorkerCtx>(
 
     match res_or_error {
         Ok(resp) => Ok(InvokeResult::from_success(consumed_fuel, Some(resp))),
-        Err(e) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &e)),
+        Err(e) => {
+            let retry_from = store.as_context().data().get_current_retry_point().await;
+            Ok(InvokeResult::from_error::<Ctx>(
+                consumed_fuel,
+                &e,
+                retry_from,
+            ))
+        }
     }
 }
 
@@ -520,7 +528,14 @@ async fn drop_resource<Ctx: WorkerCtx>(
 
         match result {
             Ok(_) => Ok(InvokeResult::from_success(consumed_fuel, None)),
-            Err(err) => Ok(InvokeResult::from_error::<Ctx>(consumed_fuel, &err)),
+            Err(err) => {
+                let retry_from = store.data().get_current_retry_point().await;
+                Ok(InvokeResult::from_error::<Ctx>(
+                    consumed_fuel,
+                    &err,
+                    retry_from,
+                ))
+            }
         }
     } else {
         Ok(InvokeResult::from_success(0, None))
@@ -608,6 +623,7 @@ pub enum InvokeResult {
     Failed {
         consumed_fuel: i64,
         error: WorkerError,
+        retry_from: OplogIndex,
     },
     /// The invoked function succeeded and produced a result
     Succeeded {
@@ -629,16 +645,21 @@ impl InvokeResult {
         }
     }
 
-    pub fn from_error<Ctx: WorkerCtx>(consumed_fuel: i64, error: &anyhow::Error) -> Self {
-        match TrapType::from_error::<Ctx>(error) {
+    pub fn from_error<Ctx: WorkerCtx>(
+        consumed_fuel: i64,
+        error: &anyhow::Error,
+        retry_from: OplogIndex,
+    ) -> Self {
+        match TrapType::from_error::<Ctx>(error, retry_from) {
             TrapType::Interrupt(kind) => InvokeResult::Interrupted {
                 consumed_fuel,
                 interrupt_kind: kind,
             },
             TrapType::Exit => InvokeResult::Exited { consumed_fuel },
-            TrapType::Error(error) => InvokeResult::Failed {
+            TrapType::Error { error, retry_from } => InvokeResult::Failed {
                 consumed_fuel,
                 error,
+                retry_from,
             },
         }
     }
@@ -671,7 +692,12 @@ impl InvokeResult {
 
     pub fn as_trap_type<Ctx: WorkerCtx>(&self) -> Option<TrapType> {
         match self {
-            InvokeResult::Failed { error, .. } => Some(TrapType::Error(error.clone())),
+            InvokeResult::Failed {
+                error, retry_from, ..
+            } => Some(TrapType::Error {
+                error: error.clone(),
+                retry_from: *retry_from,
+            }),
             InvokeResult::Interrupted { interrupt_kind, .. } => {
                 Some(TrapType::Interrupt(interrupt_kind.clone()))
             }

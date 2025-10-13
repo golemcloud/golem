@@ -20,6 +20,7 @@ use chrono::{DateTime, Utc};
 use golem_client::model::{
     AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
 };
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
@@ -30,7 +31,6 @@ use golem_wasm_ast::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
-use heck::ToKebabCase;
 use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
@@ -170,6 +170,7 @@ pub struct ComponentView {
     #[serde(default)]
     pub project_id: Option<ProjectId>,
     pub exports: Vec<String>,
+    pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
@@ -188,7 +189,14 @@ impl ComponentView {
         let exports = {
             if value.metadata.is_agent() {
                 if show_exports_for_rib {
-                    show_exported_agents(value.metadata.agent_types())
+                    let agent_types = value
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .map(|a| a.to_wit_naming())
+                        .collect::<Vec<_>>();
+
+                    show_exported_agents(&agent_types)
                 } else {
                     value
                         .metadata
@@ -198,7 +206,7 @@ impl ComponentView {
                             show_exported_functions(
                                 value.metadata.exports(),
                                 true,
-                                agent_interface_name(&value, &agent.type_name).as_deref(),
+                                agent_interface_name(&value, &agent.wrapper_type_name()).as_deref(),
                             )
                         })
                         .collect()
@@ -219,6 +227,7 @@ impl ComponentView {
             created_at: value.created_at,
             project_id: value.project_id,
             exports,
+            agent_types: value.metadata.agent_types().to_vec(),
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
@@ -259,8 +268,8 @@ pub fn render_type(typ: &AnalysedType) -> String {
             let cases_str = cases
                 .iter()
                 .map(|NameOptionTypePair { name, typ }| match typ {
-                    None => name.to_kebab_case(),
-                    Some(typ) => format!("{}({})", name.to_kebab_case(), render_type(typ)),
+                    None => name.to_string(),
+                    Some(typ) => format!("{}({})", name, render_type(typ)),
                 })
                 .collect::<Vec<String>>()
                 .join(", ");
@@ -283,20 +292,16 @@ pub fn render_type(typ: &AnalysedType) -> String {
             }
         }
         AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        AnalysedType::Enum(TypeEnum { cases, .. }) => format!(
-            "enum {{ {} }}",
-            cases.iter().map(|c| c.to_kebab_case()).join(", ")
-        ),
-        AnalysedType::Flags(TypeFlags { names, .. }) => format!(
-            "flags {{ {} }}",
-            names.iter().map(|n| n.to_kebab_case()).join(", ")
-        ),
+        AnalysedType::Enum(TypeEnum { cases, .. }) => {
+            format!("enum {{ {} }}", cases.iter().join(", "))
+        }
+        AnalysedType::Flags(TypeFlags { names, .. }) => {
+            format!("flags {{ {} }}", names.iter().join(", "))
+        }
         AnalysedType::Record(TypeRecord { fields, .. }) => {
             let pairs: Vec<String> = fields
                 .iter()
-                .map(|NameTypePair { name, typ }| {
-                    format!("{}: {}", name.to_kebab_case(), render_type(typ))
-                })
+                .map(|NameTypePair { name, typ }| format!("{}: {}", name, render_type(typ)))
                 .collect();
 
             format!("record {{ {} }}", pairs.join(", "))
@@ -340,8 +345,8 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     for method in &agent.methods {
         result.push(format!(
             "{}.{}({}) -> {}",
-            agent.type_name,
-            method.name.to_kebab_case(),
+            agent.wrapper_type_name(),
+            method.name,
             render_data_schema(&method.input_schema),
             render_data_schema(&method.output_schema)
         ));
@@ -353,8 +358,8 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
 fn render_agent_constructor(agent: &AgentType) -> String {
     format!(
         "{}({}) agent constructor",
-        agent.type_name,
-        render_data_schema(&agent.constructor.input_schema)
+        agent.wrapper_type_name(),
+        render_data_schema(&agent.constructor.input_schema.to_wit_naming())
     )
 }
 
@@ -366,7 +371,7 @@ fn render_data_schema(schema: &DataSchema) -> String {
             .map(|named_elem| {
                 format!(
                     "{}: {}",
-                    named_elem.name.to_kebab_case(),
+                    named_elem.name,
                     render_element_schema(&named_elem.schema)
                 )
             })
@@ -377,7 +382,7 @@ fn render_data_schema(schema: &DataSchema) -> String {
             .map(|named_elem| {
                 format!(
                     "{}({})",
-                    named_elem.name.to_kebab_case(),
+                    named_elem.name,
                     render_element_schema(&named_elem.schema)
                 )
             })

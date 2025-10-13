@@ -51,7 +51,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 wasi_config_vars: _,
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
-                worker_id: worker_id.into(),
+                agent_id: worker_id.into(),
                 component_version,
                 args,
                 env: env.into_iter().collect(),
@@ -112,12 +112,14 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::Suspend(TimestampParameter { timestamp }) => {
                 Self::Suspend(timestamp.into())
             }
-            PublicOplogEntry::Error(ErrorParameters { timestamp, error }) => {
-                Self::Error(oplog::ErrorParameters {
-                    timestamp: timestamp.into(),
-                    error: error.to_string(),
-                })
-            }
+            PublicOplogEntry::Error(ErrorParameters {
+                timestamp,
+                error,
+                retry_from: _,
+            }) => Self::Error(oplog::ErrorParameters {
+                timestamp: timestamp.into(),
+                error: error.to_string(),
+            }),
             PublicOplogEntry::NoOp(TimestampParameter { timestamp }) => {
                 Self::NoOp(timestamp.into())
             }
@@ -164,7 +166,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             PublicOplogEntry::PendingWorkerInvocation(PendingWorkerInvocationParameters {
                 timestamp,
                 invocation,
-            }) => Self::PendingWorkerInvocation(oplog::PendingWorkerInvocationParameters {
+            }) => Self::PendingAgentInvocation(oplog::PendingAgentInvocationParameters {
                 timestamp: timestamp.into(),
                 invocation: invocation.into(),
             }),
@@ -402,7 +404,7 @@ impl From<golem_common::model::oplog::LogLevel> for oplog::LogLevel {
     }
 }
 
-impl From<PublicWorkerInvocation> for oplog::WorkerInvocation {
+impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
     fn from(value: PublicWorkerInvocation) -> Self {
         match value {
             PublicWorkerInvocation::ExportedFunction(ExportedFunctionParameters {

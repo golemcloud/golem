@@ -3882,12 +3882,16 @@ components:
       required:
       - timestamp
       - error
+      - retryFrom
       properties:
         timestamp:
           type: string
           format: date-time
         error:
           type: string
+        retryFrom:
+          type: integer
+          format: uint64
     ErrorsBody:
       type: object
       title: ErrorsBody
@@ -6228,7 +6232,7 @@ components:
           format: uint64
         retryCount:
           type: integer
-          format: uint64
+          format: uint32
         pendingInvocationCount:
           type: integer
           format: uint64

@@ -99,7 +99,6 @@ where
         .clone();
 
     let result = ctx
-        .state
         .begin_transaction_function(RdbmsRemoteTransactionHandler::<T>::new(
             pool_key.clone(),
             ctx.state.owned_worker_id.worker_id.clone(),
@@ -141,6 +140,7 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_execute(statement, params, ctx, entry).await;
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -174,6 +174,7 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_connection_query(statement, params, ctx, entry).await;
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -215,6 +216,7 @@ where
 
     let result = if durability.is_live() {
         let result = db_connection_query_stream(statement, params, ctx, entry);
+        durability.try_trigger_retry(ctx, &result).await?;
         let input = result.clone().ok();
         durability.persist(ctx, input, result).await
     } else {
@@ -308,6 +310,7 @@ where
             Ok(query_stream) => query_stream.deref().get_columns().await,
             Err(error) => Err(error),
         };
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, (), result).await
     } else {
         durability.replay(ctx).await
@@ -357,6 +360,7 @@ where
             Ok(query_stream) => query_stream.deref().get_next().await,
             Err(error) => Err(error),
         };
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, (), result).await
     } else {
         durability.replay(ctx).await
@@ -435,6 +439,7 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_query(statement, params, ctx, entry).await;
+        durability.try_trigger_retry(ctx, &result).await?;
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -475,6 +480,9 @@ where
 
     let result = if durability.is_live() {
         let (input, result) = db_transaction_execute(statement, params, ctx, entry).await;
+        tracing::warn!("result: {result:?}");
+        durability.try_trigger_retry(ctx, &result).await?;
+        tracing::warn!("after try trigger retry");
         durability.persist(ctx, input, result).await
     } else {
         durability.replay(ctx).await
@@ -508,6 +516,7 @@ where
 
     let result = if durability.is_live() {
         let result = db_transaction_query_stream(statement, params, ctx, entry);
+        durability.try_trigger_retry(ctx, &result).await?;
         let input = result.clone().ok();
         durability.persist(ctx, input, result).await
     } else {
@@ -550,8 +559,7 @@ where
     };
 
     if pre_result.is_ok() {
-        ctx.state
-            .pre_rollback_transaction_function(begin_oplog_idx)
+        ctx.pre_rollback_transaction_function(begin_oplog_idx)
             .await?;
     }
 
@@ -564,8 +572,7 @@ where
             };
 
             if result.is_ok() {
-                ctx.state
-                    .rolled_back_transaction_function(begin_oplog_idx)
+                ctx.rolled_back_transaction_function(begin_oplog_idx)
                     .await?;
             }
 
@@ -601,9 +608,7 @@ where
     };
 
     if pre_result.is_ok() {
-        ctx.state
-            .pre_commit_transaction_function(begin_oplog_idx)
-            .await?;
+        ctx.pre_commit_transaction_function(begin_oplog_idx).await?;
     }
 
     match pre_result {
@@ -615,9 +620,7 @@ where
             };
 
             if result.is_ok() {
-                ctx.state
-                    .committed_transaction_function(begin_oplog_idx)
-                    .await?;
+                ctx.committed_transaction_function(begin_oplog_idx).await?;
             }
 
             if ctx.durable_execution_state().is_live {
@@ -650,14 +653,12 @@ where
 
     if ctx.durable_execution_state().is_live {
         if let RdbmsTransactionState::Open(transaction) = entry.state {
-            ctx.state
-                .pre_rollback_transaction_function(entry.begin_index)
+            ctx.pre_rollback_transaction_function(entry.begin_index)
                 .await?;
 
             let _ = transaction.rollback_if_open().await;
 
-            ctx.state
-                .rolled_back_transaction_function(entry.begin_index)
+            ctx.rolled_back_transaction_function(entry.begin_index)
                 .await?;
 
             let _ = ctx

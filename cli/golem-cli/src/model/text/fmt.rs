@@ -221,7 +221,7 @@ pub fn format_status(status: &WorkerStatus) -> String {
     .to_string()
 }
 
-pub fn format_retry_count(retry_count: &u64) -> String {
+pub fn format_retry_count(retry_count: &u32) -> String {
     if *retry_count == 0 {
         retry_count.to_string()
     } else {

@@ -20,6 +20,7 @@ use crate::durable_host::serialized::SerializableError;
 use crate::durable_host::{Durability, DurabilityHost, DurableWorkerCtx, HttpRequestCloseOwner};
 use crate::get_oplog_entry;
 use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, PersistenceLevel};
@@ -451,8 +452,8 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
 
             if durability.is_live() {
                 let result = HostFutureTrailers::get(&mut self.as_wasi_http_view(), self_).await;
-                let to_serialize = match &result {
-                    Ok(Some(Ok(Ok(None)))) => Ok(Some(Ok(Ok(None)))),
+                let (to_serialize, for_retry) = match &result {
+                    Ok(Some(Ok(Ok(None)))) => (Ok(Some(Ok(Ok(None)))), Ok(())),
                     Ok(Some(Ok(Ok(Some(trailers))))) => {
                         let mut serialized_trailers = HashMap::new();
 
@@ -460,13 +461,17 @@ impl<Ctx: WorkerCtx> HostFutureTrailers for DurableWorkerCtx<Ctx> {
                             serialized_trailers
                                 .insert(key.as_str().to_string(), value.as_bytes().to_vec());
                         }
-                        Ok(Some(Ok(Ok(Some(serialized_trailers)))))
+                        (Ok(Some(Ok(Ok(Some(serialized_trailers))))), Ok(()))
                     }
-                    Ok(Some(Ok(Err(error_code)))) => Ok(Some(Ok(Err(error_code.into())))),
-                    Ok(Some(Err(_))) => Ok(Some(Err(()))),
-                    Ok(None) => Ok(None),
-                    Err(err) => Err(SerializableError::from(err)),
+                    Ok(Some(Ok(Err(error_code)))) => (
+                        Ok(Some(Ok(Err(error_code.into())))),
+                        Err(error_code.to_string()),
+                    ),
+                    Ok(Some(Err(_))) => (Ok(Some(Err(()))), Err("Unknown error".to_string())),
+                    Ok(None) => (Ok(None), Ok(())),
+                    Err(err) => (Err(SerializableError::from(err)), Err(err.to_string())),
                 };
+                durability.try_trigger_retry(self, &for_retry).await?;
                 let _ = durability
                     .persist_serializable(self, request, to_serialize)
                     .await;
@@ -606,20 +611,35 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
             let response =
                 HostFutureIncomingResponse::get(&mut self.as_wasi_http_view(), self_).await;
 
-            let serializable_response = match &response {
-                Ok(None) => SerializableResponse::Pending,
+            let (serializable_response, for_retry) = match &response {
+                Ok(None) => (SerializableResponse::Pending, Ok(())),
                 Ok(Some(Ok(Ok(resource)))) => {
                     let incoming_response = self.table().get(resource)?;
-                    SerializableResponse::HeadersReceived(SerializableResponseHeaders::try_from(
-                        incoming_response,
-                    )?)
+                    (
+                        SerializableResponse::HeadersReceived(
+                            SerializableResponseHeaders::try_from(incoming_response)?,
+                        ),
+                        Ok(()),
+                    )
                 }
-                Ok(Some(Err(_))) => SerializableResponse::InternalError(None),
-                Ok(Some(Ok(Err(error_code)))) => {
-                    SerializableResponse::HttpError(error_code.clone().into())
-                }
-                Err(err) => SerializableResponse::InternalError(Some(err.into())),
+                Ok(Some(Err(_))) => (
+                    SerializableResponse::InternalError(None),
+                    Err("Unknown error".to_string()),
+                ),
+                Ok(Some(Ok(Err(error_code)))) => (
+                    SerializableResponse::HttpError(error_code.clone().into()),
+                    Err(error_code.to_string()),
+                ),
+                Err(err) => (
+                    SerializableResponse::InternalError(Some(err.into())),
+                    Err(err.to_string()),
+                ),
             };
+
+            if let Err(err) = for_retry {
+                self.state.current_retry_point = begin_index;
+                self.try_trigger_retry(anyhow!(err)).await?;
+            }
 
             if self.state.snapshotting_mode.is_none() {
                 self.state
@@ -632,7 +652,10 @@ impl<Ctx: WorkerCtx> HostFutureIncomingResponse for DurableWorkerCtx<Ctx> {
                     )
                     .await
                     .unwrap_or_else(|err| panic!("failed to serialize http response: {err}"));
-                self.state.oplog.commit(CommitLevel::DurableOnly).await;
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                    .await;
             }
 
             if !matches!(serializable_response, SerializableResponse::Pending) {
