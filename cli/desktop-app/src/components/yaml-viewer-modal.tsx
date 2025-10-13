@@ -169,7 +169,7 @@ export function YamlViewerModal({
         // Extract folder name from path like "common-xxx/golem.yaml"
         const match = file.name.match(/^(common-[^/]+)\/(.*)/);
         if (match) {
-          const folderName = match[1];
+          const folderName = match[1]!;
           if (!commonGroups[folderName]) {
             commonGroups[folderName] = [];
           }

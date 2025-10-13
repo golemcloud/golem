@@ -118,7 +118,6 @@ export const ComponentLayout = () => {
     clean: false,
   });
   const [isYamlModalOpen, setIsYamlModalOpen] = useState(false);
-  const [yamlContent, setYamlContent] = useState<string>("");
 
   // Component-level action handlers
   const handleBuildComponent = () => {
@@ -261,22 +260,9 @@ export const ComponentLayout = () => {
       });
   };
 
-  const handleViewComponentYaml = async () => {
+  const handleViewComponentYaml = () => {
     if (!appId || !currentComponent?.componentName) return;
-    try {
-      const yamlContent = await API.manifestService.getComponentYamlContent(
-        appId,
-        currentComponent.componentName,
-      );
-      setYamlContent(yamlContent);
-      setIsYamlModalOpen(true);
-    } catch (error) {
-      toast({
-        title: "Failed to Load Component YAML",
-        description: String(error),
-        variant: "destructive",
-      });
-    }
+    setIsYamlModalOpen(true);
   };
 
   const handleDeployComponent = () => {
@@ -507,11 +493,7 @@ export const ComponentLayout = () => {
       <YamlViewerModal
         isOpen={isYamlModalOpen}
         onOpenChange={setIsYamlModalOpen}
-        title={`Component Manifest (${currentComponent?.componentName || "golem"}.yaml)`}
-        yamlContent={yamlContent}
-        appId={appId}
-        componentId={componentId}
-        isAppYaml={false}
+        appId={appId!}
       />
     </ErrorBoundary>
   );
