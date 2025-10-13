@@ -243,10 +243,6 @@ const CreateRoute = () => {
               extractDynamicParams(path);
             }
             form.setValue("method", route.method);
-            // form.setValue(
-            //   "binding.bindingType",
-            //   route.binding.bindingType || "default",
-            // );
             const componentName = route.binding.componentName;
             const versionId = route.binding.componentVersion;
             if (componentName && versionId) {
@@ -741,11 +737,10 @@ const CreateRoute = () => {
                                 </button>
                               </PopoverTrigger>
                               <PopoverContent
-                                className={`${
-                                  responseSuggestions.length === 0
+                                className={`${responseSuggestions.length === 0
                                     ? "max-w-[450px]"
                                     : "w-[450px]"
-                                }  p-4`}
+                                  }  p-4`}
                                 align="start"
                                 sideOffset={5}
                               >
