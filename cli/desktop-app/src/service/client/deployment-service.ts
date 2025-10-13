@@ -4,6 +4,7 @@ import { ManifestService } from "./manifest-service";
 import { settingsService } from "@/lib/settings.ts";
 import { readTextFile } from "@tauri-apps/plugin-fs";
 import { parseDocument, Document, YAMLMap, YAMLSeq } from "yaml";
+import { Profile } from "@/types/profile";
 
 export class DeploymentService {
   private cliService: CLIService;
@@ -12,6 +13,21 @@ export class DeploymentService {
   constructor(cliService: CLIService, manifestService: ManifestService) {
     this.cliService = cliService;
     this.manifestService = manifestService;
+  }
+
+  private async getActiveProfileName(appId: string): Promise<string> {
+    try {
+      const profile = (await this.cliService.callCLI(appId, "profile", [
+        "get",
+      ])) as Profile;
+      return profile.name;
+    } catch (error) {
+      console.error(
+        "Failed to get active profile, defaulting to 'local':",
+        error,
+      );
+      return "local"; // Fallback to "local" if profile fetch fails
+    }
   }
 
   public getDeploymentApi = async (appId: string): Promise<Deployment[]> => {
@@ -76,8 +92,8 @@ export class DeploymentService {
       deployments = httpApi.get("deployments") as YAMLMap;
     }
 
-    // Get current profile (default to "local")
-    const profileName = app.profile || "local";
+    // Get current active profile from CLI
+    const profileName = await this.getActiveProfileName(appId);
 
     // Get or create profile's deployment array
     let profileDeployments = deployments.get(profileName) as
@@ -170,8 +186,8 @@ export class DeploymentService {
       return; // Nothing to delete
     }
 
-    // Get current profile (default to "local")
-    const profileName = app.profile || "local";
+    // Get current active profile from CLI
+    const profileName = await this.getActiveProfileName(appId);
 
     // Get profile's deployment array
     const profileDeployments = deployments.get(profileName) as
