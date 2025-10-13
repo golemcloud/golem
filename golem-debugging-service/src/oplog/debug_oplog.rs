@@ -69,7 +69,9 @@ pub struct DebugOplogState {
 impl Oplog for DebugOplog {
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
-    async fn add(&self, _entry: OplogEntry) {}
+    async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        OplogIndex::NONE
+    }
 
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {}
 

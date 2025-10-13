@@ -123,6 +123,7 @@ pub fn update_status_with_new_entries(
         last_known.overridden_retry_config,
         default_retry_policy,
         &skipped_regions,
+        &deleted_regions,
         &new_entries,
     );
 
@@ -201,9 +202,41 @@ fn calculate_latest_worker_status(
     mut current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
+    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (WorkerStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
     for (idx, entry) in entries {
+        // Errors are counted in skipped regions too (but not in deleted ones),
+        // otherwise we would not be able to know how many times we retried failures in atomic regions
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            match entry {
+                OplogEntry::Error {
+                    error, retry_from, ..
+                } => {
+                    let new_count = current_retry_count
+                        .get(retry_from)
+                        .copied()
+                        .unwrap_or_default()
+                        + 1;
+                    current_retry_count.insert(*retry_from, new_count);
+                    if is_worker_error_retriable(
+                        current_retry_policy
+                            .as_ref()
+                            .unwrap_or(default_retry_policy),
+                        error,
+                        new_count,
+                    ) {
+                        current_status = WorkerStatus::Retrying;
+                    } else {
+                        current_status = WorkerStatus::Failed;
+                    }
+                }
+                _ => {
+                    current_status = WorkerStatus::Running;
+                }
+            }
+        }
+
         // Skipping entries in skipped regions, as they are skipped during replay too
         if skipped_regions.is_in_deleted_region(*idx) {
             continue;
@@ -226,27 +259,6 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::Suspend { .. } => {
                 current_status = WorkerStatus::Suspended;
-            }
-            OplogEntry::Error {
-                error, retry_from, ..
-            } => {
-                let new_count = current_retry_count
-                    .get(retry_from)
-                    .copied()
-                    .unwrap_or_default()
-                    + 1;
-                current_retry_count.insert(*retry_from, new_count);
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    new_count,
-                ) {
-                    current_status = WorkerStatus::Retrying;
-                } else {
-                    current_status = WorkerStatus::Failed;
-                }
             }
             OplogEntry::NoOp { .. } => {
                 current_status = WorkerStatus::Running;
@@ -323,6 +335,9 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::RolledBackRemoteTransaction { .. } => {
                 current_status = WorkerStatus::Running;
+            }
+            OplogEntry::Error { .. } => {
+                // .. handled separately
             }
         }
     }

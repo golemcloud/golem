@@ -417,9 +417,6 @@ impl ReplayState {
                 }
 
                 if !for_all_intermediate(entry, begin_idx, &state) {
-                    tracing::warn!(
-                        "!!! Violation of condition at idx {idx} for_all_intermediate: {entry:?}"
-                    );
                     violation = true;
                 }
             }
@@ -554,6 +551,7 @@ impl ReplayState {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum OplogEntryLookupResult {
     Found {
         index: OplogIndex,

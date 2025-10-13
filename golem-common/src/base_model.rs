@@ -305,3 +305,40 @@ impl From<String> for TransactionId {
         TransactionId(value)
     }
 }
+
+#[cfg(feature = "sql")]
+mod sql {
+    use crate::model::TransactionId;
+    use sqlx::encode::IsNull;
+    use sqlx::error::BoxDynError;
+    use sqlx::postgres::PgTypeInfo;
+    use sqlx::{Database, Postgres, Type};
+    use std::io::Write;
+
+    impl sqlx::Decode<'_, Postgres> for TransactionId {
+        fn decode(value: <Postgres as Database>::ValueRef<'_>) -> Result<Self, BoxDynError> {
+            let bytes = value.as_bytes()?;
+            Ok(TransactionId(
+                u64::from_be_bytes(bytes.try_into()?).to_string(),
+            ))
+        }
+    }
+
+    impl sqlx::Encode<'_, Postgres> for TransactionId {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <Postgres as Database>::ArgumentBuffer<'_>,
+        ) -> Result<IsNull, BoxDynError> {
+            let u64 = self.0.parse::<u64>()?;
+            let bytes = u64.to_be_bytes();
+            buf.write(&bytes)?;
+            Ok(IsNull::No)
+        }
+    }
+
+    impl<'r> Type<Postgres> for TransactionId {
+        fn type_info() -> PgTypeInfo {
+            PgTypeInfo::with_name("xid8")
+        }
+    }
+}

@@ -734,9 +734,10 @@ impl Debug for MultiLayerOplog {
 
 #[async_trait]
 impl Oplog for MultiLayerOplog {
-    async fn add(&self, entry: OplogEntry) {
-        self.primary.add(entry).await;
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        let result = self.primary.add(entry).await;
         self.primary_length.fetch_add(1, Ordering::AcqRel);
+        result
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {

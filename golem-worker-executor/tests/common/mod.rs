@@ -1194,13 +1194,13 @@ impl TestOplog {
 
 #[async_trait]
 impl Oplog for TestOplog {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
+        self.oplog.add(entry).await
+    }
+
     async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
         self.check_oplog_add(&entry)?;
         self.oplog.add_safe(entry).await
-    }
-
-    async fn add(&self, entry: OplogEntry) {
-        self.oplog.add(entry).await
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {

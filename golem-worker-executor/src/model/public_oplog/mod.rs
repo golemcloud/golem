@@ -757,6 +757,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,
+                ..
             } => Ok(PublicOplogEntry::BeginRemoteTransaction(
                 BeginRemoteTransactionParameters {
                     timestamp,

@@ -1385,7 +1385,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         receiver.await.unwrap()
     }
 
-    pub async fn add_to_oplog(&self, entry: OplogEntry) {
+    pub async fn add_to_oplog(&self, entry: OplogEntry) -> OplogIndex {
         self.oplog.add(entry).await
     }
 
@@ -1401,9 +1401,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn add_and_commit_oplog(&self, entry: OplogEntry) -> OplogIndex {
-        self.add_to_oplog(entry).await;
+        let result = self.add_to_oplog(entry).await;
         self.commit_oplog_and_update_state(CommitLevel::Always)
-            .await
+            .await;
+        result
     }
 
     // TODO: should be private, exposed for the invocation loop for now.

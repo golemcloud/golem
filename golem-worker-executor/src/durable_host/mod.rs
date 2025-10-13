@@ -586,9 +586,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
                         } => {
-                            tracing::warn!(
-                                "!!! SWITCHING TO LIVE AND IGNORING REGION FROM {begin_index}"
-                            );
                             // We need to jump to the end of the oplog
                             self.state.replay_state.switch_to_live().await;
 
@@ -635,10 +632,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 self.state.current_retry_point = result;
             }
         }
-        tracing::warn!(
-            "*** Current retry point set to {}",
-            self.state.current_retry_point
-        );
+
         Ok(result)
     }
 
@@ -681,14 +675,26 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             let begin_index = self
                 .public_state
                 .worker()
-                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id))
+                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id, None))
                 .await;
+
+            self.state.current_retry_point = begin_index;
+
             Ok((begin_index, tx))
         } else {
             let (begin_index, begin_entry) = crate::get_oplog_entry!(
                 self.state.replay_state,
                 OplogEntry::BeginRemoteTransaction
             )?;
+            let original_begin_index = if let OplogEntry::BeginRemoteTransaction {
+                original_begin_index: Some(idx),
+                ..
+            } = &begin_entry
+            {
+                *idx
+            } else {
+                begin_index
+            };
 
             let assume_idempotence = self.state.assume_idempotence;
 
@@ -696,7 +702,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .state
                 .replay_state
                 .lookup_oplog_entry_with_condition_and_state(
-                    begin_index,
+                    original_begin_index,
                     OplogEntry::is_pre_remote_transaction_s,
                     OplogEntry::no_concurrent_side_effect,
                     self.state.persistence_level,
@@ -709,6 +715,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 OplogEntry::BeginRemoteTransaction {
                     timestamp: _,
                     transaction_id,
+                    original_begin_index: _,
                 }
             )
             .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
@@ -725,7 +732,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .state
                         .replay_state
                         .lookup_oplog_entry_with_condition_and_state(
-                            begin_index,
+                            original_begin_index,
                             OplogEntry::is_end_remote_transaction_s,
                             OplogEntry::no_concurrent_side_effect,
                             self.state.persistence_level,
@@ -738,10 +745,12 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
                         } => {
-                            if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                            if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
                                 // if we can not confirm the transaction was committed, we need to restart
                                 should_restart = !handler.is_committed(&tx_id).await?;
-                            } else if pre_entry.is_pre_commit_remote_transaction(begin_index) {
+                            } else if pre_entry
+                                .is_pre_commit_remote_transaction(original_begin_index)
+                            {
                                 // if we can not confirm the transaction was rolled back, we need to restart
                                 should_restart = !handler.is_rolled_back(&tx_id).await?;
                             }
@@ -773,21 +782,20 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 }
             };
 
-            if should_restart {
+            let (result, tx) = if should_restart {
                 // We need to jump to the end of the oplog
                 self.state.replay_state.switch_to_live().await;
 
                 if !assume_idempotence {
                     Err(WorkerExecutorError::runtime(
                         "Non-idempotent remote write operation was not completed, cannot retry",
-                    )
-                    .into())
+                    ))
                 } else {
                     // But this is not enough, because if the retried batched write operation succeeds,
                     // and later we replay it, we need to skip the first attempt and only replay the second.
                     // Se we add a Jump entry to the oplog that registers a deleted region.
                     let deleted_region = OplogRegion {
-                        start: begin_index, // need to keep the BeginAtomicRegion entry
+                        start: begin_index, // need to delete the previous BeginRemoteTransaction entry, because we'll get a new TX id
                         end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
                     };
 
@@ -800,17 +808,24 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     self.public_state.worker().reattach_worker_status().await;
 
                     let (tx_id, tx) = handler.create_new().await?;
-                    let begin_index = self
+                    let _ = self
                         .public_state
                         .worker()
-                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id))
+                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                            tx_id,
+                            Some(original_begin_index),
+                        ))
                         .await;
 
-                    Ok((begin_index, tx))
+                    Ok((original_begin_index, tx))
                 }
             } else {
-                Ok((begin_index, tx))
-            }
+                Ok((original_begin_index, tx))
+            }?;
+
+            self.state.current_retry_point = original_begin_index;
+
+            Ok((result, tx))
         }
     }
 
@@ -2390,13 +2405,10 @@ async fn last_error<T: HasOplogService + HasConfig>(
         let mut first_retry_from = OplogIndex::NONE;
         let mut last_error_index = idx;
         loop {
-            warn!("*** Checking {idx}");
-
             if latest_worker_status
                 .deleted_regions
                 .is_in_deleted_region(idx)
             {
-                warn!("*** Checking {idx} -> it is in a deleted region");
                 if idx > OplogIndex::INITIAL {
                     idx = idx.previous();
                     continue;
@@ -2412,12 +2424,9 @@ async fn last_error<T: HasOplogService + HasConfig>(
                             error, retry_from, ..
                         },
                     )) => {
-                        warn!("*** Checking {idx} -> it is an error with retry_from={retry_from}");
                         if first_retry_from == OplogIndex::NONE || first_retry_from == *retry_from {
-                            warn!("*** Checking {idx} -> increased retry count");
                             last_error_index = idx;
                             if first_error.is_none() {
-                                warn!("*** Checking {idx} -> stored as first_error");
                                 first_error = Some(error.clone());
                                 first_retry_from = *retry_from;
                             }
@@ -2428,13 +2437,11 @@ async fn last_error<T: HasOplogService + HasConfig>(
                                 break;
                             }
                         } else {
-                            warn!("*** Checking {idx} -> error belongs to another retry point");
                             // Found an error entry belonging to another retry point
                             break;
                         }
                     }
                     Some((_, entry)) if entry.is_hint() => {
-                        warn!("*** Checking {idx} -> skipping hint");
                         // Skipping hint entries as they can randomly interleave the error entries (such as incoming invocation requests, etc)
                         if idx > OplogIndex::INITIAL {
                             idx = idx.previous();
@@ -2449,13 +2456,11 @@ async fn last_error<T: HasOplogService + HasConfig>(
                         | OplogEntry::ExportedFunctionCompleted { .. },
                     )) => {
                         // Retry counting never gets across invocation boundaries
-                        warn!("*** Checking {idx} -> reached invocation boundary");
                         break;
                     }
                     Some((_, _)) => {
                         // Skipping non-hint entries as well, but only up to the first error entry that's different, or the beginning
                         // of the last invocation
-                        warn!("*** Checking {idx} -> other, skipping");
                         if idx > OplogIndex::INITIAL {
                             idx = idx.previous();
                             continue;

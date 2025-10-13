@@ -464,6 +464,10 @@ pub enum OplogEntry {
     BeginRemoteTransaction {
         timestamp: Timestamp,
         transaction_id: TransactionId,
+        /// BeginRemoteTransaction entries need to be repeated on retries, because they may need a new
+        /// transaction_id. The `begin_index` field always points to the original, first entry. This makes
+        /// error grouping work. When None, this is the original begin entry.
+        original_begin_index: Option<OplogIndex>,
     },
     /// Marks the point before a remote transaction is committed
     PreCommitRemoteTransaction {
@@ -730,10 +734,14 @@ impl OplogEntry {
         }
     }
 
-    pub fn begin_remote_transaction(transaction_id: TransactionId) -> OplogEntry {
+    pub fn begin_remote_transaction(
+        transaction_id: TransactionId,
+        original_begin_index: Option<OplogIndex>,
+    ) -> OplogEntry {
         OplogEntry::BeginRemoteTransaction {
             timestamp: Timestamp::now_utc(),
             transaction_id,
+            original_begin_index,
         }
     }
 

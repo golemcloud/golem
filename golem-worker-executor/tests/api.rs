@@ -2985,6 +2985,8 @@ async fn invocation_queue_is_persistent(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     let executor = start(deps, &context).await.unwrap().into_admin().await;
 

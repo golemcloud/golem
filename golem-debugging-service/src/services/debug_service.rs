@@ -750,7 +750,7 @@ mod tests {
 
     #[async_trait]
     impl Oplog for TestOplog {
-        async fn add(&self, _entry: OplogEntry) {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
             unimplemented!()
         }
 

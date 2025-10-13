@@ -165,8 +165,8 @@ pub enum CommitLevel {
 /// An open oplog providing write access
 #[async_trait]
 pub trait Oplog: Any + Debug + Send + Sync {
-    /// Adds a single entry to the oplog (possibly buffered)
-    async fn add(&self, entry: OplogEntry);
+    /// Adds a single entry to the oplog (possibly buffered), and returns its index
+    async fn add(&self, entry: OplogEntry) -> OplogIndex;
 
     async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
         self.add(entry).await;

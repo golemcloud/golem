@@ -496,7 +496,7 @@ impl PrimaryOplogState {
         result
     }
 
-    async fn add(&mut self, entry: OplogEntry) {
+    async fn add(&mut self, entry: OplogEntry) -> OplogIndex {
         record_oplog_call("add");
 
         self.buffer.push_back(entry);
@@ -504,6 +504,7 @@ impl PrimaryOplogState {
             self.commit().await;
         }
         self.last_oplog_idx = self.last_oplog_idx.next();
+        self.last_oplog_idx
     }
 
     async fn commit(&mut self) -> BTreeMap<OplogIndex, OplogEntry> {
@@ -621,7 +622,7 @@ impl Debug for PrimaryOplog {
 
 #[async_trait]
 impl Oplog for PrimaryOplog {
-    async fn add(&self, entry: OplogEntry) {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let mut state = self.state.lock().await;
         state.add(entry).await
     }
