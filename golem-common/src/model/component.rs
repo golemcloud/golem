@@ -16,7 +16,7 @@ use super::agent::AgentType;
 use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
-use super::plugin_registration::PluginRegistrationId;
+use super::plugin_registration::{PluginRegistrationId, PluginPriority};
 use crate::model::component_metadata::ComponentMetadata;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -141,27 +141,27 @@ declare_structs! {
 
     pub struct InstalledPlugin {
         pub plugin_id: PluginRegistrationId,
-        pub priority: i32,
+        pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
     }
 
     pub struct PluginInstallation {
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         /// Plugins will be applied in order of increasing priority
-        pub priority: i32,
+        pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
     }
 
     pub struct PluginInstallationUpdate {
         /// Priority will be used to identify the plugin to update
-        pub plugin_priority: i32,
-        pub new_priority: Option<i32>,
+        pub plugin_priority: PluginPriority,
+        pub new_priority: Option<PluginPriority>,
         pub new_parameters: Option<BTreeMap<String, String>>,
     }
 
     pub struct PluginUninstallation {
         /// Priority will be used to identify the plugin to delete
-        pub plugin_priority: i32
+        pub plugin_priority: PluginPriority
     }
 
     pub struct InitialComponentFile {

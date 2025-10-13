@@ -29,7 +29,7 @@ use golem_common::model::component_metadata::{
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::plugin_registration::PluginRegistrationId;
+use golem_common::model::plugin_registration::{PluginPriority, PluginRegistrationId};
 use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
@@ -597,7 +597,7 @@ impl ComponentPluginInstallationRecord {
             plugin_name: "".to_string(),
             plugin_version: "".to_string(),
             audit: RevisionAuditFields::new(actor.0),
-            priority: plugin_installation.priority,
+            priority: plugin_installation.priority.0,
             parameters: Json::from(
                 plugin_installation
                     .parameters
@@ -612,7 +612,7 @@ impl From<ComponentPluginInstallationRecord> for InstalledPlugin {
     fn from(value: ComponentPluginInstallationRecord) -> Self {
         Self {
             plugin_id: PluginRegistrationId(value.plugin_id),
-            priority: value.priority,
+            priority: PluginPriority(value.priority),
             parameters: value.parameters.0,
         }
     }

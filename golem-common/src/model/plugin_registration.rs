@@ -23,6 +23,10 @@ newtype_uuid!(PluginRegistrationId, golem_api_grpc::proto::golem::component::Plu
 
 declare_transparent_newtypes! {
     pub struct PluginWasmFileKey(pub String);
+
+    /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+    /// There can only be a single plugin with a given priority installed to a component.
+    pub struct PluginPriority(pub i32);
 }
 
 declare_structs! {
