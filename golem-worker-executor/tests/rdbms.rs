@@ -17,12 +17,10 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
 use golem_common::model::public_oplog::{
-    BeginRemoteTransactionParameters, ImportedFunctionInvokedParameters, JumpParameters,
-    PublicDurableFunctionType, PublicOplogEntry, RemoteTransactionParameters,
-    WriteRemoteTransactionParameters,
+    ImportedFunctionInvokedParameters, JumpParameters, PublicDurableFunctionType, PublicOplogEntry,
+    RemoteTransactionParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::{ComponentId, IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
-use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::config::TestDependencies;
@@ -39,7 +37,6 @@ use std::time::Duration;
 use test_r::{inherit_test_dep, test, test_dep};
 use tokio::task::JoinSet;
 use tracing::Instrument;
-use try_match::try_match;
 use uuid::Uuid;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -693,7 +690,7 @@ async fn rdbms_postgres_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-#[skip] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
+#[ignore] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
 async fn rdbms_postgres_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1365,7 +1362,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
 
 #[test]
 #[tracing::instrument]
-#[skip] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
+#[ignore] // This test simulates that the commit succeeds, but we neither write this to the oplog or can query this fact from the DB. In this case the transaction gets retried and it leads to violations, which is expected, but the current test does not expect it.
 async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -1902,11 +1899,4 @@ fn query_response(
 
 fn query_empty_response() -> serde_json::Value {
     query_response(vec![], vec![])
-}
-
-#[derive(Clone, Copy, Eq, PartialEq, Debug)]
-enum TransactionOplogBlockEnd {
-    Jump,
-    Committed,
-    RolledBack,
 }

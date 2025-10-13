@@ -331,9 +331,11 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
         OplogEntry::BeginRemoteTransaction {
             timestamp,
             transaction_id,
+            original_begin_index,
         } => OplogEntry::BeginRemoteTransaction {
             timestamp: rounded_ts(timestamp),
             transaction_id,
+            original_begin_index,
         },
         OplogEntry::PreCommitRemoteTransaction {
             timestamp,
