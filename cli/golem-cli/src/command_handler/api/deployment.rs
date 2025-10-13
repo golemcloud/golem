@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::command::api::deployment::ApiDeploymentSubcommand;
-use crate::command::shared_args::{ProjectOptionalFlagArg, UpdateOrRedeployArgs};
+use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
@@ -51,8 +51,8 @@ impl ApiDeploymentCommandHandler {
         match command {
             ApiDeploymentSubcommand::Deploy {
                 host_or_site,
-                update_or_redeploy,
-            } => self.cmd_deploy(host_or_site, update_or_redeploy).await,
+                deploy_args,
+            } => self.cmd_deploy(host_or_site, deploy_args).await,
             ApiDeploymentSubcommand::Get { project, site } => self.cmd_get(project, site).await,
             ApiDeploymentSubcommand::List {
                 project,
@@ -67,7 +67,7 @@ impl ApiDeploymentCommandHandler {
     async fn cmd_deploy(
         &self,
         host_or_site: Option<String>,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         let project = self
             .ctx
@@ -75,7 +75,11 @@ impl ApiDeploymentCommandHandler {
             .opt_select_project(None)
             .await?;
 
-        let api_deployments = self.manifest_api_deployments().await?;
+        if deploy_args.reset {
+            self.delete_all_for_reset_once(project.as_ref()).await?;
+        }
+
+        let api_deployments = self.merge_manifest_api_deployments().await?;
         let api_deployments = match &host_or_site {
             Some(host_or_site) => api_deployments
                 .into_iter()
@@ -105,8 +109,8 @@ impl ApiDeploymentCommandHandler {
         let latest_api_definition_versions = self
             .deploy_required_api_definitions(
                 project.as_ref(),
-                &update_or_redeploy,
-                api_deployments.values().map(|dep| &dep.value),
+                &deploy_args,
+                api_deployments.values(),
             )
             .await?;
 
@@ -215,13 +219,101 @@ impl ApiDeploymentCommandHandler {
         Ok(())
     }
 
+    pub async fn delete_all_for_reset_once(
+        &self,
+        project: Option<&ProjectRefAndId>,
+    ) -> anyhow::Result<()> {
+        self.ctx
+            .reset_http_deployments_once(|| async { self.delete_all_for_reset(project).await })
+            .await
+    }
+
+    async fn delete_all_for_reset(&self, project: Option<&ProjectRefAndId>) -> anyhow::Result<()> {
+        let clients = self.ctx.golem_clients().await?;
+        let project = self
+            .ctx
+            .cloud_project_handler()
+            .selected_project_id_or_default(project)
+            .await?;
+
+        let api_deployments = self.merge_manifest_api_deployments().await?;
+
+        let all_api_deployments: Vec<ApiDeployment> = clients
+            .api_deployment
+            .list_deployments(&project.0, None)
+            .await
+            .map_service_error()?
+            .into_iter()
+            .map(ApiDeployment::from)
+            .collect::<Vec<_>>();
+
+        let (to_redeploy, to_delete): (Vec<_>, Vec<_>) =
+            all_api_deployments.into_iter().partition(|api_deployment| {
+                api_deployments.contains_key(&HttpApiDeploymentSite {
+                    host: api_deployment.site.host.clone(),
+                    subdomain: api_deployment.site.subdomain.clone(),
+                })
+            });
+
+        let steps = to_delete
+            .iter()
+            .map(|api_deployment| {
+                format!(
+                    "- {} deployment {}",
+                    "Delete".log_color_warn(),
+                    HttpApiDeploymentSite {
+                        host: api_deployment.site.host.clone(),
+                        subdomain: api_deployment.site.subdomain.clone(),
+                    }
+                    .to_string()
+                    .log_color_highlight()
+                )
+            })
+            .chain(to_redeploy.iter().map(|api_deployment| {
+                format!(
+                    "- {} and {} deployment {}",
+                    "Delete".log_color_warn(),
+                    "redeploy".log_color_ok_highlight(),
+                    HttpApiDeploymentSite {
+                        host: api_deployment.site.host.clone(),
+                        subdomain: api_deployment.site.subdomain.clone(),
+                    }
+                    .to_string()
+                    .log_color_highlight()
+                )
+            }))
+            .collect::<Vec<_>>();
+
+        if steps.is_empty() {
+            return Ok(());
+        }
+
+        if !self
+            .ctx
+            .interactive_handler()
+            .confirm_reset_http_deployments(&steps)?
+        {
+            bail!(NonSuccessfulExit);
+        }
+
+        for api_deployment in to_redeploy.iter().chain(to_delete.iter()) {
+            clients
+                .api_deployment
+                .delete_deployment(&project.0, &api_deployment.site.host)
+                .await
+                .map_service_error()?;
+        }
+
+        Ok(())
+    }
+
     pub async fn deploy(
         &self,
         project: Option<&ProjectRefAndId>,
         deploy_mode: HttpApiDeployMode,
         latest_api_definition_versions: &BTreeMap<String, String>,
     ) -> anyhow::Result<()> {
-        let api_deployments = self.manifest_api_deployments().await?;
+        let api_deployments = self.merge_manifest_api_deployments().await?;
 
         if !api_deployments.is_empty() {
             log_action("Deploying", "HTTP API deployments");
@@ -248,14 +340,13 @@ impl ApiDeploymentCommandHandler {
         deploy_mode: HttpApiDeployMode,
         latest_api_definition_versions: &BTreeMap<String, String>,
         site: &HttpApiDeploymentSite,
-        api_definition: &WithSource<HttpApiDeployment>,
+        api_definition: &HttpApiDeployment,
     ) -> anyhow::Result<()> {
         let site_as_str = site.to_string();
 
         let skip_by_api_def_filter = match deploy_mode {
             HttpApiDeployMode::All => false,
             HttpApiDeployMode::Matching => !api_definition
-                .value
                 .definitions
                 .iter()
                 .any(|api_def| latest_api_definition_versions.contains_key(api_def)),
@@ -278,7 +369,7 @@ impl ApiDeploymentCommandHandler {
             .map(DiffableHttpApiDeployment::from_server)
             .transpose()?;
         let manifest_diffable_api_deployment = DiffableHttpApiDeployment::from_manifest(
-            &api_definition.value,
+            api_definition,
             latest_api_definition_versions,
         )?;
 
@@ -405,7 +496,7 @@ impl ApiDeploymentCommandHandler {
     async fn deploy_required_api_definitions<'a, I: Iterator<Item = &'a HttpApiDeployment>>(
         &self,
         project: Option<&ProjectRefAndId>,
-        update_or_redeploy: &UpdateOrRedeployArgs,
+        deploy_args: &DeployArgs,
         api_deployments: I,
     ) -> anyhow::Result<BTreeMap<String, String>> {
         let used_definition_names = api_deployments
@@ -432,7 +523,7 @@ impl ApiDeploymentCommandHandler {
         let latest_components = self
             .ctx
             .api_definition_handler()
-            .deploy_required_components(project, update_or_redeploy, used_definition_names)
+            .deploy_required_components(project, deploy_args, used_definition_names)
             .await?;
 
         log_action("Deploying", "required HTTP API definitions");
@@ -446,7 +537,7 @@ impl ApiDeploymentCommandHandler {
                 .deploy_api_definition(
                     project,
                     HttpApiDeployMode::Matching,
-                    update_or_redeploy,
+                    deploy_args,
                     &latest_components,
                     name,
                     definition,
@@ -634,7 +725,8 @@ impl ApiDeploymentCommandHandler {
 
     async fn manifest_api_deployments(
         &self,
-    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>> {
+    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>>
+    {
         let profile = self.ctx.profile_name().clone();
 
         let app_ctx = self.ctx.app_context_lock().await;
@@ -644,5 +736,28 @@ impl ApiDeploymentCommandHandler {
             .http_api_deployments(&profile)
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn merge_manifest_api_deployments(
+        &self,
+    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, HttpApiDeployment>> {
+        Ok(self
+            .manifest_api_deployments()
+            .await?
+            .into_iter()
+            .map(|(site, definitions)| {
+                (
+                    site.clone(),
+                    HttpApiDeployment {
+                        host: site.host.clone(),
+                        subdomain: site.subdomain.clone(),
+                        definitions: definitions
+                            .into_iter()
+                            .flat_map(|d| d.value.into_iter().map(|d| d.into_string()))
+                            .collect(),
+                    },
+                )
+            })
+            .collect())
     }
 }

@@ -29,7 +29,7 @@ use golem_service_base::service::routing_table::RoutingTableConfig;
 use golem_shard_manager::shard_manager_config::ShardManagerConfig;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, GolemConfig as WorkerExecutorConfig, ProjectServiceConfig,
-    ProjectServiceGrpcConfig,
+    ProjectServiceGrpcConfig, WorkerServiceGrpcConfig,
 };
 use golem_worker_service::config::WorkerServiceConfig;
 use golem_worker_service::WorkerService;
@@ -109,16 +109,21 @@ async fn start_components(
         join_set,
     )
     .await?;
-    let worker_executor = {
-        let config =
-            worker_executor_config(args, &shard_manager, &component_service, &cloud_service);
-        run_worker_executor(config, join_set).await?
-    };
     let worker_service = run_worker_service(
         worker_service_config(args, &shard_manager, &component_service, &cloud_service),
         join_set,
     )
     .await?;
+    let worker_executor = {
+        let config = worker_executor_config(
+            args,
+            &shard_manager,
+            &component_service,
+            &cloud_service,
+            &worker_service,
+        );
+        run_worker_executor(config, join_set).await?
+    };
 
     Ok(StartedComponents {
         cloud_service,
@@ -161,6 +166,7 @@ fn cloud_service_config(args: &LaunchArgs) -> CloudServiceConfig {
         storage_limit: i32::MAX,
         monthly_gas_limit: i64::MAX,
         monthly_upload_limit: i32::MAX,
+        max_memory_per_worker: i64::MAX,
     };
 
     CloudServiceConfig {
@@ -264,6 +270,7 @@ fn worker_executor_config(
     shard_manager_run_details: &golem_shard_manager::RunDetails,
     component_service_run_details: &golem_component_service::TrafficReadyEndpoints,
     cloud_service_run_details: &cloud_service::TrafficReadyEndpoints,
+    worker_service_run_details: &golem_worker_service::TrafficReadyEndpoints,
 ) -> WorkerExecutorConfig {
     use golem_worker_executor::services::golem_config::CompiledComponentServiceEnabledConfig;
     use golem_worker_executor::services::golem_config::ComponentServiceConfig;
@@ -337,6 +344,13 @@ fn worker_executor_config(
                 ..Default::default()
             },
         ),
+        public_worker_api: WorkerServiceGrpcConfig {
+            host: args.router_addr.clone(),
+            port: worker_service_run_details.grpc_port,
+            access_token: ADMIN_TOKEN.to_string(),
+            retries: Default::default(),
+            connect_timeout: Default::default(),
+        },
         ..Default::default()
     };
 

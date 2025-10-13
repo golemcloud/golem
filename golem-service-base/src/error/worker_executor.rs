@@ -450,6 +450,9 @@ impl From<WorkerExecutorError> for Status {
                 Self::invalid_argument(format!("Value mismatch: {details}"))
             }
             WorkerExecutorError::Unknown { details } => Self::unknown(details),
+            WorkerExecutorError::PreviousInvocationFailed { .. } => {
+                Self::failed_precondition(format!("{value}"))
+            }
             _ => Self::internal(format!("{value}")),
         }
     }
@@ -886,15 +889,21 @@ impl From<EncodingError> for WorkerExecutorError {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
-pub struct WorkerOutOfMemory;
+pub enum GolemSpecificWasmTrap {
+    WorkerOutOfMemory,
+    WorkerExceededMemoryLimit,
+}
 
-impl Display for WorkerOutOfMemory {
+impl Display for GolemSpecificWasmTrap {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker cannot acquire more memory")
+        match self {
+            Self::WorkerOutOfMemory => write!(f, "Worker cannot acquire more memory"),
+            Self::WorkerExceededMemoryLimit => write!(f, "Worker exceeded plan memory limits"),
+        }
     }
 }
 
-impl Error for WorkerOutOfMemory {}
+impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
     Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,

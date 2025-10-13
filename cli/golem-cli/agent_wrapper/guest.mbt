@@ -22,6 +22,6 @@ pub fn get_definition() -> @common.AgentType {
 }
 
 ///|
-pub fn discover_agent_types() -> Array[@common.AgentType] {
+pub fn discover_agent_types() -> Result[Array[@common.AgentType], @common.AgentError] {
   @guest.discover_agent_types()
 }

@@ -17,6 +17,7 @@ use crate::metrics::wasm::record_host_function_call;
 use crate::preview2::golem::durability::durability;
 use crate::preview2::golem::durability::durability::PersistedTypedDurableFunctionInvocation;
 use crate::services::oplog::{CommitLevel, OplogOps};
+use crate::services::{HasOplog, HasWorker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
@@ -125,6 +126,9 @@ impl From<durability::DurableFunctionType> for DurableFunctionType {
             }
             durability::DurableFunctionType::ReadRemote => DurableFunctionType::ReadRemote,
             durability::DurableFunctionType::ReadLocal => DurableFunctionType::ReadLocal,
+            durability::DurableFunctionType::WriteRemoteTransaction(oplog_index) => {
+                DurableFunctionType::WriteRemoteTransaction(oplog_index.map(OplogIndex::from_u64))
+            }
         }
     }
 }
@@ -141,6 +145,11 @@ impl From<DurableFunctionType> for durability::DurableFunctionType {
             }
             DurableFunctionType::ReadRemote => durability::DurableFunctionType::ReadRemote,
             DurableFunctionType::ReadLocal => durability::DurableFunctionType::ReadLocal,
+            DurableFunctionType::WriteRemoteTransaction(oplog_index) => {
+                durability::DurableFunctionType::WriteRemoteTransaction(
+                    oplog_index.map(|idx| idx.into()),
+                )
+            }
         }
     }
 }
@@ -333,7 +342,7 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         function_type: &DurableFunctionType,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         self.process_pending_replay_events().await?;
-        let oplog_index = self.state.begin_function(function_type).await?;
+        let oplog_index = self.begin_function(function_type).await?;
         Ok(oplog_index)
     }
 
@@ -343,12 +352,19 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         begin_index: OplogIndex,
         forced_commit: bool,
     ) -> Result<(), WorkerExecutorError> {
-        self.state.end_function(function_type, begin_index).await?;
+        self.end_function(function_type, begin_index).await?;
         if function_type == &DurableFunctionType::WriteRemote
             || matches!(function_type, DurableFunctionType::WriteRemoteBatched(_))
+            || matches!(
+                function_type,
+                DurableFunctionType::WriteRemoteTransaction(_)
+            )
             || forced_commit
         {
-            self.state.oplog.commit(CommitLevel::DurableOnly).await;
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::DurableOnly)
+                .await;
         }
         Ok(())
     }
@@ -368,8 +384,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
         response: &[u8],
         function_type: DurableFunctionType,
     ) {
-        self.state
-            .oplog
+        self.public_state
+            .worker()
+            .oplog()
             .add_raw_imported_function_invoked(function_name, request, response, function_type)
             .await
             .unwrap_or_else(|err| {
@@ -391,8 +408,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
                 panic!("failed to serialize response ({response:?}) for persisting durable function invocation: {err}")
             }).to_vec();
 
-        self.state
-            .oplog
+        self.public_state
+            .worker()
+            .oplog()
             .add_raw_imported_function_invoked(function_name, &request, &response, function_type)
             .await
             .unwrap_or_else(|err| {
@@ -414,8 +432,9 @@ impl<Ctx: WorkerCtx> DurabilityHost for DurableWorkerCtx<Ctx> {
             )?;
 
             let bytes = self
-                .state
-                .oplog
+                .public_state
+                .worker()
+                .oplog()
                 .get_raw_payload_of_entry(&oplog_entry)
                 .await
                 .map_err(|err| {

@@ -740,6 +740,8 @@ pub struct RdbmsPoolConfig {
     pub eviction_ttl: Duration,
     #[serde(with = "humantime_serde")]
     pub eviction_period: Duration,
+    #[serde(with = "humantime_serde")]
+    pub acquire_timeout: Duration,
 }
 
 impl SafeDisplay for RdbmsPoolConfig {
@@ -748,6 +750,7 @@ impl SafeDisplay for RdbmsPoolConfig {
         let _ = writeln!(&mut result, "max connections: {}", self.max_connections);
         let _ = writeln!(&mut result, "eviction ttl: {:?}", self.eviction_ttl);
         let _ = writeln!(&mut result, "eviction period: {:?}", self.eviction_period);
+        let _ = writeln!(&mut result, "acquire timeout: {:?}", self.acquire_timeout);
         result
     }
 }
@@ -1304,6 +1307,7 @@ impl Default for RdbmsPoolConfig {
             max_connections: 20,
             eviction_ttl: Duration::from_secs(10 * 60),
             eviction_period: Duration::from_secs(2 * 60),
+            acquire_timeout: Duration::from_secs(3),
         }
     }
 }

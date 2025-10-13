@@ -19,11 +19,10 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
@@ -53,11 +52,12 @@ use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
@@ -120,14 +120,6 @@ impl ExternalOperations<Self> for DebugContext {
         .await
     }
 
-    async fn compute_latest_worker_status<This: HasOplogService + HasConfig + Send + Sync>(
-        this: &This,
-        worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::compute_latest_worker_status(this, worker_id, metadata).await
-    }
-
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Self> + Send),
         instance: &Instance,
@@ -164,23 +156,6 @@ impl ExternalOperations<Self> for DebugContext {
         this: &This,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<Self>::on_shard_assignment_changed(this).await
-    }
-
-    async fn on_worker_update_failed_to_start<T: HasAll<Self> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::on_worker_update_failed_to_start(
-            this,
-            account_id,
-            owned_worker_id,
-            target_version,
-            details,
-        )
-        .await
     }
 }
 
@@ -226,28 +201,12 @@ impl StatusManagement for DebugContext {
         }
     }
 
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_suspended().await
+    fn set_suspended(&self) {
+        self.durable_ctx.set_suspended()
     }
 
     fn set_running(&self) {
         self.durable_ctx.set_running()
-    }
-
-    async fn get_worker_status(&self) -> WorkerStatus {
-        self.durable_ctx.get_worker_status().await
-    }
-
-    async fn store_worker_status(&self, status: WorkerStatus) {
-        self.durable_ctx.store_worker_status(status).await
-    }
-
-    async fn update_pending_invocations(&self) {
-        self.durable_ctx.update_pending_invocations().await
-    }
-
-    async fn update_pending_updates(&self) {
-        self.durable_ctx.update_pending_updates().await
     }
 }
 
@@ -359,7 +318,8 @@ impl ResourceLimiterAsync for DebugContext {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            Ok(self.durable_ctx.increase_memory(delta).await?)
+            self.durable_ctx.increase_memory(delta).await?;
+            Ok(true)
         } else {
             Ok(true)
         }
@@ -378,7 +338,7 @@ impl ResourceLimiterAsync for DebugContext {
 impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
+        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -585,6 +545,8 @@ impl WorkerCtx for DebugContext {
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
@@ -611,6 +573,8 @@ impl WorkerCtx for DebugContext {
             worker_fork,
             project_service,
             agent_types_service,
+            shard_service,
+            pending_update,
         )
         .await?;
         Ok(Self {

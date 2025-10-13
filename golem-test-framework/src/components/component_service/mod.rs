@@ -50,6 +50,7 @@ use golem_client::api::PluginClient as PluginServiceHttpClient;
 use golem_client::api::PluginClientLive as PluginServiceHttpClientLive;
 use golem_client::model::ComponentQuery;
 use golem_client::{Context, Security};
+use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::plugin::PluginTypeSpecificDefinition;
 use golem_common::model::{
@@ -486,6 +487,12 @@ pub trait ComponentService: Send + Sync {
         env: &HashMap<String, String>,
         project_id: Option<ProjectId>,
     ) -> Result<Component, AddComponentError> {
+        let agent_types = extract_agent_types(local_path, false)
+            .await
+            .map_err(|err| {
+                AddComponentError::Other(format!("Failed analyzing component: {err}"))
+            })?;
+
         let mut file = File::open(local_path).await.map_err(|_| {
             AddComponentError::Other(format!("Failed to read component from {local_path:?}"))
         })?;
@@ -512,7 +519,7 @@ pub trait ComponentService: Send + Sync {
                                     .map(|(k, v)| (k.clone(), v.clone().into())),
                             ),
                             env: env.clone(),
-                            agent_types: vec![],
+                            agent_types: agent_types.into_iter().map(|a| a.into()).collect(),
                         },
                     )),
                 }];
@@ -554,10 +561,7 @@ pub trait ComponentService: Send + Sync {
                         "Missing response from golem-component-service for create-component"
                             .to_string(),
                     )),
-                    Some(create_component_response::Result::Success(component)) => {
-                        info!("Created component (GRPC) {component:?}");
-                        Ok(component)
-                    }
+                    Some(create_component_response::Result::Success(component)) => Ok(component),
                     Some(create_component_response::Result::Error(error)) => match error.error {
                         Some(component_error::Error::AlreadyExists(_)) => {
                             Err(AddComponentError::AlreadyExists)
@@ -601,7 +605,7 @@ pub trait ComponentService: Send + Sync {
                         Some(&golem_client::model::ComponentEnv {
                             key_values: env.clone(),
                         }),
-                        None,
+                        Some(&golem_client::model::AgentTypes { types: agent_types }),
                     )
                     .await
                 {

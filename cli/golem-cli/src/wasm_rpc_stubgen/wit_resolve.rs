@@ -1,3 +1,5 @@
+use crate::app::build::command::ensure_common_deps_for_tool;
+use crate::app::context::ToolsWithEnsuredCommonDeps;
 use crate::fs;
 use crate::fs::PathExtra;
 use crate::log::{log_action, LogColorize, LogIndent};
@@ -10,6 +12,7 @@ use indexmap::IndexMap;
 use indoc::formatdoc;
 use itertools::Itertools;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use wit_parser::decoding::DecodedWasm;
 use wit_parser::{
@@ -304,10 +307,11 @@ pub struct ResolvedWitApplication {
 }
 
 impl ResolvedWitApplication {
-    pub fn new(app: &Application, profile: Option<&BuildProfileName>) -> ValidatedResult<Self> {
-        // TODO: Can be removed once we fixed all docs and templates
-        std::env::set_var("WIT_REQUIRE_F32_F64", "0");
-
+    pub async fn new(
+        app: &Application,
+        profile: Option<&BuildProfileName>,
+        tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
+    ) -> ValidatedResult<Self> {
         log_action("Resolving", "application wit directories");
         let _indent = LogIndent::new();
 
@@ -322,7 +326,14 @@ impl ResolvedWitApplication {
 
         let mut validation = ValidationBuilder::new();
 
-        resolved_app.add_components_from_app(&mut validation, app, profile);
+        resolved_app
+            .add_components_from_app(
+                &mut validation,
+                app,
+                profile,
+                tools_with_ensured_common_deps,
+            )
+            .await;
 
         resolved_app.validate_package_names(&mut validation);
         resolved_app.collect_component_deps(app, &mut validation);
@@ -419,11 +430,12 @@ impl ResolvedWitApplication {
         self.components.insert(component_name, resolved_component);
     }
 
-    fn add_components_from_app(
+    async fn add_components_from_app(
         &mut self,
         validation: &mut ValidationBuilder,
         app: &Application,
         profile: Option<&BuildProfileName>,
+        tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
     ) {
         for component_name in app.component_names() {
             validation.push_context("component name", component_name.to_string());
@@ -450,60 +462,12 @@ impl ResolvedWitApplication {
                     ),
                 );
 
-                (|| -> anyhow::Result<ResolvedWitComponent> {
-                    let unresolved_source_package_group =
-                        UnresolvedPackageGroup::parse_dir(&source_wit_dir).with_context(|| {
-                            anyhow!(
-                                "Failed to parse component {} main package in source wit dir {}",
-                                component_name.as_str().log_color_error_highlight(),
-                                source_wit_dir.log_color_highlight(),
-                            )
-                        })?;
-
-                    let source_referenced_package_deps = unresolved_source_package_group
-                        .main
-                        .foreign_deps
-                        .keys()
-                        .cloned()
-                        .collect();
-
-                    let source_contained_package_deps = {
-                        let deps_path = source_wit_dir.join("deps");
-                        if !deps_path.exists() {
-                            HashSet::new()
-                        } else {
-                            parse_wit_deps_dir(&deps_path)?
-                                .into_iter()
-                                .map(|package_group| package_group.main.name)
-                                .collect::<HashSet<_>>()
-                        }
-                    };
-
-                    let main_package_name = unresolved_source_package_group.main.name.clone();
-
-                    let resolved_generated_wit_dir = ResolvedWitDir::new(&generated_wit_dir).ok();
-                    let generated_has_same_main_package_name = resolved_generated_wit_dir
-                        .as_ref()
-                        .map(|wit| wit.main_package())
-                        .transpose()?
-                        .map(|generated_main_package| {
-                            main_package_name == generated_main_package.name
-                        })
-                        .unwrap_or_default();
-                    let resolved_generated_wit_dir = generated_has_same_main_package_name
-                        .then_some(resolved_generated_wit_dir)
-                        .flatten();
-
-                    Ok(ResolvedWitComponent {
-                        main_package_name,
-                        resolved_wit_dir: resolved_generated_wit_dir,
-                        app_component_deps,
-                        source_referenced_package_deps,
-                        source_contained_package_deps,
-                        source_component_deps: Default::default(),
-                        generated_component_deps: Default::default(),
-                    })
-                })()
+                Self::resolve_using_wit_dir(
+                    component_name,
+                    &source_wit_dir,
+                    &generated_wit_dir,
+                    app_component_deps,
+                )
             } else {
                 log_action(
                     "Resolving",
@@ -515,65 +479,13 @@ impl ResolvedWitApplication {
                     ),
                 );
 
-                (|| -> anyhow::Result<ResolvedWitComponent> {
-                    let source_wasm = std::fs::read(&source_wit_dir)
-                        .with_context(|| anyhow!("Failed to read the source WIT path as a file"))?;
-                    let wasm = wit_parser::decoding::decode(&source_wasm).with_context(|| {
-                        anyhow!(
-                            "Failed to decode the source WIT path as a WASM component: {}",
-                            source_wit_dir.log_color_highlight()
-                        )
-                    })?;
-
-                    // The WASM has no root package name (always root:component with world root) so
-                    // we use the app component name as a main package name
-                    let main_package_name = component_name.to_package_name()?;
-
-                    // When using a WASM as a "source WIT", we are currently not supporting transforming
-                    // that into a generated WIT dir, just treat it as a static interface definition for
-                    // the given component. So resolved_wit_dir in this case is the resolved _source_ WIT
-                    // parsed from the WASM.
-                    let resolved_wit_dir = ResolvedWitDir::from_wasm(&source_wit_dir, &wasm);
-
-                    let resolve = wasm.resolve();
-                    let root_package_id = wasm.package();
-                    let root_world_id = resolve.select_world(root_package_id, None)?;
-                    let root_world = resolve.worlds.get(root_world_id).ok_or_else(|| {
-                        anyhow!(
-                            "Failed to get root world from the resolved component interface: {}",
-                            source_wit_dir.log_color_highlight()
-                        )
-                    })?;
-
-                    let mut source_referenced_package_deps = HashSet::new();
-                    for import in root_world.imports.values() {
-                        if let WorldItem::Interface { id, .. } = import {
-                            let iface = resolve.interfaces.get(*id).ok_or_else(|| {
-                                anyhow!(
-                                    "Failed to get interface from the resolved component interface"
-                                )
-                            })?;
-                            if let Some(package) = iface.package {
-                                let pkg = resolve.packages.get(package).ok_or_else(|| {
-                                    anyhow!(
-                                        "Failed to get package from the resolved component interface"
-                                    )
-                                })?;
-                                source_referenced_package_deps.insert(pkg.name.clone());
-                            }
-                        }
-                    }
-
-                    Ok(ResolvedWitComponent {
-                        main_package_name,
-                        resolved_wit_dir: Some(resolved_wit_dir),
-                        app_component_deps,
-                        source_referenced_package_deps,
-                        source_contained_package_deps: Default::default(),
-                        source_component_deps: Default::default(),
-                        generated_component_deps: Default::default(),
-                    })
-                })()
+                Self::resolve_using_base_wasm(
+                    component_name,
+                    app_component_deps,
+                    &source_wit_dir,
+                    tools_with_ensured_common_deps,
+                )
+                .await
             };
 
             match resolved_component {
@@ -585,6 +497,136 @@ impl ResolvedWitApplication {
 
             validation.pop_context();
         }
+    }
+
+    fn resolve_using_wit_dir(
+        component_name: &AppComponentName,
+        source_wit_dir: &Path,
+        generated_wit_dir: &Path,
+        app_component_deps: HashSet<AppComponentName>,
+    ) -> anyhow::Result<ResolvedWitComponent> {
+        let unresolved_source_package_group = UnresolvedPackageGroup::parse_dir(source_wit_dir)
+            .with_context(|| {
+                anyhow!(
+                    "Failed to parse component {} main package in source wit dir {}",
+                    component_name.as_str().log_color_error_highlight(),
+                    source_wit_dir.log_color_highlight(),
+                )
+            })?;
+
+        let source_referenced_package_deps = unresolved_source_package_group
+            .main
+            .foreign_deps
+            .keys()
+            .cloned()
+            .collect();
+
+        let source_contained_package_deps = {
+            let deps_path = source_wit_dir.join("deps");
+            if !deps_path.exists() {
+                HashSet::new()
+            } else {
+                parse_wit_deps_dir(&deps_path)?
+                    .into_iter()
+                    .map(|package_group| package_group.main.name)
+                    .collect::<HashSet<_>>()
+            }
+        };
+
+        let main_package_name = unresolved_source_package_group.main.name.clone();
+
+        let resolved_generated_wit_dir = ResolvedWitDir::new(generated_wit_dir).ok();
+        let generated_has_same_main_package_name = resolved_generated_wit_dir
+            .as_ref()
+            .map(|wit| wit.main_package())
+            .transpose()?
+            .map(|generated_main_package| main_package_name == generated_main_package.name)
+            .unwrap_or_default();
+        let resolved_generated_wit_dir = generated_has_same_main_package_name
+            .then_some(resolved_generated_wit_dir)
+            .flatten();
+
+        Ok(ResolvedWitComponent {
+            main_package_name,
+            resolved_wit_dir: resolved_generated_wit_dir,
+            app_component_deps,
+            source_referenced_package_deps,
+            source_contained_package_deps,
+            source_component_deps: Default::default(),
+            generated_component_deps: Default::default(),
+        })
+    }
+
+    async fn resolve_using_base_wasm(
+        component_name: &AppComponentName,
+        app_component_deps: HashSet<AppComponentName>,
+        source_wit_dir: &Path,
+        tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
+    ) -> anyhow::Result<ResolvedWitComponent> {
+        if !source_wit_dir.exists() {
+            // The source WIT path does not exist. We add a special case here for paths pointing into `node_modules`
+            // and trigger an `npm install` if needed. This should be generalized later as an initialization step.
+            if source_wit_dir
+                .components()
+                .any(|c| c.as_os_str() == OsStr::new("node_modules"))
+            {
+                ensure_common_deps_for_tool(tools_with_ensured_common_deps, "node").await?;
+            }
+        }
+
+        let source_wasm = std::fs::read(source_wit_dir)
+            .with_context(|| anyhow!("Failed to read the source WIT path as a file"))?;
+        let wasm = wit_parser::decoding::decode(&source_wasm).with_context(|| {
+            anyhow!(
+                "Failed to decode the source WIT path as a WASM component: {}",
+                source_wit_dir.log_color_highlight()
+            )
+        })?;
+
+        // The WASM has no root package name (always root:component with world root) so
+        // we use the app component name as a main package name
+        let main_package_name = component_name.to_package_name()?;
+
+        // When using a WASM as a "source WIT", we are currently not supporting transforming
+        // that into a generated WIT dir, just treat it as a static interface definition for
+        // the given component. So resolved_wit_dir in this case is the resolved _source_ WIT
+        // parsed from the WASM.
+        let resolved_wit_dir = ResolvedWitDir::from_wasm(source_wit_dir, &wasm);
+
+        let resolve = wasm.resolve();
+        let root_package_id = wasm.package();
+        let root_world_id = resolve.select_world(root_package_id, None)?;
+        let root_world = resolve.worlds.get(root_world_id).ok_or_else(|| {
+            anyhow!(
+                "Failed to get root world from the resolved component interface: {}",
+                source_wit_dir.log_color_highlight()
+            )
+        })?;
+
+        let mut source_referenced_package_deps = HashSet::new();
+        for import in root_world.imports.values() {
+            if let WorldItem::Interface { id, .. } = import {
+                let iface = resolve.interfaces.get(*id).ok_or_else(|| {
+                    anyhow!("Failed to get interface from the resolved component interface")
+                })?;
+                if let Some(package) = iface.package {
+                    let pkg = resolve.packages.get(package).ok_or_else(|| {
+                        anyhow!("Failed to get package from the resolved component interface")
+                    })?;
+                    source_referenced_package_deps.insert(pkg.name.clone());
+                }
+            }
+        }
+
+        Ok(ResolvedWitComponent {
+            main_package_name,
+            resolved_wit_dir: Some(resolved_wit_dir),
+            app_component_deps,
+            source_referenced_package_deps,
+            source_contained_package_deps: Default::default(),
+            source_component_deps: Default::default(),
+            generated_component_deps: Default::default(),
+        })
     }
 
     fn collect_component_deps(&mut self, app: &Application, validation: &mut ValidationBuilder) {

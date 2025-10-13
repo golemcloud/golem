@@ -32,30 +32,28 @@ use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplog, HasOplogService, HasWorker,
-};
+use crate::services::{worker_enumeration, HasAll, HasOplog, HasWorker};
 use crate::worker::{RetryDecision, Worker};
 use async_trait::async_trait;
 use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Weak};
 use wasmtime::component::{Component, Instance, Linker};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
@@ -135,13 +133,15 @@ pub trait WorkerCtx:
         extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
-        execution_status: Arc<RwLock<ExecutionStatus>>,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError>;
 
     fn as_wasi_view(&mut self) -> impl WasiView;
@@ -264,22 +264,10 @@ pub trait StatusManagement {
     fn check_interrupt(&self) -> Option<InterruptKind>;
 
     /// Sets the worker status to suspended
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError>;
+    fn set_suspended(&self);
 
     /// Sets the worker status to running
     fn set_running(&self);
-
-    /// Gets the current worker status
-    async fn get_worker_status(&self) -> WorkerStatus;
-
-    /// Stores the current worker status
-    async fn store_worker_status(&self, status: WorkerStatus);
-
-    /// Update the pending invocations of the worker
-    async fn update_pending_invocations(&self);
-
-    /// Update the pending updates of the worker
-    async fn update_pending_updates(&self);
 }
 
 /// The invocation hooks interface of a worker context has some functions called around
@@ -357,13 +345,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError>;
 
-    /// Gets a best-effort current worker status without activating the worker
-    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError>;
-
     /// Resume the replay of a worker instance. Note that if the previous replay
     /// hasn't reached the end of the replay (which is usually last index in oplog)
     /// resume_replay will ensure to start replay from the last replayed index.
@@ -400,15 +381,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error>;
-
-    /// Called when an update attempt has failed before the worker context has been created
-    async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError>;
 }
 
 /// A required interface to be implemented by the worker context's public state.

@@ -20,12 +20,11 @@ use anyhow::anyhow;
 use golem_common::model::agent::AgentId;
 use golem_common::model::component_metadata::{ComponentMetadata, InvokableFunction};
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::{IdempotencyKey, WorkerStatus};
+use golem_common::model::IdempotencyKey;
 use golem_common::virtual_exports;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::{decode_param, encode_output, DecodeParamResult};
 use golem_wasm_rpc::Value;
-use heck::ToKebabCase;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use tracing::{debug, error, Instrument};
 use wasmtime::component::{Func, Val};
@@ -48,6 +47,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
+    is_live: bool,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
     let was_live_before = store.data().is_live();
@@ -60,6 +60,7 @@ pub async fn invoke_observed_and_traced<Ctx: WorkerCtx>(
         &mut store,
         instance,
         component_metadata,
+        is_live,
     )
     .await;
 
@@ -180,6 +181,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     store: &mut impl AsContextMut<Data = Ctx>,
     instance: &wasmtime::component::Instance,
     component_metadata: &ComponentMetadata,
+    is_live: bool,
 ) -> Result<InvokeResult, WorkerExecutorError> {
     let mut store = store.as_context_mut();
 
@@ -195,7 +197,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         validate_function_parameters(&mut store, &function, &full_function_name, &function_input)
             .await?;
 
-    if store.data().is_live() {
+    if is_live {
         store
             .data_mut()
             .on_exported_function_invoked(&full_function_name, &function_input)
@@ -203,14 +205,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     }
 
     store.data_mut().set_running();
-    store
-        .data_mut()
-        .store_worker_status(WorkerStatus::Running)
-        .await;
 
     let metadata = component_metadata
         .find_parsed_function(&parsed)
-        .await
         .map_err(WorkerExecutorError::runtime)?
         .ok_or_else(|| {
             WorkerExecutorError::invalid_request(format!(
@@ -240,7 +237,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         }
     };
 
-    store.data().set_suspended().await?;
+    store.data().set_suspended();
 
     call_result
 }
@@ -253,7 +250,7 @@ fn verify_agent_invocation(
         if invocation.agent_method_or_constructor.is_some() {
             if let Some(interface_name) = invocation.name.site.interface_name() {
                 // interface_name is the kebab-cased agent type name from the static wrapper
-                let agent_type = agent_id.agent_type.to_kebab_case();
+                let agent_type = agent_id.wrapper_agent_type();
                 if interface_name != agent_type {
                     Err(WorkerExecutorError::invalid_request(
                         format!("Attempt to call a different agent type's method on an agent; targeted agent has type {agent_type}, the invocation is targeting {interface_name}")

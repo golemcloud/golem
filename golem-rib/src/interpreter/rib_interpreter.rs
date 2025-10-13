@@ -4741,6 +4741,7 @@ mod tests {
                 let number = "usa";
                 let boolean = true;
                 let optional-str = some("optional");
+                let optional-number = some(2);
                 let list-of-str = ["a", "b", "c"];
                 let tuple = (text, 1, boolean, optional-str);
                 let record = {city: text, country: number};
@@ -4748,7 +4749,7 @@ mod tests {
                 let result-ok = ok(text);
                 let result-err = err(1);
                 let variant = foo("bar");
-                let weather-agent = weather-agent("text", 1, true, optional-str, list-of-str, tuple, record, result, result-ok, result-err, variant);
+                let weather-agent = weather-agent("text", 1, true, optional-str, optional-number, none, none, list-of-str, tuple, record, result, result-ok, result-err, variant);
                 let first-result = weather-agent.get-weather("bar");
                 let assistant-agent = assistant-agent("my assistant");
                 let second-result = assistant-agent.ask("foo", "bar");
@@ -4760,6 +4761,9 @@ mod tests {
             s32(),
             bool(),
             option(str()),
+            option(u64()),
+            option(str()),
+            option(u64()),
             list(str()),
             tuple(vec![str(), s32(), bool(), option(str())]),
             record(vec![field("city", str()), field("country", str())]),
@@ -4813,7 +4817,7 @@ mod tests {
             Value::Record(vec![
                 // worker-name
                 Value::String(
-                    "weather-agent(\"text\",1,true,some(\"optional\"),[\"a\", \"b\", \"c\"],(\"nyc\", 1, true, some(\"optional\")),{city: \"nyc\", country: \"usa\"},ok(\"nyc\"),ok(\"nyc\"),err(1),foo(\"bar\"))".to_string(),
+                    "weather-agent(\"text\",1,true,some(\"optional\"),some(2),none,none,[\"a\", \"b\", \"c\"],(\"nyc\", 1, true, some(\"optional\")),{city: \"nyc\", country: \"usa\"},ok(\"nyc\"),ok(\"nyc\"),err(1),foo(\"bar\"))".to_string(),
                 ),
                 // function-name
                 Value::String("my:agent/weather-agent.{get-weather}".to_string()),
@@ -4830,6 +4834,46 @@ mod tests {
             ]),
         ]);
 
+        assert_eq!(result.get_val().unwrap().value, expected);
+    }
+
+    #[test]
+    async fn test_interpreter_custom_instance_conflicting_variants() {
+        let expr = r#"
+                let x = instance("abc");
+                let r1 = x.func1(foo("bar"));
+                let r2 = x.func2(foo(["baz", "qux"]));
+                {result1: r1, result2: r2}
+            "#;
+
+        let expr = Expr::from_text(expr).unwrap();
+        let test_deps = RibTestDeps::test_deps_with_variant_conflicts(None);
+
+        let compiler_config =
+            RibCompilerConfig::new(test_deps.component_dependencies.clone(), vec![], vec![]);
+        let compiler = RibCompiler::new(compiler_config);
+        let compiled = compiler
+            .compile(expr)
+            .map_err(|err| err.to_string())
+            .unwrap();
+
+        let mut rib_interpreter = test_deps.interpreter;
+
+        let result = rib_interpreter.run(compiled.byte_code).await.unwrap();
+
+        let expected = Value::Record(vec![
+            Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::String("bar".to_string()))),
+            },
+            Value::Variant {
+                case_idx: 0,
+                case_value: Some(Box::new(Value::List(vec![
+                    Value::String("baz".to_string()),
+                    Value::String("qux".to_string()),
+                ]))),
+            },
+        ]);
         assert_eq!(result.get_val().unwrap().value, expected);
     }
 
@@ -4946,6 +4990,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -4969,6 +5014,44 @@ mod tests {
 
         pub(crate) fn get_metadata_with_resource_without_params() -> Vec<ComponentDependency> {
             get_metadata_with_resource(vec![])
+        }
+
+        pub(crate) fn get_metadata_simple_with_variant_conflicts() -> Vec<ComponentDependency> {
+            let func1 = AnalysedFunction {
+                name: "func1".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: variant(vec![case("foo", str())]),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            };
+
+            let func2 = AnalysedFunction {
+                name: "func2".to_string(),
+                parameters: vec![AnalysedFunctionParameter {
+                    name: "arg1".to_string(),
+                    typ: variant(vec![
+                        case("foo", list(str())), // just different types to that of the foo and bar
+                    ]),
+                }],
+                result: Some(AnalysedFunctionResult { typ: str() }),
+            };
+
+            let component_info = ComponentDependencyKey {
+                component_name: "foo".to_string(),
+                component_id: Uuid::new_v4(),
+                component_version: 0,
+                root_package_name: None,
+                root_package_version: None,
+            };
+
+            vec![ComponentDependency::new(
+                component_info,
+                vec![
+                    AnalysedExport::Function(func1),
+                    AnalysedExport::Function(func2),
+                ],
+            )]
         }
 
         pub(crate) fn get_metadata_with_multiple_interfaces_simple() -> Vec<ComponentDependency> {
@@ -5019,6 +5102,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5111,6 +5195,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5274,6 +5359,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -5547,6 +5633,28 @@ mod tests {
             }
         }
 
+        struct SimpleVariantConflictInvoke;
+
+        #[async_trait]
+        impl RibComponentFunctionInvoke for SimpleVariantConflictInvoke {
+            async fn invoke(
+                &self,
+                _component_dependency_key: ComponentDependencyKey,
+                _instruction_id: &InstructionId,
+                _worker_name: EvaluatedWorkerName,
+                function_name: EvaluatedFqFn,
+                args: EvaluatedFnArgs,
+                _return_type: Option<AnalysedType>,
+            ) -> RibFunctionInvokeResult {
+                let arg = args.0.first().unwrap();
+
+                match function_name.0.as_str() {
+                    "func1" | "func2" => Ok(Some(arg.clone())),
+                    _ => Err(format!("unexpected function name: {}", function_name.0).into()),
+                }
+            }
+        }
+
         struct CustomInstanceFunctionInvoke;
         #[async_trait]
         impl RibComponentFunctionInvoke for CustomInstanceFunctionInvoke {
@@ -5733,6 +5841,7 @@ mod tests {
                 let component_info = ComponentDependencyKey {
                     component_name: "foo".to_string(),
                     component_id: Uuid::new_v4(),
+                    component_version: 0,
                     root_package_name: None,
                     root_package_version: None,
                 };
@@ -5758,6 +5867,22 @@ mod tests {
                 let interpreter = Interpreter::new(
                     rib_input.unwrap_or_default(),
                     Arc::new(CustomInstanceFunctionInvoke),
+                    Arc::new(StaticWorkerNameGenerator),
+                );
+
+                RibTestDeps {
+                    component_dependencies,
+                    interpreter,
+                }
+            }
+
+            pub(crate) fn test_deps_with_variant_conflicts(
+                rib_input: Option<RibInput>,
+            ) -> RibTestDeps {
+                let component_dependencies = get_metadata_simple_with_variant_conflicts();
+                let interpreter = Interpreter::new(
+                    rib_input.unwrap_or_default(),
+                    Arc::new(SimpleVariantConflictInvoke),
                     Arc::new(StaticWorkerNameGenerator),
                 );
 
@@ -5851,6 +5976,7 @@ mod tests {
             let component_info = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };

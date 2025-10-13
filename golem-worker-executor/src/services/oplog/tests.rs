@@ -15,7 +15,7 @@
 use std::collections::HashSet;
 use std::sync::RwLock;
 use std::time::Instant;
-use test_r::{flaky, test, test_dep};
+use test_r::{test, test_dep};
 
 use assert2::check;
 use nonempty_collections::nev;
@@ -323,15 +323,57 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
                 level,
             }
         }
+        OplogEntry::BeginRemoteTransaction {
+            timestamp,
+            transaction_id,
+        } => OplogEntry::BeginRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            transaction_id,
+        },
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::PreCommitRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::PreRollbackRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::CommittedRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::CommittedRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => OplogEntry::RolledBackRemoteTransaction {
+            timestamp: rounded_ts(timestamp),
+            begin_index,
+        },
     }
 }
 
-fn default_execution_status(component_type: ComponentType) -> Arc<RwLock<ExecutionStatus>> {
-    Arc::new(RwLock::new(ExecutionStatus::Suspended {
-        last_known_status: WorkerStatusRecord::default(),
+fn default_last_known_status() -> read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord> {
+    read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
+        WorkerStatusRecord::default(),
+    )))
+}
+
+fn default_execution_status(
+    component_type: ComponentType,
+) -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
+    read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
         component_type,
         timestamp: Timestamp::now_utc(),
-    }))
+    })))
 }
 
 #[test]
@@ -354,6 +396,7 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -422,6 +465,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Ephemeral),
         )
         .await;
@@ -437,7 +481,7 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
     oplog.add(entry1.clone()).await;
     oplog.add(entry2.clone()).await;
     oplog.add(entry3.clone()).await;
-    oplog.commit(CommitLevel::Immediate).await;
+    oplog.commit(CommitLevel::Always).await;
 
     let r1 = oplog.read(last_oplog_idx.next()).await;
     let r2 = oplog.read(last_oplog_idx.next().next()).await;
@@ -477,6 +521,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -593,6 +638,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -695,37 +741,31 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
 }
 
 #[test]
-#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, false).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, false).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, false).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_1(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 315, 5, 1, 3, true).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_2(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 12, 2, 1, 0, true).await;
 }
 
 #[test]
-#[flaky(10)]
 async fn blob_multilayer_transfers_entries_after_limit_reached_3(_tracing: &Tracing) {
     multilayer_transfers_entries_after_limit_reached(false, 10000, 0, 0, 100, true).await;
 }
@@ -790,6 +830,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -818,6 +859,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
                 &owned_worker_id,
                 primary_oplog_service.get_last_index(&owned_worker_id).await,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -844,6 +886,7 @@ async fn multilayer_transfers_entries_after_limit_reached(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -921,6 +964,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -948,6 +992,7 @@ async fn read_from_archive_impl(use_blob: bool) {
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1042,6 +1087,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             &owned_worker_id,
             create_entry.clone(),
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -1168,6 +1214,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -1196,6 +1243,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1217,6 +1265,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 &owned_worker_id,
                 last_oplog_index,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1237,6 +1286,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 &owned_worker_id,
                 last_oplog_index,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1267,6 +1317,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1288,6 +1339,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 &owned_worker_id,
                 last_oplog_index,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1308,6 +1360,7 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
                 &owned_worker_id,
                 last_oplog_index,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1426,6 +1479,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             &owned_worker_id,
             last_oplog_index,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -1463,6 +1517,7 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1550,6 +1605,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 &owned_worker_id,
                 last_oplog_index,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await;
@@ -1572,6 +1628,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1601,6 +1658,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
                 &owned_worker_id,
                 last_oplog_index,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await;
@@ -1616,6 +1674,7 @@ async fn scheduled_archive_impl(use_blob: bool) {
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+            default_last_known_status(),
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1692,6 +1751,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
                 &owned_worker_id,
                 create_entry,
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
+                default_last_known_status(),
                 default_execution_status(ComponentType::Durable),
             )
             .await;

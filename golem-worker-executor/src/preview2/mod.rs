@@ -31,7 +31,8 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
         "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
-        "golem:api/host/get-workers": super::durable_host::golem::v1x::GetWorkersEntry,
+        "golem:api/host/get-agents": super::durable_host::golem::v1x::GetAgentsEntry,
+        "golem:api/host/get-promise-result": super::durable_host::golem::v1x::GetPromiseResultEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability/lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
@@ -58,3 +59,19 @@ pub type Pollable = golem_wasm_rpc::wasi::io::poll::Pollable;
 pub use self::golem::api1_1_7 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
+use golem_wasm_ast::analysis::analysed_type::r#enum;
+use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm_rpc::{IntoValue, Value};
+
+impl IntoValue for golem_api_1_x::host::ForkResult {
+    fn into_value(self) -> Value {
+        match self {
+            Self::Original => Value::Enum(0),
+            Self::Forked => Value::Enum(1),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&["original", "forked"])
+    }
+}

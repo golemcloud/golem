@@ -27,7 +27,6 @@ members = [
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "cli/template-golem-agent-ts",
     "test-components/app-and-library",
     "test-components/shopping-cart",
     "test-components/write-stdout",
@@ -173,6 +172,7 @@ futures = "0.3.31"
 futures-concurrency = "7.6.3"
 futures-util = "0.3.31"
 fuzzy-matcher = "0.3.7"
+gag = "1.0.0"
 gethostname = "1.0.0"
 git-version = "0.3.9"
 goldenfile = "1.8.0"
@@ -278,6 +278,7 @@ strip-ansi-escapes = "0.2.0"
 strum = "0.27.1"
 strum_macros = "0.27.1"
 syn = "2.0.90"
+synoptic = "2.2.9"
 sysinfo = "0.33.1"
 system-interface = "0.27.3"
 tap = "1.0.1"
@@ -319,7 +320,7 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
-wasm-rquickjs = "0.0.12"
+ wasm-rquickjs = "0.0.17"
 wasm-wave = "0.235"
 wasmparser = "0.235.0"
 wasmprinter = "0.219.1"

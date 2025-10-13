@@ -96,6 +96,7 @@ pub fn mock_link<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
             ComponentItem::Type(_) => {}
             ComponentItem::Resource(_resource) => {
                 if &inner_name != "pollable"
+                    && &inner_name != "wasi-io-pollable"
                     && &inner_name != "input-stream"
                     && &inner_name != "output-stream"
                 {

@@ -43,7 +43,7 @@ pub struct ExportedFunctionInvoked {
     pub invocation_context: InvocationContextStack,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct ReplayState {
     owned_worker_id: OwnedWorkerId,
     oplog_service: Arc<dyn OplogService>,
@@ -55,7 +55,7 @@ pub struct ReplayState {
     has_seen_logs: Arc<AtomicBool>,
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 struct InternalReplayState {
     pub skipped_regions: DeletedRegions,
     pub next_skipped_region: Option<OplogRegion>,
@@ -110,16 +110,6 @@ impl ReplayState {
 
     pub fn set_replay_target(&mut self, new_target: OplogIndex) {
         self.replay_target.set(new_target)
-    }
-
-    pub async fn skipped_regions(&self) -> DeletedRegions {
-        let internal = self.internal.read().await;
-        internal.skipped_regions.clone()
-    }
-
-    pub async fn add_skipped_region(&mut self, region: OplogRegion) {
-        let mut internal = self.internal.write().await;
-        internal.skipped_regions.add(region);
     }
 
     pub async fn is_in_skipped_region(&self, oplog_index: OplogIndex) -> bool {
@@ -349,6 +339,7 @@ impl ReplayState {
     ) -> Option<OplogIndex> {
         self.lookup_oplog_entry_with_condition(begin_idx, check, |_, _| true)
             .await
+            .map(|(idx, _)| idx)
     }
 
     pub async fn lookup_oplog_entry_with_condition(
@@ -356,7 +347,7 @@ impl ReplayState {
         begin_idx: OplogIndex,
         end_check: impl Fn(&OplogEntry, OplogIndex) -> bool,
         for_all_intermediate: impl Fn(&OplogEntry, OplogIndex) -> bool,
-    ) -> Option<OplogIndex> {
+    ) -> Option<(OplogIndex, OplogEntry)> {
         let replay_target = self.replay_target.get();
         let mut start = self.last_replayed_index.get().next();
 
@@ -392,7 +383,7 @@ impl ReplayState {
                         .find_next_deleted_region(idx.next());
                 }
                 if end_check(entry, begin_idx) {
-                    return Some(*idx);
+                    return Some((*idx, entry.clone()));
                 } else if !for_all_intermediate(entry, begin_idx) {
                     return None;
                 }

@@ -3,7 +3,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::oplog::OplogService;
 use crate::services::worker::WorkerService;
 use crate::services::{HasConfig, HasOplogService, HasWorkerService};
-use crate::worker::status::calculate_last_known_status;
+use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::{
@@ -48,7 +48,7 @@ impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
 
         let mut workers: Vec<WorkerMetadata> = vec![];
         for (worker_id, worker) in active_workers {
-            let metadata = worker.get_metadata()?;
+            let metadata = worker.get_latest_worker_metadata().await;
             if worker_id.component_id == *component_id
                 && (metadata.last_known_status.status == WorkerStatus::Running)
                 && filter.clone().is_none_or(|f| f.matches(&metadata))
@@ -124,21 +124,30 @@ impl DefaultWorkerEnumerationService {
                 .instrument(tracing::info_span!("get_worker_metadata"))
                 .await;
 
-            if let Some(worker_metadata) = worker_metadata {
+            if let Some((initial_worker_metadata, last_known_status)) =
+                worker_metadata.and_then(|wm| {
+                    wm.last_known_status
+                        .map(|lks| (wm.initial_worker_metadata, lks))
+                })
+            {
                 let metadata = if precise {
-                    let last_known_status = calculate_last_known_status(
+                    let last_known_status = calculate_last_known_status_for_existing_worker(
                         self,
                         &owned_worker_id,
-                        &Some(worker_metadata.clone()),
+                        Some(last_known_status),
                     )
                     .instrument(tracing::info_span!("calculate_last_known_status"))
-                    .await?;
+                    .await;
+
                     WorkerMetadata {
                         last_known_status,
-                        ..worker_metadata
+                        ..initial_worker_metadata
                     }
                 } else {
-                    worker_metadata
+                    WorkerMetadata {
+                        last_known_status,
+                        ..initial_worker_metadata
+                    }
                 };
 
                 if filter.clone().is_none_or(|f| f.matches(&metadata)) {

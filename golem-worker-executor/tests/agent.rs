@@ -12,14 +12,63 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use golem_wasm_ast::analysis::wit_parser::SharedAnalysedTypeResolve;
-use test_r::inherit_test_dep;
+use assert2::assert;
+use assert2::let_assert;
+use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
+use golem_api_grpc::proto::golem::worker::v1::{
+    worker_execution_error, InvocationFailed, WorkerExecutionError,
+};
+use golem_api_grpc::proto::golem::worker::{UnknownError, WorkerError};
+use golem_test_framework::config::TestDependencies;
+use golem_test_framework::dsl::TestDslUnsafe;
+use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
 inherit_test_dep!(Tracing);
-inherit_test_dep!(
-    #[tagged_as("golem_host")]
-    SharedAnalysedTypeResolve
-);
+
+#[test]
+#[tracing::instrument]
+async fn agent_self_rpc_is_not_allowed(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("golem_it_agent_self_rpc").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "self-rpc-agent(\"worker-name\")")
+        .await;
+
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem-it:agent-self-rpc/self-rpc-agent.{self-rpc}",
+            vec![],
+        )
+        .await;
+
+    let_assert!(
+        Err(Error::InternalError(WorkerExecutionError {
+            error: Some(worker_execution_error::Error::InvocationFailed(
+                InvocationFailed {
+                    error: Some(WorkerError {
+                        error: Some(
+                            golem_api_grpc::proto::golem::worker::worker_error::Error::UnknownError(
+                                UnknownError {
+                                    details: error_details
+                                }
+                            )
+                        )
+                    }),
+                    ..
+                }
+            ))
+        })) = result
+    );
+    assert!(error_details.contains("RPC calls to the same agent are not supported"));
+}

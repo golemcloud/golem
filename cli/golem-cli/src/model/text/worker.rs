@@ -46,14 +46,14 @@ impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
         if let Some(worker_name) = &self.worker_name {
             format!(
-                "Created new worker {}",
+                "Created new agent {}",
                 format_message_highlight(&worker_name)
             )
         } else {
             // TODO: review: do we really want to hide the worker name? it is provided now
             //       in "worker new"
             format!(
-                "Created new worker with a {}",
+                "Created new agent with a {}",
                 format_message_highlight("random generated name")
             )
         }
@@ -64,7 +64,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Worker name", &self.worker_name, format_main_id);
+            .fmt_field_option("Agent name", &self.worker_name, format_main_id);
 
         fields.build()
     }
@@ -95,7 +95,7 @@ impl WorkerGetView {
 impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
-            "Got metadata for worker {}",
+            "Got metadata for agent {}",
             format_message_highlight(&self.metadata.worker_name)
         )
     }
@@ -156,7 +156,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_version,
                 format_id,
             )
-            .fmt_field("Worker name", &self.metadata.worker_name, format_main_id)
+            .fmt_field("Agent name", &self.metadata.worker_name, format_main_id)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -205,7 +205,7 @@ impl MessageWithFields for WorkerGetView {
             )
             .fmt_field_optional(
                 "WARNING",
-                "The presented worker metadata may not be up-to-date",
+                "The presented agent metadata may not be up-to-date",
                 !self.precise,
                 format_warn,
             );
@@ -218,7 +218,7 @@ impl MessageWithFields for WorkerGetView {
 struct WorkerMetadataTableView {
     #[table(title = "Component name")]
     pub component_name: ComponentName,
-    #[table(title = "Worker name")]
+    #[table(title = "Agent name")]
     pub worker_name: WorkerName,
     #[table(title = "Component\nversion", justify = "Justify::Right")]
     pub component_version: u64,
@@ -781,6 +781,61 @@ impl TextView for PublicOplogEntry {
                 logln(format!(
                     "{pad}level:             {}",
                     format_id(&format!("{:?}", &params.persistence_level))
+                ));
+            }
+            PublicOplogEntry::BeginRemoteTransaction(params) => {
+                logln(format_message_highlight("BEGIN REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}transaction id:          {}",
+                    format_id(&params.transaction_id)
+                ));
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+                logln(format_message_highlight("PRE COMMIT REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+                logln(format_message_highlight("PRE ROLLBACK REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(params) => {
+                logln(format_message_highlight("COMMITTED REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+                logln(format_message_highlight("ROLLED BACK REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
                 ));
             }
         }

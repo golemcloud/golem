@@ -63,6 +63,7 @@ flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
+gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
 indexmap = { workspace = true }
@@ -94,6 +95,7 @@ spdx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
+synoptic = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
@@ -135,4 +137,5 @@ test-r = { workspace = true }
 wasm-metadata = { workspace = true }
 
 [build-dependencies]
+lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }

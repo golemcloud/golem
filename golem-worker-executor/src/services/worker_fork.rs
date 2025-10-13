@@ -43,12 +43,12 @@ use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
-use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata, WorkerStatusRecord};
+use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::read_only_lock;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
-use std::sync::RwLock;
 use tokio::runtime::Handle;
 
 #[async_trait]
@@ -425,6 +425,8 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         record_worker_call("fork");
 
+        tracing::debug!("Copying source oplog of worker {fork_account_id}/{source_worker_id} to {target_worker_id} up to index {oplog_index_cut_off}");
+
         let (owned_source_worker_id, owned_target_worker_id) = self
             .validate_worker_forking(
                 &source_worker_id.project_id,
@@ -450,23 +452,21 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         )
         .await?;
 
-        let source_worker_metadata = source_worker_instance.get_metadata()?;
+        let initial_source_worker_metadata = source_worker_instance.get_initial_worker_metadata();
 
         let target_worker_metadata = WorkerMetadata {
             worker_id: target_worker_id.clone(),
             created_by: fork_account_id.clone(),
             project_id,
-            env: source_worker_metadata.env.clone(),
-            args: source_worker_metadata.args.clone(),
-            wasi_config_vars: source_worker_metadata.wasi_config_vars.clone(),
+            env: initial_source_worker_metadata.env.clone(),
+            args: initial_source_worker_metadata.args.clone(),
+            wasi_config_vars: initial_source_worker_metadata.wasi_config_vars.clone(),
             created_at: Timestamp::now_utc(),
             parent: None,
-            last_known_status: WorkerStatusRecord::default(),
+            last_known_status: initial_source_worker_metadata.last_known_status.clone(),
         };
 
         let source_oplog = source_worker_instance.oplog();
-
-        source_oplog.commit(CommitLevel::Always).await;
 
         let initial_oplog_entry = source_oplog.read(OplogIndex::INITIAL).await;
 
@@ -477,17 +477,22 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
                 "Failed to update worker id in oplog entry",
             ))?;
 
+        // Note: Features of the oplog that rely on the current status / execution status will not work correctly as we are not updating them here.
         let new_oplog = self
             .oplog_service
             .create(
                 &owned_target_worker_id,
                 target_initial_oplog_entry,
                 target_worker_metadata,
-                Arc::new(RwLock::new(ExecutionStatus::Suspended {
-                    last_known_status: WorkerStatusRecord::default(),
-                    component_type: source_worker_instance.component_type(),
-                    timestamp: Timestamp::now_utc(),
-                })),
+                read_only_lock::tokio::ReadOnlyLock::new(Arc::new(tokio::sync::RwLock::new(
+                    initial_source_worker_metadata.last_known_status.clone(),
+                ))),
+                read_only_lock::std::ReadOnlyLock::new(Arc::new(std::sync::RwLock::new(
+                    ExecutionStatus::Suspended {
+                        component_type: source_worker_instance.component_type(),
+                        timestamp: Timestamp::now_utc(),
+                    },
+                ))),
             )
             .await;
 

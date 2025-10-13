@@ -12,27 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
+use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig, RdbmsQueryConfig};
 use crate::services::rdbms::postgres::types::{
     Composite, CompositeType, DbColumn, DbColumnType, DbValue, Domain, DomainType, Enumeration,
     EnumerationType, Interval, NamedType, Range, RangeType, TimeTz, ValuesRange,
 };
 use crate::services::rdbms::postgres::{PostgresType, POSTGRES};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
+    create_db_result, BeginTransactionSupport, PoolCreator, QueryExecutor, QueryParamsBinder,
+    SqlxDbResultStream, SqlxDbTransaction, SqlxRdbms, TransactionSupport,
 };
-use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
+};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures::stream::BoxStream;
+use golem_common::model::TransactionId;
 use mac_address::MacAddress;
 use serde_json::json;
 use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
-use sqlx::{Column, ConnectOptions, Pool, Row, Type, TypeInfo, ValueRef};
+use sqlx::{Column, ConnectOptions, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef};
+use sqlx_core::executor::Executor;
 use std::fmt::Display;
 use std::net::IpAddr;
+use std::ops::Deref;
 use std::sync::Arc;
 use try_match::try_match;
 use uuid::Uuid;
@@ -55,9 +61,91 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
             PgConnectOptions::from_url(&self.address).map_err(Error::connection_failure)?;
         sqlx::postgres::PgPoolOptions::new()
             .max_connections(config.max_connections)
+            .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await
             .map_err(Error::connection_failure)
+    }
+}
+
+#[async_trait]
+impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
+    async fn begin_transaction(
+        key: &RdbmsPoolKey,
+        pool: Arc<Pool<sqlx::Postgres>>,
+        query_config: RdbmsQueryConfig,
+    ) -> Result<Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>>, Error> {
+        let mut connection = pool
+            .deref()
+            .acquire()
+            .await
+            .map_err(Error::connection_failure)?;
+
+        <sqlx::Postgres as sqlx::Database>::TransactionManager::begin(&mut connection, None)
+            .await
+            .map_err(Error::query_execution_failure)?;
+
+        let query = sqlx::query("SELECT txid_current()");
+        let row = connection
+            .fetch_one(query)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
+        let transaction_id = TransactionId::new(id);
+
+        let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
+            SqlxDbTransaction::new(transaction_id, key.clone(), connection, pool, query_config),
+        );
+
+        Ok(db_transaction)
+    }
+}
+
+#[async_trait]
+impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
+    async fn pre_commit_transaction(
+        _pool: &Pool<sqlx::Postgres>,
+        _db_transaction: &SqlxDbTransaction<PostgresType, sqlx::Postgres>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn pre_rollback_transaction(
+        _pool: &Pool<sqlx::Postgres>,
+        _db_transaction: &SqlxDbTransaction<PostgresType, sqlx::Postgres>,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+
+    async fn get_transaction_status(
+        pool: &Pool<sqlx::Postgres>,
+        id: &TransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error> {
+        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.to_string());
+        let row = pool
+            .fetch_optional(query)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        if let Some(row) = row {
+            let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
+            match status {
+                "in progress" => Ok(RdbmsTransactionStatus::InProgress),
+                "committed" => Ok(RdbmsTransactionStatus::Committed),
+                "aborted" => Ok(RdbmsTransactionStatus::RolledBack),
+                _ => Err(Error::query_response_failure(format!(
+                    "Unknown transaction status: {status}"
+                ))),
+            }
+        } else {
+            Ok(RdbmsTransactionStatus::NotFound)
+        }
+    }
+
+    async fn cleanup_transaction(
+        _pool: &Pool<sqlx::Postgres>,
+        _id: &TransactionId,
+    ) -> Result<(), Error> {
+        Ok(())
     }
 }
 

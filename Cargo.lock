@@ -1795,6 +1795,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
+name = "char_index"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10ef8669476802b7127a0a97612a0c34113e949ee65c695e4ac259f1f49aaa25"
+
+[[package]]
 name = "chrono"
 version = "0.4.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3551,6 +3557,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "filedescriptor"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e40758ed24c9b2eeb76c35fb0aebc66c626084edd827e07e1552279814c6682d"
+dependencies = [
+ "libc",
+ "thiserror 1.0.69",
+ "winapi",
+]
+
+[[package]]
 name = "filetime"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3899,6 +3916,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "gag"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a713bee13966e9fbffdf7193af71d54a6b35a0bb34997cd6c9519ebeb5005972"
+dependencies = [
+ "filedescriptor",
+ "tempfile",
+]
+
+[[package]]
 name = "gen_ops"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4130,6 +4157,7 @@ dependencies = [
  "fs_extra",
  "futures-util",
  "fuzzy-matcher",
+ "gag",
  "golem-client",
  "golem-common",
  "golem-rib",
@@ -4174,6 +4202,7 @@ dependencies = [
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "syn 2.0.105",
+ "synoptic",
  "tempfile",
  "terminal_size",
  "test-r",
@@ -4233,6 +4262,7 @@ name = "golem-common"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert2",
  "async-trait",
  "base64 0.22.1",
  "bincode",
@@ -4253,7 +4283,9 @@ dependencies = [
  "http 1.3.1",
  "humantime-serde",
  "iso8601-timestamp",
+ "itertools 0.14.0",
  "lazy_static 1.5.0",
+ "lenient_bool",
  "nonempty-collections",
  "poem",
  "poem-openapi",
@@ -4282,6 +4314,7 @@ dependencies = [
  "typed-path",
  "url",
  "uuid",
+ "wasm-wave",
  "wasmtime",
  "wasmtime-wasi",
  "wit-parser 0.235.0",
@@ -4777,6 +4810,7 @@ dependencies = [
  "prost 0.14.1",
  "rand 0.9.2",
  "redis",
+ "regex",
  "ringbuf",
  "serde",
  "serde_json",
@@ -4827,6 +4861,7 @@ dependencies = [
  "golem-service-base",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "golem-wasm-rpc-derive",
  "headers 0.4.1",
  "http 1.3.1",
  "http-body-util",
@@ -5593,6 +5628,12 @@ dependencies = [
  "icu_normalizer",
  "icu_properties",
 ]
+
+[[package]]
+name = "if_chain"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd62e6b5e86ea8eeeb8db1de02880a6abc01a397b2ebb64b5d74ac255318f5cb"
 
 [[package]]
 name = "im-rc"
@@ -6863,6 +6904,12 @@ dependencies = [
  "libc",
  "memoffset",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nom"
@@ -10674,6 +10721,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "synoptic"
+version = "2.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3961017ab3836f3d19579098fae565969c5e7c32c66d746bc706cfbbb047e080"
+dependencies = [
+ "char_index",
+ "if_chain",
+ "nohash-hasher",
+ "regex",
+ "unicode-width 0.2.1",
+]
+
+[[package]]
 name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12557,9 +12617,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-rquickjs"
-version = "0.0.12"
+version = "0.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ae9dbf8ce8a6e85067ac9a4823d54073b8a7ccadf5ef9776b99332240a50c33"
+checksum = "c7a5c3b495c462e4686163ca81cc3241bfaf309e2f477f73fa31284f52ff5ea4"
 dependencies = [
  "anyhow",
  "camino",

@@ -33,31 +33,33 @@ use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplogService, NoAdditionalDeps};
+use crate::services::{worker_enumeration, HasAll, NoAdditionalDeps};
 use crate::worker::{RetryDecision, Worker};
 use crate::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement,
     InvocationContextManagement, InvocationHooks, InvocationManagement, StatusManagement,
     UpdateManagement, WorkerCtx,
 };
-use anyhow::Error;
+use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_common::base_model::ProjectId;
 use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerStatusRecord,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
+};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
@@ -67,7 +69,7 @@ use golem_wasm_rpc::{
 };
 use std::collections::{BTreeMap, HashSet};
 use std::future::Future;
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Weak};
 use tracing::debug;
 use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
@@ -213,28 +215,12 @@ impl StatusManagement for Context {
         self.durable_ctx.check_interrupt()
     }
 
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_suspended().await
+    fn set_suspended(&self) {
+        self.durable_ctx.set_suspended()
     }
 
     fn set_running(&self) {
         self.durable_ctx.set_running()
-    }
-
-    async fn get_worker_status(&self) -> WorkerStatus {
-        self.durable_ctx.get_worker_status().await
-    }
-
-    async fn store_worker_status(&self, status: WorkerStatus) {
-        self.durable_ctx.store_worker_status(status).await
-    }
-
-    async fn update_pending_invocations(&self) {
-        self.durable_ctx.update_pending_invocations().await
-    }
-
-    async fn update_pending_updates(&self) {
-        self.durable_ctx.update_pending_updates().await
     }
 }
 
@@ -280,14 +266,21 @@ impl ResourceLimiterAsync for Context {
             "memory_growing: current={}, desired={}, maximum={:?}, account limit={}",
             current, desired, maximum, limit
         );
-        let allow = if desired > limit {
-            false
-        } else {
-            !matches!(maximum, Some(max) if desired > max)
+
+        if desired > limit || maximum.map(|m| desired > m).unwrap_or_default() {
+            Err(anyhow!(GolemSpecificWasmTrap::WorkerExceededMemoryLimit))?;
         };
 
-        record_allocated_memory(desired);
-        Ok(allow)
+        let current_known = self.durable_ctx.total_linear_memory_size();
+        let delta = (desired as u64).saturating_sub(current_known);
+
+        if delta > 0 {
+            // Get more permits from the host. If this is not allowed the worker will fail immediately and will retry with more permits.
+            self.durable_ctx.increase_memory(delta).await?;
+            record_allocated_memory(desired);
+        }
+
+        Ok(true)
     }
 
     async fn table_growing(
@@ -319,14 +312,6 @@ impl ExternalOperations<Context> for Context {
             worker_status_record,
         )
         .await
-    }
-
-    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
-        this: &T,
-        worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::compute_latest_worker_status(this, worker_id, metadata).await
     }
 
     async fn resume_replay(
@@ -367,23 +352,6 @@ impl ExternalOperations<Context> for Context {
         this: &T,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<Context>::on_shard_assignment_changed(this).await
-    }
-
-    async fn on_worker_update_failed_to_start<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::on_worker_update_failed_to_start(
-            this,
-            account_id,
-            owned_worker_id,
-            target_version,
-            details,
-        )
-        .await
     }
 }
 
@@ -458,7 +426,7 @@ impl FileSystemReading for Context {
 impl HostWasmRpc for Context {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::WorkerId,
+        worker_id: golem_wasm_rpc::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -658,13 +626,15 @@ impl WorkerCtx for Context {
         _extra_deps: Self::ExtraDeps,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
-        execution_status: Arc<RwLock<ExecutionStatus>>,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn Plugins>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -691,6 +661,8 @@ impl WorkerCtx for Context {
             worker_fork,
             project_service,
             agent_types_service,
+            shard_service,
+            pending_update,
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_id, resource_limits))

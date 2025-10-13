@@ -12,17 +12,41 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use lenient_bool::LenientBool;
 use shadow_rs::{BuildPattern, SdResult, ShadowBuilder};
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
 use std::process::Command;
 
+static SKIP_ENV_VAR_NAME: &str = "GOLEM_BUILD_SKIP_SHADOW";
+
 fn main() {
+    if should_skip() {
+        println!("cargo::warning=skipping shadow build");
+        return;
+    }
+
     ShadowBuilder::builder()
         .hook(append_write_git_describe_tags_hook)
         .build_pattern(BuildPattern::Lazy)
         .build()
         .unwrap();
+}
+
+fn should_skip() -> bool {
+    let skip_requested = std::env::var(SKIP_ENV_VAR_NAME)
+        .ok()
+        .and_then(|value| value.parse::<LenientBool>().ok())
+        .unwrap_or_default()
+        .0;
+
+    if !skip_requested {
+        return false;
+    }
+
+    let out = Path::new(&std::env::var("OUT_DIR").unwrap()).join("shadow.rs");
+    out.exists()
 }
 
 fn append_write_git_describe_tags_hook(file: &File) -> SdResult<()> {
@@ -31,7 +55,9 @@ fn append_write_git_describe_tags_hook(file: &File) -> SdResult<()> {
 }
 
 fn append_write_git_describe_tags(mut file: &File) -> SdResult<()> {
-    let output = Command::new("git").args(["describe", "--tags"]).output()?;
+    let output = Command::new("git")
+        .args(["describe", "--tags", "--match", "v*"])
+        .output()?;
 
     let version = {
         if !output.status.success() {

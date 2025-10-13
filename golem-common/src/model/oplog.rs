@@ -16,8 +16,8 @@ pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
-    WorkerInvocation,
+    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId,
+    WorkerId, WorkerInvocation,
 };
 use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
@@ -64,7 +64,7 @@ impl OplogIndexRange {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct AtomicOplogIndex(Arc<AtomicU64>);
 
 impl AtomicOplogIndex {
@@ -455,6 +455,26 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         level: PersistenceLevel,
     },
+    BeginRemoteTransaction {
+        timestamp: Timestamp,
+        transaction_id: TransactionId,
+    },
+    PreCommitRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    PreRollbackRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    CommittedRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
+    RolledBackRemoteTransaction {
+        timestamp: Timestamp,
+        begin_index: OplogIndex,
+    },
 }
 
 impl OplogEntry {
@@ -698,12 +718,71 @@ impl OplogEntry {
         }
     }
 
+    pub fn begin_remote_transaction(transaction_id: TransactionId) -> OplogEntry {
+        OplogEntry::BeginRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            transaction_id,
+        }
+    }
+
+    pub fn pre_commit_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn pre_rollback_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn committed_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::CommittedRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
+    pub fn rolled_back_remote_transaction(begin_index: OplogIndex) -> OplogEntry {
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp: Timestamp::now_utc(),
+            begin_index,
+        }
+    }
+
     pub fn is_end_atomic_region(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndAtomicRegion { begin_index, .. } if *begin_index == idx)
     }
 
     pub fn is_end_remote_write(&self, idx: OplogIndex) -> bool {
         matches!(self, OplogEntry::EndRemoteWrite { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_commit_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::PreCommitRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_rollback_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::PreRollbackRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_pre_remote_transaction(&self, idx: OplogIndex) -> bool {
+        self.is_pre_commit_remote_transaction(idx) || self.is_pre_rollback_remote_transaction(idx)
+    }
+
+    pub fn is_committed_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::CommittedRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_rolled_back_remote_transaction(&self, idx: OplogIndex) -> bool {
+        matches!(self, OplogEntry::RolledBackRemoteTransaction { begin_index, .. } if *begin_index == idx)
+    }
+
+    pub fn is_end_remote_transaction(&self, idx: OplogIndex) -> bool {
+        self.is_committed_remote_transaction(idx) || self.is_rolled_back_remote_transaction(idx)
     }
 
     /// Checks that an "intermediate oplog entry" between a `BeginRemoteWrite` and an `EndRemoteWrite`
@@ -715,6 +794,11 @@ impl OplogEntry {
                 ..
             } => match durable_function_type {
                 DurableFunctionType::WriteRemoteBatched(Some(begin_index))
+                    if *begin_index == idx =>
+                {
+                    true
+                }
+                DurableFunctionType::WriteRemoteTransaction(Some(begin_index))
                     if *begin_index == idx =>
                 {
                     true
@@ -786,7 +870,12 @@ impl OplogEntry {
             | OplogEntry::StartSpan { timestamp, .. }
             | OplogEntry::FinishSpan { timestamp, .. }
             | OplogEntry::SetSpanAttribute { timestamp, .. }
-            | OplogEntry::ChangePersistenceLevel { timestamp, .. } => *timestamp,
+            | OplogEntry::ChangePersistenceLevel { timestamp, .. }
+            | OplogEntry::BeginRemoteTransaction { timestamp, .. }
+            | OplogEntry::PreCommitRemoteTransaction { timestamp, .. }
+            | OplogEntry::PreRollbackRemoteTransaction { timestamp, .. }
+            | OplogEntry::CommittedRemoteTransaction { timestamp, .. }
+            | OplogEntry::RolledBackRemoteTransaction { timestamp, .. } => *timestamp,
         }
     }
 
@@ -894,6 +983,8 @@ pub enum DurableFunctionType {
     /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
     /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
     WriteRemoteBatched(Option<OplogIndex>),
+
+    WriteRemoteTransaction(Option<OplogIndex>),
 }
 
 /// Describes the error that occurred in the worker
@@ -903,6 +994,8 @@ pub enum WorkerError {
     InvalidRequest(String),
     StackOverflow,
     OutOfMemory,
+    // The worker tried to grow its memory beyond the limits of the plan
+    ExceededMemoryLimit,
 }
 
 impl WorkerError {
@@ -912,6 +1005,7 @@ impl WorkerError {
             Self::InvalidRequest(message) => message,
             Self::StackOverflow => "Stack overflow",
             Self::OutOfMemory => "Out of memory",
+            Self::ExceededMemoryLimit => "Exceeded plan memory limit",
         }
     }
 
@@ -969,6 +1063,7 @@ mod protobuf {
                 Error::OutOfMemory(_) => Ok(Self::OutOfMemory),
                 Error::InvalidRequest(inner) => Ok(Self::InvalidRequest(inner.details)),
                 Error::UnknownError(inner) => Ok(Self::Unknown(inner.details)),
+                Error::ExceededMemoryLimit(_) => Ok(Self::ExceededMemoryLimit),
             }
         }
     }
@@ -985,6 +1080,9 @@ mod protobuf {
                 }
                 WorkerError::Unknown(details) => {
                     Error::UnknownError(grpc_worker::UnknownError { details })
+                }
+                WorkerError::ExceededMemoryLimit => {
+                    Error::ExceededMemoryLimit(grpc_worker::ExceededMemoryLimit {})
                 }
             };
             Self { error: Some(error) }

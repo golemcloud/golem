@@ -79,6 +79,7 @@ async fn test_simple_rib(deps: &EnvBasedTestDependencies, worker_name: Option<&s
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
+        component_version: 0,
         root_package_name: metadata.root_package_name().clone(),
         root_package_version: metadata.root_package_version().clone(),
     };
@@ -167,6 +168,7 @@ async fn test_rib_for_loop(deps: &EnvBasedTestDependencies, worker_name: Option<
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
+        component_version: 0,
         root_package_name: metadata.root_package_name().clone(),
         root_package_version: metadata.root_package_version().clone(),
     };
@@ -274,6 +276,7 @@ async fn test_rib_with_resource_methods(
     let component_dependency_key = ComponentDependencyKey {
         component_name: "shopping-cart".to_string(),
         component_id: component_id.0,
+        component_version: 0,
         root_package_name: metadata.root_package_name().clone(),
         root_package_version: metadata.root_package_version().clone(),
     };

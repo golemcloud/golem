@@ -105,16 +105,34 @@ mod internal {
                     ..
                 } => {
                     if !variable_id.is_local() {
-                        let result = component_dependency
+                        let type_variants_opt = component_dependency
                             .function_dictionary()
                             .iter()
-                            .find_map(|x| x.get_variant_info(variable_id.name().as_str()));
+                            .find_map(|x| {
+                                let result = x.get_variant_info(variable_id.name().as_str());
 
-                        // Conflicts of having the same variant names across multiple components is not handled
-                        if let Some(type_variant) = result {
+                                if result.is_empty() {
+                                    None
+                                } else {
+                                    Some(result)
+                                }
+                            });
+
+                        if let Some(type_variants) = type_variants_opt {
                             no_arg_variants.push(variable_id.name());
-                            *inferred_type =
-                                inferred_type.merge(InferredType::from_type_variant(&type_variant));
+
+                            let inferred_types = type_variants
+                                .iter()
+                                .map(InferredType::from_type_variant)
+                                .collect::<Vec<_>>();
+
+                            let new_inferred_type = if inferred_types.len() == 1 {
+                                inferred_types[0].clone()
+                            } else {
+                                InferredType::all_of(inferred_types)
+                            };
+
+                            *inferred_type = inferred_type.merge(new_inferred_type);
                         }
                     }
                 }
@@ -129,13 +147,31 @@ mod internal {
                     let result = component_dependency
                         .function_dictionary()
                         .iter()
-                        .find_map(|x| x.get_variant_info(function_name.to_string().as_str()));
+                        .find_map(|x| {
+                            let type_variants =
+                                x.get_variant_info(function_name.to_string().as_str());
+                            if type_variants.is_empty() {
+                                None
+                            } else {
+                                Some(type_variants)
+                            }
+                        });
 
-                    if let Some(variant_type) = result {
-                        let variant_inferred_type = InferredType::from_type_variant(&variant_type);
-                        *inferred_type = inferred_type.merge(variant_inferred_type);
-
+                    if let Some(result) = result {
                         variant_with_args.push(function_name.to_string());
+
+                        let inferred_types = result
+                            .iter()
+                            .map(InferredType::from_type_variant)
+                            .collect::<Vec<_>>();
+
+                        let new_inferred_type = if inferred_types.len() == 1 {
+                            inferred_types[0].clone()
+                        } else {
+                            InferredType::all_of(inferred_types)
+                        };
+
+                        *inferred_type = inferred_type.merge(new_inferred_type);
                     }
 
                     for expr in args {

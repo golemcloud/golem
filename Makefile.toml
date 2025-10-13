@@ -66,8 +66,8 @@ run_task = [
         "wit-wasm-rpc",
         "wit-golem-common",
         "wit-golem-cli",
-        "wit-template-golem-agent-ts",
         "wit-test-components",
+        "wit-debugging-service-test-components",
         "wit-golem-templates",
         "wit-sdks",
     ] },
@@ -133,13 +133,6 @@ cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
 """
 
-[tasks.wit-template-golem-agent-ts]
-private = true
-script_runner = "@duckscript"
-script = """
-glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
-"""
-
 [tasks.wit-test-components]
 private = true
 script_runner = "@duckscript"
@@ -155,21 +148,15 @@ array_push ${components} http-client
 array_push ${components} ifs-update
 array_push ${components} ifs-update-inside-exported-function
 array_push ${components} invocation-context
-array_push ${components} js-1
-array_push ${components} js-4
 array_push ${components} key-value-service
 array_push ${components} networking
 array_push ${components} oplog-processor
 array_push ${components} promise
-array_push ${components} python-http-client
 array_push ${components} rdbms-service
 array_push ${components} rpc
 array_push ${components} runtime-service
 array_push ${components} scheduled-invocation
 array_push ${components} shopping-cart
-array_push ${components} tinygo-wasi
-array_push ${components} tinygo-wasi-http
-array_push ${components} ts-rpc
 array_push ${components} update-test-env-var
 array_push ${components} update-test-v2-11
 array_push ${components} update-test-v3-11
@@ -185,6 +172,21 @@ for component in ${components}
     rm -r test-components/${component}/wit/deps
     mkdir test-components/${component}/wit/deps
     glob_cp wit/deps/**/* test-components/${component}/wit/deps
+end
+"""
+
+[tasks.wit-debugging-service-test-components]
+private = true
+script_runner = "@duckscript"
+script = """
+components = array
+array_push ${components} shopping-cart
+
+for component in ${components}
+    echo "Updating wit directory for test component ${component}"
+    rm -r golem-debugging-service/test-components/${component}/wit/deps
+    mkdir golem-debugging-service/test-components/${component}/wit/deps
+    glob_cp wit/deps/**/* golem-debugging-service/test-components/${component}/wit/deps
 end
 """
 
@@ -1069,20 +1071,7 @@ args = ["s3", "sync", "cli/schema.golem.cloud", "s3://schema.golem.cloud"]
 description = "Serve the schema.golem.cloud directory locally to help testing the schemas in editors"
 install_crate = "miniserve"
 command = "miniserve"
-args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
-
-## Agent template management
-[tasks.rebuild-ts-agent-template]
-description = "Rebuilds the TypeScript agent template WASM"
-script_runner = "@duckscript"
-script = '''
-cd cli/template-golem-agent-ts
-exec --fail-on-error npm update
-exec --fail-on-error npm install
-exec --fail-on-error npm run generate
-exec --fail-on-error npm run build
-cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
-'''
+args = ["--interfaces", "127.0.0.1", "--port", "41357", "cli/schema.golem.cloud"]
 
 ## Cleanup
 [tasks.clear-v8]
