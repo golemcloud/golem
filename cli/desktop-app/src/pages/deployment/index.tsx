@@ -9,7 +9,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { cn, removeDuplicateApis } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import { useEffect, useState } from "react";
 
 import { API } from "@/service";
@@ -132,14 +132,14 @@ export default function Deployments() {
         );
 
         const nonDraftDefinitions = uploadedDefinitions
-          .filter((def: any) => !def.draft)
-          .map((def: any) => ({
+          .filter((def: HttpApiDefinition) => !def.draft)
+          .map((def: HttpApiDefinition) => ({
             id: def.id,
             version: def.version,
             routes: def.routes || [],
           }));
 
-        setApiList(nonDraftDefinitions as any);
+        setApiList(nonDraftDefinitions);
 
         const deploymentResponse = await API.deploymentService.getDeploymentApi(
           appId!,

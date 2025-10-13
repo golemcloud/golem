@@ -255,21 +255,22 @@ export class APIService {
 
     // Iterate through all profiles (e.g., "local", "production", etc.)
     for (const pair of deployments.items) {
-      const profileName = pair.key;
-      const profileDeployments = pair.value as any;
+      const profileDeployments = pair.value as YAMLMap;
 
       if (!profileDeployments || !profileDeployments.items) continue;
 
       // For each deployment in the profile
       for (let i = profileDeployments.items.length - 1; i >= 0; i--) {
-        const deployment = profileDeployments.items[i];
-        const definitionsSeq = deployment.get("definitions");
+        const deployment = profileDeployments.items[i] as unknown as YAMLMap;
+        const definitionsSeq = deployment.get("definitions") as
+          | YAMLMap
+          | undefined;
 
         if (definitionsSeq && definitionsSeq.items) {
           const originalLength = definitionsSeq.items.length;
 
           // Remove the specific API definition (apiId@version)
-          definitionsSeq.items = definitionsSeq.items.filter((item: any) => {
+          definitionsSeq.items = definitionsSeq.items.filter(item => {
             const defString = String(item).trim();
             return defString !== targetDefinition;
           });

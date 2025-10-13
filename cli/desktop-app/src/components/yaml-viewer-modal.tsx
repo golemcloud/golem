@@ -61,15 +61,6 @@ export function YamlViewerModal({
     }
   }, [appId, isOpen]);
 
-  const getAllFiles = (): YamlFile[] => {
-    if (!yamlFiles) return [];
-    const files: YamlFile[] = [];
-    if (yamlFiles.root) files.push(yamlFiles.root);
-    files.push(...yamlFiles.common);
-    files.push(...yamlFiles.components);
-    return files;
-  };
-
   const getSelectedFile = (): YamlFile | null => {
     if (!yamlFiles || !selectedFileId) return null;
 
@@ -210,9 +201,8 @@ export function YamlViewerModal({
         // Extract paths like "components-xxx/yyy/golem.yaml"
         const match = file.name.match(/^(components-[^/]+)\/([^/]+)\/(.*)/);
         if (match) {
-          const topFolder = match[1];
-          const subFolder = match[2];
-          const fileName = match[3];
+          const topFolder = match[1] as string;
+          const subFolder = match[2] as string;
 
           if (!componentGroups[topFolder]) {
             componentGroups[topFolder] = {};
@@ -307,8 +297,6 @@ export function YamlViewerModal({
   }
 
   const selectedFile = getSelectedFile();
-  const allFiles = getAllFiles();
-
   return (
     <Dialog open={isOpen} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-6xl w-[95vw] h-[85vh] flex flex-col">

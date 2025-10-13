@@ -7,13 +7,14 @@ import {
   FolderOpen,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { YamlFile } from "@/types/yaml-files";
 
 export interface FileTreeNode {
   id: string;
   name: string;
   type: "file" | "folder";
   children?: FileTreeNode[];
-  data?: any; // Additional data for the file/folder
+  data?: YamlFile;
 }
 
 interface FileTreeProps {

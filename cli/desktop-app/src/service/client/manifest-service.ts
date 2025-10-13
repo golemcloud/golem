@@ -207,7 +207,7 @@ export class ManifestService {
     }
 
     const result: AppYamlFiles = {
-      root: null as any,
+      root: null,
       common: [],
       components: [],
     };

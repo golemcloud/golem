@@ -92,6 +92,7 @@ export interface HttpApiDefinition {
   // id and componentId not part of YAML
   id?: string;
   componentId?: string;
+  draft?: boolean;
 }
 
 export function serializeHttpApiDefinition(

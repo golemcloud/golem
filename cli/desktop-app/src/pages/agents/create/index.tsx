@@ -33,6 +33,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { AgentTypeSchema } from "@/types/agent-types";
 import { RecursiveParameterInput } from "@/components/invoke/RecursiveParameterInput";
+import { Typ } from "@/types/component";
 
 const formSchema = z.object({
   componentID: z.string(),
@@ -47,7 +48,7 @@ const formSchema = z.object({
   args: z.array(z.string()),
 });
 
-const createEmptyValue = (type: any): unknown => {
+const createEmptyValue = (type: Typ): unknown => {
   const typeStr = type.type?.toLowerCase();
 
   switch (typeStr) {
@@ -57,6 +58,7 @@ const createEmptyValue = (type: any): unknown => {
     case "bool":
       return false;
     case "record":
+      // eslint-disable-next-line no-case-declarations
       const record: Record<string, unknown> = {};
       type.fields?.forEach(field => {
         record[field.name] = createEmptyValue(field.typ);
@@ -203,7 +205,7 @@ export default function CreateAgent() {
       setIsSubmitting(true);
       const {
         componentID,
-        agentTypeIndex,
+        _agentTypeIndex,
         constructorParams,
         env: envArray,
         args: argsArray,

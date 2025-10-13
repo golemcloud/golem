@@ -75,7 +75,13 @@ export class AgentService {
     appId: string,
     componentID: string,
     name: string,
-    constructorParamsArray: any[],
+    constructorParamsArray: {
+      name: string;
+      schema: {
+        type: "ComponentModel";
+        elementType: Typ;
+      };
+    }[],
     constructorParamTypes: Typ[] | undefined,
     args?: string[],
     env?: Record<string, string>,
