@@ -18,7 +18,7 @@ export function convertToWaveFormat(value: unknown, typ?: Typ): string {
 function convertValueWithType(value: unknown, typ?: Typ): string {
   // Handle null/undefined
   if (value === null || value === undefined) {
-    return typ?.type === "option" ? "none" : "null";
+    return typ?.type?.toLowerCase() === "option" ? "none" : "null";
   }
 
   // No type info - basic conversion
@@ -285,7 +285,7 @@ function isSimpleType(type: string): boolean {
     "f64",
     "chr",
     "enum",
-  ].includes(type);
+  ].includes(type.toLowerCase());
 }
 
 export function convertPayloadToWaveArgs(payload: {
