@@ -176,7 +176,9 @@ export class APIService {
         component.componentName!,
       );
     } else {
-      definitionYamlPath = await this.manifestService.getAppYamlPath(appId);
+      definitionYamlPath = (await this.manifestService.getAppYamlPath(
+        appId,
+      )) as string;
       if (!definitionYamlPath) {
         throw new Error("App manifest file not found");
       }

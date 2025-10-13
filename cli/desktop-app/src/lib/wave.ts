@@ -114,8 +114,9 @@ function convertRecord(value: unknown, typ: Typ): string {
       const fieldNameInSchema = field.name;
 
       // Convert schema field name to camelCase to check the input object
-      const camelFieldName = fieldNameInSchema.replace(/-([a-z])/g, g =>
-        g[1].toUpperCase(),
+      const camelFieldName = fieldNameInSchema.replace(
+        /-([a-z])/g,
+        g => g[1]?.toUpperCase() || "",
       );
 
       let fieldValue;

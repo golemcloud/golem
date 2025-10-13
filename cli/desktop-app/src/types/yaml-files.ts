@@ -13,7 +13,7 @@ export interface YamlFile {
 
 export interface AppYamlFiles {
   /** The root golem.yaml file */
-  root: YamlFile;
+  root?: YamlFile;
   /** Common YAML files from common-* directories */
   common: YamlFile[];
   /** Component YAML files from components-*/
