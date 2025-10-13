@@ -1,7 +1,12 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { InvokeLayout, InvokeParams } from "../InvokeLayout";
 import { Export, ComponentExportFunction } from "@/types/component";
+
+// Mock react-router-dom
+vi.mock("react-router-dom", () => ({
+  useParams: () => ({ agentName: "appy-complex-api" }),
+}));
 
 // Mock lucide-react icons
 vi.mock("lucide-react", () => ({

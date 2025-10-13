@@ -9,6 +9,7 @@ import {
   HttpApiDefinitionRoute,
 } from "@/types/golemManifest";
 import { App } from "@/lib/settings";
+import React from "react";
 
 // Mock lucide-react icons
 vi.mock("lucide-react", () => ({
@@ -116,24 +117,44 @@ vi.mock("@/pages/dashboard/apiSection.tsx", () => ({
 }));
 
 // Mock YAML Viewer Modal
-vi.mock("@/components/yaml-viewer-modal", () => ({
-  YamlViewerModal: ({
-    isOpen,
-    title,
-    yamlContent,
-  }: {
-    isOpen: boolean;
-    title: string;
-    yamlContent: string;
-  }) =>
-    isOpen ? (
-      <div data-testid="yaml-modal">
-        <h3>{title}</h3>
-        <pre data-testid="yaml-content">{yamlContent}</pre>
-        <button data-testid="close-yaml-modal">Close</button>
-      </div>
-    ) : null,
-}));
+vi.mock("@/components/yaml-viewer-modal", async () => {
+  const { API: mockedAPI } = await import("@/service");
+  const { toast: mockedToast } = await import("@/hooks/use-toast");
+
+  return {
+    YamlViewerModal: ({
+      isOpen,
+      onOpenChange,
+      appId,
+    }: {
+      isOpen: boolean;
+      onOpenChange: (open: boolean) => void;
+      appId: string;
+    }) => {
+      // Load YAML content when modal opens
+      React.useEffect(() => {
+        if (isOpen && appId) {
+          mockedAPI.manifestService.getAppYamlContent(appId)
+            .catch((error: Error) => {
+              mockedToast({
+                title: "Failed to Load YAML",
+                description: `Error: ${error.message}`,
+                variant: "destructive",
+              });
+            });
+        }
+      }, [isOpen, appId]);
+
+      return isOpen ? (
+        <div data-testid="yaml-modal">
+          <h3>Application Manifest (golem.yaml)</h3>
+          <pre data-testid="yaml-content">apiVersion: v1\nkind: App</pre>
+          <button data-testid="close-yaml-modal" onClick={() => onOpenChange(false)}>Close</button>
+        </div>
+      ) : null;
+    },
+  };
+});
 
 // Mock utils
 vi.mock("@/lib/utils", () => ({
