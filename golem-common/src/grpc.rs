@@ -21,8 +21,7 @@ use golem_api_grpc::proto::golem::common::{AccountId as ProtoAccountId};
 use crate::model::account::AccountId;
 
 pub fn proto_account_id_string(account_id: &Option<ProtoAccountId>) -> Option<String> {
-    account_id
-        .clone()
+    (*account_id)
         .and_then(|v| TryInto::<AccountId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
