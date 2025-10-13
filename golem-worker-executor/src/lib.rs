@@ -45,7 +45,6 @@ use crate::services::oplog::{
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
 use crate::services::plugins::{PluginsService, PluginsObservations};
-use crate::services::projects::ProjectService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -171,7 +170,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
         plugin_observations: Arc<dyn PluginsObservations>,
-        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -203,7 +201,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-        project_service: Arc<dyn ProjectService>,
         agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Ctx>>;
 

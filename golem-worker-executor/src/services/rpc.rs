@@ -20,7 +20,6 @@ use super::file_loader::FileLoader;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::plugins::PluginsService;
-use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -29,7 +28,7 @@ use crate::services::{
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
     HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
     HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
@@ -326,7 +325,6 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     plugins: Arc<dyn PluginsService>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
-    project_service: Arc<dyn ProjectService>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     extra_deps: Ctx::ExtraDeps,
 }
@@ -359,7 +357,6 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
-            project_service: self.project_service.clone(),
             agent_types_service: self.agent_types_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
@@ -532,12 +529,6 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasProjectService for DirectWorkerInvocationRpc<Ctx> {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     #[allow(clippy::too_many_arguments)]
@@ -569,7 +560,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -599,7 +589,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
-            project_service,
             agent_types_service,
             extra_deps,
         }

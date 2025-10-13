@@ -30,7 +30,7 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService,
     HasResourceLimits, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
     HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
@@ -1781,7 +1781,6 @@ impl RunningWorker {
             parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
-            parent.project_service(),
             parent.agent_types(),
         )
         .await?;

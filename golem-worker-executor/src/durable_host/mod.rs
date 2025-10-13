@@ -51,7 +51,6 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
 use crate::services::plugins::PluginsService;
-use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -61,7 +60,7 @@ use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
 use crate::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplog, HasProjectService, HasWorker,
+    worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker,
 };
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
@@ -166,7 +165,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
@@ -2358,7 +2356,6 @@ struct PrivateDurableWorkerState {
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
-    project_service: Arc<dyn ProjectService>,
     /// The initial config vars that the worker was configured with
     initial_wasi_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
@@ -2392,7 +2389,6 @@ impl PrivateDurableWorkerState {
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
-        project_service: Arc<dyn ProjectService>,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -2443,7 +2439,6 @@ impl PrivateDurableWorkerState {
             read_only_paths,
             files,
             file_loader,
-            project_service,
             created_by,
             initial_wasi_config_vars,
             wasi_config_vars: RwLock::new(wasi_config_vars),
@@ -2586,7 +2581,7 @@ impl PrivateDurableWorkerState {
                 when,
                 ScheduledAction::CompletePromise {
                     account_id: self.created_by.clone(),
-                    project_id: self.owned_worker_id.project_id(),
+                    environment_id: self.owned_worker_id.environment_id(),
                     promise_id,
                 },
             )
@@ -2675,12 +2670,6 @@ impl HasConfig for PrivateDurableWorkerState {
 impl HasPlugins for PrivateDurableWorkerState {
     fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
-    }
-}
-
-impl HasProjectService for PrivateDurableWorkerState {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
     }
 }
 

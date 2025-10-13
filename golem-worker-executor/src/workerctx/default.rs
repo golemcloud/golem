@@ -27,7 +27,6 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
 use crate::services::plugins::PluginsService;
-use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -54,7 +53,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
 use golem_common::model::{
     GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
+    OwnedWorkerId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use golem_common::model::environment::EnvironmentId;
@@ -663,7 +662,6 @@ impl WorkerCtx for Context {
         plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
@@ -688,7 +686,6 @@ impl WorkerCtx for Context {
             file_loader,
             plugins,
             worker_fork,
-            project_service,
             agent_types_service,
         )
         .await?;
