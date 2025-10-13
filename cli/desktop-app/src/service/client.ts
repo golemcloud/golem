@@ -32,7 +32,10 @@ export class Service {
       this.manifestService,
     );
     this.pluginService = new PluginService(this.cliService);
-    this.deploymentService = new DeploymentService(this.cliService, this.manifestService);
+    this.deploymentService = new DeploymentService(
+      this.cliService,
+      this.manifestService,
+    );
     this.appService = new AppService(this.cliService);
   }
 }

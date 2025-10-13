@@ -6,7 +6,7 @@ export interface YamlFile {
   /** The YAML content */
   content: string;
   /** The type of YAML file */
-  type: 'root' | 'common' | 'component';
+  type: "root" | "common" | "component";
   /** Whether this file can be edited */
   editable: boolean;
 }

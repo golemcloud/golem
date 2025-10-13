@@ -23,11 +23,7 @@ export class DeploymentService {
 
   public deleteDeployment = async (appId: string, host: string) => {
     // Step 1: Call CLI to delete from server FIRST
-    await this.cliService.callCLI(appId, "api", [
-      "deployment",
-      "delete",
-      host,
-    ]);
+    await this.cliService.callCLI(appId, "api", ["deployment", "delete", host]);
 
     // Step 2: Only if CLI succeeds, remove from YAML
     await this.deleteDeploymentFromYaml(appId, host);
@@ -37,7 +33,7 @@ export class DeploymentService {
     appId: string,
     host: string,
     subdomain: string | null,
-    definitions: { id: string; version: string }[]
+    definitions: { id: string; version: string }[],
   ) => {
     // Step 1: Write to YAML first
     await this.writeDeploymentToYaml(appId, host, subdomain, definitions);
@@ -50,7 +46,7 @@ export class DeploymentService {
     appId: string,
     host: string,
     subdomain: string | null,
-    definitions: { id: string; version: string }[]
+    definitions: { id: string; version: string }[],
   ) => {
     const app = await settingsService.getAppById(appId);
     if (!app) {
@@ -84,7 +80,9 @@ export class DeploymentService {
     const profileName = app.profile || "local";
 
     // Get or create profile's deployment array
-    let profileDeployments = deployments.get(profileName) as YAMLSeq | undefined;
+    let profileDeployments = deployments.get(profileName) as
+      | YAMLSeq
+      | undefined;
     if (!profileDeployments) {
       deployments.set(profileName, new YAMLSeq());
       profileDeployments = deployments.get(profileName) as YAMLSeq;
@@ -114,11 +112,14 @@ export class DeploymentService {
 
     // Format definitions as "id@version"
     const formattedDefinitions = definitions.map(
-      def => `${def.id}@${def.version}`
+      def => `${def.id}@${def.version}`,
     );
 
     // Merge with existing definitions (avoid duplicates)
-    const mergedDefinitions = new Set([...existingDefinitions, ...formattedDefinitions]);
+    const mergedDefinitions = new Set([
+      ...existingDefinitions,
+      ...formattedDefinitions,
+    ]);
 
     // Create new deployment object
     const newDeployment = new YAMLMap();
@@ -142,10 +143,7 @@ export class DeploymentService {
     await this.manifestService.saveAppManifest(appId, manifest.toString());
   };
 
-  private deleteDeploymentFromYaml = async (
-    appId: string,
-    host: string
-  ) => {
+  private deleteDeploymentFromYaml = async (appId: string, host: string) => {
     const app = await settingsService.getAppById(appId);
     if (!app) {
       throw new Error("App not found");
@@ -176,7 +174,9 @@ export class DeploymentService {
     const profileName = app.profile || "local";
 
     // Get profile's deployment array
-    const profileDeployments = deployments.get(profileName) as YAMLSeq | undefined;
+    const profileDeployments = deployments.get(profileName) as
+      | YAMLSeq
+      | undefined;
     if (!profileDeployments) {
       return; // Nothing to delete
     }

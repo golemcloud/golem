@@ -1,6 +1,10 @@
 import { Agent } from "../../types/agent";
 import { InvokeResponse } from "../../hooks/useInvoke";
-import { convertValuesToWaveArgs, convertPayloadToWaveArgs, convertToWaveFormat } from "@/lib/wave";
+import {
+  convertValuesToWaveArgs,
+  convertPayloadToWaveArgs,
+  convertToWaveFormat,
+} from "@/lib/wave";
 import { Typ } from "@/types/component";
 import { CLIService } from "./cli-service";
 import { ComponentService } from "./component-service";
@@ -76,7 +80,6 @@ export class AgentService {
     args?: string[],
     env?: Record<string, string>,
   ) => {
-
     const component = await this.componentService.getComponentById(
       appId,
       componentID,
@@ -90,7 +93,7 @@ export class AgentService {
         const typ = constructorParamTypes?.[index];
         // Remove spaces from the WAVE format to avoid "Worker name must not contain whitespaces" error
         const waveFormatted = convertToWaveFormat(param, typ);
-        return waveFormatted.replace(/\s+/g, '');
+        return waveFormatted.replace(/\s+/g, "");
       });
 
       // Construct the agent name with parameters (no spaces allowed)

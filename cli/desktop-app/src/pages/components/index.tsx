@@ -188,8 +188,12 @@ const Components = () => {
   const [filteredComponents, setFilteredComponents] = useState<ComponentMap>(
     {},
   );
-  const [unbuiltComponents, setUnbuiltComponents] = useState<UnbuiltComponent[]>([]);
-  const [filteredUnbuiltComponents, setFilteredUnbuiltComponents] = useState<UnbuiltComponent[]>([]);
+  const [unbuiltComponents, setUnbuiltComponents] = useState<
+    UnbuiltComponent[]
+  >([]);
+  const [filteredUnbuiltComponents, setFilteredUnbuiltComponents] = useState<
+    UnbuiltComponent[]
+  >([]);
   const [agentList, setAgentList] = useState<AgentStatusMap>({});
   const [searchQuery, setSearchQuery] = useState("");
   const { appId } = useParams<{ appId: string }>();
@@ -205,7 +209,9 @@ const Components = () => {
       setFilteredComponents(response);
 
       // Fetch all unbuilt components from folders
-      const actuallyUnbuilt = await API.componentService.getUnbuiltComponents(appId!);
+      const actuallyUnbuilt = await API.componentService.getUnbuiltComponents(
+        appId!,
+      );
 
       setUnbuiltComponents(actuallyUnbuilt);
       setFilteredUnbuiltComponents(actuallyUnbuilt);
@@ -282,7 +288,7 @@ const Components = () => {
 
       // Filter unbuilt components
       const filteredUnbuilt = unbuiltComponents.filter(comp =>
-        comp.name.toLowerCase().includes(searchLower)
+        comp.name.toLowerCase().includes(searchLower),
       );
 
       setFilteredComponents(filtered);
@@ -348,12 +354,13 @@ const Components = () => {
         </div>
 
         {/* Main Content: Grid of components or empty state */}
-        {Object.keys(filteredComponents).length === 0 && filteredUnbuiltComponents.length === 0 ? (
+        {Object.keys(filteredComponents).length === 0 &&
+        filteredUnbuiltComponents.length === 0 ? (
           EmptyState
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 overflow-scroll max-h-[78vh] px-4">
             {/* Unbuilt components first */}
-            {filteredUnbuiltComponents.map((unbuilt) => (
+            {filteredUnbuiltComponents.map(unbuilt => (
               <UnbuiltComponentCard
                 key={unbuilt.name}
                 name={unbuilt.name}

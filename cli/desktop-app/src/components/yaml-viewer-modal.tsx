@@ -27,7 +27,9 @@ export function YamlViewerModal({
   const [yamlFiles, setYamlFiles] = useState<AppYamlFiles | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedFileId, setSelectedFileId] = useState<string>("");
-  const [editedContents, setEditedContents] = useState<Record<string, string>>({});
+  const [editedContents, setEditedContents] = useState<Record<string, string>>(
+    {},
+  );
   const [savingFiles, setSavingFiles] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -97,7 +99,7 @@ export function YamlViewerModal({
     if (selectedFile) {
       setEditedContents(prev => ({
         ...prev,
-        [selectedFile.path]: content
+        [selectedFile.path]: content,
       }));
     }
   };
@@ -120,9 +122,10 @@ export function YamlViewerModal({
 
         return {
           ...prev,
-          root: prev.root && prev.root.path === file.path
-            ? { ...prev.root, content }
-            : prev.root,
+          root:
+            prev.root && prev.root.path === file.path
+              ? { ...prev.root, content }
+              : prev.root,
           common: prev.common.map(updateFile),
           components: prev.components.map(updateFile),
         };
@@ -153,7 +156,6 @@ export function YamlViewerModal({
     }
   };
 
-
   const buildFileTree = (): FileTreeNode[] => {
     if (!yamlFiles) return [];
 
@@ -164,8 +166,8 @@ export function YamlViewerModal({
       tree.push({
         id: "root",
         name: yamlFiles.root.name,
-        type: 'file',
-        data: yamlFiles.root
+        type: "file",
+        data: yamlFiles.root,
       });
     }
 
@@ -189,13 +191,13 @@ export function YamlViewerModal({
         tree.push({
           id: `common-${folderName}`,
           name: folderName,
-          type: 'folder',
+          type: "folder",
           children: files.map((file, index) => ({
             id: `common-${folderName}-${index}`,
-            name: file.name.split('/').pop() || 'golem.yaml',
-            type: 'file' as const,
-            data: file
-          }))
+            name: file.name.split("/").pop() || "golem.yaml",
+            type: "file" as const,
+            data: file,
+          })),
         });
       });
     }
@@ -227,18 +229,18 @@ export function YamlViewerModal({
         tree.push({
           id: topFolder,
           name: topFolder,
-          type: 'folder',
+          type: "folder",
           children: Object.entries(subFolders).map(([subFolder, files]) => ({
             id: `${topFolder}-${subFolder}`,
             name: subFolder,
-            type: 'folder' as const,
+            type: "folder" as const,
             children: files.map((file, index) => ({
               id: `component-${topFolder}-${subFolder}-${index}`,
-              name: file.name.split('/').pop() || 'golem.yaml',
-              type: 'file' as const,
-              data: file
-            }))
-          }))
+              name: file.name.split("/").pop() || "golem.yaml",
+              type: "file" as const,
+              data: file,
+            })),
+          })),
         });
       });
     }
@@ -247,7 +249,7 @@ export function YamlViewerModal({
   };
 
   const handleFileSelect = (node: FileTreeNode) => {
-    if (node.type === 'file' && node.data) {
+    if (node.type === "file" && node.data) {
       // Find the original file ID based on the data
       const file = node.data as YamlFile;
       if (!yamlFiles) return;
@@ -266,13 +268,14 @@ export function YamlViewerModal({
       }
 
       // Check component files
-      const componentIndex = yamlFiles.components.findIndex(f => f.path === file.path);
+      const componentIndex = yamlFiles.components.findIndex(
+        f => f.path === file.path,
+      );
       if (componentIndex !== -1) {
         setSelectedFileId(`component-${componentIndex}`);
       }
     }
   };
-
 
   if (isLoading) {
     return (
@@ -341,7 +344,7 @@ export function YamlViewerModal({
           </div>
 
           {/* Editor */}
-          <div className="flex-1" style={{ height: '100%' }}>
+          <div className="flex-1" style={{ height: "100%" }}>
             {selectedFile ? (
               <YamlEditor
                 value={getFileContent(selectedFile)}

@@ -61,7 +61,6 @@ export default function APISettings() {
       setIsDeleting(false);
       setShowConfirmDialog(false);
     }
-
   };
 
   return (
@@ -86,7 +85,7 @@ export default function APISettings() {
                 action: () => setShowConfirmDialog(prev => !prev),
                 confirm: showConfirmDialog,
                 handler: () => handleDelete(),
-              }
+              },
             ].map(({ title, description, action, confirm, handler }, index) => (
               <div
                 key={index}

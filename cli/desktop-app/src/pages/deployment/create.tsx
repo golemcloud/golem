@@ -167,7 +167,7 @@ export default function CreateDeployment() {
         appId!,
         data.domain,
         subdomain,
-        data.definitions
+        data.definitions,
       );
       toast({
         title: "Deployment was successful",
@@ -253,7 +253,8 @@ export default function CreateDeployment() {
                         />
                       </FormControl>
                       <FormDescription className="text-[11px] text-muted-foreground">
-                        Optional subdomain for the deployment. Leave empty if not needed.
+                        Optional subdomain for the deployment. Leave empty if
+                        not needed.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

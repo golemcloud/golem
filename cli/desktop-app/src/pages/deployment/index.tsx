@@ -127,7 +127,9 @@ export default function Deployments() {
   useEffect(() => {
     const fetchDeployments = async () => {
       try {
-        const uploadedDefinitions = await API.apiService.getUploadedDefinitions(appId!);
+        const uploadedDefinitions = await API.apiService.getUploadedDefinitions(
+          appId!,
+        );
 
         const nonDraftDefinitions = uploadedDefinitions
           .filter((def: any) => !def.draft)
@@ -139,7 +141,9 @@ export default function Deployments() {
 
         setApiList(nonDraftDefinitions as any);
 
-        const deploymentResponse = await API.deploymentService.getDeploymentApi(appId!);
+        const deploymentResponse = await API.deploymentService.getDeploymentApi(
+          appId!,
+        );
 
         if (!deploymentResponse || deploymentResponse.length === 0) {
           setDeployments([]);
@@ -202,7 +206,9 @@ export default function Deployments() {
       <div className="p-6 mx-auto max-w-7xl">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">API Deployments</h1>
+            <h1 className="text-2xl font-bold tracking-tight">
+              API Deployments
+            </h1>
             <p className="text-sm text-muted-foreground mt-1">
               Manage your API deployments across different environments
             </p>
@@ -242,7 +248,9 @@ export default function Deployments() {
                             )}
                           </h2>
                           <p className="text-sm text-muted-foreground">
-                            {deployment.apiDefinitions.length} API{deployment.apiDefinitions.length !== 1 ? 's' : ''} deployed
+                            {deployment.apiDefinitions.length} API
+                            {deployment.apiDefinitions.length !== 1 ? "s" : ""}{" "}
+                            deployed
                           </p>
                         </div>
                       </div>
@@ -277,7 +285,10 @@ export default function Deployments() {
                             <DialogTitle>Delete Deployment</DialogTitle>
                             <DialogDescription>
                               Are you sure you want to delete the deployment at{" "}
-                              <strong className="text-foreground">{selectedDeploymentHost}</strong>?
+                              <strong className="text-foreground">
+                                {selectedDeploymentHost}
+                              </strong>
+                              ?
                               <br />
                               This action cannot be undone.
                             </DialogDescription>
@@ -303,22 +314,35 @@ export default function Deployments() {
                     {/* API Definitions List */}
                     <div className="space-y-3">
                       {deployment.apiDefinitions.map(api => (
-                        <div key={`${api.id}-${api.version}`} className="space-y-2">
+                        <div
+                          key={`${api.id}-${api.version}`}
+                          className="space-y-2"
+                        >
                           <div className="flex items-center justify-between p-3 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
                             <div className="flex items-center gap-3 flex-1">
                               <Badge variant="secondary" className="font-mono">
                                 {api.id}
                               </Badge>
-                              <Badge variant="outline" className="font-mono text-xs">
+                              <Badge
+                                variant="outline"
+                                className="font-mono text-xs"
+                              >
                                 v{api.version}
                               </Badge>
                               <span className="text-xs text-muted-foreground">
                                 {apiList.find(
-                                  a => a.id === api.id && a.version === api.version,
+                                  a =>
+                                    a.id === api.id &&
+                                    a.version === api.version,
                                 )?.routes?.length || 0}{" "}
-                                route{(apiList.find(
-                                  a => a.id === api.id && a.version === api.version,
-                                )?.routes?.length || 0) !== 1 ? 's' : ''}
+                                route
+                                {(apiList.find(
+                                  a =>
+                                    a.id === api.id &&
+                                    a.version === api.version,
+                                )?.routes?.length || 0) !== 1
+                                  ? "s"
+                                  : ""}
                               </span>
                             </div>
 
@@ -342,7 +366,7 @@ export default function Deployments() {
                                     "h-4 w-4 transition-transform duration-200",
                                     expandedDeployment.includes(
                                       `${deployment.site.host}.${api.id}.${api.version}`,
-                                    ) && "rotate-90"
+                                    ) && "rotate-90",
                                   )}
                                 />
                               </Button>
@@ -374,7 +398,9 @@ export default function Deployments() {
                 <div className="p-4 rounded-full bg-muted mb-4">
                   <Layers className="h-8 w-8 text-muted-foreground" />
                 </div>
-                <h3 className="text-lg font-semibold mb-2">No Deployments Yet</h3>
+                <h3 className="text-lg font-semibold mb-2">
+                  No Deployments Yet
+                </h3>
                 <p className="text-sm text-muted-foreground mb-6 text-center max-w-sm">
                   Create your first API deployment to start serving your APIs
                 </p>

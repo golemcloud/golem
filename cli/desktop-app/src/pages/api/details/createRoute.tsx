@@ -737,10 +737,11 @@ const CreateRoute = () => {
                                 </button>
                               </PopoverTrigger>
                               <PopoverContent
-                                className={`${responseSuggestions.length === 0
+                                className={`${
+                                  responseSuggestions.length === 0
                                     ? "max-w-[450px]"
                                     : "w-[450px]"
-                                  }  p-4`}
+                                }  p-4`}
                                 align="start"
                                 sideOffset={5}
                               >

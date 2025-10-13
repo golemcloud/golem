@@ -64,9 +64,8 @@ export function InvokeLayout({
           {/* Sidebar with exports */}
           <div className="border-r px-8 py-4 min-w-[300px]">
             <div className="flex flex-col gap-4 overflow-scroll h-[85vh]">
-              {parsedExports.
-                filter(item => agentName.includes(item.name.split("/").pop()!)
-                )
+              {parsedExports
+                .filter(item => agentName.includes(item.name.split("/").pop()!))
                 .map((exportItem, index) => (
                   <div key={exportItem.name + index} className="border-b pb-4">
                     <div className="flex items-center justify-between">
@@ -121,10 +120,11 @@ export function InvokeLayout({
                         setResultValue("");
                         setViewMode("form");
                       }}
-                      className={`text-primary hover:bg-primary/10 hover:text-primary ${viewMode === "form"
-                        ? "bg-primary/20 hover:text-primary "
-                        : ""
-                        }`}
+                      className={`text-primary hover:bg-primary/10 hover:text-primary ${
+                        viewMode === "form"
+                          ? "bg-primary/20 hover:text-primary "
+                          : ""
+                      }`}
                     >
                       <ClipboardCopy className="h-4 w-4 mr-1" />
                       Form Layout
@@ -135,10 +135,11 @@ export function InvokeLayout({
                         setResultValue("");
                         setViewMode("preview");
                       }}
-                      className={`text-primary hover:bg-primary/10 hover:text-primary ${viewMode === "preview"
-                        ? "bg-primary/20 hover:text-primary "
-                        : ""
-                        }`}
+                      className={`text-primary hover:bg-primary/10 hover:text-primary ${
+                        viewMode === "preview"
+                          ? "bg-primary/20 hover:text-primary "
+                          : ""
+                      }`}
                     >
                       <Presentation className="h-4 w-4 mr-1" />
                       Json Layout
@@ -148,10 +149,11 @@ export function InvokeLayout({
                     <Button
                       variant="outline"
                       onClick={() => setViewMode("types")}
-                      className={`text-primary hover:bg-primary/10 hover:text-primary ${viewMode === "types"
-                        ? "bg-primary/20 hover:text-primary "
-                        : ""
-                        }`}
+                      className={`text-primary hover:bg-primary/10 hover:text-primary ${
+                        viewMode === "types"
+                          ? "bg-primary/20 hover:text-primary "
+                          : ""
+                      }`}
                     >
                       <TableIcon className="h-4 w-4 mr-1" />
                       Types

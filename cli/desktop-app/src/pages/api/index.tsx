@@ -42,7 +42,8 @@ export const APIs = () => {
       const newData = removeDuplicateApis(localApis).map(api => ({
         ...api,
         isUploaded: uploadedApis.some(
-          uploaded => uploaded.id === api.id && uploaded.version === api.version
+          uploaded =>
+            uploaded.id === api.id && uploaded.version === api.version,
         ),
       }));
 
@@ -157,7 +158,7 @@ const APICard = ({
   count,
   isUploaded,
   onUpload,
-  isUploading
+  isUploading,
 }: APICardProps) => {
   const navigate = useNavigate();
   const { appId } = useParams<{ appId: string }>();
@@ -166,7 +167,9 @@ const APICard = ({
     <Card className="from-background to-muted bg-gradient-to-br border-border w-full hover:shadow-lg transition-all relative">
       <div
         className="cursor-pointer"
-        onClick={() => navigate(`/app/${appId}/apis/${name}/version/${version}`)}
+        onClick={() =>
+          navigate(`/app/${appId}/apis/${name}/version/${version}`)
+        }
       >
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
           <CardTitle className="text-base font-semibold text-emerald-400">
@@ -217,7 +220,7 @@ const APICard = ({
               size="sm"
               variant="ghost"
               className="h-6 gap-1.5 text-xs px-2"
-              onClick={(e) => {
+              onClick={e => {
                 e.stopPropagation();
                 onUpload();
               }}

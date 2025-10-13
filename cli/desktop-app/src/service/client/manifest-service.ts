@@ -209,7 +209,7 @@ export class ManifestService {
     const result: AppYamlFiles = {
       root: null as any,
       common: [],
-      components: []
+      components: [],
     };
 
     // 1. Get root golem.yaml
@@ -221,8 +221,8 @@ export class ManifestService {
           name: "golem.yaml",
           path: rootYamlPath,
           content,
-          type: 'root',
-          editable: true
+          type: "root",
+          editable: true,
         };
       }
     } catch (error) {
@@ -247,8 +247,8 @@ export class ManifestService {
               name: `${commonFolder}/golem.yaml`,
               path: commonYamlPath,
               content,
-              type: 'common',
-              editable: true
+              type: "common",
+              editable: true,
             });
           } else {
             // Try .yml extension
@@ -259,8 +259,8 @@ export class ManifestService {
                 name: `${commonFolder}/golem.yml`,
                 path: commonYmlPath,
                 content,
-                type: 'common',
-                editable: true
+                type: "common",
+                editable: true,
               });
             }
           }
@@ -276,12 +276,17 @@ export class ManifestService {
     try {
       const appEntries = await readDir(app.folderLocation);
       const componentsFolders = appEntries
-        .filter(entry => entry.isDirectory && entry.name.startsWith("components-"))
+        .filter(
+          entry => entry.isDirectory && entry.name.startsWith("components-"),
+        )
         .map(entry => entry.name);
 
       for (const componentsFolder of componentsFolders) {
         try {
-          const componentsFolderPath = await join(app.folderLocation, componentsFolder);
+          const componentsFolderPath = await join(
+            app.folderLocation,
+            componentsFolder,
+          );
           const subEntries = await readDir(componentsFolderPath);
           const subFolders = subEntries
             .filter(entry => entry.isDirectory)
@@ -298,8 +303,8 @@ export class ManifestService {
                   name: `${componentsFolder}/${subFolder}/golem.yaml`,
                   path: componentYamlPath,
                   content,
-                  type: 'component',
-                  editable: true
+                  type: "component",
+                  editable: true,
                 });
               } else {
                 // Try .yml extension
@@ -310,17 +315,23 @@ export class ManifestService {
                     name: `${componentsFolder}/${subFolder}/golem.yml`,
                     path: componentYmlPath,
                     content,
-                    type: 'component',
-                    editable: true
+                    type: "component",
+                    editable: true,
                   });
                 }
               }
             } catch (error) {
-              console.warn(`Failed to read component folder ${subFolder}:`, error);
+              console.warn(
+                `Failed to read component folder ${subFolder}:`,
+                error,
+              );
             }
           }
         } catch (error) {
-          console.warn(`Failed to read components folder ${componentsFolder}:`, error);
+          console.warn(
+            `Failed to read components folder ${componentsFolder}:`,
+            error,
+          );
         }
       }
     } catch (error) {
@@ -330,7 +341,10 @@ export class ManifestService {
     return result;
   };
 
-  public saveYamlFile = async (filePath: string, content: string): Promise<void> => {
+  public saveYamlFile = async (
+    filePath: string,
+    content: string,
+  ): Promise<void> => {
     await writeTextFile(filePath, content);
   };
 

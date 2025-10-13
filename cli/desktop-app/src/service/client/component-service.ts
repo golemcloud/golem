@@ -272,8 +272,7 @@ export class ComponentService {
       try {
         builtComponents = await this.getComponents(appId);
       } catch (error) {
-        // If getComponents fails, assume no built components
-        console.log("No built components found");
+        console.error("Failed to get built components:", error);
       }
 
       // Extract built component names (remove version suffix)

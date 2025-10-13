@@ -48,4 +48,3 @@ export interface AgentTypeSchema {
   };
   implementedBy: string;
 }
-

@@ -24,7 +24,9 @@ export const ComponentsSection = forwardRef<ComponentsSectionRef>((_, ref) => {
   const [components, setComponents] = useState<{
     [key: string]: ComponentList;
   }>({});
-  const [unbuiltComponents, setUnbuiltComponents] = useState<UnbuiltComponent[]>([]);
+  const [unbuiltComponents, setUnbuiltComponents] = useState<
+    UnbuiltComponent[]
+  >([]);
 
   const fetchComponents = async () => {
     if (appId) {
@@ -33,7 +35,8 @@ export const ComponentsSection = forwardRef<ComponentsSectionRef>((_, ref) => {
       setComponents(response);
 
       // Fetch all unbuilt components from folders
-      let actuallyUnbuilt = await API.componentService.getUnbuiltComponents(appId);
+      let actuallyUnbuilt =
+        await API.componentService.getUnbuiltComponents(appId);
       setUnbuiltComponents(actuallyUnbuilt);
     }
   };
@@ -63,10 +66,11 @@ export const ComponentsSection = forwardRef<ComponentsSectionRef>((_, ref) => {
           </div>
         </CardHeader>
         <CardContent>
-          {Object.keys(components).length > 0 || unbuiltComponents.length > 0 ? (
+          {Object.keys(components).length > 0 ||
+          unbuiltComponents.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6 overflow-scroll max-h-[70vh] px-4">
               {/* Unbuilt components first */}
-              {unbuiltComponents.map((unbuilt) => (
+              {unbuiltComponents.map(unbuilt => (
                 <UnbuiltComponentCard
                   key={unbuilt.name}
                   name={unbuilt.name}

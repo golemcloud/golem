@@ -109,8 +109,11 @@ export default function CreateAgent() {
   const { componentId, appId } = useParams();
 
   const [agentTypes, setAgentTypes] = useState<AgentTypeSchema[]>([]);
-  const [selectedAgentType, setSelectedAgentType] = useState<AgentTypeSchema | null>(null);
-  const [constructorValues, setConstructorValues] = useState<Record<string, unknown>>({});
+  const [selectedAgentType, setSelectedAgentType] =
+    useState<AgentTypeSchema | null>(null);
+  const [constructorValues, setConstructorValues] = useState<
+    Record<string, unknown>
+  >({});
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -147,7 +150,10 @@ export default function CreateAgent() {
     const fetchAgentTypes = async () => {
       try {
         setIsLoading(true);
-        const types = await API.agentService.getAgentTypesForComponent(appId!, componentId!);
+        const types = await API.agentService.getAgentTypesForComponent(
+          appId!,
+          componentId!,
+        );
         setAgentTypes(types);
       } catch (error) {
         console.error("Failed to fetch agent types:", error);
@@ -169,11 +175,14 @@ export default function CreateAgent() {
       const initialValues: Record<string, unknown> = {};
 
       // Access the inputSchema.elements for constructor parameters
-      const constructorParams = agentType.agentType.constructor.inputSchema.elements || [];
+      const constructorParams =
+        agentType.agentType.constructor.inputSchema.elements || [];
 
       constructorParams.forEach(param => {
         // The parameter schema is in param.schema.elementType
-        initialValues[param.name] = createEmptyValue(param.schema?.elementType || param.schema);
+        initialValues[param.name] = createEmptyValue(
+          param.schema?.elementType || param.schema,
+        );
       });
 
       setConstructorValues(initialValues);
@@ -192,21 +201,28 @@ export default function CreateAgent() {
   async function onSubmit(values) {
     try {
       setIsSubmitting(true);
-      const { componentID, agentTypeIndex, constructorParams, env: envArray, args: argsArray } = values;
+      const {
+        componentID,
+        agentTypeIndex,
+        constructorParams,
+        env: envArray,
+        args: argsArray,
+      } = values;
 
       if (!selectedAgentType) {
         throw new Error("No agent type selected");
       }
 
       // Convert constructor params to array in the correct order
-      const constructorElements = selectedAgentType.agentType.constructor.inputSchema.elements || [];
-      const constructorParamsArray = constructorElements.map(param =>
-        constructorParams?.[param.name]
+      const constructorElements =
+        selectedAgentType.agentType.constructor.inputSchema.elements || [];
+      const constructorParamsArray = constructorElements.map(
+        param => constructorParams?.[param.name],
       );
 
       // Extract constructor parameter types in the same order
-      const constructorParamTypes = constructorElements.map(param =>
-        param.schema?.elementType || param.schema
+      const constructorParamTypes = constructorElements.map(
+        param => param.schema?.elementType || param.schema,
       );
       // Convert env array to object, filtering out empty entries
       const envObject = envArray.reduce((acc, item) => {
@@ -217,7 +233,9 @@ export default function CreateAgent() {
       }, {});
 
       // Filter out empty arguments
-      const filteredArgs = argsArray.filter(arg => arg && arg.trim().length > 0);
+      const filteredArgs = argsArray.filter(
+        arg => arg && arg.trim().length > 0,
+      );
       const response = await API.agentService.createAgent(
         appId,
         componentID,
@@ -225,7 +243,7 @@ export default function CreateAgent() {
         constructorParamsArray,
         constructorParamTypes,
         filteredArgs,
-        envObject
+        envObject,
       );
       navigate(
         `/app/${appId}/components/${componentId}/agents/${response.worker_name}`,
@@ -255,7 +273,8 @@ export default function CreateAgent() {
       <Card className="w-full max-w-4xl border shadow-md p-6">
         <CardTitle className="text-xl font-bold">Create a New Agent</CardTitle>
         <CardDescription className="text-gray-500 mb-6">
-          Select an agent type and configure its constructor parameters. The agent will be created with the specified type and parameters.
+          Select an agent type and configure its constructor parameters. The
+          agent will be created with the specified type and parameters.
         </CardDescription>
         <CardContent>
           <Form {...form}>
@@ -270,7 +289,7 @@ export default function CreateAgent() {
                     <FormControl>
                       <Select
                         value={field.value >= 0 ? field.value.toString() : ""}
-                        onValueChange={(value) => {
+                        onValueChange={value => {
                           const index = parseInt(value);
                           field.onChange(index);
                           handleAgentTypeChange(value);
@@ -283,15 +302,23 @@ export default function CreateAgent() {
                           {agentTypes.map((_agentType, index) => {
                             let agentType = _agentType.agentType;
                             // Count how many times this typeName appears in the array
-                            const typeNameCount = agentTypes.filter(t => t.agentType.typeName === agentType.typeName).length;
+                            const typeNameCount = agentTypes.filter(
+                              t => t.agentType.typeName === agentType.typeName,
+                            ).length;
                             // Find the position of this item among items with the same typeName
-                            const typeNameIndex = agentTypes.slice(0, index + 1).filter(t => t.agentType.typeName === agentType.typeName).length;
+                            const typeNameIndex = agentTypes
+                              .slice(0, index + 1)
+                              .filter(
+                                t =>
+                                  t.agentType.typeName === agentType.typeName,
+                              ).length;
 
                             return (
                               <SelectItem key={index} value={index.toString()}>
                                 <div className="flex flex-col">
                                   <span className="font-medium">
-                                    {agentType.typeName} {typeNameCount > 1 && `(${typeNameIndex})`}
+                                    {agentType.typeName}{" "}
+                                    {typeNameCount > 1 && `(${typeNameIndex})`}
                                   </span>
                                   <span className="text-sm text-muted-foreground">
                                     {agentType.description}
@@ -304,7 +331,8 @@ export default function CreateAgent() {
                       </Select>
                     </FormControl>
                     <FormDescription>
-                      Choose the type of agent to create. This determines the available constructor parameters.
+                      Choose the type of agent to create. This determines the
+                      available constructor parameters.
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -313,29 +341,39 @@ export default function CreateAgent() {
 
               {/* Constructor Parameters */}
 
-              {selectedAgentType && selectedAgentType.agentType.constructor.inputSchema.elements.length > 0 && (
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-base font-semibold">Constructor Parameters</Label>
-                    <p className="text-sm text-muted-foreground mt-1">
-                      {selectedAgentType.agentType.constructor.description}
-                    </p>
+              {selectedAgentType &&
+                selectedAgentType.agentType.constructor.inputSchema.elements
+                  .length > 0 && (
+                  <div className="space-y-4">
+                    <div>
+                      <Label className="text-base font-semibold">
+                        Constructor Parameters
+                      </Label>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        {selectedAgentType.agentType.constructor.description}
+                      </p>
+                    </div>
+                    <Card className="bg-muted/30">
+                      <CardContent className="p-4 space-y-4">
+                        {selectedAgentType.agentType.constructor.inputSchema.elements.map(
+                          param => (
+                            <RecursiveParameterInput
+                              key={param.name}
+                              name={param.name}
+                              typeDef={
+                                param.schema?.elementType || param.schema
+                              }
+                              value={constructorValues[param.name]}
+                              onChange={(_, value) =>
+                                handleConstructorParamChange(param.name, value)
+                              }
+                            />
+                          ),
+                        )}
+                      </CardContent>
+                    </Card>
                   </div>
-                  <Card className="bg-muted/30">
-                    <CardContent className="p-4 space-y-4">
-                      {selectedAgentType.agentType.constructor.inputSchema.elements.map((param) => (
-                        <RecursiveParameterInput
-                          key={param.name}
-                          name={param.name}
-                          typeDef={param.schema?.elementType || param.schema}
-                          value={constructorValues[param.name]}
-                          onChange={(_, value) => handleConstructorParamChange(param.name, value)}
-                        />
-                      ))}
-                    </CardContent>
-                  </Card>
-                </div>
-              )}
+                )}
 
               {/* Environment Variables */}
               <div>
