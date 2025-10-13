@@ -134,7 +134,8 @@ vi.mock("@/components/yaml-viewer-modal", async () => {
       // Load YAML content when modal opens
       React.useEffect(() => {
         if (isOpen && appId) {
-          mockedAPI.manifestService.getAppYamlContent(appId)
+          mockedAPI.manifestService
+            .getAppYamlContent(appId)
             .catch((error: Error) => {
               mockedToast({
                 title: "Failed to Load YAML",
@@ -149,7 +150,12 @@ vi.mock("@/components/yaml-viewer-modal", async () => {
         <div data-testid="yaml-modal">
           <h3>Application Manifest (golem.yaml)</h3>
           <pre data-testid="yaml-content">apiVersion: v1\nkind: App</pre>
-          <button data-testid="close-yaml-modal" onClick={() => onOpenChange(false)}>Close</button>
+          <button
+            data-testid="close-yaml-modal"
+            onClick={() => onOpenChange(false)}
+          >
+            Close
+          </button>
         </div>
       ) : null;
     },

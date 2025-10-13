@@ -249,7 +249,9 @@ export default function Deployments() {
                           </h2>
                           <p className="text-sm text-muted-foreground">
                             {deployment.apiDefinitions.length} API
-                            {deployment.apiDefinitions.length !== 1 ? "s" : ""}{" "}
+                            {deployment.apiDefinitions.length !== 1
+                              ? "s"
+                              : ""}{" "}
                             deployed
                           </p>
                         </div>
