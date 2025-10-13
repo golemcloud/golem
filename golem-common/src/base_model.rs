@@ -331,12 +331,12 @@ mod sql {
         ) -> Result<IsNull, BoxDynError> {
             let u64 = self.0.parse::<u64>()?;
             let bytes = u64.to_be_bytes();
-            buf.write(&bytes)?;
+            buf.write_all(&bytes)?;
             Ok(IsNull::No)
         }
     }
 
-    impl<'r> Type<Postgres> for TransactionId {
+    impl Type<Postgres> for TransactionId {
         fn type_info() -> PgTypeInfo {
             PgTypeInfo::with_name("xid8")
         }

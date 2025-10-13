@@ -214,29 +214,27 @@ fn calculate_latest_worker_status(
         // Errors are counted in skipped regions too (but not in deleted ones),
         // otherwise we would not be able to know how many times we retried failures in atomic regions
         if !deleted_regions.is_in_deleted_region(*idx) {
-            match entry {
-                OplogEntry::Error {
-                    error, retry_from, ..
-                } => {
-                    let new_count = current_retry_count
-                        .get(retry_from)
-                        .copied()
-                        .unwrap_or_default()
-                        + 1;
-                    current_retry_count.insert(*retry_from, new_count);
-                    if is_worker_error_retriable(
-                        current_retry_policy
-                            .as_ref()
-                            .unwrap_or(default_retry_policy),
-                        error,
-                        new_count,
-                    ) {
-                        current_status = WorkerStatus::Retrying;
-                    } else {
-                        current_status = WorkerStatus::Failed;
-                    }
+            if let OplogEntry::Error {
+                error, retry_from, ..
+            } = entry
+            {
+                let new_count = current_retry_count
+                    .get(retry_from)
+                    .copied()
+                    .unwrap_or_default()
+                    + 1;
+                current_retry_count.insert(*retry_from, new_count);
+                if is_worker_error_retriable(
+                    current_retry_policy
+                        .as_ref()
+                        .unwrap_or(default_retry_policy),
+                    error,
+                    new_count,
+                ) {
+                    current_status = WorkerStatus::Retrying;
+                } else {
+                    current_status = WorkerStatus::Failed;
                 }
-                _ => {}
             }
         }
 
