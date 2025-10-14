@@ -433,6 +433,7 @@ test('Invoke function that takes and returns inbuilt result type', () => {
     false,
   );
 
+  // aliased result test
   testInvoke(
     'fun31',
     [['param', Result.ok(true)]],

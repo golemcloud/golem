@@ -223,7 +223,7 @@ class FooAgent extends BaseAgent {
   }
 
   async fun31(param: MyResult): Promise<MyResult> {
-    return Result.ok(true);
+    return param;
   }
 
   // Overridden methods should be  not be considered as agent methods
