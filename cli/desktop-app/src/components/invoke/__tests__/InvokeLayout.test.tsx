@@ -106,6 +106,10 @@ vi.mock("@/lib/agent", () => ({
       type: p.type,
     })),
   }),
+  filterExportsForInvoke: (exports: unknown[], _agentName?: string) => {
+    // Simple mock implementation that returns exports as-is
+    return exports;
+  },
 }));
 
 describe("InvokeLayout", () => {
