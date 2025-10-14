@@ -46,7 +46,7 @@ export function SectionCard({
   onReset = () => {},
   exportName = "",
 }: SectionCardProps) {
-  const { theme } = useTheme();
+  const { resolvedTheme } = useTheme();
   const [copied, setCopied] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -166,7 +166,7 @@ export function SectionCard({
             <ReactJson
               src={JSON.parse(value || "{}")}
               name={null}
-              theme={theme == "dark" ? "brewer" : "bright:inverted"}
+              theme={resolvedTheme == "dark" ? "brewer" : "bright:inverted"}
               collapsed={false}
               enableClipboard={false}
               displayDataTypes={false}
