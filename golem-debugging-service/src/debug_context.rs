@@ -15,6 +15,7 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::base_model::OplogIndex;
 use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
@@ -236,6 +237,10 @@ impl InvocationHooks for DebugContext {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
+    }
+
+    async fn get_current_retry_point(&self) -> OplogIndex {
+        self.durable_ctx.get_current_retry_point().await
     }
 }
 

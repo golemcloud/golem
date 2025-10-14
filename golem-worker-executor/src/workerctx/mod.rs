@@ -47,7 +47,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
+    OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::wasmtime::ResourceStore;
@@ -303,6 +303,10 @@ pub trait InvocationHooks {
         consumed_fuel: i64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError>;
+
+    /// Gets the retry point that should be associated with a current error. Errors are grouped
+    /// by this information. The current oplog index is a good default.
+    async fn get_current_retry_point(&self) -> OplogIndex;
 }
 
 #[async_trait]

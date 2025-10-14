@@ -349,6 +349,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
             timestamp: error.timestamp,
             error: WorkerError::Unknown(error.error),
+            retry_from: error.retry_from,
         }),
         PublicOplogEntry::NoOp(timestamp_parameter) => Ok(OplogEntry::NoOp {
             timestamp: timestamp_parameter.timestamp,

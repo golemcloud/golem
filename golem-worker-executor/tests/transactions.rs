@@ -345,16 +345,17 @@ async fn idempotence_on(
         .start_worker_with(&component_id, "idempotence-flag", vec![], env, vec![])
         .await;
 
-    let _ = executor
+    let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
             vec![true.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await;
+
+    let _ = result.unwrap();
 
     drop(executor);
     http_server.abort();

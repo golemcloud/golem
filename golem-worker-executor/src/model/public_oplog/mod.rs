@@ -412,12 +412,15 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Suspend { timestamp } => {
                 Ok(PublicOplogEntry::Suspend(TimestampParameter { timestamp }))
             }
-            OplogEntry::Error { timestamp, error } => {
-                Ok(PublicOplogEntry::Error(ErrorParameters {
-                    timestamp,
-                    error: error.to_string(""),
-                }))
-            }
+            OplogEntry::Error {
+                timestamp,
+                error,
+                retry_from,
+            } => Ok(PublicOplogEntry::Error(ErrorParameters {
+                timestamp,
+                error: error.to_string(""),
+                retry_from,
+            })),
             OplogEntry::NoOp { timestamp } => {
                 Ok(PublicOplogEntry::NoOp(TimestampParameter { timestamp }))
             }
@@ -754,6 +757,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::BeginRemoteTransaction {
                 timestamp,
                 transaction_id,
+                ..
             } => Ok(PublicOplogEntry::BeginRemoteTransaction(
                 BeginRemoteTransactionParameters {
                     timestamp,

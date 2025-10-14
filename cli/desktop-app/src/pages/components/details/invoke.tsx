@@ -19,7 +19,7 @@ export default function ComponentInvoke() {
     onInvoke,
     copyToClipboard,
     navigate,
-  } = useInvoke({ isWorkerInvoke: false });
+  } = useInvoke({ isAgentInvoke: false });
 
   const onNavigateToFunction = (exportName: string, functionName: string) => {
     navigate(

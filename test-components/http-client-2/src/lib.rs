@@ -78,20 +78,16 @@ impl Guest for Component {
         let client = Client::builder().build().unwrap();
         loop {
             println!("Calling the poll endpoint");
-            match client.get(format!("http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}")).send() {
-                Ok(response) => {
-                    let s = response.text().unwrap_or_else(|err| format!("error receiving body: {err:?}"));
-                    println!("Received {s}");
-                    if s == until {
-                        println!("Poll loop finished");
-                        return;
-                    } else {
-                        std::thread::sleep(std::time::Duration::from_millis(100));
-                    }
-                }
-                Err(err) => {
-                    println!("Failed to poll: {err}");
-                }
+            let response = client.get(format!("http://localhost:{port}/poll?component_id={component_id}&worker_name={worker_name}")).send().unwrap();
+            let s = response
+                .text()
+                .unwrap_or_else(|err| format!("error receiving body: {err:?}"));
+            println!("Received {s}");
+            if s == until {
+                println!("Poll loop finished");
+                return;
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
     }

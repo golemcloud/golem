@@ -123,6 +123,7 @@ pub fn update_status_with_new_entries(
         last_known.overridden_retry_config,
         default_retry_policy,
         &skipped_regions,
+        &deleted_regions,
         &new_entries,
     );
 
@@ -197,20 +198,44 @@ pub fn update_status_with_new_entries(
 
 fn calculate_latest_worker_status(
     mut current_status: WorkerStatus,
-    mut current_retry_count: u32,
+    mut current_retry_count: HashMap<OplogIndex, u32>,
     mut current_retry_policy: Option<RetryConfig>,
     default_retry_policy: &RetryConfig,
     skipped_regions: &DeletedRegions,
+    deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> (WorkerStatus, u32, Option<RetryConfig>) {
+) -> (WorkerStatus, HashMap<OplogIndex, u32>, Option<RetryConfig>) {
     for (idx, entry) in entries {
         // Skipping entries in skipped regions, as they are skipped during replay too
         if skipped_regions.is_in_deleted_region(*idx) {
             continue;
         }
 
-        if !matches!(entry, OplogEntry::Error { .. }) {
-            current_retry_count = 0;
+        // Errors are counted in skipped regions too (but not in deleted ones),
+        // otherwise we would not be able to know how many times we retried failures in atomic regions
+        if !deleted_regions.is_in_deleted_region(*idx) {
+            if let OplogEntry::Error {
+                error, retry_from, ..
+            } = entry
+            {
+                let new_count = current_retry_count
+                    .get(retry_from)
+                    .copied()
+                    .unwrap_or_default()
+                    + 1;
+                current_retry_count.insert(*retry_from, new_count);
+                if is_worker_error_retriable(
+                    current_retry_policy
+                        .as_ref()
+                        .unwrap_or(default_retry_policy),
+                    error,
+                    new_count,
+                ) {
+                    current_status = WorkerStatus::Retrying;
+                } else {
+                    current_status = WorkerStatus::Failed;
+                }
+            }
         }
 
         match entry {
@@ -222,26 +247,14 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::ExportedFunctionInvoked { .. } => {
                 current_status = WorkerStatus::Running;
+                current_retry_count.clear();
             }
             OplogEntry::ExportedFunctionCompleted { .. } => {
                 current_status = WorkerStatus::Idle;
+                current_retry_count.clear();
             }
             OplogEntry::Suspend { .. } => {
                 current_status = WorkerStatus::Suspended;
-            }
-            OplogEntry::Error { error, .. } => {
-                current_retry_count += 1;
-                if is_worker_error_retriable(
-                    current_retry_policy
-                        .as_ref()
-                        .unwrap_or(default_retry_policy),
-                    error,
-                    current_retry_count,
-                ) {
-                    current_status = WorkerStatus::Retrying;
-                } else {
-                    current_status = WorkerStatus::Failed;
-                }
             }
             OplogEntry::NoOp { .. } => {
                 current_status = WorkerStatus::Running;
@@ -318,6 +331,9 @@ fn calculate_latest_worker_status(
             }
             OplogEntry::RolledBackRemoteTransaction { .. } => {
                 current_status = WorkerStatus::Running;
+            }
+            OplogEntry::Error { .. } => {
+                // .. handled separately
             }
         }
     }
@@ -771,6 +787,7 @@ mod test {
     use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_wasm_rpc::Value;
+    use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;

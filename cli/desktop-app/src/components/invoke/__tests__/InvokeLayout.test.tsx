@@ -1,7 +1,12 @@
 import { render, screen, fireEvent } from "@testing-library/react";
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import { InvokeLayout, InvokeParams } from "../InvokeLayout";
 import { Export, ComponentExportFunction } from "@/types/component";
+
+// Mock react-router-dom
+vi.mock("react-router-dom", () => ({
+  useParams: () => ({ agentName: "appy-complex-api" }),
+}));
 
 // Mock lucide-react icons
 vi.mock("lucide-react", () => ({
@@ -20,7 +25,7 @@ vi.mock("lucide-react", () => ({
 }));
 
 // Mock DynamicForm component
-vi.mock("@/pages/workers/details/dynamic-form.tsx", () => ({
+vi.mock("@/pages/agents/details/dynamic-form.tsx", () => ({
   DynamicForm: ({
     functionDetails,
     onInvoke,
@@ -90,8 +95,8 @@ vi.mock("../SectionCard", () => ({
   ),
 }));
 
-// Mock worker utilities
-vi.mock("@/lib/worker", () => ({
+// Mock agent utilities
+vi.mock("@/lib/agent", () => ({
   parseToJsonEditor: (functionDetails: ComponentExportFunction) => ({
     [functionDetails.parameters[0]?.name || "param"]: "default-value",
   }),
@@ -101,6 +106,10 @@ vi.mock("@/lib/worker", () => ({
       type: p.type,
     })),
   }),
+  filterExportsForInvoke: (exports: unknown[], _agentName?: string) => {
+    // Simple mock implementation that returns exports as-is
+    return exports;
+  },
 }));
 
 describe("InvokeLayout", () => {

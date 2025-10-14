@@ -56,7 +56,9 @@ impl LogHandler {
                     println!("{}", serde_json::to_string(view).unwrap());
                 }
             }
-            Format::Yaml => {}
+            Format::Yaml => {
+                println!("---\n{}", serde_yaml::to_string(view).unwrap());
+            }
             Format::PrettyYaml => {
                 if self.ctx.should_colorize() {
                     println!("---\n{}", to_colored_yaml(view).unwrap());

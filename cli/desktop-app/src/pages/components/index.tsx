@@ -11,14 +11,15 @@ import {
 import { Input } from "@/components/ui/input";
 import { cn, formatRelativeTime } from "@/lib/utils";
 import { API } from "@/service";
-import { ComponentList } from "@/types/component";
-import { Worker } from "@/types/worker";
+import { ComponentList, UnbuiltComponent } from "@/types/component";
+import { Agent } from "@/types/agent";
 import { LayoutGrid, PlusCircle } from "lucide-react";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { UnbuiltComponentCard } from "./unbuilt-component-card";
 import { useNavigate, useParams } from "react-router-dom";
 
 /**
- * Worker status metrics used to categorize workers
+ * Agent status metrics used to categorize agents
  */
 const WORKER_STATUS_METRICS = [
   "Idle",
@@ -34,7 +35,7 @@ const WORKER_COLOR_MAPPER = {
   Failed: "text-rose-400 dark:text-rose-200",
 };
 
-type WorkerStatusType = (typeof WORKER_STATUS_METRICS)[number];
+type AgentStatusType = (typeof WORKER_STATUS_METRICS)[number];
 
 /**
  * Debounce delay (in milliseconds) for search functionality
@@ -42,17 +43,17 @@ type WorkerStatusType = (typeof WORKER_STATUS_METRICS)[number];
 const SEARCH_DEBOUNCE_MS = 300;
 
 /**
- * Shape of the worker status for any single component
+ * Shape of the agent status for any single component
  */
-type ComponentWorkerStatus = {
-  [K in WorkerStatusType]: number;
+type ComponentAgentStatus = {
+  [K in AgentStatusType]: number;
 };
 
 /**
- * Mapping of component IDs to their worker statuses
+ * Mapping of component IDs to their agent statuses
  */
-type WorkerStatusMap = {
-  [key: string]: ComponentWorkerStatus;
+type AgentStatusMap = {
+  [key: string]: ComponentAgentStatus;
 };
 
 /**
@@ -63,41 +64,33 @@ type ComponentMap = {
 };
 
 /**
- * Default worker status used when no workers or statuses are found
+ * Default agent status used when no agents or statuses are found
  * for a given component.
  */
-const DEFAULT_WORKER_STATUS: ComponentWorkerStatus =
+const DEFAULT_WORKER_STATUS: ComponentAgentStatus =
   WORKER_STATUS_METRICS.reduce((acc, metric) => {
     acc[metric] = 0;
     return acc;
-  }, {} as ComponentWorkerStatus);
+  }, {} as ComponentAgentStatus);
 
 /**
- * Card representing a single component's details and worker status
+ * Card representing a single component's details and agent status
  */
 export const ComponentCard = React.memo(
   ({
     data,
-    workerStatus,
+    agentStatus,
     onCardClick,
   }: {
     data: ComponentList;
-    workerStatus?: ComponentWorkerStatus;
+    agentStatus?: ComponentAgentStatus;
     onCardClick: (componentId: string) => void;
   }) => {
-    // Retrieve the latest version from the versions array
     const latestVersion = data.versions?.[data.versions?.length - 1];
-    // Count total exports using a helper function
-    const exportCount = (latestVersion?.metadata?.exports as string[]) || [];
-    // Convert component size from bytes to kilobytes
+    const exports = (latestVersion?.exports as string[]) || [];
     const componentSize = Math.round(
       (latestVersion?.componentSize || 0) / 1024,
     );
-
-    /**
-     * Handles a click on the entire card.
-     * Only triggers if componentId is present.
-     */
     const handleClick = () => {
       if (data.componentId) {
         onCardClick(data.componentId);
@@ -125,12 +118,8 @@ export const ComponentCard = React.memo(
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Worker Status Grid */}
-          {/*
-            Removed the extra ":grid-cols-4" class which appeared to be a typo.
-            Adjust classes to a responsive 2-column (mobile) to 4-column (desktop) layout.
-          */}
-          {workerStatus && (
+          {/* Agent Status Grid */}
+          {agentStatus && (
             <div className="grid grid-cols-4 gap-4">
               {WORKER_STATUS_METRICS.map(metric => (
                 <div key={metric} className="space-y-2">
@@ -148,7 +137,7 @@ export const ComponentCard = React.memo(
                       WORKER_COLOR_MAPPER[metric],
                     )}
                   >
-                    {workerStatus[metric]}
+                    {agentStatus[metric]}
                   </p>
                 </div>
               ))}
@@ -167,7 +156,7 @@ export const ComponentCard = React.memo(
               variant="secondary"
               className="bg-muted hover:bg-muted/80 text-muted-foreground transition-colors rounded-md cursor-pointer shadow"
             >
-              {exportCount || 0} Exports
+              {exports.length || 0} Exports
             </Badge>
             <Badge
               variant="secondary"
@@ -199,25 +188,40 @@ const Components = () => {
   const [filteredComponents, setFilteredComponents] = useState<ComponentMap>(
     {},
   );
-  const [workerList, setWorkerList] = useState<WorkerStatusMap>({});
+  const [unbuiltComponents, setUnbuiltComponents] = useState<
+    UnbuiltComponent[]
+  >([]);
+  const [filteredUnbuiltComponents, setFilteredUnbuiltComponents] = useState<
+    UnbuiltComponent[]
+  >([]);
+  const [agentList, setAgentList] = useState<AgentStatusMap>({});
   const [searchQuery, setSearchQuery] = useState("");
   const { appId } = useParams<{ appId: string }>();
 
   /**
-   * Fetch all components, then fetch worker status for each component in parallel
+   * Fetch all components, then fetch agent status for each component in parallel
    */
   const fetchComponentsAndMetrics = useCallback(async () => {
     try {
+      // Fetch built components
       const response = await API.componentService.getComponentByIdAsKey(appId!);
       setComponentList(response);
       setFilteredComponents(response);
 
-      const componentStatus: WorkerStatusMap = {};
+      // Fetch all unbuilt components from folders
+      const actuallyUnbuilt = await API.componentService.getUnbuiltComponents(
+        appId!,
+      );
 
-      // Map over each component to fetch worker info
-      const workerPromises = Object.values(response).map(async comp => {
+      setUnbuiltComponents(actuallyUnbuilt);
+      setFilteredUnbuiltComponents(actuallyUnbuilt);
+
+      const componentStatus: AgentStatusMap = {};
+
+      // Map over each component to fetch agent info
+      const agentPromises = Object.values(response).map(async comp => {
         if (comp.componentId) {
-          const worker = await API.workerService.findWorker(
+          const agent = await API.agentService.findAgent(
             appId!,
             comp.componentId,
             {
@@ -230,8 +234,8 @@ const Components = () => {
           const status = { ...DEFAULT_WORKER_STATUS };
 
           // Update counts for existing statuses
-          worker.workers.forEach((w: Worker) => {
-            const wStatus = w.status as WorkerStatusType;
+          agent.workers.forEach((w: Agent) => {
+            const wStatus = w.status as AgentStatusType;
             if (wStatus && status[wStatus] !== undefined) {
               status[wStatus] += 1;
             }
@@ -241,15 +245,15 @@ const Components = () => {
         }
       });
 
-      await Promise.all(workerPromises);
-      setWorkerList(componentStatus);
+      await Promise.all(agentPromises);
+      setAgentList(componentStatus);
     } catch (error) {
       console.error("Error fetching components or metrics:", error);
     }
   }, []);
 
   /**
-   * On mount, fetch components and their worker statuses
+   * On mount, fetch components and their agent statuses
    */
   useEffect(() => {
     (async () => {
@@ -264,14 +268,17 @@ const Components = () => {
     const timeoutId = setTimeout(() => {
       if (!searchQuery) {
         setFilteredComponents(componentList);
+        setFilteredUnbuiltComponents(unbuiltComponents);
         return;
       }
 
-      // Filter matches where the component name includes the user’s search text
+      const searchLower = searchQuery.toLowerCase();
+
+      // Filter built components
       const filtered = Object.entries(componentList).reduce(
         (acc, [key, component]) => {
           const componentName = component.componentName?.toLowerCase() || "";
-          if (componentName.includes(searchQuery.toLowerCase())) {
+          if (componentName.includes(searchLower)) {
             acc[key] = component;
           }
           return acc;
@@ -279,11 +286,17 @@ const Components = () => {
         {} as ComponentMap,
       );
 
+      // Filter unbuilt components
+      const filteredUnbuilt = unbuiltComponents.filter(comp =>
+        comp.name.toLowerCase().includes(searchLower),
+      );
+
       setFilteredComponents(filtered);
+      setFilteredUnbuiltComponents(filteredUnbuilt);
     }, SEARCH_DEBOUNCE_MS);
 
     return () => clearTimeout(timeoutId);
-  }, [searchQuery, componentList]);
+  }, [searchQuery, componentList, unbuiltComponents]);
 
   /**
    * Memoized empty state component to render when no components are found
@@ -341,16 +354,28 @@ const Components = () => {
         </div>
 
         {/* Main Content: Grid of components or empty state */}
-        {Object.keys(filteredComponents).length === 0 ? (
+        {Object.keys(filteredComponents).length === 0 &&
+        filteredUnbuiltComponents.length === 0 ? (
           EmptyState
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 overflow-scroll max-h-[78vh] px-4">
+            {/* Unbuilt components first */}
+            {filteredUnbuiltComponents.map(unbuilt => (
+              <UnbuiltComponentCard
+                key={unbuilt.name}
+                name={unbuilt.name}
+                appId={appId!}
+                onBuildComplete={fetchComponentsAndMetrics}
+              />
+            ))}
+
+            {/* Built components */}
             {Object.values(filteredComponents).map(data => (
               <ComponentCard
                 key={data.componentId}
                 data={data}
-                workerStatus={
-                  workerList[data.componentId || ""] || DEFAULT_WORKER_STATUS
+                agentStatus={
+                  agentList[data.componentId || ""] || DEFAULT_WORKER_STATUS
                 }
                 onCardClick={handleCardClick}
               />

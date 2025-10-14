@@ -85,13 +85,13 @@ impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
             .await
             .map_err(Error::query_execution_failure)?;
 
-        let query = sqlx::query("SELECT txid_current()");
+        let query = sqlx::query("SELECT pg_current_xact_id()");
         let row = connection
             .fetch_one(query)
             .await
             .map_err(Error::query_execution_failure)?;
-        let id: i64 = row.try_get(0).map_err(Error::query_response_failure)?;
-        let transaction_id = TransactionId::new(id);
+        let transaction_id: TransactionId =
+            row.try_get(0).map_err(Error::query_response_failure)?;
 
         let db_transaction: Arc<SqlxDbTransaction<PostgresType, sqlx::Postgres>> = Arc::new(
             SqlxDbTransaction::new(transaction_id, key.clone(), connection, pool, query_config),
@@ -121,7 +121,7 @@ impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
         pool: &Pool<sqlx::Postgres>,
         id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, Error> {
-        let query = sqlx::query("SELECT txid_status($1::bigint)").bind(id.to_string());
+        let query = sqlx::query("SELECT pg_xact_status($1)").bind(id);
         let row = pool
             .fetch_optional(query)
             .await

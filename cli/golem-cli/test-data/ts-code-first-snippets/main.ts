@@ -1,4 +1,4 @@
-import {BaseAgent, agent, UnstructuredText, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
+import {BaseAgent, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, Multimodal} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -26,6 +26,9 @@ import {
     UnionWithOnlyLiterals,
 } from './model';
 
+
+export type InputText = { val: string };
+export type InputImage = Uint8Array;
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -169,6 +172,8 @@ class FooAgent extends BaseAgent {
     }
 
 
+
+
     async funString(stringType: StringType): Promise<Types.StringType> {
         return await this.barAgent.funString(stringType);
     }
@@ -231,8 +236,16 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUndefinedReturn(text);
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
         return await this.barAgent.funUnstructuredText(unstructuredText);
+    }
+
+    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return await this.barAgent.funUnstructuredBinary(unstructuredText);
+    }
+
+    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+        return await this.barAgent.funMultimodal(multimodal);
     }
 
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
@@ -380,8 +393,16 @@ class BarAgent extends BaseAgent {
         return
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
-        return unstructuredText
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
+        return "foo"
+    }
+
+    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return "foo"
+    }
+
+    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+        return "foo"
     }
 
     async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {

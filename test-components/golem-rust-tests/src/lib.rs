@@ -70,6 +70,7 @@ impl Guest for Component {
         let future_response = send_remote_side_effect("1");
 
         atomically(|| {
+            let _guard = use_persistence_level(PersistenceLevel::PersistNothing);
             let decision = remote_call(1); // will return false on the 2nd call
             if decision {
                 panic!("crash 1");

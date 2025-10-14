@@ -625,7 +625,9 @@ pub struct WorkerStatusRecord {
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
     pub component_version_for_replay: ComponentVersion,
-    pub current_retry_count: u32,
+    /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
+    /// the last invocation boundary.
+    pub current_retry_count: HashMap<OplogIndex, u32>,
 }
 
 impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
@@ -699,7 +701,7 @@ impl Default for WorkerStatusRecord {
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_version_for_replay: 0,
-            current_retry_count: 0,
+            current_retry_count: HashMap::new(),
         }
     }
 }

@@ -1024,6 +1024,15 @@ async fn test_ts_code_first_complex() {
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["foo"]).await;
 
+    // Unstructured text type
+    run_and_assert(&ctx, "fun-unstructured-text", &["url(\"foo\")"]).await;
+
+    // Unstructured binary
+    run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
+
+    // Multimodal
+    run_and_assert(&ctx, "fun-multimodal", &["[input-text({val: \"foo\"})]"]).await;
+
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
 
@@ -1158,13 +1167,13 @@ async fn test_common_dep_plugs_errors() {
             dependencies:
               app:weather-agent:
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_brave-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_google-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_google.wasm
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_serper-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_serper.wasm
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_tavily-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm
         "# },
     )
         .unwrap();
@@ -1174,10 +1183,10 @@ async fn test_common_dep_plugs_errors() {
     assert!(outputs.stderr_contains_ordered(
         [
             "error: an error occurred when building the composition graph: multiple plugs found for export golem:web-search/types@1.0.0, only use one of them:",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_brave-dev.wasm",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_google-dev.wasm",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_serper-dev.wasm",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_tavily-dev.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_google.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_serper.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm",
         ]
     ));
 
@@ -1191,7 +1200,7 @@ async fn test_common_dep_plugs_errors() {
             dependencies:
               app:weather-agent:
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_brave-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
         "# },
     )
         .unwrap();

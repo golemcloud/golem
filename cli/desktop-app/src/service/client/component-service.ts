@@ -253,6 +253,82 @@ export class ComponentService {
     }
   };
 
+  /**
+   * Get the list of unbuilt components (folders that exist but are not yet built)
+   * @param appId - The ID of the application
+   * @returns {Promise<{name: string}[]>} - Array of unbuilt component names
+   */
+  public getUnbuiltComponents = async (
+    appId: string,
+  ): Promise<{ name: string }[]> => {
+    const app = await settingsService.getAppById(appId);
+    if (!app) {
+      return [];
+    }
+
+    try {
+      // Get all built components
+      let builtComponents: Component[] = [];
+      try {
+        builtComponents = await this.getComponents(appId);
+      } catch (error) {
+        console.error("Failed to get built components:", error);
+      }
+
+      // Extract built component names and convert to filesystem format (colons to hyphens)
+      const builtComponentNames = new Set(
+        builtComponents.map(c => {
+          return c.componentName!.replace(/:/g, "-").toLowerCase();
+        }),
+      );
+
+      // Get all component folders
+      const appEntries = await readDir(app.folderLocation);
+      const componentsFolders = appEntries
+        .filter(
+          entry => entry.isDirectory && entry.name.startsWith("components-"),
+        )
+        .map(entry => entry.name);
+
+      const unbuiltComponents: { name: string }[] = [];
+
+      // Check each components-* folder
+      for (const componentsFolder of componentsFolders) {
+        const componentsFolderPath = await join(
+          app.folderLocation,
+          componentsFolder,
+        );
+
+        try {
+          const subEntries = await readDir(componentsFolderPath);
+          const subFolders = subEntries.filter(entry => entry.isDirectory);
+
+          // Check each subfolder
+          for (const folder of subFolders) {
+            const folderNameLower = folder.name.toLowerCase();
+
+            // If this folder name is not in built components, it's unbuilt
+            if (!builtComponentNames.has(folderNameLower)) {
+              // Convert filesystem folder name back to component name format (last hyphen to colon)
+              const componentName = folderNameLower.replace(/-([^-]*)$/, ":$1");
+              unbuiltComponents.push({ name: componentName });
+            }
+          }
+        } catch (error) {
+          console.warn(
+            `Failed to read components folder ${componentsFolder}:`,
+            error,
+          );
+        }
+      }
+
+      return unbuiltComponents;
+    } catch (error) {
+      console.error("Error getting unbuilt components:", error);
+      return [];
+    }
+  };
+
   public getComponentByIdAsKey = async (
     appId: string,
   ): Promise<Record<string, ComponentList>> => {
@@ -287,5 +363,13 @@ export class ComponentService {
       },
       {},
     );
+  };
+
+  public getComponentTemplates = async (): Promise<
+    { language: string; template: string; description: string }[]
+  > => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const result = await invoke<string>("get_component_templates");
+    return JSON.parse(result);
   };
 }
