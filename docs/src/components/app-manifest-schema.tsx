@@ -3,37 +3,64 @@ import { createContext, FC, ReactNode, useContext, useEffect, useState } from "r
 export const enum Release {
   R_1_1_0 = 1,
   R_1_1_1,
-  R_1_1_2,
+  R_1_2_2,
+  R_1_2_2_1,
+  R_1_2_4,
+  R_1_3_0,
 }
 
 type ReleaseMeta = {
   json: string
-  ossCli: string
-  cloudCli: string
   otherChanges?: ReactNode
 }
 
 const Releases: { [key in Release]: ReleaseMeta } = {
   [Release.R_1_1_0]: {
     json: "1.1.0",
-    ossCli: "1.1.0",
-    cloudCli: "1.1.0",
   },
   [Release.R_1_1_1]: {
     json: "1.1.1",
-    ossCli: "1.1.12",
-    cloudCli: "1.1.1",
   },
-  [Release.R_1_1_2]: {
-    json: "1.1.2",
-    ossCli: "1.1.12",
-    cloudCli: "1.1.2",
+  [Release.R_1_2_2]: {
+    json: "1.2.2",
     otherChanges: (
       <>
         <div>
-          added enum value {code("static-wasm-rpc")} to
-          {fieldLink({ path: "dependencies.<component-name>[*].type" })}
+          added enum value {code("library")} to
+          {fieldLink({ path: "components.<component-name>[*].componentType" })}
         </div>
+        <div>
+          added enum values {code("wasm")} and {code("wasm-rpc-static")} to
+          {fieldLink({ path: "dependencies.<component-name>.type" })}
+        </div>
+        <div>component and template schema property cleanups</div>
+      </>
+    ),
+  },
+  [Release.R_1_2_2_1]: {
+    json: "1.2.2.1",
+    otherChanges: (
+      <>
+        <div>external command schema property cleanups</div>
+      </>
+    ),
+  },
+  [Release.R_1_2_4]: {
+    json: "1.2.4",
+    otherChanges: <></>,
+  },
+  [Release.R_1_3_0]: {
+    json: "1.3.0",
+    otherChanges: (
+      <>
+        <div>
+          added enum values {code("pretty-json")}, {code("pretty")} and {code("pretty-yaml")} to
+          {fieldLink({ path: "profiles.<profile-name>.format" })}
+        </div>
+        <div>
+          renamed {code("resetWorkers")} to {code("resetAgents")}
+        </div>
+        <div>deprecated wasm-rpc dependencies</div>
       </>
     ),
   },
@@ -43,6 +70,7 @@ export type FieldMeta = {
   path: string
   type?: string
   since?: Release
+  deprecated?: Release
   noSpecialization?: boolean
 }
 
@@ -145,10 +173,11 @@ const FieldsContext = createContext<{
 } | null>(null)
 
 export const Field: FC<FieldProps> = ({
-  meta: { path, since, noSpecialization },
+  meta: { path, since, deprecated, noSpecialization },
   children: children,
 }) => {
   const since_release = release(since)
+  const deprecated_release = deprecated ? release(deprecated) : undefined
   const id = fieldPathToId(path)
   const specializationDescription = !noSpecialization && fieldSpecializationDescription(path)
   const relatedDescription = !noSpecialization && relatedFieldDescription(path)
@@ -158,9 +187,16 @@ export const Field: FC<FieldProps> = ({
     fieldContext?.addField(since_release, path, id)
   })
 
+  let headerClassName = "nx-tracking-tight nx-text-slate-900 dark:nx-text-slate-100 nx-mt-8"
+  if (deprecated) {
+    headerClassName += " line-through"
+  } else {
+    headerClassName += " nx-font-semibold"
+  }
+
   return (
     <>
-      <h5 className="nx-font-semibold nx-tracking-tight nx-text-slate-900 dark:nx-text-slate-100 nx-mt-8 nx-mb-2">
+      <h5 className={headerClassName}>
         <code
           className="nx-border-black nx-border-opacity-[0.04] nx-bg-opacity-[0.03] nx-bg-black nx-break-words nx-rounded-md nx-border nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10"
           dir="ltr"
@@ -175,7 +211,7 @@ export const Field: FC<FieldProps> = ({
         ></a>
       </h5>
       <div className="nx-bg-primary-700/5 dark:nx-bg-primary-300/10 nx-rounded-lg nx-px-2 nx-py-2">
-        {availableSince(since_release, "nx-flex nx-justify-end")}
+        {availableAndDeprecatedSince(since_release, deprecated_release, "nx-flex nx-justify-end")}
         <hr className="nx-opacity-50" />
         {specializationDescription && specializationDescription}
         {children}
@@ -210,6 +246,7 @@ type EnumValueMeta = {
   value: string
   isDefault?: boolean
   since?: Release
+  deprecated?: Release
 }
 
 type EnumValueProps = {
@@ -218,20 +255,24 @@ type EnumValueProps = {
 }
 
 export const EnumValue: FC<EnumValueProps> = ({
-  meta: { value, isDefault, since },
+  meta: { value, isDefault, since, deprecated },
   children,
 }: EnumValueProps) => {
+  let codeClassName =
+    "nx-border-black nx-border-opacity-[0.04] nx-bg-opacity-[0.03] nx-bg-black nx-break-words nx-rounded-md nx-border nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10"
+  if (deprecated) {
+    codeClassName += " line-through"
+  } else {
+    codeClassName += " nx-font-semibold"
+  }
   return (
     <li className="nx-my-2">
       <div>
-        <code
-          className="nx-border-black nx-border-opacity-[0.04] nx-bg-opacity-[0.03] nx-bg-black nx-break-words nx-rounded-md nx-border nx-py-0.5 nx-px-[.25em] nx-text-[.9em] dark:nx-border-white/10 dark:nx-bg-white/10 nx-font-semibold"
-          dir="ltr"
-        >
+        <code className={codeClassName} dir="ltr">
           {value}
         </code>
         {isDefault && <span className="nx-italic nx-px-3">(default value)</span>}
-        {availableSince(release(since))}
+        {availableAndDeprecatedSince(release(since), deprecated ? release(deprecated) : undefined)}
         <div>{children}</div>
       </div>
     </li>
@@ -246,7 +287,10 @@ export const Fields: FC<FieldsProps> = ({ children }) => {
   const [fields, setFields] = useState<Record<Release, Record<string, string>>>({
     [Release.R_1_1_0]: {},
     [Release.R_1_1_1]: {},
-    [Release.R_1_1_2]: {},
+    [Release.R_1_2_2]: {},
+    [Release.R_1_2_2_1]: {},
+    [Release.R_1_2_4]: {},
+    [Release.R_1_3_0]: {},
   })
 
   const addField = (relase: Release, path: string, id: string) => {
@@ -274,7 +318,7 @@ export const FieldReleases: FC = ({}) => {
         {(Object.keys(fields) as unknown as Release[]).map(release => {
           return (
             <div key={release}>
-              <div className="nx-py-4">{availableSince(release)}</div>
+              <div className="nx-py-4">{availableAndDeprecatedSince(release, undefined)}</div>
               {Object.keys(fields[release])
                 .sort()
                 .map(path => {
@@ -298,24 +342,35 @@ function release(since: Release | undefined): Release {
   return since
 }
 
-function availableSince(since: Release, divClassExt?: string) {
+function availableAndDeprecatedSince(
+  since: Release,
+  deprecated: Release | undefined,
+  divClassExt?: string
+) {
   const release = Releases[since]
   let className = "nx-text-xs nx-py-1"
   if (divClassExt) {
     className += " "
     className += divClassExt
   }
+
+  let deprecatedBlock = <></>
+  if (deprecated) {
+    const release = Releases[deprecated]
+    deprecatedBlock = (
+      <>
+        <span className="nx-px-1 nx-italic nx-font-bold">deprecated since</span>
+        <span className="nx-font-bold">{release.json}</span>
+        <span className="nx-select-none nx-px-1">|</span>
+      </>
+    )
+  }
+
   return (
     <div className={className}>
+      {deprecatedBlock}
       <span className="nx-px-1 nx-italic">available since</span>
-      <span className="nx-font-bold nx-px-1">JSON Schema:</span>
       <span className="nx-font-bold">{release.json}</span>
-      <span className="nx-select-none nx-px-1">|</span>
-      <span className="nx-font-bold nx-px-1">OSS CLI: </span>
-      <span className="nx-font-bold">{release.ossCli}</span>
-      <span className="nx-select-none nx-px-1">|</span>
-      <span className="nx-font-bold nx-px-1">Cloud CLI: </span>
-      <span className="nx-font-bold">{release.cloudCli}</span>
     </div>
   )
 }

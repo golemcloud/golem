@@ -14,7 +14,7 @@ import {MultiPlatformCommand} from "@/components/multi-platform-command"
 
 ## JSON schema
 
-For the application manifest format we also publish _JSON schemas_. The current version (1.1.1) is available [here](https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json).
+For the application manifest format we also publish _JSON schemas_. The current version (1.1.1) is available [here](https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json).
 
 The _JSON schema_ is intended to be used with _editors_ and _IDEs_, to help with base _validation_ and _code completion_.
 
@@ -24,12 +24,12 @@ Use the following _YAML comments_ at the start of your `golem.yaml` documents to
   commands={[
     {
       label: "IntelliJ IDEA based products",
-      command: "# $schema: https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json",
+      command: "# $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json",
     },
     {
       label: "VSCode with YAML Language Support plugin",
       command:
-        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.1.1/golem.schema.json",
+        "# yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json",
     },
   ]}
   language={"yaml"}
@@ -44,37 +44,6 @@ The _Golem CLI_ commands that use _Application Manifest_ start by searching for 
 After resolving relative paths in the documents they are merged, then _component selection_ happens: this can be either explicit, by using `--component-name` CLI flags, or implicit, in which case only components defined in the directory - including subdirectories - from where the _Golem CLI_ was executed are used.
 
 Application Manifest documents can also be explicitly passed to the CLI, using the `--app` flag. Note that when using explicit documents the `includes` field is not used, it is expected that all relevant documents are provided for the CLI.
-
-## Build steps performed by the App Build command
-
-The `golem app build` command can be used to create Golem components. The command relies on build steps implemented partially in `golem` and partially defined by the component specific build properties.
-
-There are three main build steps.
-
-**`gen-rpc`**:
-
-- Generates required client WIT packages for Worker to Worker communication based on <FieldLink path="components.<component-name>.sourceWit"/> and <FieldLink path="dependencies"/>.
-- In case of `static-wasm-rpc` dependencies it also generates and builds the required client components.
-- Generates <FieldLink path="components.<component-name>.generatedWit"/>.
-using <FieldLink path="components.<component-name>.sourceWit"/>, <FieldLink path="dependencies"/>
-and <FieldLink path="witDeps"/>.
-
-**`componentize`**:
-
-Builds the component using steps defined in <FieldLink path="components.<component-name>.build"/>.
-The final binary should be created at <FieldLink path="components.<component-name>.componentWasm"/>.
-
-Usually the steps involve binding generation from
-
-**`link-rpc`**:
-
-Links the componentized WASM binary with required client components. For `static-wasm-rpc` this means the client
-components generated during `gen-rpc`, for `wasm-rpc` these will be skipped, as the clients are generated dynamically
-on the server-side.
-
-By default, all the above three steps are executed when using `golem app build`, but they can be selected by using the
-`--step` flag. This is intended to be used for more complex setups, when one would like to integrate `golem app build`
-into another build tool.
 
 ## Template variables and functions
 
@@ -176,6 +145,278 @@ Available naming related string transforming functions:
   </Field>
 
   <Field meta={{
+    path: "httpApi",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional object*** for defining HTTP APIs and HTTP API deployments.
+    APIs and deployments can be defined in multiple manifests, and they are merged during deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional map of HTTP API definitions*** by **API name**.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.version",
+    since: Release.R_1_2_4
+  }}>
+    ***Required string version*** of the API.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.project",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional project reference*** for the API.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional array of HTTP routes***.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].method",
+    since: Release.R_1_2_4
+  }}>
+    ***Required HTTP method*** for the route, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "CONNECT", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "DELETE", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "GET", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "HEAD", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "OPTIONS", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "PATCH", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "POST", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "PUT", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "TRACE", since: Release.R_1_2_4}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].path",
+    since: Release.R_1_2_4
+  }}>
+    ***Required HTTP path pattern*** for the route.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].security",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional ID*** of the required *HTTP API security*.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].binding",
+    since: Release.R_1_2_4
+  }}>
+    ***Required API binding***.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].type",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional binding type**, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "default", since: Release.R_1_2_4, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "cors-preflight", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "file-server", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "file-handle", since: Release.R_1_2_4}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].componentName",
+    since: Release.R_1_2_4
+  }}>
+    ***Required name of the component*** to be used in the bindings.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].componentVersion",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional version of the component*** to be used in the bindings, default to the latest deployed one.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].idempotencyKey",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional Rib script*** for calculating the idempotency key.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].invocationContext",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional Rib script*** for calculating the invocation context.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.definitions.<http-api-name>.routes[*].response",
+    since: Release.R_1_2_4
+  }}>
+    ***Required Rib script*** for creating the response.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional map of HTTP API deployments*** by **profile name**.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<profile-name>",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional list of HTTP API deployments*** for the profile.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<profile-name>[*].host",
+    since: Release.R_1_2_4
+  }}>
+    ***Required host*** for the deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<profile-name>[*].subdomain",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional subdomain*** for the deployment.
+  </Field>
+
+  <Field meta={{
+    path: "httpApi.deployments.<profile-name>[*].definitions",
+    since: Release.R_1_2_4
+  }}>
+    ***Required list of HTTP APIDefinitions*** for the deployment.
+    Accepted formats: `name` or `name@version`.
+  </Field>
+
+  <Field meta={{
+    path: "profiles",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional custom or customized*** profiles for the application by **profile name**.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.default",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional boolean*** which defaults to false. Only one profile can be marked as default.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.cloud",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional boolean*** which marks the profile as a cloud profile. Implicitly true for
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.project",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional project reference*** for the profile.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.url",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional custom URL*** for golem services.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.workerUrl",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional custom URL*** for golem worker service.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.format",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional default format*** for the profile, accepted values:
+    <EnumValues>
+      <EnumValue meta={{value: "text", since: Release.R_1_2_4, isDefault: true}}></EnumValue>
+      <EnumValue meta={{value: "json", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "pretty-json", since: Release.R_1_3_0}}></EnumValue>
+      <EnumValue meta={{value: "pretty", since: Release.R_1_3_0}}>alias for `pretty-json`</EnumValue>
+      <EnumValue meta={{value: "yaml", since: Release.R_1_2_4}}></EnumValue>
+      <EnumValue meta={{value: "pretty-yaml", since: Release.R_1_3_0}}></EnumValue>
+    </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.buildProfile",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional default build profile***.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.autoConfirm",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it
+    enables the auto-confirm (*yes*) flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.redeployWorkers",
+    since: Release.R_1_2_4,
+    deprecated: Release.R_1_3_0
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it
+    enables *redeploy-workers* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.redeployAgents",
+    since: Release.R_1_2_4,
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it
+    enables *redeploy-agents* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.redeployHttpApi",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it
+    enables *redeploy-http-api* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.redeployAll",
+    since: Release.R_1_2_4
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it
+    enables *redeploy-all* flag by default.
+  </Field>
+
+  <Field meta={{
+    path: "profiles.<profile-name>.reset",
+    since: Release.R_1_3_0
+  }}>
+    ***Optional boolean*** which defaults to false, when set to true it
+    enables *reset* flag by default.
+  </Field>
+
+  <Field meta={{
     path: "components",
   }}>
     ***Optional map of Golem components indexed by `component-name`-s*** used for defining components.
@@ -218,7 +459,8 @@ Available naming related string transforming functions:
     ***Optional string enum of component types,*** accepted values:
     <EnumValues>
       <EnumValue meta={{value: "durable", isDefault: true}}></EnumValue>
-      <EnumValue meta={{value: "ephemeral"}}></EnumValue>
+      <EnumValue meta={{value: "ephemeral", since: Release.R_1_2_2}}></EnumValue>
+      <EnumValue meta={{value: "library", since: Release.R_1_2_2}}></EnumValue>
     </EnumValues>
 
     See [Ephemeral vs Durable Workers](/concepts/workers#ephemeral-vs-durable-workers) for more information about
@@ -292,6 +534,34 @@ Available naming related string transforming functions:
       <EnumValue meta={{value: "read-only", isDefault: true}}></EnumValue>
       <EnumValue meta={{value: "read-write"}}></EnumValue>
     </EnumValues>
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins",
+    since: Release.R_1_2_2
+  }}>
+    ***Optional list of component plugin installation entries,***
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].name",
+    since: Release.R_1_2_2
+  }}>
+    ***Required name*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].version",
+    since: Release.R_1_2_2
+  }}>
+    ***Required version*** of the plugin.
+  </Field>
+
+  <Field meta={{
+    path: "components.<component-name>.plugins[*].parameters",
+    since: Release.R_1_2_2
+  }}>
+    ***Optional string map*** of plugin parameters.
   </Field>
 
   <Field meta={{
@@ -780,32 +1050,6 @@ Available naming related string transforming functions:
   }}>
     ***Optional map of list of component dependencies***, which can be used for defining WASM RPC connections
     between components.
-
-    <Example>
-      { /* @formatter:off */ }
-      ```yaml
-      components:
-        pack-ns:component-a:
-          # ...
-        pack-ns:component-b:
-          # ...
-        pack-ns:component-c:
-        # ...
-      dependencies:
-        pack-ns:component-a:
-        - target: pack-ns:component-b
-          type: wasm-rpc
-        - target: pack-ns:component-c
-          type: wasm-rpc
-        pack-ns:component-b:
-        - target: pack-ns:component-a
-          type: wasm-rpc
-        - target: pack-ns:component-b
-          type: wasm-rpc
-      ```
-      { /* @formatter:on */}
-    </Example>
-
   </Field>
 
   <Field meta={{
@@ -813,17 +1057,19 @@ Available naming related string transforming functions:
   }}>
     ***Required string enum***, accepted values:
     <EnumValues>
-      <EnumValue meta={{value: "wasm-rpc"}}>
-        _Dynamic_ WASM RPC linking. The preferred method for linking.
+      <EnumValue meta={{value: "wasm-rpc", deprecated: Release.R_1_3_0 }}>
+        _Dynamic_ WASM RPC linking.
 
         With this dependency type the linking happens on servers side, so there is no need for generating and creating
-        WAM RPC
-        clients.
+        WASM RPC clients.
       </EnumValue>
-      <EnumValue meta={{value: "static-wasm-rpc", since: Release.R_1_1_2}}>
+      <EnumValue meta={{value: "wasm-rpc-static", since: Release.R_1_2_2, deprecated: Release.R_1_3_0 }}>
         _Static_ WASM RPC linking.
 
         With this dependency type the linking happens locally, so it requires _Rust tooling_.
+      </EnumValue>
+      <EnumValue meta={{value: "wasm", since: Release.R_1_2_2}}>
+        Component linking.
       </EnumValue>
     </EnumValues>
 
@@ -832,10 +1078,28 @@ Available naming related string transforming functions:
   <Field meta={{
     path: "dependencies.<component-name>[*].target",
   }}>
-    ***Required component-name***, which defines the target of the dependency.
+    Must be a defined _component name_. Required when <FieldLink path="dependencies.<component-name>[*].type"/> is
+    set to `wasm-rpc` or `wasm-rpc-static`.
+  </Field>
 
-    Must be a defined _component name_.
+  <Field meta={{
+    path: "dependencies.<component-name>[*].path",
+    since: Release.R_1_2_2,
+  }}>
+    Target component WASM path to be used as dependency for linking.
 
+    When <FieldLink path="dependencies.<component-name>[*].type"/> is set to `wasm` then this or
+    <FieldLink path="dependencies.<component-name>[*].url"/> ir required.
+  </Field>
+
+  <Field meta={{
+    path: "dependencies.<component-name>[*].url",
+    since: Release.R_1_2_2,
+  }}>
+    Target component WASM path to be used as dependency for linking.
+
+    When <FieldLink path="dependencies.<component-name>[*].type"/> is set to `wasm` then this or
+    <FieldLink path="dependencies.<component-name>[*].path"/> ir required.
   </Field>
 
   <Field meta={{
