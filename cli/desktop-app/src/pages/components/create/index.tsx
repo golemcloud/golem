@@ -16,7 +16,7 @@ import {
   FormLabel,
 } from "@/components/ui/form.tsx";
 import { Input } from "@/components/ui/input.tsx";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 import { API } from "@/service";
 import { useNavigate, useParams } from "react-router-dom";
@@ -51,6 +51,7 @@ const CreateComponent = () => {
     { language: string; template: string; description: string }[]
   >([]);
   const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -84,18 +85,29 @@ const CreateComponent = () => {
   }, []);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    API.componentService
-      .createComponent(appId!, values.name, values.template)
-      .then(() => {
-        toast({
-          title: `Component ${values.name} created successfully!`,
-          description:
-            "Please deploy your component to see it on the dashboard",
-          duration: 8000,
-          variant: "default",
-        });
-        navigate(`/app/${appId}/components`);
+    setIsCreating(true);
+    try {
+      await API.componentService.createComponent(
+        appId!,
+        values.name,
+        values.template,
+      );
+      toast({
+        title: `Component ${values.name} created successfully!`,
+        description: "Please deploy your component to see it on the dashboard",
+        duration: 8000,
+        variant: "default",
       });
+      navigate(`/app/${appId}/components`);
+    } catch (error) {
+      toast({
+        title: "Error creating component",
+        description: String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   return (
@@ -182,12 +194,24 @@ const CreateComponent = () => {
                     type="button"
                     variant="secondary"
                     onClick={() => navigate(-1)}
+                    disabled={isCreating}
                   >
                     <ArrowLeft className="mr-2 h-5 w-5" />
                     Back
                   </Button>
-                  <Button type="submit" className="px-6 py-2">
-                    Create Component
+                  <Button
+                    type="submit"
+                    className="px-6 py-2"
+                    disabled={isCreating || isLoadingTemplates}
+                  >
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      "Create Component"
+                    )}
                   </Button>
                 </div>
               </form>
