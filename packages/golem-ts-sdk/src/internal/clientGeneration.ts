@@ -79,7 +79,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
         if (typeof val === 'function') {
           return getMethodProxy(metadata, prop, agentClassName, workerId);
         }
-        return undefined
+        return undefined;
       },
     });
   };
