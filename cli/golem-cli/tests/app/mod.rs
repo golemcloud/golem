@@ -1167,13 +1167,13 @@ async fn test_common_dep_plugs_errors() {
             dependencies:
               app:weather-agent:
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_brave-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_google-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_google.wasm
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_serper-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_serper.wasm
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_tavily-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm
         "# },
     )
         .unwrap();
@@ -1183,10 +1183,10 @@ async fn test_common_dep_plugs_errors() {
     assert!(outputs.stderr_contains_ordered(
         [
             "error: an error occurred when building the composition graph: multiple plugs found for export golem:web-search/types@1.0.0, only use one of them:",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_brave-dev.wasm",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_google-dev.wasm",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_serper-dev.wasm",
-            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_tavily-dev.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_google.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_serper.wasm",
+            "  - https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm",
         ]
     ));
 
@@ -1200,7 +1200,7 @@ async fn test_common_dep_plugs_errors() {
             dependencies:
               app:weather-agent:
               - type: wasm
-                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.6/golem_web_search_brave-dev.wasm
+                url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_brave.wasm
         "# },
     )
         .unwrap();
