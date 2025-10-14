@@ -2,8 +2,8 @@ pub mod commands;
 pub mod services;
 
 use std::sync::Mutex;
-const SETTINGS_FILE:&str = "settings.json";
-const GOLEM_CLI_PATH:&str = "golem_cli_path";
+const SETTINGS_FILE: &str = "settings.json";
+const GOLEM_CLI_PATH: &str = "golem_cli_path";
 // Define storage state to hold app-wide variables
 pub struct AppState {
     pub backend_url: Mutex<String>,
@@ -30,6 +30,7 @@ pub fn run() {
         .manage(app_state) // Register app state
         .invoke_handler(tauri::generate_handler![
             commands::golem_commands::call_golem_command,
+            commands::golem_commands::get_component_templates,
             commands::backend_commands::set_golem_cli_path,
             commands::backend_commands::get_golem_cli_path
         ])
