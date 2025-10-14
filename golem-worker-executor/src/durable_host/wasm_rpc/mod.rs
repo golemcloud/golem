@@ -52,7 +52,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::{error, Instrument};
+use tracing::{error, info, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
@@ -278,6 +278,8 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             DurableFunctionType::WriteRemote,
         )
         .await?;
+
+        info!("Remote worker id: {remote_worker_id}; own worker id: {own_worker_id}; function {function_name}");
 
         if remote_worker_id == own_worker_id {
             return Err(anyhow!("RPC calls to the same agent are not supported"));

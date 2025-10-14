@@ -103,7 +103,7 @@ popd || exit
 # start worker-executor
 pushd golem-worker-executor || exit
 
-RUST_LOG=info \
+RUST_LOG=debug \
 GOLEM__HTTP_PORT=${WORKER_EXECUTOR_HTTP_PORT} \
 GOLEM__PORT=${WORKER_EXECUTOR_GRPC_PORT} \
 GOLEM__PUBLIC_WORKER_API__PORT=${WORKER_SERVICE_GRPC_PORT} \

@@ -1789,11 +1789,12 @@ async fn agent_promise_await(
             },
             b"hello".to_vec(),
         )
-        .await
-        .unwrap();
+        .await?;
 
-    let result = task.await.unwrap();
+    let result = task.await?;
     check!(result == Ok(vec![Value::String("hello".to_string())]));
+
+    admin.check_oplog_is_queryable(&worker).await;
 
     Ok(())
 }
