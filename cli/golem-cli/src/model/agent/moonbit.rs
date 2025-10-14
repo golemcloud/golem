@@ -18,7 +18,7 @@ use camino::Utf8Path;
 use golem_client::model::AnalysedType;
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
     to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
 };
@@ -625,7 +625,9 @@ fn to_moonbit_parameter_list(
         }
         DataSchema::Multimodal(_) => {
             // multi-modal input is represented as a list of a generated variant type
-            let name = format!("{context}-input");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-input");
+
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -690,7 +692,8 @@ fn to_moonbit_return_type(
         }
         DataSchema::Multimodal(_) => {
             // multi-modal output is represented as a list of a generated variant type
-            let name = format!("{context}-output");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-output");
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -834,7 +837,9 @@ fn build_data_value(
             writeln!(result, "     ])")?;
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            let name = format!("{context}-input");
+            let context_kebab = context.to_kebab_case();
+
+            let name = format!("{context_kebab}-input");
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -1189,7 +1194,8 @@ fn extract_data_value(
             }
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            let name = format!("{context}-output");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-output");
             let variant_name = ctx
                 .multimodal_variants
                 .get(&name)

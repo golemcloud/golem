@@ -1,4 +1,4 @@
-import {BaseAgent, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
+import {BaseAgent, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, Multimodal} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -26,6 +26,9 @@ import {
     UnionWithOnlyLiterals,
 } from './model';
 
+
+export type InputText = { val: string };
+export type InputImage = Uint8Array;
 
 @agent()
 class FooAgent extends BaseAgent {
@@ -241,6 +244,10 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUnstructuredBinary(unstructuredText);
     }
 
+    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
+        return await this.barAgent.funMultimodal(multimodal);
+    }
+
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
         return await this.barAgent.funResultNoTag(eitherBothOptional);
     }
@@ -391,6 +398,10 @@ class BarAgent extends BaseAgent {
     }
 
     async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return "foo"
+    }
+
+    async funMultimodal(multimodal: Multimodal<InputText | InputImage>): Promise<string> {
         return "foo"
     }
 
