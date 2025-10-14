@@ -35,6 +35,14 @@ import { AgentTypeSchema } from "@/types/agent-types";
 import { RecursiveParameterInput } from "@/components/invoke/RecursiveParameterInput";
 import { Typ } from "@/types/component";
 
+// Convert PascalCase to kebab-case (e.g., CounterAgent -> counter-agent)
+const toKebabCase = (str: string): string => {
+  return str
+    .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1-$2")
+    .toLowerCase();
+};
+
 const formSchema = z.object({
   componentID: z.string(),
   agentTypeIndex: z.number().min(0, "Please select an agent type"),
@@ -238,10 +246,13 @@ export default function CreateAgent() {
       const filteredArgs = argsArray.filter(
         arg => arg && arg.trim().length > 0,
       );
+      // Convert PascalCase typeName to kebab-case for CLI
+      const agentTypeName = toKebabCase(selectedAgentType.agentType.typeName);
+
       const response = await API.agentService.createAgent(
         appId,
         componentID,
-        selectedAgentType.agentType.typeName,
+        agentTypeName,
         constructorParamsArray,
         constructorParamTypes,
         filteredArgs,
