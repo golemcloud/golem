@@ -164,7 +164,18 @@ export default function CreateAgent() {
           appId!,
           componentId!,
         );
-        setAgentTypes(types);
+
+        // Group agent types by their kebab-case API name (deduplicate)
+        const uniqueTypesMap = new Map<string, AgentTypeSchema>();
+        types.forEach(type => {
+          const kebabCaseName = toKebabCase(type.agentType.typeName);
+          // Only keep the first occurrence of each unique type
+          if (!uniqueTypesMap.has(kebabCaseName)) {
+            uniqueTypesMap.set(kebabCaseName, type);
+          }
+        });
+
+        setAgentTypes(Array.from(uniqueTypesMap.values()));
       } catch (error) {
         console.error("Failed to fetch agent types:", error);
       } finally {
@@ -312,34 +323,18 @@ export default function CreateAgent() {
                           <SelectValue placeholder="Select an agent type..." />
                         </SelectTrigger>
                         <SelectContent>
-                          {agentTypes.map((_agentType, index) => {
-                            let agentType = _agentType.agentType;
-                            // Count how many times this typeName appears in the array
-                            const typeNameCount = agentTypes.filter(
-                              t => t.agentType.typeName === agentType.typeName,
-                            ).length;
-                            // Find the position of this item among items with the same typeName
-                            const typeNameIndex = agentTypes
-                              .slice(0, index + 1)
-                              .filter(
-                                t =>
-                                  t.agentType.typeName === agentType.typeName,
-                              ).length;
-
-                            return (
-                              <SelectItem key={index} value={index.toString()}>
-                                <div className="flex flex-col">
-                                  <span className="font-medium">
-                                    {agentType.typeName}{" "}
-                                    {typeNameCount > 1 && `(${typeNameIndex})`}
-                                  </span>
-                                  <span className="text-sm text-muted-foreground">
-                                    {agentType.description}
-                                  </span>
-                                </div>
-                              </SelectItem>
-                            );
-                          })}
+                          {agentTypes.map((agentTypeSchema, index) => (
+                            <SelectItem key={index} value={index.toString()}>
+                              <div className="flex flex-col">
+                                <span className="font-medium">
+                                  {agentTypeSchema.agentType.typeName}
+                                </span>
+                                <span className="text-sm text-muted-foreground">
+                                  {agentTypeSchema.agentType.description}
+                                </span>
+                              </div>
+                            </SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                     </FormControl>
