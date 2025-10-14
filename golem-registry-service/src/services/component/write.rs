@@ -50,6 +50,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::{Instrument, debug, info, info_span};
+use golem_common::model::plugin_registration::PluginPriority;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -676,7 +677,7 @@ impl ComponentWriteService {
     async fn apply_component_transformer_plugin(
         &self,
         mut component: NewComponentRevision,
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         data: Arc<[u8]>,
         url: String,
         parameters: &BTreeMap<String, String>,
@@ -729,7 +730,7 @@ impl ComponentWriteService {
         &self,
         data: Arc<[u8]>,
         plugin_owner: &AccountId,
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         plugin_spec: &LibraryPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
         let plug_bytes = self
@@ -756,7 +757,7 @@ impl ComponentWriteService {
         &self,
         data: Arc<[u8]>,
         plugin_owner: &AccountId,
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         plugin_spec: &AppPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
         let socket_bytes = self
