@@ -343,13 +343,23 @@ fn render_exported_agent(agent: &AgentType) -> Vec<String> {
     let mut result = Vec::new();
     result.push(render_agent_constructor(agent));
     for method in &agent.methods {
-        result.push(format!(
-            "{}.{}({}) -> {}",
-            agent.wrapper_type_name(),
-            method.name,
-            render_data_schema(&method.input_schema),
-            render_data_schema(&method.output_schema)
-        ));
+        let output = render_data_schema(&method.output_schema);
+        if output.is_empty() {
+            result.push(format!(
+                "{}.{}({})",
+                agent.wrapper_type_name(),
+                method.name,
+                render_data_schema(&method.input_schema),
+            ));
+        } else {
+            result.push(format!(
+                "{}.{}({}) -> {}",
+                agent.wrapper_type_name(),
+                method.name,
+                render_data_schema(&method.input_schema),
+                output
+            ));
+        }
     }
 
     result
@@ -368,13 +378,7 @@ fn render_data_schema(schema: &DataSchema) -> String {
         DataSchema::Tuple(elements) => elements
             .elements
             .iter()
-            .map(|named_elem| {
-                format!(
-                    "{}: {}",
-                    named_elem.name,
-                    render_element_schema(&named_elem.schema)
-                )
-            })
+            .map(|named_elem| render_element_schema(&named_elem.schema))
             .join(", "),
         DataSchema::Multimodal(elements) => elements
             .elements
