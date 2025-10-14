@@ -50,7 +50,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
 ) {
   return (...args: any[]) => {
-    const instance = new ctor(...args);
+    const instance = Object.create(ctor.prototype);
 
     const agentClassName = new AgentClassName(ctor.name);
 
@@ -79,7 +79,7 @@ export function getRemoteClient<T extends new (...args: any[]) => any>(
         if (typeof val === 'function') {
           return getMethodProxy(metadata, prop, agentClassName, workerId);
         }
-        return val;
+        return undefined
       },
     });
   };
