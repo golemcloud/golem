@@ -300,7 +300,7 @@ function getTypeFromTsMorphInternal(
   if (type.isUnion()) {
     const argsInternal = tsMorphType.getAliasTypeArguments();
 
-    const aliased = getAliasTypeArgumentsSafe(tsMorphType, aliasName);
+    const aliased = getAliasTypeArgumentsSafe(tsMorphType);
 
     const unionTypes = type
       .getUnionTypes()
@@ -408,7 +408,6 @@ type RawName = string;
 
 function getAliasTypeArgumentsSafe(
   type: TsMorphType,
-  aliasName: string | undefined,
 ): [RawName | undefined, TsMorphType[]] {
   const aliasSymbol = type.getAliasSymbol();
   if (!aliasSymbol) return [undefined, []];
@@ -420,10 +419,6 @@ function getAliasTypeArgumentsSafe(
   const typeNode = decl.getTypeNodeOrThrow();
   const typeRef = typeNode.asKind(ts.SyntaxKind.TypeReference);
   if (!typeRef) return [undefined, []];
-
-  if (aliasName === "MyaResult") {
-    console.log(typeRef.getTypeName().getText());
-  }
 
   return [
     typeRef.getTypeName().getText(),

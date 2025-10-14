@@ -369,8 +369,6 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       const inbuiltResultType =
         getInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams);
 
-      console.log("Inbuilt resultType:", inbuiltResultType);
-
       if (inbuiltResultType) {
         if (!type.name && Either.isRight(inbuiltResultType) ) {
           unionTypeMapRegistry.set(hash, inbuiltResultType.val);
@@ -871,9 +869,6 @@ export function getInbuiltResultType(
     if (isResult && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
       const okType = typeParams[0];
       const errType = typeParams[1];
-
-      console.log(okType);
-      console.log(errType);
 
       const okAnalysed = fromTsTypeInternal(okType, Option.none());
       const errAnalysed = fromTsTypeInternal(errType, Option.none());
