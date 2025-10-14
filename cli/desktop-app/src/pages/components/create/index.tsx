@@ -29,17 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select.tsx";
 import { toast } from "@/hooks/use-toast.ts";
-
-// Language template options
-const LANGUAGE_TEMPLATES = [
-  // TypeScript
-  { value: "ts", label: "TypeScript: Default component template" },
-];
-
-// Group templates by language
-const GROUPED_TEMPLATES = {
-  TypeScript: LANGUAGE_TEMPLATES,
-};
+import { useEffect, useState } from "react";
 
 // Form schema using zod for validation
 const formSchema = z.object({
@@ -56,6 +46,12 @@ const formSchema = z.object({
 
 const CreateComponent = () => {
   const navigate = useNavigate();
+  const { appId } = useParams();
+  const [templates, setTemplates] = useState<
+    { language: string; template: string; description: string }[]
+  >([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -63,7 +59,29 @@ const CreateComponent = () => {
       template: "",
     },
   });
-  const { appId } = useParams();
+
+  // Fetch templates on mount
+  useEffect(() => {
+    const fetchTemplates = async () => {
+      try {
+        setIsLoadingTemplates(true);
+        const fetchedTemplates =
+          await API.componentService.getComponentTemplates();
+        setTemplates(fetchedTemplates);
+      } catch (error) {
+        console.error("Error fetching templates:", error);
+        toast({
+          title: "Error fetching templates",
+          description: String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoadingTemplates(false);
+      }
+    };
+
+    fetchTemplates();
+  }, []);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     API.componentService
@@ -122,28 +140,33 @@ const CreateComponent = () => {
                         <Select
                           onValueChange={field.onChange}
                           value={field.value}
+                          disabled={isLoadingTemplates}
                         >
                           <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select a template" />
+                            <SelectValue
+                              placeholder={
+                                isLoadingTemplates
+                                  ? "Loading templates..."
+                                  : "Select a template"
+                              }
+                            />
                           </SelectTrigger>
                           <SelectContent>
-                            {Object.entries(GROUPED_TEMPLATES).map(
-                              ([language, templates]) => (
-                                <div key={language} className="mb-2">
-                                  <h3 className="font-semibold px-2 py-1 bg-muted text-muted-foreground text-sm">
-                                    {language}
-                                  </h3>
-                                  {templates.map(template => (
-                                    <SelectItem
-                                      key={template.value}
-                                      value={template.value}
-                                    >
-                                      {template.label}
-                                    </SelectItem>
-                                  ))}
+                            {templates.map(template => (
+                              <SelectItem
+                                key={template.template}
+                                value={template.template}
+                              >
+                                <div className="flex flex-col">
+                                  <span className="font-medium">
+                                    {template.template}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {template.description}
+                                  </span>
                                 </div>
-                              ),
-                            )}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </FormControl>
