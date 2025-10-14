@@ -275,10 +275,10 @@ export class ComponentService {
         console.error("Failed to get built components:", error);
       }
 
-      // Extract built component names (remove version suffix)
+      // Extract built component names and convert to filesystem format (colons to hyphens)
       const builtComponentNames = new Set(
         builtComponents.map(c => {
-          return c.componentName!.toLowerCase();
+          return c.componentName!.replace(/:/g, "-").toLowerCase();
         }),
       );
 
@@ -305,12 +305,13 @@ export class ComponentService {
 
           // Check each subfolder
           for (const folder of subFolders) {
-            let folderNameLower = folder.name.toLowerCase();
-            folderNameLower = folderNameLower.replace(/[-]/g, ":");
+            const folderNameLower = folder.name.toLowerCase();
 
             // If this folder name is not in built components, it's unbuilt
             if (!builtComponentNames.has(folderNameLower)) {
-              unbuiltComponents.push({ name: folderNameLower });
+              // Convert filesystem folder name back to component name format (last hyphen to colon)
+              const componentName = folderNameLower.replace(/-([^-]*)$/, ":$1");
+              unbuiltComponents.push({ name: componentName });
             }
           }
         } catch (error) {
@@ -362,5 +363,13 @@ export class ComponentService {
       },
       {},
     );
+  };
+
+  public getComponentTemplates = async (): Promise<
+    { language: string; template: string; description: string }[]
+  > => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const result = await invoke<string>("get_component_templates");
+    return JSON.parse(result);
   };
 }

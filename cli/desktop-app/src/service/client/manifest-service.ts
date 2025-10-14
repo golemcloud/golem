@@ -35,8 +35,8 @@ export class ManifestService {
       throw new Error("App not found");
     }
 
-    // Replace: with - in component name
-    let folderName = componentName.replace(/:/g, "-").toLowerCase();
+    // Convert colons to hyphens for filesystem compatibility
+    const folderName = componentName.replace(/:/g, "-").toLowerCase();
 
     try {
       // Get all folders in app.folderLocation

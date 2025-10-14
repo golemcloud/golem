@@ -43,6 +43,36 @@ export class CLIService {
     return parsedResult || true;
   };
 
+  public callCLIRaw = async (
+    appId: string,
+    command: string,
+    subcommands: string[],
+  ): Promise<string> => {
+    // find folder location
+    const app = await settingsService.getAppById(appId);
+    if (!app) {
+      throw new Error("App not found");
+    }
+    let result: string;
+    try {
+      result = await invoke("call_golem_command", {
+        command,
+        subcommands,
+        folderPath: app.folderLocation,
+      });
+    } catch (_e) {
+      toast({
+        title: "Error from golem CLI",
+        description: String(_e),
+        variant: "destructive",
+        duration: 5000,
+      });
+      throw new Error("Error from golem CLI: " + String(_e));
+    }
+
+    return result;
+  };
+
   public callCLIWithLogs = async (
     appId: string,
     command: string,
