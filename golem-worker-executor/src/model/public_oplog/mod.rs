@@ -1505,7 +1505,8 @@ fn encode_host_function_response_as_value(
             Ok(payload.into_value_and_type())
         }
         "golem_agent::get_agent_type" => {
-            let payload: Result<Option<RegisteredAgentType>, SerializableError> = try_deserialize(oplog_index, &what, bytes)?;
+            let payload: Result<Option<RegisteredAgentType>, SerializableError> =
+                try_deserialize(oplog_index, &what, bytes)?;
             Ok(payload.into_value_and_type())
         }
         "http::types::incoming_body_stream::skip" => {

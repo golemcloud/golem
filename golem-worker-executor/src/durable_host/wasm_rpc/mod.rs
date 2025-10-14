@@ -52,7 +52,7 @@ use std::any::Any;
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
-use tracing::{error, info, Instrument};
+use tracing::{error, Instrument};
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::p2::bindings::cli::environment::Host;
@@ -228,7 +228,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
-        let own_worker_id = self.owned_worker_id().clone();
 
         let entry = self.table().get(&self_)?;
         let payload = entry.payload.downcast_ref::<WasmRpcEntryPayload>().unwrap();
@@ -278,12 +277,6 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
             DurableFunctionType::WriteRemote,
         )
         .await?;
-
-        info!("Remote worker id: {remote_worker_id}; own worker id: {own_worker_id}; function {function_name}");
-
-        if remote_worker_id == own_worker_id {
-            return Err(anyhow!("RPC calls to the same agent are not supported"));
-        }
 
         let result: Result<(), RpcError> = if durability.is_live() {
             let input = SerializableInvokeRequest {
