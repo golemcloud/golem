@@ -65,6 +65,7 @@ const formSchema = z.object({
       },
       { message: "Port number is required (e.g., localhost:9006)" },
     ),
+  subdomain: z.string().optional(),
   definitions: z
     .array(
       z.object({
@@ -97,6 +98,7 @@ export default function CreateDeployment() {
     resolver: zodResolver(formSchema),
     defaultValues: {
       domain: "localhost:9006",
+      subdomain: "",
       definitions: [{ id: "", version: "" }],
     },
   });
@@ -158,14 +160,15 @@ export default function CreateDeployment() {
   const onSubmit = async (data: FormValues) => {
     try {
       setIsSubmitting(true);
-      const payload = {
-        site: {
-          host: data.domain,
-          subdomain: null,
-        },
-        apiDefinitions: data.definitions,
-      };
-      await API.deploymentService.createDeployment(appId!, payload.site.host);
+      // Set subdomain to null if empty string
+      const subdomain = data.subdomain?.trim() ? data.subdomain.trim() : null;
+
+      await API.deploymentService.createDeployment(
+        appId!,
+        data.domain,
+        subdomain,
+        data.definitions,
+      );
       toast({
         title: "Deployment was successful",
         duration: 3000,
@@ -232,6 +235,26 @@ export default function CreateDeployment() {
                       <FormDescription className="text-[11px] text-muted-foreground">
                         Enter localhost with a port number (e.g.,
                         localhost:9006). The port must be between 1 and 65535.
+                      </FormDescription>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="subdomain"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Subdomain (Optional)</FormLabel>
+                      <FormControl>
+                        <Input
+                          placeholder="Leave empty if not needed"
+                          {...field}
+                        />
+                      </FormControl>
+                      <FormDescription className="text-[11px] text-muted-foreground">
+                        Optional subdomain for the deployment. Leave empty if
+                        not needed.
                       </FormDescription>
                       <FormMessage />
                     </FormItem>

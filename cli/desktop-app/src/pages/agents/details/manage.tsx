@@ -28,23 +28,23 @@ import {
 import { toast } from "@/hooks/use-toast";
 import { API } from "@/service";
 import { ComponentList } from "@/types/component.ts";
-import { Worker } from "@/types/worker.ts";
+import { Agent } from "@/types/agent.ts";
 import { CircleFadingArrowUp, Pause, Play, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
-export default function WorkerManage() {
-  const { appId, componentId = "", workerName = "" } = useParams();
+export default function AgentManage() {
+  const { appId, componentId = "", agentName = "" } = useParams();
   const navigate = useNavigate();
-  const [workerDetails, setWorkerDetails] = useState({} as Worker);
+  const [agentDetails, setAgentDetails] = useState({} as Agent);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [showWorkerUpgrade, setShowWorkerUpgrade] = useState(false);
+  const [showAgentUpgrade, setShowAgentUpgrade] = useState(false);
   const [upgradeTo, setUpgradeTo] = useState("0");
   const [upgradeType, setUpgradeType] = useState("Automatic");
   const [componentList, setComponentList] = useState<ComponentList>({});
 
   useEffect(() => {
-    if (componentId && workerName) {
+    if (componentId && agentName) {
       API.componentService.getComponentByIdAsKey(appId!).then(response => {
         const componentListArray = Object.values(
           response as Record<string, ComponentList>,
@@ -56,37 +56,37 @@ export default function WorkerManage() {
           setComponentList(foundComponent);
         }
       });
-      API.workerService
-        .getParticularWorker(appId!, componentId, workerName)
+      API.agentService
+        .getParticularAgent(appId!, componentId, agentName)
         .then(response => {
-          const worker = response as Worker;
-          setWorkerDetails(worker);
-          setUpgradeTo(`${worker?.componentVersion}`);
+          const agent = response.metadata;
+          setAgentDetails(agent);
+          setUpgradeTo(`${agent?.componentVersion}`);
         });
     }
-  }, [componentId, workerName]);
+  }, [componentId, agentName]);
 
   const handleUpgrade = () => {
-    API.workerService
-      .upgradeWorker(
+    API.agentService
+      .upgradeAgent(
         appId!,
         componentList.componentName!,
-        workerDetails?.workerName,
+        agentDetails?.workerName!,
         Number(upgradeTo),
         upgradeType,
       )
       .then(() => {
         toast({
-          title: "Worker upgraded Initiated",
+          title: "Agent upgraded Initiated",
           duration: 3000,
         });
       });
   };
 
   const handleDelete = () => {
-    API.workerService.deleteWorker(appId!, componentId, workerName).then(() => {
+    API.agentService.deleteAgent(appId!, componentId, agentName).then(() => {
       toast({
-        title: "Worker deleted successfully",
+        title: "Agent deleted successfully",
         duration: 3000,
         variant: "destructive",
       });
@@ -94,79 +94,75 @@ export default function WorkerManage() {
     });
   };
 
-  const onResumeWorker = () => {
-    API.workerService.resumeWorker(appId!, componentId, workerName).then(() => {
+  const onResumeAgent = () => {
+    API.agentService.resumeAgent(appId!, componentId, agentName).then(() => {
       toast({
-        title: "Worker resumed",
+        title: "Agent resumed",
         duration: 3000,
       });
     });
   };
 
-  const onInterruptWorker = () => {
-    API.workerService
-      .interruptWorker(appId!, componentId, workerName)
-      .then(() => {
-        toast({
-          title: "Worker interrupted",
-          duration: 3000,
-        });
+  const onInterruptAgent = () => {
+    API.agentService.interruptAgent(appId!, componentId, agentName).then(() => {
+      toast({
+        title: "Agent interrupted",
+        duration: 3000,
       });
+    });
   };
 
   const versionListGreaterThan =
     componentList.versionList?.filter(
-      version => version > workerDetails?.componentVersion,
+      version => version > agentDetails?.componentVersion,
     ) || [];
 
   return (
     <div className="flex flex-col items-center p-6 space-y-6 w-full max-w-4xl mx-auto">
       <Card className="w-full shadow-lg rounded-xl border border-border/30">
         <CardHeader>
-          <CardTitle>Worker Execution</CardTitle>
-          <CardDescription>
-            Manage the worker and its execution.
-          </CardDescription>
+          <CardTitle>Agent Execution</CardTitle>
+          <CardDescription>Manage the agent and its execution.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="flex items-center justify-between p-3 bg-muted/10 rounded-lg">
             <div>
-              <h3 className="text-lg font-semibold">Upgrade Worker</h3>
+              <h3 className="text-lg font-semibold">Upgrade Agent</h3>
               <p className="text-sm text-muted-foreground">
-                Upgrade Worker With New Component Version
+                Upgrade Agent With New Component Version
               </p>
             </div>
             <Button
               variant="default"
-              onClick={() => setShowWorkerUpgrade(true)}
+              onClick={() => setShowAgentUpgrade(true)}
               className="bg-blue-600 text-white hover:bg-blue-700"
             >
               <CircleFadingArrowUp className="mr-2 h-4 w-4" />
-              Upgrade Worker
+              Upgrade Agent
             </Button>
           </div>
           <div className="flex items-center justify-between p-3 bg-muted/10 rounded-lg">
             <div>
-              <h3 className="text-lg font-semibold">Interrupt Worker</h3>
+              <h3 className="text-lg font-semibold">Interrupt Agent</h3>
               <p className="text-sm text-muted-foreground">
-                Interrupts the execution of a running worker
+                Interrupts the execution of a running agent
               </p>
             </div>
-            <Button variant="secondary" onClick={onInterruptWorker}>
+            <Button variant="secondary" onClick={onInterruptAgent}>
               <Pause className="mr-2 h-4 w-4" />
-              Interrupt Worker
+              Interrupt Agent
             </Button>
           </div>
           <div className="flex items-center justify-between p-3 bg-muted/10 rounded-lg">
             <div>
-              <h3 className="text-lg font-semibold">Resume Worker</h3>
+              <h3 className="text-lg font-semibold">Resume Agent</h3>
               <p className="text-sm text-muted-foreground">
-                Resumes the execution of an interrupted worker
+                Resumes the execution of an interrupted agent
               </p>
             </div>
-            <Button variant="secondary" onClick={onResumeWorker}>
+            <Button variant="secondary" onClick={onResumeAgent}>
               <Play className="mr-2 h-4 w-4" />
-              Resume Worker
+              Resume Agent
             </Button>
           </div>
         </CardContent>
@@ -179,9 +175,9 @@ export default function WorkerManage() {
         <CardContent>
           <div className="flex items-center justify-between">
             <div>
-              <h3 className="text-lg font-semibold">Delete this Worker</h3>
+              <h3 className="text-lg font-semibold">Delete this Agent</h3>
               <p className="text-sm text-muted-foreground">
-                Once you delete a worker, there is no going back. Please be
+                Once you delete a agent, there is no going back. Please be
                 certain.
               </p>
             </div>
@@ -190,20 +186,20 @@ export default function WorkerManage() {
               onClick={() => setShowDeleteDialog(true)}
             >
               <Trash2 className="mr-2 h-4 w-4" />
-              Delete Worker
+              Delete Agent
             </Button>
           </div>
         </CardContent>
       </Card>
-      <AlertDialog open={showWorkerUpgrade} onOpenChange={setShowWorkerUpgrade}>
+      <AlertDialog open={showAgentUpgrade} onOpenChange={setShowAgentUpgrade}>
         <AlertDialogContent className="sm:max-w-[600px]">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-xl font-semibold">
-              Upgrade Worker
+              Upgrade Agent
             </AlertDialogTitle>
             <AlertDialogDescription className="text-sm text-muted-foreground">
               This action cannot be undone. This will permanently upgrade the
-              worker to the selected version.
+              agent to the selected version.
             </AlertDialogDescription>
           </AlertDialogHeader>
 
@@ -217,7 +213,7 @@ export default function WorkerManage() {
                 Component Name
               </Label>
               <Input
-                defaultValue={workerDetails.componentName || "N/A"}
+                defaultValue={agentDetails.componentName || "N/A"}
                 className="col-span-3 bg-muted/50"
                 disabled
               />
@@ -232,7 +228,7 @@ export default function WorkerManage() {
                 Current Version
               </Label>
               <Input
-                defaultValue={workerDetails?.componentVersion}
+                defaultValue={agentDetails?.componentVersion}
                 className="col-span-3 bg-muted/50"
                 disabled
               />
@@ -284,7 +280,7 @@ export default function WorkerManage() {
                   ) : (
                     <div className="p-2 text-center text-sm text-muted-foreground">
                       No versions available above v
-                      {workerDetails?.componentVersion}
+                      {agentDetails?.componentVersion}
                     </div>
                   )}
                 </SelectContent>
@@ -313,7 +309,7 @@ export default function WorkerManage() {
             <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
             <AlertDialogDescription>
               This action cannot be undone. This will permanently delete the
-              worker and remove all associated data.
+              agent and remove all associated data.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -20,7 +20,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self' https://cdn.jsdelivr.net; connect-src ipc: http://ipc.localhost; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; worker-src 'self' blob: tauri://localhost;",
+      "csp": "default-src 'self' https://cdn.jsdelivr.net; connect-src ipc: http://ipc.localhost; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; font-src 'self' https://cdn.jsdelivr.net; agent-src 'self' blob: tauri://localhost;",
       "headers": {
         "Cross-Origin-Opener-Policy": "cross-origin",
         "Timing-Allow-Origin": "*"

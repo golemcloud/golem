@@ -2,6 +2,7 @@
 import {
   Case,
   ComponentExportFunction,
+  Export,
   Field,
   Typ,
   TypeField,
@@ -653,4 +654,32 @@ export function validateJsonStructure(
   }
 
   return null; // No error
+}
+
+/**
+ * Filters exports based on agent scope and removes initialize functions
+ * @param exports - Array of exports to filter
+ * @param agentName - Optional agent name for scoping (used for agent invokes only)
+ * @returns Filtered exports with initialize functions removed
+ */
+export function filterExportsForInvoke(
+  exports: Export[],
+  agentName?: string,
+): Export[] {
+  // First filter by agent scope if agentName is provided
+  const scopedExports = agentName
+    ? exports.filter(item => agentName.includes(item.name.split("/").pop()!))
+    : exports;
+
+  // Then filter out initialize functions and remove empty exports
+  return scopedExports
+    .map(exportItem => ({
+      ...exportItem,
+      functions: exportItem.functions?.filter(
+        (fn: ComponentExportFunction) => fn.name !== "initialize",
+      ),
+    }))
+    .filter(
+      exportItem => exportItem.functions && exportItem.functions.length > 0,
+    );
 }

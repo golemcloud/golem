@@ -1,7 +1,7 @@
 import { useInvoke } from "@/hooks/useInvoke";
 import { InvokeLayout } from "@/components/invoke/InvokeLayout";
 
-export default function WorkerInvoke() {
+export default function AgentInvoke() {
   const {
     functionDetails,
     value,
@@ -15,16 +15,16 @@ export default function WorkerInvoke() {
     urlFn,
     appId,
     componentId,
-    workerName,
+    agentName,
     handleValueChange,
     onInvoke,
     copyToClipboard,
     navigate,
-  } = useInvoke({ isWorkerInvoke: true });
+  } = useInvoke({ isAgentInvoke: true });
 
   const onNavigateToFunction = (exportName: string, functionName: string) => {
     navigate(
-      `/app/${appId}/components/${componentId}/workers/${workerName}/invoke?name=${exportName}&&fn=${functionName}`,
+      `/app/${appId}/components/${componentId}/agents/${agentName}/invoke?name=${exportName}&&fn=${functionName}`,
     );
   };
 

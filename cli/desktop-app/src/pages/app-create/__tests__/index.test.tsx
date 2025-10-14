@@ -321,9 +321,9 @@ describe("CreateApplication", () => {
       const user = userEvent.setup();
 
       const languageSelect = screen.getByRole("combobox");
-      await user.selectOptions(languageSelect, "rust");
+      await user.selectOptions(languageSelect, "ts");
 
-      expect(languageSelect).toHaveValue("rust");
+      expect(languageSelect).toHaveValue("ts");
     });
 
     it("should handle form submission with valid data", async () => {
@@ -351,21 +351,21 @@ describe("CreateApplication", () => {
       await user.click(selectFolderButton);
 
       const languageSelect = screen.getByRole("combobox");
-      await user.selectOptions(languageSelect, "rust");
+      await user.selectOptions(languageSelect, "ts");
 
       // Submit form
       const createButton = screen.getByText("Create Application");
       await user.click(createButton);
 
       await waitFor(() => {
-        expect(invoke).toHaveBeenCalledWith("create_golem_app", {
+        expect(invoke).toHaveBeenCalledWith("call_golem_command", {
+          command: "app",
+          subcommands: ["new", "test-app", "ts"],
           folderPath: "/path/to/folder",
-          appName: "test-app",
-          language: "rust",
         });
         expect(toast).toHaveBeenCalledWith({
           title: "Application created successfully",
-          description: "app-id-123",
+          description: "Successfully created application: test-app\napp-id-123",
         });
         expect(mockNavigate).toHaveBeenCalledWith("/");
       });
@@ -396,7 +396,7 @@ describe("CreateApplication", () => {
       await user.click(selectFolderButton);
 
       const languageSelect = screen.getByRole("combobox");
-      await user.selectOptions(languageSelect, "rust");
+      await user.selectOptions(languageSelect, "ts");
 
       // Submit form
       const createButton = screen.getByText("Create Application");
@@ -453,7 +453,7 @@ describe("CreateApplication", () => {
       await user.click(selectFolderButton);
 
       const languageSelect = screen.getByRole("combobox");
-      await user.selectOptions(languageSelect, "rust");
+      await user.selectOptions(languageSelect, "ts");
 
       // Submit form
       const createButton = screen.getByText("Create Application");

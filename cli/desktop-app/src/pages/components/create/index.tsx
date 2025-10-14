@@ -16,7 +16,7 @@ import {
   FormLabel,
 } from "@/components/ui/form.tsx";
 import { Input } from "@/components/ui/input.tsx";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button.tsx";
 import { API } from "@/service";
 import { useNavigate, useParams } from "react-router-dom";
@@ -29,58 +29,7 @@ import {
   SelectValue,
 } from "@/components/ui/select.tsx";
 import { toast } from "@/hooks/use-toast.ts";
-
-// Language template options
-const LANGUAGE_TEMPLATES = [
-  // C
-  { value: "c", label: "C: Default component template" },
-  { value: "c/example-http", label: "C: Example - Stateful with WASI HTTP" },
-  // Go
-  { value: "go", label: "Go: Default component template" },
-  { value: "go/wasi-http", label: "Go: WASI HTTP handler" },
-  // JavaScript
-  { value: "js", label: "JavaScript: Default component template" },
-  { value: "js/example-fetch", label: "JavaScript: Example with fetch" },
-  { value: "js/wasi-http", label: "JavaScript: WASI HTTP handler" },
-  // Python
-  { value: "python", label: "Python: Default component template" },
-  { value: "python/wasi-http", label: "Python: WASI HTTP handler" },
-  // Rust
-  { value: "rust/async", label: "Rust: Async with tokio support" },
-  { value: "rust", label: "Rust: Default component template" },
-  {
-    value: "rust/example-shopping-cart",
-    label: "Rust: Example - Stateful shopping cart",
-  },
-  {
-    value: "rust/example-todo-list",
-    label: "Rust: Example - Stateful todo list",
-  },
-  { value: "rust/minimal", label: "Rust: Minimal with no dependencies" },
-  { value: "rust/wasi-http", label: "Rust: WASI HTTP handler" },
-  // TypeScript
-  { value: "ts", label: "TypeScript: Default component template" },
-  { value: "ts/example-fetch", label: "TypeScript: Example using fetch" },
-  // Zig
-  { value: "zig", label: "Zig: Default component template" },
-  // Scala.js
-  { value: "scala", label: "Scala.js: Default component template" },
-  // MoonBit
-  { value: "moonbit", label: "MoonBit: Default component template" },
-];
-
-// Group templates by language
-const GROUPED_TEMPLATES = {
-  C: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("c")),
-  Go: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("go")),
-  JavaScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("js")),
-  Python: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("python")),
-  Rust: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("rust")),
-  TypeScript: LANGUAGE_TEMPLATES.filter(t => t.value.startsWith("ts")),
-  Zig: LANGUAGE_TEMPLATES.filter(t => t.value === "zig"),
-  "Scala.js": LANGUAGE_TEMPLATES.filter(t => t.value === "scala"),
-  MoonBit: LANGUAGE_TEMPLATES.filter(t => t.value === "moonbit"),
-};
+import { useEffect, useState } from "react";
 
 // Form schema using zod for validation
 const formSchema = z.object({
@@ -97,6 +46,13 @@ const formSchema = z.object({
 
 const CreateComponent = () => {
   const navigate = useNavigate();
+  const { appId } = useParams();
+  const [templates, setTemplates] = useState<
+    { language: string; template: string; description: string }[]
+  >([]);
+  const [isLoadingTemplates, setIsLoadingTemplates] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -104,21 +60,54 @@ const CreateComponent = () => {
       template: "",
     },
   });
-  const { appId } = useParams();
+
+  // Fetch templates on mount
+  useEffect(() => {
+    const fetchTemplates = async () => {
+      try {
+        setIsLoadingTemplates(true);
+        const fetchedTemplates =
+          await API.componentService.getComponentTemplates();
+        setTemplates(fetchedTemplates);
+      } catch (error) {
+        console.error("Error fetching templates:", error);
+        toast({
+          title: "Error fetching templates",
+          description: String(error),
+          variant: "destructive",
+        });
+      } finally {
+        setIsLoadingTemplates(false);
+      }
+    };
+
+    fetchTemplates();
+  }, []);
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
-    API.componentService
-      .createComponent(appId!, values.name, values.template)
-      .then(() => {
-        toast({
-          title: `Component ${values.name} created successfully!`,
-          description:
-            "Please deploy your component to see it on the dashboard",
-          duration: 8000,
-          variant: "default",
-        });
-        navigate(`/app/${appId}/components`);
+    setIsCreating(true);
+    try {
+      await API.componentService.createComponent(
+        appId!,
+        values.name,
+        values.template,
+      );
+      toast({
+        title: `Component ${values.name} created successfully!`,
+        description: "Please deploy your component to see it on the dashboard",
+        duration: 8000,
+        variant: "default",
       });
+      navigate(`/app/${appId}/components`);
+    } catch (error) {
+      toast({
+        title: "Error creating component",
+        description: String(error),
+        variant: "destructive",
+      });
+    } finally {
+      setIsCreating(false);
+    }
   }
 
   return (
@@ -163,28 +152,33 @@ const CreateComponent = () => {
                         <Select
                           onValueChange={field.onChange}
                           value={field.value}
+                          disabled={isLoadingTemplates}
                         >
                           <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select a template" />
+                            <SelectValue
+                              placeholder={
+                                isLoadingTemplates
+                                  ? "Loading templates..."
+                                  : "Select a template"
+                              }
+                            />
                           </SelectTrigger>
                           <SelectContent>
-                            {Object.entries(GROUPED_TEMPLATES).map(
-                              ([language, templates]) => (
-                                <div key={language} className="mb-2">
-                                  <h3 className="font-semibold px-2 py-1 bg-muted text-muted-foreground text-sm">
-                                    {language}
-                                  </h3>
-                                  {templates.map(template => (
-                                    <SelectItem
-                                      key={template.value}
-                                      value={template.value}
-                                    >
-                                      {template.label}
-                                    </SelectItem>
-                                  ))}
+                            {templates.map(template => (
+                              <SelectItem
+                                key={template.template}
+                                value={template.template}
+                              >
+                                <div className="flex flex-col">
+                                  <span className="font-medium">
+                                    {template.template}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground">
+                                    {template.description}
+                                  </span>
                                 </div>
-                              ),
-                            )}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </FormControl>
@@ -200,12 +194,24 @@ const CreateComponent = () => {
                     type="button"
                     variant="secondary"
                     onClick={() => navigate(-1)}
+                    disabled={isCreating}
                   >
                     <ArrowLeft className="mr-2 h-5 w-5" />
                     Back
                   </Button>
-                  <Button type="submit" className="px-6 py-2">
-                    Create Component
+                  <Button
+                    type="submit"
+                    className="px-6 py-2"
+                    disabled={isCreating || isLoadingTemplates}
+                  >
+                    {isCreating ? (
+                      <>
+                        <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      "Create Component"
+                    )}
                   </Button>
                 </div>
               </form>
