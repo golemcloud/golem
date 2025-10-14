@@ -62,5 +62,75 @@ use the `golem:api/save-snapshot` function to persist the files and later restor
 
 ## Externally accessing agent files
 
-You can use [file-server bindings](/invoke/making-custom-apis) to automatically deploy a REST API that allows accessing the files
-on an agent filesystem.
+<Callout type="info">
+Previous Golem versions allowed defining **file-server bindings** in the API mapping to expose files on the agent filesystem via a REST API.
+This feature is not available in Golem 1.3, but will be re-introduced in the next major release in a different and improved form.
+</Callout>
+
+There is no built-in way to automatically expose files on the agent filesystem for the outside world, but it is easy to define an agent method
+and map that to a HTTP route in the API mapping.
+
+For example, we can define a `get` method like in the following example agent:
+
+```typescript
+import * as fs from 'node:fs';
+import { BaseAgent, agent } from '@golemcloud/golem-ts-sdk';
+
+@agent()
+class FileServerAgent extends BaseAgent {
+  constructor(requestId: string) {
+    super();
+  }
+
+  get(filepath: string): { contentType: string, data: Uint8Array } {
+    try {
+      const buffer = fs.readFileSync("/web/" + filepath);
+
+      let contentType = "application/octet-stream";
+      if (filepath.endsWith(".html")) {
+        contentType = "text/html";
+      } else if (filepath.endsWith(".js")) {
+        contentType = "application/javascript";
+      }
+
+      return {
+        contentType: contentType,
+        data: buffer
+      };
+    } catch (err) {
+      return {
+        contentType: "text/plain",
+        data: new TextEncoder().encode(`Not found! (${ err })`)
+      };
+    }
+  }
+}
+```
+
+Then in the HTTP API mapping we can map this method to a HTTP route:
+
+```yaml
+httpApi:
+  definitions:
+    counter-api:
+      version: '0.0.2'
+      routes:
+        - method: POST
+          path: /{name}/increment
+          binding:
+            type: default
+            componentName: "example:counter"
+            response: |
+                let fsa = file-server-agent(request.request_id.value);
+                let file = fsa.get(request.path.file);
+                {
+                  headers: {
+                    Content-Type: file.content-type
+                  },
+                  body: file.data
+                }
+```
+
+For more information about defining custom HTTP APIs for agents, [check the dedicated documentation page](/invoke/making-custom-apis).
+
+For serving static content, it is good practice to define a separate agent in an **ephemeral component** that is only responsible for serving files, and pass the `request.request_id.value` string to its constructor to make sure each request gets its own unique ephemeral instance. This way the file-serving endpoints will not ever block by waiting for a stateful agent to process their requests.

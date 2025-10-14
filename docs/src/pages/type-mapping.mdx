@@ -54,19 +54,19 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
     } from '@golemcloud/golem-ts-sdk';
 
     async exampleMethod(
-        @languageCodes(['en'])
-        unstructuredTextWithLanguageCode: UnstructuredText,
+        unstructuredTextWithLanguageCode: UnstructuredText<["en"]>,
     ): Promise<void> {
         // ...
     }
     ```
 
-    The `@languageCodes` decorator is optional; if missing, there will be no restrictions for the language of the text.
+    The type parameter is optional; if missing, there will be no restrictions for the language of the text. It's possible
+    to list multiple language codes that are accepted by the agent.
 
     The type itself represents either an inline string or a remote reference:
 
     ```typescript
-    export type UnstructuredText =
+    export type UnstructuredText<LC extends LanguageCode[] = []> =
       | {
           tag: 'url';
           val: string;
@@ -74,7 +74,7 @@ Unstructured text is an arbitrary string, optionally annotated with a language c
       | {
           tag: 'inline';
           val: string;
-          languageCode?: string;
+          languageCode?: LC[number];
         };
     ```
   </Tabs.Tab>
@@ -92,19 +92,17 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
     } from '@golemcloud/golem-ts-sdk';
 
     async exampleMethod(
-      @mimeTypes(['application/json'])
-      unstructuredBinaryWithMimeType: UnstructuredBinary,
+      unstructuredBinaryWithMimeType: UnstructuredBinary<['application/json']>,
     ): Promise<void> {
         // ...
     }
     ```
 
-    The `@mimeTypes` decorator specifies the set of allowed MIME types for the binary data.
-
+    The type parameter specifies the set of allowed MIME types for the binary data.
     The type itself represents either an inline byte array or a remote reference:
 
     ```typescript
-    export type UnstructuredBinary =
+    export type UnstructuredBinary<MT extends MimeType[]> =
       | {
           tag: 'url';
           val: string;
@@ -112,7 +110,7 @@ Unstructured binary data is similar to unstructured text, but it is annotated (a
       | {
           tag: 'inline';
           val: Uint8Array;
-          mimeType?: string;
+          mimeType?: MT[number];
         };
     ```
   </Tabs.Tab>
@@ -124,16 +122,11 @@ Agents can work with **multimodal values** as input or output. When defining a p
 
 <Tabs items={["TypeScript"]}>
     <Tabs.Tab>
-    In TypeScript, methods taking multimodal values are annotated with the `@multimodal()` decorator, and each parameter of the method is going to be a possible type of the multimodal value. As there is no constraint on the number of values for each type, every parameter of the multimodal method is going to be an array of values of the corresponding type:
+    In TypeScript, the `Multimodal` generic type can be used in both input and output position, where the type parameter is a union of all the possible types of the multimodal value. As there is no constraint on the number of values for each type, every parameter of the multimodal method is going to be an array of values of the corresponding type:
 
     ```typescript
-    @multimodal()
     async exampleMethod(
-      metadata: MyStructuredData[],
-      @languageCodes(['en', 'de'])
-      text: UnstructuredText[],
-      @mimeTypes('image/jpeg', 'image/png')
-      image: UnstructuredBinary[]
+      input: Multimodal<MyStructuredData[] | UnstructuredText<['en', 'de']> | UnstructuredBinary<['image/jpeg', 'image/png']>>,
     ): Promise<void> {
       // ...
     }

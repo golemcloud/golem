@@ -59,6 +59,7 @@ The response script has access to the `request` object, which allows access to d
 - `request.headers.xyz` refers to a header named `xyz`
 - `request.body` refers to the JSON request body - it can be inspected by accessing its fields such as `request.body.exampleField` etc.
 - `request.auth` when authentication is configured (see below)
+- `request.request_id.value` is a string containing a UUID that is unique for each incoming request. It can be used with ephemeral agents to provide a unique identity for each request by defining a `requestId` string parameter for the ephemeral agent's constructor, and passing this value from Rib.
 
 The script can construct an agent reference for any of the agent types defined in the **component** identified by `componentName` by using the agent type name and providing the necessary constructor parameters. For example if there is an agent type `counter-agent` with a single string constructor parameter, the following Rib snippets are constructing an instance of it:
 
@@ -210,53 +211,6 @@ httpApi:
               Access-Control-Max-Age: 86400u64
              }
 ```
-
-#### File server bindings
-The `file-server` binding type can be used to retrieve files from an agent's filesystem. For read-write files the file is retrieved between running worker invocation, so users are guaranteed to not see any in-progress changes to files.
-
-For read-only files the files are retrieved from a separate datastore and not directly from the agent. This makes retrieving read-only files very cheap
-and allows it be used for serving static content.
-
-To learn more about the agent filesystem, check out the [dedicated guide](/develop/agent-filesystem).
-
-Example:
-
-```yaml
-routes:
-  - method: Get
-    # {+var} patterns capture all remaining path segments
-    path: /workers/{worker-name}/files/{+file}
-    binding:
-      type: file-server
-      componentName: example-component
-      # retrieve the path /files/${{file}} from the worker and return the content.
-      response: 'let file: string = request.path.file; "/files/${{file}}"'
-```
-
-Parameters:
-
-| Parameter               | Required | Type   | Description                                                                                                                                                         |
-| ----------------------- | -------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| componentName | true     | string | Name of the component to invoke                                                                                                                                       |
-| workerName              | false    | rib    | Script used to compute the name of the agent that will be invoked. The script has access to the request input. If not provided, an ephemeral worker is used.       |
-| idempotencyKey          | false    | rib    | Script used to compute the idempotency key. The script has access to the request input. If not provided an idempotency key will be generated.                       |
-| response                | true     | rib    | Script that is used to compute the file to retrieve and the response to send to users. See the dedicatedc [section](#file-server-response-object) for more details. |
-
-#### File Server Response Object
-
-The object returned from the response rib script warrants some extra mention.
-There are two different structures that are supported by golem:
-
-1. Returning a single string. The returned string is interpreted as an absolute path and looked up in the worker filesystem and returned with an inferred content type and a 200 status code.
-   If the file does not exist, a 404 is returned instead.
-
-2. As an object. This object can have 3 different fields that are explained below:
-   | Field | Required | Rib Type | Description |
-   | --------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------ |
-   | headers | false | record | Headers that should be included in the response. |
-   | status | false | u64 | Status code of the response. If not provided defaults to 200. |
-   | file-path | true | string | Path of the file that should be retrieved from the worker filesystem. If the file does not exist a 404 is returned |
-
 
 ### Deployments
 

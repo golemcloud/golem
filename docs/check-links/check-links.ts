@@ -54,7 +54,9 @@ const headingRegex = /^#+ (.+)$/gm
 // Extract all links from markdown content
 const extractLinks = (content: string): string[] => {
   const links = markdownLinkExtractor(content)
-  return Array.from<string>(new Set(links)).filter(link => link.length > 0)
+  return Array.from<string>(new Set(links)).filter(
+    link => link.length > 0 && !link.startsWith("mailto:")
+  )
 }
 
 // Extract all headings and convert to valid anchor links
