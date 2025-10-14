@@ -432,6 +432,14 @@ test('Invoke function that takes and returns inbuilt result type', () => {
     Result.ok(true),
     false,
   );
+
+  testInvoke(
+    'fun31',
+    [['param', Result.ok(true)]],
+    resolvedAgent,
+    Result.ok(true),
+    false,
+  );
 });
 
 test('Invoke function that takes and returns multimodal types', () => {

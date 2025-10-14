@@ -62,6 +62,7 @@ export function buildJSONFromType(type: Type.Type): LiteTypeJSON {
         types: type.unionTypes.map(buildJSONFromType),
         optional: type.optional,
         typeParams: type.typeParams.map(buildJSONFromType),
+        originalTypeName: type.originalTypeName,
       };
 
     case 'object':

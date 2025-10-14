@@ -365,8 +365,11 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
         return Either.right(analysedType);
       }
 
+
       const inbuiltResultType =
-        getInbuiltResultType(type.name, type.unionTypes, type.typeParams);
+        getInbuiltResultType(type.name, type.originalTypeName, type.unionTypes, type.typeParams);
+
+      console.log("Inbuilt resultType:", inbuiltResultType);
 
       if (inbuiltResultType) {
         if (!type.name && Either.isRight(inbuiltResultType) ) {
@@ -436,7 +439,8 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
           type.name,
           type,
           type.unionTypes,
-          type.typeParams
+          type.typeParams,
+          type.originalTypeName
         );
 
         if (Either.isLeft(filteredTypes)) {
@@ -821,7 +825,8 @@ function filterUndefinedTypes(
   unionTypeName: string | undefined,
   type: TsType,
   unionTypes: TsType[],
-  typeParams: TsType[]
+  typeParams: TsType[],
+  originalTypeName: string | undefined
 ): Either.Either<TsType, string> {
 
   const scopeName = getScopeName(scope);
@@ -852,18 +857,23 @@ function filterUndefinedTypes(
     return Either.right(alternateTypes[0]);
   }
 
-  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: typeParams });
+  return Either.right({ kind: "union", name: unionTypeName, unionTypes: alternateTypes, optional: type.optional, typeParams: typeParams, originalTypeName: originalTypeName });
 }
-
 
 export function getInbuiltResultType(
   typeName: string | undefined,
+  originalTypeName: string | undefined, // if aliased
   unionTypes: TsType[],
   typeParams: TsType[],
 ): Either.Either<AnalysedType, string> | undefined {
-    if (typeName && typeName === 'Result' && typeParams.length === 2 && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
+    const isResult = typeName === 'Result' || originalTypeName === 'Result';
+
+    if (isResult && unionTypes.length === 2 && unionTypes[0].name === 'Ok' && unionTypes[1].name === 'Err') {
       const okType = typeParams[0];
       const errType = typeParams[1];
+
+      console.log(okType);
+      console.log(errType);
 
       const okAnalysed = fromTsTypeInternal(okType, Option.none());
       const errAnalysed = fromTsTypeInternal(errType, Option.none());

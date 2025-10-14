@@ -33,6 +33,7 @@ export type LiteTypeJSON =
       types: LiteTypeJSON[];
       typeParams: LiteTypeJSON[];
       optional: boolean;
+      originalTypeName: string | undefined;
     }
   | { kind: 'literal'; name?: string; literalValue?: string; optional: boolean }
   | {

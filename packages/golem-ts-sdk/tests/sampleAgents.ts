@@ -222,6 +222,10 @@ class FooAgent extends BaseAgent {
     return param;
   }
 
+  async fun31(param: MyResult): Promise<MyResult> {
+    return Result.ok(true);
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
@@ -238,6 +242,8 @@ class FooAgent extends BaseAgent {
     return super.getId();
   };
 }
+
+export type MyResult = Result<boolean, string>;
 
 export interface CustomData {
   data: string;

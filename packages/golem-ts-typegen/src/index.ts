@@ -298,20 +298,40 @@ function getTypeFromTsMorphInternal(
   }
 
   if (type.isUnion()) {
-    const args = tsMorphType
-      .getAliasTypeArguments()
-      .map((arg) => getTypeFromTsMorph(arg, false));
+    const argsInternal = tsMorphType.getAliasTypeArguments();
+
+    const aliased = getAliasTypeArgumentsSafe(tsMorphType, aliasName);
 
     const unionTypes = type
       .getUnionTypes()
       .map((t) => getTypeFromTsMorphInternal(t, false, new Set(visitedTypes)));
+
+    const [aliasRawName, aliasedTypeArgs] = aliased;
+
+    if (argsInternal.length > 0 || !aliasRawName) {
+      const args = argsInternal.map((arg) => getTypeFromTsMorph(arg, false));
+
+      return {
+        kind: "union",
+        name: aliasName,
+        unionTypes,
+        optional: isOptional,
+        typeParams: args,
+        originalTypeName: undefined,
+      };
+    }
+
+    const aliasedArgs = aliasedTypeArgs.map((arg) =>
+      getTypeFromTsMorph(arg, false),
+    );
 
     return {
       kind: "union",
       name: aliasName,
       unionTypes,
       optional: isOptional,
-      typeParams: args,
+      typeParams: aliasedArgs,
+      originalTypeName: aliasRawName,
     };
   }
 
@@ -382,6 +402,33 @@ function getTypeFromTsMorphInternal(
     optional: isOptional,
     recursive: false,
   };
+}
+
+type RawName = string;
+
+function getAliasTypeArgumentsSafe(
+  type: TsMorphType,
+  aliasName: string | undefined,
+): [RawName | undefined, TsMorphType[]] {
+  const aliasSymbol = type.getAliasSymbol();
+  if (!aliasSymbol) return [undefined, []];
+
+  const decl = aliasSymbol.getDeclarations()[0];
+  if (!decl || !decl.isKind(ts.SyntaxKind.TypeAliasDeclaration))
+    return [undefined, []];
+
+  const typeNode = decl.getTypeNodeOrThrow();
+  const typeRef = typeNode.asKind(ts.SyntaxKind.TypeReference);
+  if (!typeRef) return [undefined, []];
+
+  if (aliasName === "MyaResult") {
+    console.log(typeRef.getTypeName().getText());
+  }
+
+  return [
+    typeRef.getTypeName().getText(),
+    typeRef.getTypeArguments().map((arg) => arg.getType()),
+  ];
 }
 
 export function getRawTypeName(type: TsMorphType): string | undefined {

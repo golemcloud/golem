@@ -86,6 +86,7 @@ export function buildTypeFromJSON(json: LiteTypeJSON): Type {
         unionTypes: unionElems,
         optional: json.optional,
         typeParams: unionTypeParams,
+        originalTypeName: json.originalTypeName,
       };
     }
 

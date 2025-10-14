@@ -30,6 +30,7 @@ export type Type =
       unionTypes: Type[];
       typeParams: Type[];
       optional: boolean;
+      originalTypeName: string | undefined;
     }
   | {
       kind: 'object';
