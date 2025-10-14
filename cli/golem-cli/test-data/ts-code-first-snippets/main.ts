@@ -1,4 +1,4 @@
-import {BaseAgent, agent, UnstructuredText, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
+import {BaseAgent, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -169,6 +169,8 @@ class FooAgent extends BaseAgent {
     }
 
 
+
+
     async funString(stringType: StringType): Promise<Types.StringType> {
         return await this.barAgent.funString(stringType);
     }
@@ -231,8 +233,12 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funUndefinedReturn(text);
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
         return await this.barAgent.funUnstructuredText(unstructuredText);
+    }
+
+    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return await this.barAgent.funUnstructuredBinary(unstructuredText);
     }
 
     async funEitherOptional(eitherBothOptional: ResultLikeWithNoTag): Promise<ResultLikeWithNoTag> {
@@ -380,8 +386,12 @@ class BarAgent extends BaseAgent {
         return
     }
 
-    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<UnstructuredText> {
-        return unstructuredText
+    async funUnstructuredText(unstructuredText: UnstructuredText): Promise<string> {
+        return "foo"
+    }
+
+    async funUnstructuredBinary(unstructuredText: UnstructuredBinary<['application/json']>): Promise<string> {
+        return "foo"
     }
 
     async funUnionWithOnlyLiterals(unionWithLiterals: UnionWithOnlyLiterals): Promise<Types.UnionWithOnlyLiterals> {
