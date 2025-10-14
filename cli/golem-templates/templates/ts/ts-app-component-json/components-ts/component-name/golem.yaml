@@ -6,7 +6,7 @@ httpApi:
       version: '0.0.1'
       routes:
         - method: POST
-          path: /{name}/tasks
+          path: /component-name-api/{name}/tasks
           binding:
             type: default
             __cn__: componentname
@@ -17,12 +17,12 @@ httpApi:
               { status: 200, body: { result: new-task }, headers: { Content-Type: "application/json" } }
 
         - method: OPTIONS
-          path: /{name}/tasks
+          path: /component-name-api/{name}/tasks
           binding:
             type: cors-preflight
 
         - method: GET
-          path: /{name}/tasks
+          path: /component-name-api/{name}/tasks
           binding:
             type: default
             __cn__: componentname
@@ -33,7 +33,7 @@ httpApi:
               { status: 200, body: { result: tasks }, headers: { Content-Type: "application/json" } }
 
         - method: POST
-          path: /{name}/tasks/{taskId}/complete
+          path: /component-name-api/{name}/tasks/{taskId}/complete
           binding:
             type: default
             __cn__: componentname
@@ -45,7 +45,7 @@ httpApi:
               { status: 200, body: { result: result }, headers: { Content-Type: "application/json" } }
 
         - method: OPTIONS
-          path: /{name}/tasks/{taskId}/complete
+          path: /component-name-api/{name}/tasks/{taskId}/complete
           binding:
             type: cors-preflight
 

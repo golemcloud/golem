@@ -1024,6 +1024,15 @@ async fn test_ts_code_first_complex() {
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["foo"]).await;
 
+    // Unstructured text type
+    run_and_assert(&ctx, "fun-unstructured-text", &["url(\"foo\")"]).await;
+
+    // Unstructured binary
+    run_and_assert(&ctx, "fun-unstructured-binary", &["url(\"foo\")"]).await;
+
+    // Multimodal
+    run_and_assert(&ctx, "fun-multimodal", &["[input-text({val: \"foo\"})]"]).await;
+
     // Union that has only literals
     run_and_assert(&ctx, "fun-union-with-only-literals", &["bar"]).await;
 
