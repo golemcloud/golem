@@ -393,14 +393,6 @@ export function buildOutputSchema(
     ]);
   }
 
-  const undefinedSchema = handleUndefinedReturnType(returnType);
-  if (Option.isSome(undefinedSchema)) {
-    return Either.right([
-      { tag: 'analysed', val: tuple(undefined, 'undefined', []) },
-      undefinedSchema.val,
-    ]);
-  }
-
   const unstructuredText = handleUnstructuredCase(
     returnType,
     'UnstructuredText',
@@ -747,37 +739,6 @@ function convertToElementSchema(
       val: witType,
     };
   });
-}
-
-function handleUndefinedReturnType(
-  returnType: Type.Type,
-): Option.Option<DataSchema> {
-  switch (returnType.kind) {
-    case 'null':
-      return Option.some({
-        tag: 'tuple',
-        val: [],
-      });
-
-    case 'undefined':
-      return Option.some({
-        tag: 'tuple',
-        val: [],
-      });
-
-    case 'void':
-      return Option.some({
-        tag: 'tuple',
-        val: [],
-      });
-
-    case 'promise':
-      const elementType = returnType.element;
-      return handleUndefinedReturnType(elementType);
-
-    default:
-      return Option.none();
-  }
 }
 
 function getBinaryDescriptor(

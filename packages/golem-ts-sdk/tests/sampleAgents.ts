@@ -226,6 +226,10 @@ class FooAgent extends BaseAgent {
     return param;
   }
 
+  async fun32(param: Result<void, string>): Promise<Result<void, string>> {
+    return param;
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {
