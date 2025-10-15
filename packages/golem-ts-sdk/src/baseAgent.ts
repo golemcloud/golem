@@ -163,9 +163,11 @@ export class BaseAgent {
  * ```
  */
 export type WithRemoteMethods<T> = {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+  [K in keyof T as T[K] extends (...args: any[]) => any
+    ? K
+    : never]: T[K] extends (...args: infer A) => infer R
     ? RemoteMethod<A, Awaited<R>>
-    : T[K];
+    : never;
 };
 
 export type RemoteMethod<Args extends any[], R> = {
