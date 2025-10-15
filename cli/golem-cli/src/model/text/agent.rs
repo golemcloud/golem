@@ -30,6 +30,7 @@ impl MessageWithFields for AgentTypeView {
         let mut fields = FieldsBuilder::new();
 
         fields.field("Agent type", &self.agent_type);
+        fields.field("Constructor", &self.constructor);
         fields.field("Description", &self.description);
 
         fields.build()
