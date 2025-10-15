@@ -576,7 +576,7 @@ export function serializeDefaultTsValue(
 }
 
 export function serializeBinaryReferenceTsValue(tsValue: any): Value {
-  const binaryReference = castTsValueToBinaryReference(tsValue);
+  const binaryReference = serializeTsValueToBinaryReference(tsValue);
 
   switch (binaryReference.tag) {
     case 'url':
@@ -616,7 +616,7 @@ export function serializeBinaryReferenceTsValue(tsValue: any): Value {
 }
 
 export function serializeTextReferenceTsValue(tsValue: any): Value {
-  const textReference: TextReference = castTsValueToTextReference(tsValue);
+  const textReference: TextReference = serializeTsValueToTextReference(tsValue);
 
   switch (textReference.tag) {
     case 'url':
@@ -666,7 +666,9 @@ export function serializeTextReferenceTsValue(tsValue: any): Value {
   }
 }
 
-export function castTsValueToBinaryReference(tsValue: any): BinaryReference {
+export function serializeTsValueToBinaryReference(
+  tsValue: any,
+): BinaryReference {
   if (typeof tsValue === 'object') {
     const keys = Object.keys(tsValue);
 
@@ -729,7 +731,7 @@ export function castTsValueToBinaryReference(tsValue: any): BinaryReference {
   );
 }
 
-export function castTsValueToTextReference(value: any): TextReference {
+export function serializeTsValueToTextReference(value: any): TextReference {
   if (typeof value === 'object') {
     const keys = Object.keys(value);
 

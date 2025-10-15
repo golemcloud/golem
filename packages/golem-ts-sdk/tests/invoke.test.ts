@@ -64,8 +64,8 @@ import { AgentMethodRegistry } from '../src/internal/registry/agentMethodRegistr
 import { Multimodal, Result, UnstructuredText } from '../src';
 import { AgentClassName } from '../src';
 import {
-  castTsValueToBinaryReference,
-  castTsValueToTextReference,
+  serializeTsValueToBinaryReference,
+  serializeTsValueToTextReference,
 } from '../src/internal/mapping/values/serializer';
 import {
   deserializeDataValue,
@@ -740,14 +740,14 @@ function createInputDataValue(
           };
 
         case 'unstructured-text':
-          const textReference = castTsValueToTextReference(value);
+          const textReference = serializeTsValueToTextReference(value);
           return {
             tag: 'unstructured-text',
             val: textReference,
           };
 
         case 'unstructured-binary':
-          const binaryReference = castTsValueToBinaryReference(value);
+          const binaryReference = serializeTsValueToBinaryReference(value);
           return {
             tag: 'unstructured-binary',
             val: binaryReference,

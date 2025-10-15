@@ -23,8 +23,8 @@ import {
   TextReference,
 } from 'golem:agent/common';
 import {
-  castTsValueToBinaryReference,
-  castTsValueToTextReference,
+  serializeTsValueToBinaryReference,
+  serializeTsValueToTextReference,
   matchesType,
 } from './serializer';
 import { getLanguageCodes, getMimeTypes } from '../../schema';
@@ -275,7 +275,7 @@ export function serializeToDataValue(
 
 function serializeBinaryReferenceToDataValue(tsValue: any): DataValue {
   const binaryReference: BinaryReference =
-    castTsValueToBinaryReference(tsValue);
+    serializeTsValueToBinaryReference(tsValue);
 
   const elementValue: ElementValue = {
     tag: 'unstructured-binary',
@@ -289,7 +289,7 @@ function serializeBinaryReferenceToDataValue(tsValue: any): DataValue {
 }
 
 function serializeTextReferenceToDataValue(value: any): DataValue {
-  const textReference: TextReference = castTsValueToTextReference(value);
+  const textReference: TextReference = serializeTsValueToTextReference(value);
 
   const elementValue: ElementValue = {
     tag: 'unstructured-text',

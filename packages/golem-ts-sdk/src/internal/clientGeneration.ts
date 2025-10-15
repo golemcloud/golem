@@ -36,8 +36,8 @@ import { AgentConstructorParamRegistry } from './registry/agentConstructorParamR
 import { AgentMethodRegistry } from './registry/agentMethodRegistry';
 import { deserialize } from './mapping/values/deserializer';
 import {
-  castTsValueToBinaryReference,
-  castTsValueToTextReference,
+  serializeTsValueToBinaryReference,
+  serializeTsValueToTextReference,
   matchesType,
   serializeBinaryReferenceTsValue,
   serializeDefaultTsValue,
@@ -45,6 +45,10 @@ import {
 } from './mapping/values/serializer';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
 import { match } from 'node:assert';
+import {
+  deserializeDataValue,
+  ParameterDetail,
+} from './mapping/values/dataValue';
 
 export function getRemoteClient<T extends new (...args: any[]) => any>(
   ctor: T,
@@ -111,12 +115,12 @@ function getMethodProxy(
 
   const functionName = `${agentClassName.asWit}.{${methodNameKebab}}`;
 
-  const returnTypeAnalysed = AgentMethodRegistry.getReturnType(
+  const returnTypeInfoInternal = AgentMethodRegistry.getReturnType(
     agentClassName,
     methodName,
   );
 
-  function getValue(
+  function convertToValue(
     arg: any,
     typeInfoInternal: TypeInfoInternal,
   ): Either.Either<Value.Value, string> {
@@ -167,7 +171,7 @@ function getMethodProxy(
               }
             });
 
-            const result = getValue(arg[index], types[index][1]);
+            const result = convertToValue(arg[index], types[index][1]);
 
             if (Either.isLeft(result)) {
               return Either.left(
@@ -212,9 +216,9 @@ function getMethodProxy(
           );
         }
 
-        const value = getValue(fnArg, typeInfo);
-
-        return Either.map(value, (v) => Value.toWitValue(v));
+        return Either.map(convertToValue(fnArg, typeInfo), (v) =>
+          Value.toWitValue(v),
+        );
       }),
     );
 
@@ -252,13 +256,15 @@ function getMethodProxy(
           })()
         : rpcResult.val;
 
-    if (!returnTypeAnalysed || returnTypeAnalysed.tag !== 'analysed') {
+    if (!returnTypeInfoInternal) {
       throw new Error(
         `Return type of method ${String(prop)}  not supported in remote calls`,
       );
     }
 
-    return deserialize(unwrapResult(rpcWitValue), returnTypeAnalysed.val);
+    const rpcValueUnwrapped = unwrapResult(rpcWitValue);
+
+    return deserializeRpcResult(rpcValueUnwrapped, returnTypeInfoInternal);
   }
 
   function invokeFireAndForget(...fnArgs: any[]) {
@@ -347,7 +353,7 @@ function getAgentId(
             );
           case 'unstructured-text':
             const textReference: TextReference =
-              castTsValueToTextReference(arg);
+              serializeTsValueToTextReference(arg);
 
             const elementValue: Either.Either<ElementValue, string> =
               Either.right({
@@ -359,7 +365,7 @@ function getAgentId(
 
           case 'unstructured-binary':
             const binaryReference: BinaryReference =
-              castTsValueToBinaryReference(arg);
+              serializeTsValueToBinaryReference(arg);
 
             const elementValueBinary: Either.Either<ElementValue, string> =
               Either.right({
@@ -409,4 +415,394 @@ function unwrapResult(witValue: WitValue.WitValue): Value.Value {
   return value.kind === 'tuple' && value.value.length > 0
     ? value.value[0]
     : value;
+}
+
+function deserializeRpcResult(
+  rpcResult: Value.Value,
+  typeInfoInternal: TypeInfoInternal,
+): any {
+  switch (typeInfoInternal.tag) {
+    case 'analysed':
+      const dataValue: DataValue = {
+        tag: 'tuple',
+        val: [
+          {
+            tag: 'component-model',
+            val: Value.toWitValue(rpcResult),
+          },
+        ],
+      };
+
+      return Either.map(
+        deserializeDataValue(dataValue, [
+          {
+            parameterName: 'return-value',
+            parameterTypeInfo: typeInfoInternal,
+          },
+        ]),
+        (values) => values[0],
+      );
+
+    case 'unstructured-text':
+      const textReferenceEither = convertValueToTextReference(rpcResult);
+
+      if (Either.isLeft(textReferenceEither)) {
+        throw new Error(
+          `Failed to convert return value to TextReference: ${textReferenceEither.val}`,
+        );
+      }
+
+      const dataValueText: DataValue = {
+        tag: 'tuple',
+        val: [
+          {
+            tag: 'unstructured-text',
+            val: textReferenceEither.val,
+          },
+        ],
+      };
+
+      const textResult = Either.map(
+        deserializeDataValue(dataValueText, [
+          {
+            parameterName: 'return-value',
+            parameterTypeInfo: typeInfoInternal,
+          },
+        ]),
+        (values) => values[0],
+      );
+
+      if (Either.isLeft(textResult)) {
+        throw new Error(
+          `Failed to deserialize return value: ${textResult.val}`,
+        );
+      }
+
+      return textResult.val;
+
+    case 'unstructured-binary':
+      const binaryReferenceEither = convertValueToBinaryReference(rpcResult);
+
+      if (Either.isLeft(binaryReferenceEither)) {
+        throw new Error(
+          `Failed to convert return value to BinaryReference: ${binaryReferenceEither.val}`,
+        );
+      }
+
+      const dataValueBinary: DataValue = {
+        tag: 'tuple',
+        val: [
+          {
+            tag: 'unstructured-binary',
+            val: binaryReferenceEither.val,
+          },
+        ],
+      };
+
+      const paramInfo = [
+        {
+          parameterName: 'return-value',
+          parameterTypeInfo: typeInfoInternal,
+        },
+      ];
+
+      const binaryResult = Either.map(
+        deserializeDataValue(dataValueBinary, paramInfo),
+        (values) => values[0],
+      );
+
+      if (Either.isLeft(binaryResult)) {
+        throw new Error(
+          `Failed to deserialize return value: ${binaryResult.val}`,
+        );
+      }
+      return binaryResult.val;
+
+    case 'multimodal':
+      const multimodalParamInfo: ParameterDetail[] = typeInfoInternal.types.map(
+        ([name, typeInfo]) => ({
+          parameterName: name,
+          parameterTypeInfo: typeInfo,
+        }),
+      );
+
+      switch (rpcResult.kind) {
+        // A multimodal value is always a list
+        case 'list':
+          const values = rpcResult.value;
+
+          const nameAndElementValues: [string, ElementValue][] = values.map(
+            (value, idx) => {
+              switch (value.kind) {
+                case 'variant':
+                  const caseIdx = value.caseIdx;
+
+                  const paramDetail = multimodalParamInfo[caseIdx];
+
+                  const caseValue = value.caseValue;
+
+                  if (!caseValue) {
+                    throw new Error(
+                      `Missing case value in multimodal return value at index ${idx}`,
+                    );
+                  }
+
+                  const elementValue = convertNonMultimodalValueToElementValue(
+                    caseValue,
+                    paramDetail.parameterTypeInfo,
+                  );
+
+                  return [paramDetail.parameterName, elementValue];
+
+                default:
+                  throw new Error(
+                    `Invalid kind in multimodal return value at index ${idx}: expected variant, got ${value.kind}`,
+                  );
+              }
+            },
+          );
+
+          const dataValue: DataValue = {
+            tag: 'multimodal',
+            val: nameAndElementValues,
+          };
+
+          const multimodalTsValue = Either.map(
+            deserializeDataValue(dataValue, multimodalParamInfo),
+            (values) => values[0],
+          );
+
+          if (Either.isLeft(multimodalTsValue)) {
+            throw new Error(
+              `Failed to deserialize return value: ${multimodalTsValue.val}`,
+            );
+          }
+
+          return multimodalTsValue.val;
+      }
+  }
+}
+
+function convertNonMultimodalValueToElementValue(
+  rpcValueUnwrapped: Value.Value,
+  returnTypeInfoInternal: TypeInfoInternal,
+): ElementValue {
+  switch (returnTypeInfoInternal.tag) {
+    case 'analysed':
+      return {
+        tag: 'component-model',
+        val: Value.toWitValue(rpcValueUnwrapped),
+      };
+
+    case 'unstructured-text':
+      const textReferenceEither =
+        convertValueToTextReference(rpcValueUnwrapped);
+
+      if (Either.isLeft(textReferenceEither)) {
+        throw new Error(
+          `Failed to convert return value to TextReference: ${textReferenceEither.val}`,
+        );
+      }
+
+      return {
+        tag: 'unstructured-text',
+        val: textReferenceEither.val,
+      };
+
+    case 'unstructured-binary':
+      const binaryReferenceEither =
+        convertValueToBinaryReference(rpcValueUnwrapped);
+
+      if (Either.isLeft(binaryReferenceEither)) {
+        throw new Error(
+          `Failed to convert return value to BinaryReference: ${binaryReferenceEither.val}`,
+        );
+      }
+
+      return {
+        tag: 'unstructured-binary',
+        val: binaryReferenceEither.val,
+      };
+
+    case 'multimodal':
+      // DataValue::Multimodal cannot encode recursive multimodals
+      throw new Error(`Nested multimodal values are not supported`);
+  }
+}
+
+function convertValueToTextReference(
+  value: Value.Value,
+): Either.Either<TextReference, string> {
+  switch (value.kind) {
+    case 'variant':
+      const idx = value.caseIdx;
+      switch (idx) {
+        case 0:
+          // url
+          const urlValue = value.caseValue;
+
+          if (!urlValue) {
+            return Either.left(`Unable to extract URL from value`);
+          }
+
+          switch (urlValue.kind) {
+            case 'string':
+              return Either.right({
+                tag: 'url',
+                val: urlValue.value,
+              });
+
+            default:
+              return Either.left(
+                `Invalid URL value type in value: ${urlValue.kind}`,
+              );
+          }
+
+        case 1:
+          // inline
+          const inlineValue = value.caseValue;
+
+          if (!inlineValue) {
+            return Either.left(`Unable to extract inline text from value`);
+          }
+
+          switch (inlineValue.kind) {
+            case 'record':
+              const record = inlineValue.value;
+
+              const data = record[0];
+
+              const languageCode = record.length > 1 ? record[1] : undefined;
+
+              switch (data.kind) {
+                case 'string':
+                  const textData = data.value;
+
+                  if (!languageCode) {
+                    return Either.right({
+                      tag: 'inline',
+                      val: {
+                        data: textData,
+                      },
+                    });
+                  }
+
+                  switch (languageCode.kind) {
+                    case 'string':
+                      const languageCodeStr = languageCode.value;
+                      return Either.right({
+                        tag: 'inline',
+                        val: {
+                          data: textData,
+                          textType: { languageCode: languageCodeStr },
+                        },
+                      });
+
+                    default:
+                      return Either.left(
+                        `Invalid inline text language code type: expected string`,
+                      );
+                  }
+
+                default:
+                  return Either.left(
+                    `Invalid inline text data type: expected string`,
+                  );
+              }
+            default:
+              return Either.left(
+                `Invalid inline text value type in value: ${inlineValue.kind}`,
+              );
+          }
+      }
+  }
+
+  return Either.left(`Unable to convert value to TextReference`);
+}
+
+function convertValueToBinaryReference(
+  value: Value.Value,
+): Either.Either<BinaryReference, string> {
+  switch (value.kind) {
+    case 'variant':
+      const idx = value.caseIdx;
+      switch (idx) {
+        case 0:
+          // url
+          const urlValue = value.caseValue;
+
+          if (!urlValue) {
+            return Either.left(`Unable to extract URL from value`);
+          }
+
+          switch (urlValue.kind) {
+            case 'string':
+              return Either.right({
+                tag: 'url',
+                val: urlValue.value,
+              });
+
+            default:
+              return Either.left(
+                `Invalid URL value type in value: ${urlValue.kind}`,
+              );
+          }
+
+        case 1:
+          // inline
+          const inlineValue = value.caseValue;
+
+          if (!inlineValue) {
+            return Either.left(`Unable to extract inline binary from value`);
+          }
+
+          switch (inlineValue.kind) {
+            case 'record':
+              const values = inlineValue.value;
+
+              const data = values[0];
+
+              const uint8Array: Uint8Array = deserialize(data, {
+                kind: 'list',
+                value: {
+                  name: undefined,
+                  owner: undefined,
+                  inner: { kind: 'u8' },
+                },
+                typedArray: 'u8',
+                mapType: undefined,
+              }) as Uint8Array;
+
+              const mimeType = values[1];
+
+              if (!mimeType) {
+                return Either.left(`Unable to extract mime type from value`);
+              }
+
+              switch (mimeType.kind) {
+                case 'string':
+                  return Either.right({
+                    tag: 'inline',
+                    val: {
+                      data: uint8Array,
+                      binaryType: {
+                        mimeType: mimeType.value,
+                      },
+                    },
+                  });
+                default:
+                  return Either.left(
+                    `Invalid inline binary mime type type: expected string`,
+                  );
+              }
+
+            default:
+              return Either.left(
+                `Invalid inline binary value type in value: ${inlineValue.kind}`,
+              );
+          }
+      }
+  }
+
+  return Either.left(`Unable to convert value to BinaryReference`);
 }
