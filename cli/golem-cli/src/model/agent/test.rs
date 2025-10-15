@@ -17,7 +17,7 @@ use golem_common::model::agent::{
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
 use golem_wasm_ast::analysis::analysed_type::{
-    case, field, list, option, r#enum, record, result, s32, str, u32, unit_case, variant,
+    case, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case, variant,
 };
 
 pub fn single_agent_wrapper_types() -> Vec<AgentType> {
@@ -442,6 +442,57 @@ pub fn reproducer_for_issue_with_result_types() -> Vec<AgentType> {
                         element_type: result(str(), str()).named("result-exact"),
                     }),
                 }],
+            }),
+        }],
+        dependencies: vec![],
+    }]
+}
+
+pub fn multimodal_untagged_variant_in_out() -> Vec<AgentType> {
+    vec![AgentType {
+        type_name: "test-agent".to_string(),
+        description: "Test".to_string(),
+        constructor: AgentConstructor {
+            name: None,
+            description: "Constructor".to_string(),
+            prompt_hint: None,
+            input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
+        },
+        methods: vec![AgentMethod {
+            name: "foo".to_string(),
+            description: "".to_string(),
+            prompt_hint: Some("".to_string()),
+            input_schema: DataSchema::Multimodal(NamedElementSchemas {
+                elements: vec![
+                    NamedElementSchema {
+                        name: "text".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![field("val", str())]).named("text"),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "image".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![field("val", list(u8()))]).named("image"),
+                        }),
+                    },
+                ],
+            }),
+            output_schema: DataSchema::Multimodal(NamedElementSchemas {
+                elements: vec![
+                    NamedElementSchema {
+                        name: "text".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![field("val", str())]).named("text"),
+                        }),
+                    },
+                    NamedElementSchema {
+                        name: "image".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: record(vec![field("val", list(u8()))]).named("image"),
+                        }),
+                    },
+                ],
             }),
         }],
         dependencies: vec![],

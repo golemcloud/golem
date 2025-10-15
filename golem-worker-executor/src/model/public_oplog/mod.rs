@@ -41,7 +41,7 @@ use crate::services::rpc::RpcError;
 use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_common::model::agent::{AgentId, DataValue};
+use golem_common::model::agent::{AgentId, DataValue, RegisteredAgentType};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
@@ -1260,6 +1260,11 @@ async fn encode_host_function_request_as_value(
         }
         "rdbms::postgres::db-result-stream::get-columns"
         | "rdbms::postgres::db-result-stream::get-next" => no_payload(),
+        "golem_agent::get_all_agent_types" => no_payload(),
+        "golem_agent::get_agent_type" => {
+            let payload: String = try_deserialize(oplog_index, &what, bytes)?;
+            Ok(payload.into_value_and_type())
+        }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
             let payload: ValueAndType = try_deserialize(oplog_index, &what, bytes)?;
@@ -1756,6 +1761,16 @@ fn encode_host_function_response_as_value(
                 SerializableError,
             > = try_deserialize(oplog_index, &what, bytes)?;
             Ok(RdbmsIntoValueAndType::into_value_and_type(payload))
+        }
+        "golem_agent::get_agent_type" => {
+            let payload: Result<Option<RegisteredAgentType>, SerializableError> =
+                try_deserialize(oplog_index, &what, bytes)?;
+            Ok(payload.into_value_and_type())
+        }
+        "golem_agent::get_all_agent_types" => {
+            let payload: Result<Vec<RegisteredAgentType>, SerializableError> =
+                try_deserialize(oplog_index, &what, bytes)?;
+            Ok(payload.into_value_and_type())
         }
         _ => {
             // For everything else we assume that payload is a serialized ValueAndType
