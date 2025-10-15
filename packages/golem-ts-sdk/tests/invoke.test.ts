@@ -443,6 +443,64 @@ test('Invoke function that takes and returns inbuilt result type', () => {
   );
 });
 
+test('Invoke function that takes and returns inbuilt result type with void', () => {
+  overrideSelfMetadataImpl(FooAgentClassName);
+  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
+  if (!classMetadata) {
+    throw new Error('FooAgent type metadata not found');
+  }
+
+  const resolvedAgent = initiateFooAgent('foo', classMetadata);
+
+  testInvoke(
+    'fun32',
+    [['param', 'foo']],
+    resolvedAgent,
+    Result.ok(undefined),
+    false,
+  );
+
+  testInvoke(
+    'fun33',
+    [['param', 'foo']],
+    resolvedAgent,
+    Result.err(undefined),
+    false,
+  );
+
+  testInvoke(
+    'fun34',
+    [['param', 'foo']],
+    resolvedAgent,
+    Result.ok(undefined),
+    false,
+  );
+
+  testInvoke(
+    'fun35',
+    [['param', 'foo']],
+    resolvedAgent,
+    Result.ok(undefined),
+    false,
+  );
+
+  testInvoke(
+    'fun36',
+    [['param', 'foo']],
+    resolvedAgent,
+    Result.err(undefined),
+    false,
+  );
+
+  testInvoke(
+    'fun37',
+    [['param', 'foo']],
+    resolvedAgent,
+    Result.ok(undefined),
+    false,
+  );
+});
+
 test('Invoke function that takes and returns multimodal types', () => {
   overrideSelfMetadataImpl(FooAgentClassName);
 
@@ -669,7 +727,9 @@ function testInvoke(
       invokeResult.tag === 'ok'
         ? invokeResult.val
         : (() => {
-            throw new Error('Test failure: ' + util.format(invokeResult.val));
+            throw new Error(
+              'Test failure: ' + JSON.stringify(invokeResult.val),
+            );
           })();
 
     // Unless it is an RPC call, we don't really need to deserialize the result

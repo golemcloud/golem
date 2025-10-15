@@ -477,6 +477,18 @@ export function serializeDefaultTsValue(
 
           if (tsValue['tag'] === 'ok') {
             if (!okType) {
+              if (analysedType.resultType.okEmptyType) {
+                return Either.right({
+                  kind: 'result',
+                  value: {
+                    ok: {
+                      kind: 'tuple',
+                      value: [],
+                    },
+                  },
+                });
+              }
+
               return Either.left(
                 customSerializationError('unresolved ok type'),
               );
@@ -495,6 +507,18 @@ export function serializeDefaultTsValue(
 
           if (tsValue['tag'] === 'err') {
             if (!errType) {
+              if (analysedType.resultType.errEmptyType) {
+                return Either.right({
+                  kind: 'result',
+                  value: {
+                    err: {
+                      kind: 'tuple',
+                      value: [],
+                    },
+                  },
+                });
+              }
+
               return Either.left(
                 customSerializationError('unresolved err type'),
               );

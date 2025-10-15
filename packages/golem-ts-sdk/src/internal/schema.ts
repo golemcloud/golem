@@ -848,29 +848,27 @@ function handleVoidReturnType(
         const okType = resultTypeParams[0];
         const errType = resultTypeParams[1];
 
-        const isOkVoid =
-          okType.kind === 'void' ||
-          okType.kind === 'undefined' ||
-          okType.kind === 'null';
-
-        const isErrVoid =
-          errType.kind === 'void' ||
-          errType.kind === 'undefined' ||
-          errType.kind === 'null';
-
-        const okEmptyType: EmptyType =
+        const okEmptyType: EmptyType | undefined =
           okType.kind === 'void'
             ? 'void'
             : okType.kind === 'undefined'
               ? 'undefined'
-              : 'null';
+              : okType.kind === 'null'
+                ? 'null'
+                : undefined;
 
-        const errEmptyType: EmptyType =
+        const errEmptyType: EmptyType | undefined =
           errType.kind === 'void'
             ? 'void'
             : errType.kind === 'undefined'
               ? 'undefined'
-              : 'null';
+              : errType.kind === 'null'
+                ? 'null'
+                : undefined;
+
+        const isOkVoid = okEmptyType !== undefined;
+
+        const isErrVoid = errEmptyType !== undefined;
 
         if (isOkVoid && isErrVoid) {
           return Either.right(

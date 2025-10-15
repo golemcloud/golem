@@ -226,6 +226,31 @@ class FooAgent extends BaseAgent {
     return param;
   }
 
+  // Result types with void
+  async fun32(param: string): Promise<Result<void, string>> {
+    return Result.ok(undefined);
+  }
+
+  async fun33(param: string): Promise<Result<string, void>> {
+    return Result.err(undefined);
+  }
+
+  async fun34(param: string): Promise<Result<void, void>> {
+    return Result.ok(undefined);
+  }
+
+  fun35(param: string): Result<void, string> {
+    return Result.ok(undefined);
+  }
+
+  fun36(param: string): Result<string, void> {
+    return Result.err(undefined);
+  }
+
+  fun37(param: string): Result<void, void> {
+    return Result.ok(undefined);
+  }
+
   // Overridden methods should be  not be considered as agent methods
   // without override keyword
   loadSnapshot(bytes: Uint8Array): Promise<void> {

@@ -295,6 +295,28 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               return Result.err(deserialize(value.value.err, inbuiltErrType));
             }
 
+            if (value.value.ok && analysedType.resultType.okEmptyType) {
+              switch (analysedType.resultType.okEmptyType) {
+                case 'null':
+                  return Result.ok(null);
+                case 'void':
+                  return Result.ok(undefined);
+                case 'undefined':
+                  return Result.ok(undefined);
+              }
+            }
+
+            if (value.value.err && analysedType.resultType.errEmptyType) {
+              switch (analysedType.resultType.errEmptyType) {
+                case 'null':
+                  return Result.err(null);
+                case 'void':
+                  return Result.err(undefined);
+                case 'undefined':
+                  return Result.err(undefined);
+              }
+            }
+
             throw new Error(typeMismatchInDeserialize(value, 'result'));
 
           case 'custom':
