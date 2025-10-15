@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::component::render_agent_constructor;
 use cli_table::Table;
 use golem_common::model::agent::RegisteredAgentType;
 use serde_derive::{Deserialize, Serialize};
@@ -19,7 +20,11 @@ use serde_derive::{Deserialize, Serialize};
 #[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize, Table)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypeView {
+    #[table(title = "Agent Type")]
     pub agent_type: String,
+    #[table(title = "Constructor")]
+    pub constructor: String,
+    #[table(title = "Description")]
     pub description: String,
 }
 
@@ -27,6 +32,7 @@ impl AgentTypeView {
     pub fn new(value: &RegisteredAgentType) -> Self {
         Self {
             agent_type: value.agent_type.type_name.clone(),
+            constructor: render_agent_constructor(&value.agent_type, false),
             description: value.agent_type.description.clone(),
         }
     }
