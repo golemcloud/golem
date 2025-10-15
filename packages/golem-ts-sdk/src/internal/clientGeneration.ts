@@ -433,7 +433,7 @@ function deserializeRpcResult(
         ],
       };
 
-      return Either.map(
+      const result = Either.map(
         deserializeDataValue(dataValue, [
           {
             parameterName: 'return-value',
@@ -442,6 +442,14 @@ function deserializeRpcResult(
         ]),
         (values) => values[0],
       );
+
+      if (Either.isLeft(result)) {
+        throw new Error(
+          `Failed to deserialize return value from rpc call: ${result.val}`,
+        );
+      }
+
+      return result.val;
 
     case 'unstructured-text':
       const textReferenceEither = convertValueToTextReference(rpcResult);
@@ -516,6 +524,7 @@ function deserializeRpcResult(
           `Failed to deserialize return value: ${binaryResult.val}`,
         );
       }
+
       return binaryResult.val;
 
     case 'multimodal':
