@@ -1,4 +1,4 @@
-export interface Worker {
+export interface Agent {
   accountId: string;
   args: string[];
   componentSize: number;
@@ -6,7 +6,7 @@ export interface Worker {
   createdAt: string;
   env: { [key: string]: string };
   lastError: string | null;
-  ownedResources: { [key: string]: string };
+  exportedResourceInstances: { [key: string]: string };
   pendingInvocationCount: number;
   retryCount: number;
   status: string;
@@ -25,7 +25,7 @@ export interface Update {
   type: "failedUpdate" | "successfulUpdate";
 }
 
-export interface WorkerStatus {
+export interface AgentStatus {
   Idle?: number;
   Running?: number;
   Suspended?: number;
@@ -53,9 +53,9 @@ interface BaseLogEntry {
   timestamp: string;
 }
 
-interface WorkerId {
+interface AgentId {
   componentId: string;
-  workerName: string;
+  agentName: string;
 }
 
 interface AttributeValue {
@@ -80,7 +80,7 @@ interface LocalSpan {
 
 interface CreateEntry extends BaseLogEntry {
   type: "Create";
-  workerId: WorkerId;
+  agentId: AgentId;
   componentVersion: number;
   args: unknown[];
   env: Record<string, unknown>;

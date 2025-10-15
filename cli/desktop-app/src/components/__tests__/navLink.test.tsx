@@ -228,18 +228,18 @@ describe("NavLink", () => {
           <nav>
             <NavLink to="/dashboard">Dashboard</NavLink>
             <NavLink to="/components">Components</NavLink>
-            <NavLink to="/workers">Workers</NavLink>
+            <NavLink to="/agents">Agents</NavLink>
           </nav>
         </MemoryRouter>,
       );
 
       const dashboardLink = screen.getByText("Dashboard");
       const componentsLink = screen.getByText("Components");
-      const workersLink = screen.getByText("Workers");
+      const agentsLink = screen.getByText("Agents");
 
       expect(dashboardLink).toHaveClass("text-gray-500");
       expect(componentsLink).toHaveClass("bg-primary-background");
-      expect(workersLink).toHaveClass("text-gray-500");
+      expect(agentsLink).toHaveClass("text-gray-500");
     });
 
     it("should handle nested route activation correctly", () => {

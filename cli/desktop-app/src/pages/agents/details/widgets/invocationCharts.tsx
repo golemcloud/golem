@@ -1,5 +1,5 @@
 import { ChartContainer, ChartTooltip } from "@/components/ui/chart";
-import { Invocation } from "@/types/worker";
+import { Invocation } from "@/types/agent";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 
 interface ProcessedData {

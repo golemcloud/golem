@@ -16,13 +16,13 @@ import {
   OplogWithIndex,
   Terminal,
   WsMessage,
-} from "@/types/worker.ts";
+} from "@/types/agent.ts";
 import { RotateCw, Search, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
-export default function WorkerLive() {
-  const { componentId = "", workerName = "", appId } = useParams();
+export default function AgentLive() {
+  const { componentId = "", agentName = "", appId } = useParams();
   const wsRef = useRef<WSS | null>(null);
   const [invocationData, setInvocationData] = useState<Invocation[]>([]);
   const [terminal, setTerminal] = useState<Terminal[]>([]);
@@ -43,7 +43,7 @@ export default function WorkerLive() {
       const initWebSocket = async () => {
         try {
           const ws = await WSS.getConnection(
-            `/v1/components/${componentId}/workers/${workerName}/connect`,
+            `/v1/components/${componentId}/agents/${agentName}/connect`,
           );
           wsRef.current = ws;
 
@@ -88,11 +88,11 @@ export default function WorkerLive() {
   }, [debouncedActiveTab, debouncedSearchQuery]);
 
   const getOpLog = async (search: string) => {
-    API.workerService
+    API.agentService
       .getOplog(
         appId!,
         componentId,
-        workerName,
+        agentName,
         `${
           debouncedActiveTab === "log" ? "" : "ExportedFunctionInvoked"
         } ${search}`,

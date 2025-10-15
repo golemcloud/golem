@@ -20,43 +20,43 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb.tsx";
 
-const MenuItems = (appId: string, componentId: string, workerName: string) => [
+const MenuItems = (appId: string, componentId: string, agentName: string) => [
   {
     title: "Overview",
-    url: `/app/${appId}/components/${componentId}/workers/${workerName}`,
+    url: `/app/${appId}/components/${componentId}/agents/${agentName}`,
     icon: Home,
   },
   {
     title: "Live",
-    url: `/app/${appId}/components/${componentId}/workers/${workerName}/live`,
+    url: `/app/${appId}/components/${componentId}/agents/${agentName}/live`,
     icon: Tv,
   },
   {
     title: "Environment",
-    url: `/app/${appId}/components/${componentId}/workers/${workerName}/environments`,
+    url: `/app/${appId}/components/${componentId}/agents/${agentName}/environments`,
     icon: Container,
   },
   {
     title: "Invoke",
-    url: `/app/${appId}/components/${componentId}/workers/${workerName}/invoke`,
+    url: `/app/${appId}/components/${componentId}/agents/${agentName}/invoke`,
     icon: Workflow,
   },
   {
     title: "Info",
-    url: `/app/${appId}/components/${componentId}/workers/${workerName}/info`,
+    url: `/app/${appId}/components/${componentId}/agents/${agentName}/info`,
     icon: Info,
   },
   {
     title: "Manage",
-    url: `/app/${appId}/components/${componentId}/workers/${workerName}/manage`,
+    url: `/app/${appId}/components/${componentId}/agents/${agentName}/manage`,
     icon: Settings,
   },
 ];
 
-export const WorkerLayout = () => {
+export const AgentLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { componentId = "", workerName = "", appId } = useParams();
+  const { componentId = "", agentName = "", appId } = useParams();
   const [currentComponent, setCurrentComponent] = useState({} as ComponentList);
   const [currentMenu, setCurrentMenu] = useState("Overview");
 
@@ -78,7 +78,7 @@ export const WorkerLayout = () => {
   }, [location.pathname]);
 
   const navigateHome = () => {
-    navigate(`/app/${appId}/components/${componentId}/workers/${workerName}`);
+    navigate(`/app/${appId}/components/${componentId}/agents/${agentName}`);
     setCurrentMenu("Overview");
   };
 
@@ -86,10 +86,10 @@ export const WorkerLayout = () => {
     <ErrorBoundary>
       <SidebarProvider>
         <SidebarMenu
-          menus={MenuItems(appId!, componentId, workerName)}
+          menus={MenuItems(appId!, componentId, agentName)}
           activeItem={currentMenu}
           setActiveItem={setCurrentMenu}
-          title={"Worker"}
+          title={"Agent"}
         />
         <SidebarInset>
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 border-b">
@@ -118,8 +118,8 @@ export const WorkerLayout = () => {
                         onClick={() => navigateHome()}
                         className="cursor-pointer"
                       >
-                        <span className="text-gray-500">Worker:</span>{" "}
-                        {workerName}
+                        <span className="text-gray-500">Agent:</span>{" "}
+                        {agentName}
                       </span>
                     </BreadcrumbLink>
                   </BreadcrumbItem>

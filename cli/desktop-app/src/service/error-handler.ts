@@ -12,7 +12,7 @@ interface GolemError {
   type: string;
   reason?: string;
   path?: string;
-  worker_id?: string;
+  agent_id?: string;
   component_id?: string;
   promise_id?: string;
   details?: string;
@@ -55,17 +55,17 @@ export function parseErrorResponse(response: unknown): ErrorResponse {
         parsedError.description += ` (Path: ${errorObj.golemError.path})`;
       }
       switch (errorObj.golemError.type) {
-        case "WorkerAlreadyExists":
-          parsedError.title = "Worker Conflict";
-          parsedError.description = `Worker '${errorObj.golemError.worker_id}' already exists.`;
+        case "AgentAlreadyExists":
+          parsedError.title = "Agent Conflict";
+          parsedError.description = `Agent '${errorObj.golemError.agent_id}' already exists.`;
           break;
-        case "WorkerNotFound":
-          parsedError.title = "Worker Not Found";
-          parsedError.description = `Worker '${errorObj.golemError.worker_id}' not found.`;
+        case "AgentNotFound":
+          parsedError.title = "Agent Not Found";
+          parsedError.description = `Agent '${errorObj.golemError.agent_id}' not found.`;
           break;
-        case "WorkerCreationFailed":
-          parsedError.title = "Worker Creation Failed";
-          parsedError.description = `Failed to create worker '${errorObj.golemError.worker_id}': ${errorObj.golemError.details}`;
+        case "AgentCreationFailed":
+          parsedError.title = "Agent Creation Failed";
+          parsedError.description = `Failed to create agent '${errorObj.golemError.agent_id}': ${errorObj.golemError.details}`;
           break;
         case "ComponentDownloadFailed":
           parsedError.title = "Component Download Error";

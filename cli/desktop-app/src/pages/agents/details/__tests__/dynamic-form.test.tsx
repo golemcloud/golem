@@ -1,5 +1,5 @@
 // Mock dependencies first
-vi.mock("@/lib/worker", () => ({
+vi.mock("@/lib/agent", () => ({
   parseToJsonEditor: vi.fn(),
   parseTooltipTypesData: vi.fn(),
   safeFormatJSON: vi.fn(str => str),
@@ -100,7 +100,7 @@ import { DynamicForm, nonStringPrimitives } from "../dynamic-form";
 import { ComponentExportFunction } from "@/types/component";
 
 // Mock dependencies
-vi.mock("@/lib/worker", () => ({
+vi.mock("@/lib/agent", () => ({
   parseToJsonEditor: vi.fn(),
   parseTooltipTypesData: vi.fn(),
   safeFormatJSON: vi.fn(str => str),
@@ -354,7 +354,7 @@ describe("DynamicForm", () => {
     });
 
     it("should render form with complex JSON input field", async () => {
-      const { parseToJsonEditor } = await import("@/lib/worker");
+      const { parseToJsonEditor } = await import("@/lib/agent");
       (
         parseToJsonEditor as MockedFunction<typeof parseToJsonEditor>
       ).mockReturnValue([{ field: "value" }]);
@@ -499,7 +499,7 @@ describe("DynamicForm", () => {
 
   describe("Form validation", () => {
     it("should validate required fields and show errors", async () => {
-      const { validateJsonStructure } = await import("@/lib/worker");
+      const { validateJsonStructure } = await import("@/lib/agent");
       (
         validateJsonStructure as MockedFunction<typeof validateJsonStructure>
       ).mockReturnValue("Field is required");
@@ -572,7 +572,7 @@ describe("DynamicForm", () => {
     });
 
     it("should clear errors when input changes", async () => {
-      const { validateJsonStructure } = await import("@/lib/worker");
+      const { validateJsonStructure } = await import("@/lib/agent");
       (
         validateJsonStructure as MockedFunction<typeof validateJsonStructure>
       ).mockReturnValue("Field is required");
@@ -611,7 +611,7 @@ describe("DynamicForm", () => {
 
   describe("Form submission", () => {
     it("should submit form with valid string data", async () => {
-      const { validateJsonStructure } = await import("@/lib/worker");
+      const { validateJsonStructure } = await import("@/lib/agent");
       (
         validateJsonStructure as MockedFunction<typeof validateJsonStructure>
       ).mockReturnValue(null); // No validation errors
@@ -651,7 +651,7 @@ describe("DynamicForm", () => {
     });
 
     it("should submit form with valid integer data", async () => {
-      const { validateJsonStructure } = await import("@/lib/worker");
+      const { validateJsonStructure } = await import("@/lib/agent");
       (
         validateJsonStructure as MockedFunction<typeof validateJsonStructure>
       ).mockReturnValue(null);
@@ -692,7 +692,7 @@ describe("DynamicForm", () => {
     });
 
     it("should submit form with valid boolean data", async () => {
-      const { validateJsonStructure } = await import("@/lib/worker");
+      const { validateJsonStructure } = await import("@/lib/agent");
       (
         validateJsonStructure as MockedFunction<typeof validateJsonStructure>
       ).mockReturnValue(null);
@@ -733,7 +733,7 @@ describe("DynamicForm", () => {
 
     it("should submit form with valid JSON data", async () => {
       const { validateJsonStructure, parseToJsonEditor } = await import(
-        "@/lib/worker"
+        "@/lib/agent"
       );
       const { sanitizeInput } = await import("@/lib/utils");
 
@@ -789,7 +789,7 @@ describe("DynamicForm", () => {
     });
 
     it("should submit form with multiple parameters", async () => {
-      const { validateJsonStructure } = await import("@/lib/worker");
+      const { validateJsonStructure } = await import("@/lib/agent");
       (
         validateJsonStructure as MockedFunction<typeof validateJsonStructure>
       ).mockReturnValue(null);
@@ -856,7 +856,7 @@ describe("DynamicForm", () => {
 
   describe("Form reset functionality", () => {
     it("should reset form when function details change", async () => {
-      const { parseToJsonEditor } = await import("@/lib/worker");
+      const { parseToJsonEditor } = await import("@/lib/agent");
       (
         parseToJsonEditor as MockedFunction<typeof parseToJsonEditor>
       ).mockReturnValue(["initial"]);
@@ -943,7 +943,7 @@ describe("DynamicForm", () => {
     });
 
     it("should handle unknown field types gracefully", async () => {
-      const { parseToJsonEditor } = await import("@/lib/worker");
+      const { parseToJsonEditor } = await import("@/lib/agent");
       (
         parseToJsonEditor as MockedFunction<typeof parseToJsonEditor>
       ).mockReturnValue([{ field: "value" }]);

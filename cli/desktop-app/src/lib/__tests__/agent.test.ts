@@ -6,10 +6,10 @@ import {
   parseTooltipTypesData,
   parseTypesData,
   validateJsonStructure,
-} from "../worker";
+} from "../agent";
 import { ComponentExportFunction, TypeField } from "@/types/component";
 
-describe("worker utilities", () => {
+describe("agent utilities", () => {
   describe("parseToJsonEditor", () => {
     it("should handle string parameters", () => {
       const data: ComponentExportFunction = {
