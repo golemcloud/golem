@@ -1352,6 +1352,58 @@ mod tests {
         )
     }
 
+    #[test]
+    pub fn multimodal_untagged_variant_in_out() {
+        let component_name = "test:agent".into();
+        let agent_types = test::multimodal_untagged_variant_in_out();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                interface types {
+                  use golem:agent/common.{text-reference, binary-reference};
+
+                  record image {
+                    val: list<u8>,
+                  }
+
+                  record text {
+                    val: string,
+                  }
+
+                  variant foo-input {
+                    text(text),
+                    image(image),
+                  }
+
+                  variant foo-output {
+                    text(text),
+                    image(image),
+                  }
+                }
+
+                /// Test
+                interface test-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                  use types.{foo-input, foo-output};
+
+                  /// Constructor
+                  initialize: func();
+
+                  get-definition: func() -> agent-type;
+
+                  foo: func(input: list<foo-input>) -> list<foo-output>;
+                }
+            "#},
+        )
+    }
+
     fn assert_wit(actual: &str, expected: &str) {
         let line_count = expected.lines().count();
         let actual_prefix = actual

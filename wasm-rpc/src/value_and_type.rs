@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
+use crate::{NodeIndex, ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
 use golem_wasm_ast::analysis::analysed_type::{
     case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
 };
@@ -620,7 +620,7 @@ impl IntoValue for WitType {
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![analysed_type::field(
             "nodes",
-            list(WitTypeNode::get_type()),
+            list(NamedWitTypeNode::get_type()),
         )])
     }
 }
@@ -628,12 +628,17 @@ impl IntoValue for WitType {
 #[cfg(feature = "host-bindings")]
 impl IntoValue for NamedWitTypeNode {
     fn into_value(self) -> Value {
-        Value::Record(vec![self.name.into_value(), self.type_.into_value()])
+        Value::Record(vec![
+            self.name.into_value(),
+            self.owner.into_value(),
+            self.type_.into_value(),
+        ])
     }
 
     fn get_type() -> AnalysedType {
         analysed_type::record(vec![
-            analysed_type::field("name", analysed_type::str()),
+            analysed_type::field("name", option(analysed_type::str())),
+            analysed_type::field("owner", option(analysed_type::str())),
             analysed_type::field("type", WitTypeNode::get_type()),
         ])
     }
@@ -736,14 +741,26 @@ impl IntoValue for WitTypeNode {
 
     fn get_type() -> AnalysedType {
         variant(vec![
-            case("record-type", list(tuple(vec![str(), u32()]))),
-            case("variant-type", list(tuple(vec![str(), option(u32())]))),
+            case(
+                "record-type",
+                list(tuple(vec![str(), NodeIndex::get_type()])),
+            ),
+            case(
+                "variant-type",
+                list(tuple(vec![str(), option(NodeIndex::get_type())])),
+            ),
             case("enum-type", list(str())),
             case("flags-type", list(str())),
-            case("tuple-type", list(u32())),
-            case("list-type", u32()),
-            case("option-type", u32()),
-            case("result-type", tuple(vec![option(u32()), option(u32())])),
+            case("tuple-type", list(NodeIndex::get_type())),
+            case("list-type", NodeIndex::get_type()),
+            case("option-type", NodeIndex::get_type()),
+            case(
+                "result-type",
+                tuple(vec![
+                    option(NodeIndex::get_type()),
+                    option(NodeIndex::get_type()),
+                ]),
+            ),
             unit_case("prim-u8-type"),
             unit_case("prim-u16-type"),
             unit_case("prim-u32-type"),
