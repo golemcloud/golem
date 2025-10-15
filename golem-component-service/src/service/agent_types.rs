@@ -13,10 +13,13 @@
 // limitations under the License.
 
 use crate::error::ComponentError;
+use crate::model::Component;
 use crate::service::component::ComponentService;
 use async_trait::async_trait;
 use golem_common::model::agent::RegisteredAgentType;
 use golem_common::model::component::ComponentOwner;
+use golem_common::model::ComponentId;
+use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -58,13 +61,38 @@ impl AgentTypesServiceDefault {
 
 #[async_trait]
 impl AgentTypesService for AgentTypesServiceDefault {
+    // NOTE: unlike component service naming, here "get all" returns only the latest version,
+    //       and we do the grouping in the service layer, as this is only added as a quickfix.
+    //       With atomic deployments the semantics and APIs will change soon anyway,
+    //       hence we do not do a bigger cleanup around naming or changes around the repo layer.
     async fn get_all_agent_types(
         &self,
         owner: &ComponentOwner,
     ) -> Result<Vec<RegisteredAgentType>, ComponentError> {
         let components = self.component_service.find_by_name(None, owner).await?;
-        let mut agent_types = Vec::new();
+
+        let mut latest_components = BTreeMap::<ComponentId, Component>::new();
         for component in components {
+            match latest_components.get_mut(&component.versioned_component_id.component_id) {
+                Some(existing) => {
+                    if existing.versioned_component_id.version
+                        < component.versioned_component_id.version
+                    {
+                        *existing = component;
+                    }
+                }
+                None => {
+                    latest_components.insert(
+                        component.versioned_component_id.component_id.clone(),
+                        component,
+                    );
+                    continue;
+                }
+            }
+        }
+
+        let mut agent_types = Vec::new();
+        for component in latest_components.values() {
             agent_types.extend(component.metadata.agent_types().iter().cloned().map(
                 |agent_type| RegisteredAgentType {
                     agent_type,
