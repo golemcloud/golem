@@ -115,6 +115,18 @@ describe('Invalid types in agents', () => {
       'Unsupported type `BigInt`, use `bigint` instead',
     );
 
+    expect(nullType.val).toBe(
+      'Unsupported type `null` in fun1 for parameter `nullParam`',
+    );
+
+    expect(undefinedType.val).toBe(
+      'Unsupported type `undefined` in fun1 for parameter `undefined`',
+    );
+
+    expect(voidType.val).toBe(
+      'Unsupported type `void` in fun1 for parameter `voidParam`',
+    );
+
     expect(unionWithKeyWord.val).toBe(
       '`ok` is a reserved keyword. The following keywords cannot be used as literals: ok, err, none, some',
     );

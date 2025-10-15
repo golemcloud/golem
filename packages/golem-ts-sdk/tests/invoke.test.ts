@@ -443,32 +443,6 @@ test('Invoke function that takes and returns inbuilt result type', () => {
   );
 });
 
-test('Invoke function that takes and returns result of void', () => {
-  overrideSelfMetadataImpl(FooAgentClassName);
-  const classMetadata = TypeMetadata.get(FooAgentClassName.value);
-  if (!classMetadata) {
-    throw new Error('FooAgent type metadata not found');
-  }
-
-  const resolvedAgent = initiateFooAgent('foo', classMetadata);
-
-  testInvoke(
-    'fun32',
-    [['param', Result.ok(undefined)]],
-    resolvedAgent,
-    Result.ok(undefined),
-    false,
-  );
-
-  testInvoke(
-    'fun32',
-    [['param', Result.err('message')]],
-    resolvedAgent,
-    Result.err('message'),
-    false,
-  );
-});
-
 test('Invoke function that takes and returns multimodal types', () => {
   overrideSelfMetadataImpl(FooAgentClassName);
 

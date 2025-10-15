@@ -329,13 +329,13 @@ export function fromTsTypeInternal(type: TsType, scope: Option.Option<TypeMappin
       return Either.right(u64(true))
 
     case "null":
-      return Either.right(tuple(undefined, 'undefined', []))
+      return Either.left("Unsupported type `null` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "undefined":
-      return Either.right(tuple(undefined, 'undefined', []))
+      return Either.left("Unsupported type `undefined` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "void":
-      return Either.right(tuple(undefined, 'undefined', []))
+      return Either.left("Unsupported type `void` in " + (scopeName ? `${scopeName}` : "") + " " + (Option.isSome(parameterInScope) ? `for parameter \`${parameterInScope.val}\`` : ""));
 
     case "tuple":
       const tupleElems = Either.all(type.elements.map(el => fromTsTypeInternal(el, Option.none())));
