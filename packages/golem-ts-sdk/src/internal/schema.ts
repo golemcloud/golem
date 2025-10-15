@@ -33,7 +33,12 @@ import {
 import { TypeMappingScope } from './mapping/types/scope';
 import { AgentConstructorParamRegistry } from './registry/agentConstructorParamRegistry';
 import { AgentMethodParamRegistry } from './registry/agentMethodParamRegistry';
-import { AnalysedType, tuple } from './mapping/types/AnalysedType';
+import {
+  AnalysedType,
+  EmptyType,
+  result,
+  tuple,
+} from './mapping/types/AnalysedType';
 import { TypeInfoInternal } from './registry/typeInfoInternal';
 import { convertVariantTypeNameToKebab } from './mapping/types/name';
 
@@ -393,12 +398,42 @@ export function buildOutputSchema(
     ]);
   }
 
-  const undefinedSchema = handleUndefinedReturnType(returnType);
-  if (Option.isSome(undefinedSchema)) {
-    return Either.right([
-      { tag: 'analysed', val: tuple(undefined, 'undefined', []) },
-      undefinedSchema.val,
-    ]);
+  const undefinedSchema = handleVoidReturnType(returnType);
+
+  if (Either.isLeft(undefinedSchema)) {
+    return Either.left(
+      `Failed to handle void return type: ${undefinedSchema.val}`,
+    );
+  }
+
+  if (Option.isSome(undefinedSchema.val)) {
+    const undefinedSchemaVal = undefinedSchema.val.val;
+
+    switch (undefinedSchemaVal.kind) {
+      case 'void':
+        return Either.right([
+          { tag: 'analysed', val: tuple(undefined, 'undefined', []) },
+          undefinedSchemaVal.dataSchema,
+        ]);
+      case 'result-with-void':
+        return Either.right([
+          { tag: 'analysed', val: undefinedSchemaVal.analysedType },
+          {
+            tag: 'tuple',
+            val: [
+              [
+                'return-value',
+                {
+                  tag: 'component-model',
+                  val: WitType.fromAnalysedType(
+                    undefinedSchemaVal.analysedType,
+                  ),
+                },
+              ],
+            ],
+          },
+        ]);
+    }
   }
 
   const unstructuredText = handleUnstructuredCase(
@@ -749,34 +784,177 @@ function convertToElementSchema(
   });
 }
 
-function handleUndefinedReturnType(
+// To handle void, undefined, null return types or Result with void/undefined/null on either side
+type ReturnTypeWithVoid =
+  | { kind: 'void'; dataSchema: DataSchema }
+  | { kind: 'result-with-void'; analysedType: AnalysedType };
+
+function handleVoidReturnType(
   returnType: Type.Type,
-): Option.Option<DataSchema> {
+): Either.Either<Option.Option<ReturnTypeWithVoid>, string> {
   switch (returnType.kind) {
     case 'null':
-      return Option.some({
-        tag: 'tuple',
-        val: [],
-      });
+      return Either.right(
+        Option.some({
+          kind: 'void',
+          dataSchema: {
+            tag: 'tuple',
+            val: [],
+          },
+        }),
+      );
 
     case 'undefined':
-      return Option.some({
-        tag: 'tuple',
-        val: [],
-      });
+      return Either.right(
+        Option.some({
+          kind: 'void',
+          dataSchema: {
+            tag: 'tuple',
+            val: [],
+          },
+        }),
+      );
 
     case 'void':
-      return Option.some({
-        tag: 'tuple',
-        val: [],
-      });
+      return Either.right(
+        Option.some({
+          kind: 'void',
+          dataSchema: {
+            tag: 'tuple',
+            val: [],
+          },
+        }),
+      );
 
     case 'promise':
       const elementType = returnType.element;
-      return handleUndefinedReturnType(elementType);
+      return handleVoidReturnType(elementType);
+
+    // Special handling for union types that might include void/undefined/null
+    case 'union':
+      const typeName = returnType.name;
+      const originalTypeName = returnType.originalTypeName;
+      const unionTypes = returnType.unionTypes;
+      const isResult = typeName === 'Result' || originalTypeName === 'Result';
+
+      if (
+        isResult &&
+        unionTypes.length === 2 &&
+        unionTypes[0].name === 'Ok' &&
+        unionTypes[1].name === 'Err'
+      ) {
+        const resultTypeParams = returnType.typeParams;
+
+        const okType = resultTypeParams[0];
+        const errType = resultTypeParams[1];
+
+        const isOkVoid =
+          okType.kind === 'void' ||
+          okType.kind === 'undefined' ||
+          okType.kind === 'null';
+
+        const isErrVoid =
+          errType.kind === 'void' ||
+          errType.kind === 'undefined' ||
+          errType.kind === 'null';
+
+        const okEmptyType: EmptyType =
+          okType.kind === 'void'
+            ? 'void'
+            : okType.kind === 'undefined'
+              ? 'undefined'
+              : 'null';
+
+        const errEmptyType: EmptyType =
+          errType.kind === 'void'
+            ? 'void'
+            : errType.kind === 'undefined'
+              ? 'undefined'
+              : 'null';
+
+        if (isOkVoid && isErrVoid) {
+          return Either.right(
+            Option.some({
+              kind: 'result-with-void',
+              analysedType: result(
+                undefined,
+                {
+                  tag: 'inbuilt',
+                  okEmptyType: okEmptyType,
+                  errEmptyType: errEmptyType,
+                },
+                undefined,
+                undefined,
+              ),
+            }),
+          );
+        }
+
+        if (isOkVoid) {
+          const errAnalysedTypeEither = WitType.fromTsType(
+            errType,
+            Option.none(),
+          );
+
+          if (Either.isLeft(errAnalysedTypeEither)) {
+            return errAnalysedTypeEither;
+          }
+
+          const errAnalysedType = errAnalysedTypeEither.val[1];
+
+          return Either.right(
+            Option.some({
+              kind: 'result-with-void',
+              analysedType: result(
+                undefined,
+                {
+                  tag: 'inbuilt',
+                  okEmptyType: okEmptyType,
+                  errEmptyType: errEmptyType,
+                },
+                undefined,
+                errAnalysedType,
+              ),
+            }),
+          );
+        }
+
+        if (isErrVoid) {
+          const okAnalysedTypeEither = WitType.fromTsType(
+            okType,
+            Option.none(),
+          );
+
+          if (Either.isLeft(okAnalysedTypeEither)) {
+            return okAnalysedTypeEither;
+          }
+
+          const okAnalysedType = okAnalysedTypeEither.val[1];
+
+          return Either.right(
+            Option.some({
+              kind: 'result-with-void',
+              analysedType: result(
+                undefined,
+                {
+                  tag: 'inbuilt',
+                  okEmptyType: okEmptyType,
+                  errEmptyType: errEmptyType,
+                },
+                okAnalysedType,
+                undefined,
+              ),
+            }),
+          );
+        }
+
+        return Either.right(Option.none());
+      }
+
+      return Either.right(Option.none());
 
     default:
-      return Option.none();
+      return Either.right(Option.none());
   }
 }
 

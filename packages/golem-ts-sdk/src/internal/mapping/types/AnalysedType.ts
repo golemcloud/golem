@@ -39,13 +39,13 @@ export interface NameOptionTypePair {
 
 export type TypedArray = 'u8' | 'u16' | 'u32' | 'big-u64' | 'i8' | 'i16' | 'i32' | 'big-i64' | 'f32' | 'f64';
 export type EmptyType = 'null' | 'void' | 'undefined' | 'question-mark';
-export type ResultType = {tag: 'custom', okValueName: string | undefined, errValueName: string | undefined} | {tag: 'inbuilt'};
+export type CustomOrInbuilt = {tag: 'custom', okValueName: string | undefined, errValueName: string | undefined} | {tag: 'inbuilt', okEmptyType: EmptyType | undefined, errEmptyType: EmptyType | undefined};
 
 // This is similar to internal analyzed-type in wasm-rpc (golem)
 // while having extra information useful for WIT -> WIT type and value mapping
 export type AnalysedType =
     | { kind: 'variant'; value: TypeVariant, taggedTypes: TaggedTypeMetadata[] }
-    | { kind: 'result'; value: TypeResult, resultType: ResultType }
+    | { kind: 'result'; value: TypeResult, resultType: CustomOrInbuilt }
     | { kind: 'option'; value: TypeOption, emptyType: EmptyType }
     | { kind: 'enum'; value: TypeEnum }
     | { kind: 'flags'; value: TypeFlags }
@@ -231,7 +231,7 @@ export const unitCase=  (name: string): NameOptionTypePair => ({ name });
  export const enum_ = (name: string | undefined, cases: string[]): AnalysedType => ({ kind: 'enum', value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
  export const variant = (name: string | undefined, taggedTypes: TaggedTypeMetadata[],  cases: NameOptionTypePair[]): AnalysedType => ({ kind: 'variant', taggedTypes: taggedTypes,  value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, cases } });
 
- export const result = (name: string | undefined, resultType: ResultType,  ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
+ export const result = (name: string | undefined, resultType: CustomOrInbuilt, ok: AnalysedType | undefined, err: AnalysedType | undefined): AnalysedType =>
       ({ kind: 'result', resultType, value: { name: convertOptionalTypeNameToKebab(name), owner: undefined, ok, err } });
 
 
@@ -874,7 +874,7 @@ export function getInbuiltResultType(
       const errAnalysed = fromTsTypeInternal(errType, Option.none());
 
       return Either.map(Either.zipBoth(okAnalysed, errAnalysed), ([ok, err]) => {
-        return result(undefined, { tag: 'inbuilt' }, ok, err);
+        return result(undefined, { tag: 'inbuilt' , okEmptyType: undefined, errEmptyType: undefined}, ok, err);
       });
     }
 }
