@@ -44,6 +44,9 @@ pub mod model;
 #[cfg(any(feature = "model", feature = "base-model"))]
 pub mod newtype;
 
+#[cfg(feature = "tokio")]
+pub mod one_shot;
+
 #[cfg(feature = "redis")]
 pub mod redis;
 

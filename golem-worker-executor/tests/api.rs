@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, start_customized, TestContext};
+use crate::common::{start, start_customized, TestContext, TestWorkerExecutor};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use assert2::check;
+use assert2::{check, let_assert};
 use axum::routing::get;
 use axum::Router;
-use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
+use golem_api_grpc::proto::golem::worker::v1::{
+    worker_execution_error, ComponentParseFailed, WorkerExecutionError,
+};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
@@ -29,7 +31,7 @@ use golem_common::model::{
     ScanCursor, StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
     worker_error_logs, worker_error_message, TestDslUnsafe,
@@ -47,12 +49,13 @@ use std::io::Write;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, inherit_test_dep, test, test_gen, timeout};
 use tokio::task::JoinHandle;
-use tokio::time::{sleep, Instant};
+use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, Instrument, Span};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -3669,4 +3672,73 @@ async fn delete_worker_during_invocation(
 
     check!(result == Ok(vec![Value::Result(Ok(None))]));
     check!(metadata.last_known_status.pending_invocations.is_empty());
+}
+
+#[test]
+#[tracing::instrument]
+#[test_r::non_flaky(10)]
+async fn invoking_worker_while_its_getting_deleted_works(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("counters").unique().store().await;
+    let worker_id = executor.start_worker(&component_id, "worker").await;
+
+    let invoking_task = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        tokio::spawn(async move {
+            let mut result = None;
+            while matches!(result, Some(Ok(_)) | None) {
+                tracing::warn!("begin request");
+                result = Some(
+                    executor
+                        .invoke_and_await(
+                            &worker_id,
+                            "rpc:counters-exports/api.{inc-global-by}",
+                            vec![1u64.into_value_and_type()],
+                        )
+                        .await,
+                );
+                tracing::warn!("end request");
+            }
+            result
+        })
+    };
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let deleting_task_cancel_token = CancellationToken::new();
+    {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        let deleting_task_cancel_token = deleting_task_cancel_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = deleting_task_cancel_token.cancelled() => { break },
+                    _ = <TestDependenciesDsl<TestWorkerExecutor> as ::golem_test_framework::dsl::TestDsl>::delete_worker(&executor, &worker_id) => { }
+                }
+            }
+        })
+    };
+
+    let invocation_result = invoking_task.await?.unwrap();
+    tracing::info!("cancelling deletion task");
+    deleting_task_cancel_token.cancel();
+    // We tried invoking the worker while it was being deleted, we expect an invalid request
+    let_assert!(
+        Err(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(WorkerExecutionError {
+            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvalidRequest(
+                golem_api_grpc::proto::golem::worker::v1::InvalidRequest {
+                    details: error_details
+                }
+            ))
+        })) = invocation_result
+    );
+    assert!(error_details.contains("being deleted"));
+
+    Ok(())
 }

@@ -374,43 +374,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        if let Some(metadata) =
-            Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await
+        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+            .await
+            .is_some()
         {
-            let should_interrupt = match &metadata.last_known_status.status {
-                WorkerStatus::Idle
-                | WorkerStatus::Running
-                | WorkerStatus::Suspended
-                | WorkerStatus::Retrying => true,
-                WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Interrupted => false,
-            };
+            let worker = Worker::get_or_create_suspended(
+                self,
+                &account_id,
+                &owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
+            .await?;
 
-            if should_interrupt {
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    &account_id,
-                    &owned_worker_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                )
-                .await?;
+            worker.start_deleting().await?;
 
-                if let Some(mut await_interrupted) =
-                    worker.set_interrupting(InterruptKind::Interrupt).await
-                {
-                    await_interrupted.recv().await.unwrap();
-                }
-
-                worker.stop().await;
-            }
-
-            Ctx::on_worker_deleted(self, &owned_worker_id.worker_id).await?;
             self.worker_service().remove(&owned_worker_id).await;
             self.active_workers().remove(&owned_worker_id.worker_id);
+            // ensure we are holding the worker while we are doing cleanup.
+            drop(worker);
         }
 
         Ok(())
@@ -802,6 +788,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+
         Worker::get_or_create_suspended(
             self,
             &account_id,
@@ -822,7 +809,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let full_function_name = request.name();
 
+        tracing::warn!("begin get_or_create worker");
+
         let worker = self.get_or_create(request).await?;
+
+        tracing::warn!("end get_or_create worker");
 
         let idempotency_key = request
             .idempotency_key()?
@@ -835,6 +826,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .map(|val| val.clone().try_into())
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
+
+        tracing::warn!("begin invoke");
 
         worker
             .invoke(
@@ -1137,7 +1130,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.enqueue_manual_update(request.target_version).await;
+                worker.enqueue_manual_update(request.target_version).await?;
             }
         }
 
