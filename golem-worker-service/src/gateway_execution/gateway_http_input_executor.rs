@@ -996,7 +996,7 @@ fn parse_to_value<T: FromStr + IntoValue + Sized>(
     Ok(value.into_value_and_type().value)
 }
 
-#[derive(golem_wasm_rpc_derive::IntoValue)]
+#[derive(golem_wasm_derive::IntoValue)]
 struct RequestIdContainer {
     value: Uuid,
 }

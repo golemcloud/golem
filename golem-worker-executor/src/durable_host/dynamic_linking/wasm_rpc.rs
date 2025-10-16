@@ -846,7 +846,7 @@ async fn remote_invoke<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
 }
 
 async fn schedule_remote_invocation<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
-    scheduled_for: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+    scheduled_for: golem_wasm::wasi::clocks::wall_clock::Datetime,
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],
@@ -896,7 +896,7 @@ async fn value_result_to_wasmtime_vals<Ctx: ResourceStore + Send>(
     Ok(())
 }
 
-fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wall_clock::Datetime> {
+fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm::wasi::clocks::wall_clock::Datetime> {
     let fields = match val {
         Val::Record(inner) => inner.into_iter().collect::<HashMap<String, _>>(),
         _ => Err(anyhow!("did not find a record value"))?,
@@ -918,7 +918,7 @@ fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wal
         _ => Err(anyhow!("nanoseconds field has invalid type"))?,
     };
 
-    Ok(golem_wasm_rpc::wasi::clocks::wall_clock::Datetime {
+    Ok(golem_wasm::wasi::clocks::wall_clock::Datetime {
         seconds,
         nanoseconds,
     })

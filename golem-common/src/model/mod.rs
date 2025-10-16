@@ -46,7 +46,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{IntoValue, Value};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -2037,17 +2037,17 @@ impl TryFrom<String> for GatewayBindingType {
     }
 }
 
-impl From<WorkerId> for golem_wasm_rpc::AgentId {
+impl From<WorkerId> for golem_wasm::AgentId {
     fn from(worker_id: WorkerId) -> Self {
-        golem_wasm_rpc::AgentId {
+        golem_wasm::AgentId {
             component_id: worker_id.component_id.into(),
             agent_id: worker_id.worker_name,
         }
     }
 }
 
-impl From<golem_wasm_rpc::AgentId> for WorkerId {
-    fn from(host: golem_wasm_rpc::AgentId) -> Self {
+impl From<golem_wasm::AgentId> for WorkerId {
+    fn from(host: golem_wasm::AgentId) -> Self {
         Self {
             component_id: host.component_id.into(),
             worker_name: host.agent_id,
@@ -2055,8 +2055,8 @@ impl From<golem_wasm_rpc::AgentId> for WorkerId {
     }
 }
 
-impl From<golem_wasm_rpc::ComponentId> for ComponentId {
-    fn from(host: golem_wasm_rpc::ComponentId) -> Self {
+impl From<golem_wasm::ComponentId> for ComponentId {
+    fn from(host: golem_wasm::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
@@ -2064,12 +2064,12 @@ impl From<golem_wasm_rpc::ComponentId> for ComponentId {
     }
 }
 
-impl From<ComponentId> for golem_wasm_rpc::ComponentId {
+impl From<ComponentId> for golem_wasm::ComponentId {
     fn from(component_id: ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
-        golem_wasm_rpc::ComponentId {
-            uuid: golem_wasm_rpc::Uuid {
+        golem_wasm::ComponentId {
+            uuid: golem_wasm::Uuid {
                 high_bits,
                 low_bits,
             },

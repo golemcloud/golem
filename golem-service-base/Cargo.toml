@@ -22,6 +22,7 @@ worker-executor = [ "dep:wasmtime-wasi" ]
 golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true}
 golem-wasm = { workspace = true, features = ["host"] }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }

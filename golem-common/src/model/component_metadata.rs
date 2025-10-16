@@ -26,12 +26,9 @@ use golem_wasm::analysis::{
     AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     AnalysedType, TypeHandle,
 };
-use golem_wasm_ast::core::Mem;
 use golem_wasm::metadata::Producers as WasmAstProducers;
-use golem_wasm_ast::{
-    analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
-    component::Component,
-    IgnoreAllButMetadata,
+use golem_wasm::{
+    analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure},
 };
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
@@ -837,6 +834,23 @@ impl LinearMemory {
     const PAGE_SIZE: u64 = 65536;
 }
 
+// TODO -->
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    pub min: u64,
+    pub max: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemType {
+    pub limits: Limits,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Mem {
+    pub mem_type: MemType,
+}
+
 impl From<Mem> for LinearMemory {
     fn from(value: Mem) -> Self {
         Self {
@@ -849,6 +863,7 @@ impl From<Mem> for LinearMemory {
         }
     }
 }
+// <-- TODO
 
 /// Metadata of Component in terms of golem_wasm_ast types
 #[derive(Default)]
@@ -865,15 +880,13 @@ impl RawComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
     ) -> Result<RawComponentMetadata, ComponentProcessingError> {
-        let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
-            .map_err(ComponentProcessingError::Parsing)?;
+        // let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
+        //     .map_err(ComponentProcessingError::Parsing)?;
 
-        let producers = component
-            .get_all_producers()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        let analysis = AnalysisContext::new(component);
+        // let producers = component
+        //     .get_all_producers()
+        //     .into_iter()
+        //     .collect::<Vec<_>>();
 
         let wit_analysis =
             WitAnalysisContext::new(data).map_err(ComponentProcessingError::Analysis)?;
@@ -896,16 +909,16 @@ impl RawComponentMetadata {
 
         let exports = exports.into_iter().collect::<Vec<_>>();
 
-        let memories: Vec<Mem> = analysis
-            .get_all_memories()
-            .map_err(ComponentProcessingError::Analysis)?
-            .into_iter()
-            .collect();
+        // let memories: Vec<Mem> = analysis
+        //     .get_all_memories()
+        //     .map_err(ComponentProcessingError::Analysis)?
+        //     .into_iter()
+        //     .collect();
 
         Ok(RawComponentMetadata {
             exports,
-            producers,
-            memories,
+            producers: vec![], // TODO
+            memories: vec![], // TODO
             binary_wit,
             root_package_name: root_package
                 .as_ref()
@@ -942,8 +955,8 @@ impl RawComponentMetadata {
     }
 }
 
-impl From<golem_wasm_rpc::metadata::Producers> for Producers {
-    fn from(value: golem_wasm_rpc::metadata::Producers) -> Self {
+impl From<golem_wasm::metadata::Producers> for Producers {
+    fn from(value: golem_wasm::metadata::Producers) -> Self {
         Self {
             fields: value
                 .fields
@@ -954,7 +967,7 @@ impl From<golem_wasm_rpc::metadata::Producers> for Producers {
     }
 }
 
-impl From<Producers> for golem_wasm_rpc::metadata::Producers {
+impl From<Producers> for golem_wasm::metadata::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value
@@ -966,8 +979,8 @@ impl From<Producers> for golem_wasm_rpc::metadata::Producers {
     }
 }
 
-impl From<golem_wasm_rpc::metadata::ProducersField> for ProducerField {
-    fn from(value: golem_wasm_rpc::metadata::ProducersField) -> Self {
+impl From<golem_wasm::metadata::ProducersField> for ProducerField {
+    fn from(value: golem_wasm::metadata::ProducersField) -> Self {
         Self {
             name: value.name,
             values: value
@@ -982,14 +995,14 @@ impl From<golem_wasm_rpc::metadata::ProducersField> for ProducerField {
     }
 }
 
-impl From<ProducerField> for golem_wasm_rpc::metadata::ProducersField {
+impl From<ProducerField> for golem_wasm::metadata::ProducersField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
             values: value
                 .values
                 .into_iter()
-                .map(|value| golem_wasm_rpc::metadata::VersionedName {
+                .map(|value| golem_wasm::metadata::VersionedName {
                     name: value.name,
                     version: value.version,
                 })

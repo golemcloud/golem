@@ -350,7 +350,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &request)
                     .await?;
-                let proto_params: Vec<golem_wasm_rpc::protobuf::Val> =
+                let proto_params: Vec<golem_wasm::protobuf::Val> =
                     core_try_deserialize(&payload_bytes)?.unwrap_or_default();
                 let params = proto_params
                     .into_iter()

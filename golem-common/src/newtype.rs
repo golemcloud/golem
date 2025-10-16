@@ -134,27 +134,27 @@ macro_rules! newtype_uuid {
         }
 
         #[cfg(feature = "model")]
-        impl golem_wasm_rpc::IntoValue for $name {
-            fn into_value(self) -> golem_wasm_rpc::Value {
+        impl golem_wasm::IntoValue for $name {
+            fn into_value(self) -> golem_wasm::Value {
                 let (hi, lo) = self.0.as_u64_pair();
-                golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::Record(vec![
-                    golem_wasm_rpc::Value::U64(hi),
-                    golem_wasm_rpc::Value::U64(lo),
+                golem_wasm::Value::Record(vec![golem_wasm::Value::Record(vec![
+                    golem_wasm::Value::U64(hi),
+                    golem_wasm::Value::U64(lo),
                 ])])
             }
 
-            fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-                golem_wasm_ast::analysis::analysed_type::record(vec![
-                    golem_wasm_ast::analysis::analysed_type::field(
+            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                golem_wasm::analysis::analysed_type::record(vec![
+                    golem_wasm::analysis::analysed_type::field(
                         "uuid",
-                        golem_wasm_ast::analysis::analysed_type::record(vec![
-                            golem_wasm_ast::analysis::analysed_type::field(
+                        golem_wasm::analysis::analysed_type::record(vec![
+                            golem_wasm::analysis::analysed_type::field(
                                 "high-bits",
-                                golem_wasm_ast::analysis::analysed_type::u64(),
+                                golem_wasm::analysis::analysed_type::u64(),
                             ),
-                            golem_wasm_ast::analysis::analysed_type::field(
+                            golem_wasm::analysis::analysed_type::field(
                                 "low-bits",
-                                golem_wasm_ast::analysis::analysed_type::u64(),
+                                golem_wasm::analysis::analysed_type::u64(),
                             ),
                         ]),
                     ),

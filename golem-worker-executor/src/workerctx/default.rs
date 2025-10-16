@@ -430,7 +430,7 @@ impl FileSystemReading for Context {
 impl HostWasmRpc for Context {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::AgentId,
+        worker_id: golem_wasm::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }

@@ -1344,7 +1344,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
                 .iter()
                 .map(|value| value.clone().into())
                 .collect();

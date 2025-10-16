@@ -30,7 +30,7 @@ pub mod bindings {
           async: true,
           trappable_imports: true,
           with: {
-            "golem:rpc/types": golem_wasm_rpc::golem_rpc_0_2_x::types,
+            "golem:rpc/types": golem_wasm::golem_rpc_0_2_x::types,
           },
           wasmtime_crate: ::wasmtime
     });
@@ -46,7 +46,7 @@ use bincode::{Decode, Encode};
 use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
@@ -81,7 +81,7 @@ pub enum AgentError {
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
+    CustomError(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
 }
 
 impl Display for AgentError {
@@ -456,7 +456,7 @@ impl IntoValue for NamedElementValue {
 #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
 #[serde(tag = "type")]
 pub enum ElementValue {
-    ComponentModel(#[wit_field(convert = golem_wasm_rpc::WitValue)] ValueAndType),
+    ComponentModel(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
     UnstructuredText(TextReference),
     UnstructuredBinary(BinaryReference),
 }

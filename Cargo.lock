@@ -4505,6 +4505,7 @@ dependencies = [
  "golem-api-grpc",
  "golem-common",
  "golem-wasm",
+ "golem-wasm-derive",
  "headers 0.4.1",
  "hex",
  "http 1.3.1",

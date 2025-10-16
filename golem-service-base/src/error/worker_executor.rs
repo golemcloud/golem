@@ -19,7 +19,7 @@ use golem_common::model::oplog::WorkerError;
 use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_wasm::wasmtime::EncodingError;
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;

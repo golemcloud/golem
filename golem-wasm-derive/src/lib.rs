@@ -46,7 +46,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         },
                     };
                     let get_type = quote! {
-                        <#field_type as golem_wasm_rpc::IntoValue>::get_type()
+                        <#field_type as golem_wasm::IntoValue>::get_type()
                     };
 
                     Some((into_value, get_type))
@@ -77,7 +77,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         let case_ident = &variant.ident;
                         let idx = idx as u32;
                         quote! {
-                            #ident::#case_ident => golem_wasm_rpc::Value::Enum(#idx)
+                            #ident::#case_ident => golem_wasm::Value::Enum(#idx)
                         }
                     })
                     .collect::<Vec<_>>();
@@ -94,7 +94,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                 };
 
                 let get_type = quote! {
-                    golem_wasm_ast::analysis::analysed_type::r#enum(
+                    golem_wasm::analysis::analysed_type::r#enum(
                         &[#(#case_labels),*]
                     ).named(#lit_name)
                 };
@@ -123,7 +123,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
                         if variant.fields.is_empty() {
                             quote! {
-                                #ident::#case_ident => golem_wasm_rpc::Value::Variant {
+                                #ident::#case_ident => golem_wasm::Value::Variant {
                                     case_idx: #idx,
                                     case_value: None
                                 }
@@ -132,7 +132,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                             // separate inner type
                             if is_unit_case(variant) {
                                 quote! {
-                                    #ident::#case_ident(inner) => golem_wasm_rpc::Value::Variant {
+                                    #ident::#case_ident(inner) => golem_wasm::Value::Variant {
                                         case_idx: #idx,
                                         case_value: None
                                     }
@@ -141,7 +141,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                                 let wit_field = wit_fields.first().unwrap();
                                 let into_value = apply_conversions(wit_field, quote! { inner });
                                 quote! {
-                                    #ident::#case_ident(inner) => golem_wasm_rpc::Value::Variant {
+                                    #ident::#case_ident(inner) => golem_wasm::Value::Variant {
                                         case_idx: #idx,
                                         case_value: Some(Box::new(#into_value))
                                     }
@@ -167,7 +167,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
                             if is_unit_case(variant) {
                                 quote! {
-                                    #ident::#case_ident { #(#field_names),* } => golem_wasm_rpc::Value::Variant {
+                                    #ident::#case_ident { #(#field_names),* } => golem_wasm::Value::Variant {
                                         case_idx: #idx,
                                         case_value: None
                                     }
@@ -175,9 +175,9 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                             } else {
                                 quote! {
                                     #ident::#case_ident { #(#field_names),* } =>
-                                        golem_wasm_rpc::Value::Variant {
+                                        golem_wasm::Value::Variant {
                                             case_idx: #idx,
-                                            case_value: Some(Box::new(golem_wasm_rpc::Value::Record(
+                                            case_value: Some(Box::new(golem_wasm::Value::Record(
                                                 vec![#(#field_values),*]
                                             )))
                                         }
@@ -202,7 +202,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
 
                             if is_unit_case(variant) {
                                 quote! {
-                                    #ident::#case_ident(#(#field_names),*) => golem_wasm_rpc::Value::Variant {
+                                    #ident::#case_ident(#(#field_names),*) => golem_wasm::Value::Variant {
                                         case_idx: #idx,
                                         case_value: None
                                     }
@@ -210,9 +210,9 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                             } else {
                                 quote! {
                                     #ident::#case_ident(#(#field_names),*) =>
-                                        golem_wasm_rpc::Value::Variant {
+                                        golem_wasm::Value::Variant {
                                             case_idx: #idx,
-                                            case_value: Some(Box::new(golem_wasm_rpc::Value::Tuple(
+                                            case_value: Some(Box::new(golem_wasm::Value::Tuple(
                                                 vec![#(#field_values),*]
                                             )))
                                         }
@@ -239,7 +239,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                         let case_name = variant.ident.to_string().to_kebab_case();
                         if is_unit_case(variant) {
                             quote! {
-                                golem_wasm_ast::analysis::analysed_type::unit_case(#case_name)
+                                golem_wasm::analysis::analysed_type::unit_case(#case_name)
                             }
                         } else if has_single_anonymous_field(&variant.fields) {
                             let single_field = variant.fields.iter().next().unwrap();
@@ -248,13 +248,13 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                             let typ = get_field_type(typ, wit_field);
 
                             quote! {
-                                golem_wasm_ast::analysis::analysed_type::case(#case_name, <#typ as golem_wasm_rpc::IntoValue>::get_type())
+                                golem_wasm::analysis::analysed_type::case(#case_name, <#typ as golem_wasm::IntoValue>::get_type())
                             }
                         } else {
                             let (_, inner_get_type) = record_or_tuple(&LitStr::new(&case_name, Span::call_site()), &variant.fields);
 
                             quote! {
-                                golem_wasm_ast::analysis::analysed_type::case(#case_name, #inner_get_type)
+                                golem_wasm::analysis::analysed_type::case(#case_name, #inner_get_type)
                             }
                         }
                     })
@@ -266,7 +266,7 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
                     }
                 };
                 let get_type = quote! {
-                    golem_wasm_ast::analysis::analysed_type::variant(
+                    golem_wasm::analysis::analysed_type::variant(
                         vec![#(#case_defs),*]
                     ).named(#lit_name)
                 };
@@ -280,12 +280,12 @@ pub fn derive_into_value(input: TokenStream) -> TokenStream {
     };
 
     let result = quote! {
-        impl golem_wasm_rpc::IntoValue for #ident {
-            fn into_value(self) -> golem_wasm_rpc::Value {
+        impl golem_wasm::IntoValue for #ident {
+            fn into_value(self) -> golem_wasm::Value {
                 #into_value
             }
 
-            fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
+            fn get_type() -> golem_wasm::analysis::AnalysedType {
                 #get_type
             }
         }
@@ -342,9 +342,9 @@ fn record_or_tuple(
                         });
                     let field_type = get_field_type(&field.ty, &wit_field);
                     Some(quote! {
-                        golem_wasm_ast::analysis::analysed_type::field(
+                        golem_wasm::analysis::analysed_type::field(
                             #field_name,
-                            <#field_type as golem_wasm_rpc::IntoValue>::get_type()
+                            <#field_type as golem_wasm::IntoValue>::get_type()
                         )
                     })
                 }
@@ -352,12 +352,12 @@ fn record_or_tuple(
             .collect::<Vec<_>>();
 
         let into_value = quote! {
-            golem_wasm_rpc::Value::Record(vec![
+            golem_wasm::Value::Record(vec![
                 #(#field_values),*
             ])
         };
         let get_type = quote! {
-            golem_wasm_ast::analysis::analysed_type::record(vec![
+            golem_wasm::analysis::analysed_type::record(vec![
                 #(#field_defs),*
             ]).named(#lit_name)
         };
@@ -377,18 +377,18 @@ fn record_or_tuple(
             .map(|field| {
                 let field_type = &field.ty;
                 quote! {
-                    <#field_type as golem_wasm_rpc::IntoValue>::get_type()
+                    <#field_type as golem_wasm::IntoValue>::get_type()
                 }
             })
             .collect::<Vec<_>>();
 
         let into_value = quote! {
-            golem_wasm_rpc::Value::Tuple(vec![
+            golem_wasm::Value::Tuple(vec![
                 #(#tuple_field_values),*
             ])
         };
         let get_type = quote! {
-            golem_wasm_ast::analysis::analysed_type::tuple(vec![
+            golem_wasm::analysis::analysed_type::tuple(vec![
                 #(#tuple_field_types),*
             ]).named(#lit_name)
         };

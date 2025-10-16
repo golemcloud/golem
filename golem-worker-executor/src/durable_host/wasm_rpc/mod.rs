@@ -62,7 +62,7 @@ use wasmtime_wasi::subscribe;
 impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::AgentId,
+        worker_id: golem_wasm::golem_rpc_0_2_x::types::AgentId,
     ) -> anyhow::Result<Resource<WasmRpcEntry>> {
         self.observe_function_call("golem::rpc::wasm-rpc", "new");
 
@@ -80,7 +80,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self_: Resource<WasmRpcEntry>,
         function_name: String,
         mut function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Result<WitValue, golem_wasm_rpc::RpcError>> {
+    ) -> anyhow::Result<Result<WitValue, golem_wasm::RpcError>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
@@ -224,7 +224,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
         self_: Resource<WasmRpcEntry>,
         function_name: String,
         mut function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Result<(), golem_wasm_rpc::RpcError>> {
+    ) -> anyhow::Result<Result<(), golem_wasm::RpcError>> {
         let args = self.get_arguments().await?;
         let env = self.get_environment().await?;
         let wasi_config_vars = self.wasi_config_vars();
@@ -472,9 +472,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn schedule_invocation(
         &mut self,
         this: Resource<WasmRpcEntry>,
-        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+        datetime: golem_wasm::wasi::clocks::wall_clock::Datetime,
         full_function_name: String,
-        function_input: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
+        function_input: Vec<golem_wasm::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<()> {
         self.schedule_cancelable_invocation(this, datetime, full_function_name, function_input)
             .await?;
@@ -485,9 +485,9 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
     async fn schedule_cancelable_invocation(
         &mut self,
         this: Resource<WasmRpcEntry>,
-        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+        datetime: golem_wasm::wasi::clocks::wall_clock::Datetime,
         function_name: String,
-        mut function_params: Vec<golem_wasm_rpc::golem_rpc_0_2_x::types::WitValue>,
+        mut function_params: Vec<golem_wasm::golem_rpc_0_2_x::types::WitValue>,
     ) -> anyhow::Result<Resource<CancellationToken>> {
         let durability = Durability::<SerializableScheduleId, WorkerExecutorError>::new(
             self,
@@ -608,14 +608,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 }
 
-impl From<RpcError> for golem_wasm_rpc::RpcError {
+impl From<RpcError> for golem_wasm::RpcError {
     fn from(value: RpcError) -> Self {
         match value {
-            RpcError::ProtocolError { details } => golem_wasm_rpc::RpcError::ProtocolError(details),
-            RpcError::Denied { details } => golem_wasm_rpc::RpcError::Denied(details),
-            RpcError::NotFound { details } => golem_wasm_rpc::RpcError::NotFound(details),
+            RpcError::ProtocolError { details } => golem_wasm::RpcError::ProtocolError(details),
+            RpcError::Denied { details } => golem_wasm::RpcError::Denied(details),
+            RpcError::NotFound { details } => golem_wasm::RpcError::NotFound(details),
             RpcError::RemoteInternalError { details } => {
-                golem_wasm_rpc::RpcError::RemoteInternalError(details)
+                golem_wasm::RpcError::RemoteInternalError(details)
             }
         }
     }
@@ -715,7 +715,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
     async fn get(
         &mut self,
         this: Resource<FutureInvokeResult>,
-    ) -> anyhow::Result<Option<Result<WitValue, golem_wasm_rpc::RpcError>>> {
+    ) -> anyhow::Result<Option<Result<WitValue, golem_wasm::RpcError>>> {
         self.observe_function_call("golem::rpc::future-invoke-result", "get");
         let rpc = self.rpc();
         let component_service = self.state.component_service.clone();
@@ -745,7 +745,7 @@ impl<Ctx: WorkerCtx> HostFutureInvokeResult for DurableWorkerCtx<Ctx> {
 
             #[allow(clippy::type_complexity)]
             let (result, serializable_invoke_request, serializable_invoke_result, begin_index): (
-                Result<Option<Result<Option<ValueAndType>, golem_wasm_rpc::RpcError>>, Error>,
+                Result<Option<Result<Option<ValueAndType>, golem_wasm::RpcError>>, Error>,
                 SerializableInvokeRequest,
                 SerializableInvokeResult,
                 OplogIndex,
@@ -1115,17 +1115,17 @@ impl<Ctx: WorkerCtx> HostCancellationToken for DurableWorkerCtx<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> golem_wasm_rpc::Host for DurableWorkerCtx<Ctx> {
+impl<Ctx: WorkerCtx> golem_wasm::Host for DurableWorkerCtx<Ctx> {
     async fn parse_uuid(
         &mut self,
         uuid: String,
-    ) -> anyhow::Result<Result<golem_wasm_rpc::Uuid, String>> {
+    ) -> anyhow::Result<Result<golem_wasm::Uuid, String>> {
         Ok(Uuid::parse_str(&uuid)
             .map(|uuid| uuid.into())
             .map_err(|e| e.to_string()))
     }
 
-    async fn uuid_to_string(&mut self, uuid: golem_wasm_rpc::Uuid) -> anyhow::Result<String> {
+    async fn uuid_to_string(&mut self, uuid: golem_wasm::Uuid) -> anyhow::Result<String> {
         let uuid: Uuid = uuid.into();
         Ok(uuid.to_string())
     }

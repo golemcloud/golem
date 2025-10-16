@@ -21,7 +21,7 @@ use chrono::{DateTime, Timelike, Utc};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm::{IntoValue, Value};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use std::fmt::{Display, Formatter};
 use std::ops::Add;
 use std::time::{Duration, SystemTime};

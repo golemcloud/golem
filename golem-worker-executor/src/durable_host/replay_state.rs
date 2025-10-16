@@ -452,7 +452,7 @@ impl ReplayState {
                         invocation_context: spans,
                         ..
                     } => {
-                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
+                        let request: Vec<golem_wasm::protobuf::Val> = self
                             .oplog
                             .get_payload_of_entry(&oplog_entry)
                             .await

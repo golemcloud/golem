@@ -81,7 +81,7 @@ pub static PARSED_FUNCTION_NAME: LazyLock<rib::ParsedFunctionName> =
     });
 
 pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
-    Vec<golem_wasm_ast::analysis::AnalysedFunctionParameter>,
+    Vec<golem_wasm::analysis::AnalysedFunctionParameter>,
 > = {
     use golem_wasm::analysis::*;
     LazyLock::new(|| {
@@ -93,7 +93,7 @@ pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
 };
 
 pub static ANALYZED_FUNCTION_RESULT: LazyLock<
-    Option<golem_wasm_ast::analysis::AnalysedFunctionResult>,
+    Option<golem_wasm::analysis::AnalysedFunctionResult>,
 > = {
     use golem_wasm::analysis::*;
     LazyLock::new(|| {

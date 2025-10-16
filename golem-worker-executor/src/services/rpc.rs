@@ -42,7 +42,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{ValueAndType, WitValue};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use tokio::runtime::Handle;
 use tracing::debug;
@@ -162,13 +162,13 @@ impl From<WorkerProxyError> for RpcError {
     }
 }
 
-impl From<golem_wasm_rpc::RpcError> for RpcError {
-    fn from(value: golem_wasm_rpc::RpcError) -> Self {
+impl From<golem_wasm::RpcError> for RpcError {
+    fn from(value: golem_wasm::RpcError) -> Self {
         match value {
-            golem_wasm_rpc::RpcError::ProtocolError(details) => Self::ProtocolError { details },
-            golem_wasm_rpc::RpcError::Denied(details) => Self::Denied { details },
-            golem_wasm_rpc::RpcError::NotFound(details) => Self::NotFound { details },
-            golem_wasm_rpc::RpcError::RemoteInternalError(details) => {
+            golem_wasm::RpcError::ProtocolError(details) => Self::ProtocolError { details },
+            golem_wasm::RpcError::Denied(details) => Self::Denied { details },
+            golem_wasm::RpcError::NotFound(details) => Self::NotFound { details },
+            golem_wasm::RpcError::RemoteInternalError(details) => {
                 Self::RemoteInternalError { details }
             }
         }

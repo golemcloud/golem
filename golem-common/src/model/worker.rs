@@ -74,10 +74,10 @@ impl From<BTreeMap<String, String>> for WasiConfigVars {
 }
 
 impl IntoValue for WasiConfigVars {
-    fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
+    fn get_type() -> golem_wasm::analysis::AnalysedType {
         BTreeMap::<String, String>::get_type()
     }
-    fn into_value(self) -> golem_wasm_rpc::Value {
+    fn into_value(self) -> golem_wasm::Value {
         BTreeMap::from(self).into_value()
     }
 }

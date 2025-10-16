@@ -730,7 +730,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Option<Val>, WorkerExecutorError> {
         let result = self.invoke_and_await_worker_internal_typed(request).await?;
         let value = result
-            .map(golem_wasm_rpc::Value::try_from)
+            .map(golem_wasm::Value::try_from)
             .transpose()
             .map_err(|e| WorkerExecutorError::unknown(e.to_string()))?
             .map(|value| value.into());
