@@ -310,8 +310,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .expect("Failed enqueuing initial agent invocations to worker");
             }
         };
-
-        tracing::warn!("worker new done");
         Ok(worker)
     }
 
