@@ -3633,7 +3633,7 @@ async fn delete_worker_during_invocation(
     info!("Enqueuing invocations");
     // Enqueuing a large number of invocations, each sleeping for 2 seconds
     for _ in 0..25 {
-        let _ = executor
+        executor
             .invoke(
                 &worker_id,
                 "golem:it/api.{sleep}",
