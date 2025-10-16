@@ -417,7 +417,9 @@ pub trait InvocationContextManagement {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
+
     async fn start_child_span(
         &mut self,
         parent: &SpanId,
