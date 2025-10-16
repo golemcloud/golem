@@ -38,9 +38,14 @@ use http::header::{HOST, LOCATION, ORIGIN};
 use http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use openidconnect::{ClientId, ClientSecret, RedirectUrl, Scope};
 use poem::{Request, Response};
+use rib::RibCompilationError;
 use serde_json::{Number, Value as JsonValue};
+use std::str::FromStr;
 use std::sync::Arc;
-use test_r::test;
+use test_r::core::DynamicTestRegistration;
+use test_r::core::TestProperties;
+use test_r::test_gen;
+use test_r::{add_test, test};
 use url::Url;
 use uuid::uuid;
 
@@ -128,6 +133,110 @@ fn test_namespace() -> Namespace {
             value: uuid!("a92803c1-186a-4367-bc00-23faffb5c932").to_string(),
         },
         project_id: ProjectId(uuid!("44f28456-d0c2-45d2-aaad-6e85462b6f18")),
+    }
+}
+
+#[test]
+async fn test_api_def_with_agent() {
+    let response_mapping = r#"
+       let user_id = request.query.userid;
+       let my-agent = weather-agent(user_id);
+       let response = my-agent.get-weather("usa");
+      response
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo?{userid}", response_mapping).await;
+
+    let result = CompiledHttpApiDefinition::from_http_api_definition(
+        &api_specification,
+        &internal::get_agent_component_metadata(),
+        &test_namespace(),
+        &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+    );
+
+    assert!(result.is_ok());
+}
+
+#[test_gen]
+async fn gen_agent_type_error_tests(r: &mut DynamicTestRegistration) {
+    let cases = vec![
+        (
+            "invalid_constructor_argument_type",
+            r#"
+                let my-agent = weather-agent(1);
+                let response = my-agent.get-weather("usa");
+                response
+            "#,
+        ),
+        (
+            "too_few_constructor_arguments",
+            r#"
+                let my-agent = weather-agent();
+                let response = my-agent.get-weather("usa");
+                response
+            "#,
+        ),
+        (
+            "too_many_constructor_arguments",
+            r#"
+              let my-agent = weather-agent("foo", "bar");
+              let response = my-agent.get-weather("usa");
+              response
+            "#,
+        ),
+        (
+            "invalid_method_argument_type",
+            r#"
+              let user_id = request.query.userid;
+              let my-agent = weather-agent(user_id);
+              let response = my-agent.get-weather(1);
+              response
+            "#,
+        ),
+        (
+            "too_few_method_arguments",
+            r#"
+              let user_id = request.query.userid;
+              let my-agent = weather-agent(user_id);
+              let response = my-agent.get-weather();
+              response
+            "#,
+        ),
+        (
+            "too_many_method_arguments",
+            r#"
+              let user_id = request.query.userid;
+              let my-agent = weather-agent(user_id);
+              let response = my-agent.get-weather();
+              response
+            "#,
+        ),
+    ];
+
+    async fn run_test(rib_response_mapping: &str) {
+        let api_specification: HttpApiDefinition =
+            get_api_def_with_worker_binding("/foo?{userid}", rib_response_mapping).await;
+
+        let result = CompiledHttpApiDefinition::from_http_api_definition(
+            &api_specification,
+            &internal::get_agent_component_metadata(),
+            &test_namespace(),
+            &(Box::new(TestConversionContext) as Box<dyn ConversionContext>),
+        );
+
+        assert2::assert!(let Err(RouteCompilationErrors::RibError(RibCompilationError::RibTypeError(_))) = result);
+    }
+
+    for (name, rib_response_mapping) in cases {
+        add_test!(
+            r,
+            format!("test_api_def_with_agent_invalid_rib_{name}"),
+            TestProperties::unit_test(),
+            move || async {
+                run_test(rib_response_mapping).await;
+            }
+        );
     }
 }
 
@@ -2465,8 +2574,13 @@ async fn get_api_def_with_with_default_cors_preflight_for_get_endpoint_resource(
 
 mod internal {
     use async_trait::async_trait;
+    use golem_common::model::agent::{
+        AgentConstructor, AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
+        NamedElementSchema, NamedElementSchemas,
+    };
     use golem_common::model::auth::Namespace;
     use golem_common::model::component::VersionedComponentId;
+    use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
     use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
@@ -2718,6 +2832,32 @@ mod internal {
         create_record(record_elems)
     }
 
+    pub(crate) fn get_weather_agent_exports() -> Vec<AnalysedExport> {
+        let weather_agent_wrapper = AnalysedExport::Instance(AnalysedInstance {
+            name: "my:agent/weather-agent".to_string(),
+            functions: vec![
+                AnalysedFunction {
+                    name: "initialize".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "location".to_string(),
+                        typ: str(),
+                    }],
+                    result: None,
+                },
+                AnalysedFunction {
+                    name: "get-weather".to_string(),
+                    parameters: vec![AnalysedFunctionParameter {
+                        name: "arg1".to_string(),
+                        typ: str(),
+                    }],
+                    result: Some(AnalysedFunctionResult { typ: str() }),
+                },
+            ],
+        });
+
+        vec![weather_agent_wrapper]
+    }
+
     pub(crate) fn get_bigw_shopping_metadata() -> Vec<AnalysedExport> {
         // Exist in only amazon:shopping-cart/api1
         let analysed_function_in_api1 = AnalysedFunction {
@@ -2737,6 +2877,62 @@ mod internal {
         vec![analysed_export1]
     }
 
+    pub(crate) fn get_agent_component_metadata() -> ComponentMetadataDictionary {
+        let versioned_component_id = VersionedComponentId {
+            component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
+            version: 0,
+        };
+
+        let mut metadata_dict = HashMap::new();
+        let mut exports = get_weather_agent_exports();
+        exports.extend(get_bigw_shopping_metadata_with_resource());
+        exports.extend(get_golem_shopping_cart_metadata());
+
+        let metadata = ComponentMetadata::from_parts(
+            exports,
+            vec![],
+            HashMap::new(),
+            Some("my:agent".to_string()),
+            None,
+            vec![AgentType {
+                type_name: "weather-agent".to_string(),
+                description: "".to_string(),
+                constructor: AgentConstructor {
+                    name: None,
+                    description: "".to_string(),
+                    prompt_hint: None,
+                    input_schema: DataSchema::Tuple(NamedElementSchemas {
+                        elements: vec![NamedElementSchema {
+                            name: "location".to_string(),
+                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                                element_type: str(),
+                            }),
+                        }],
+                    }),
+                },
+                methods: vec![],
+                dependencies: vec![],
+            }],
+        );
+
+        let component_details = ComponentDetails {
+            component_info: ComponentDependencyKey {
+                component_name: "agent-component".to_string(),
+                component_id: Uuid::new_v4(),
+                component_version: 0,
+                root_package_name: None,
+                root_package_version: None,
+            },
+            metadata,
+        };
+
+        metadata_dict.insert(versioned_component_id, component_details);
+
+        ComponentMetadataDictionary {
+            metadata: metadata_dict,
+        }
+    }
+
     pub(crate) fn get_component_metadata() -> ComponentMetadataDictionary {
         let versioned_component_id = VersionedComponentId {
             component_id: ComponentId::try_from("0b6d9cd8-f373-4e29-8a5a-548e61b868a5").unwrap(),
@@ -2748,15 +2944,24 @@ mod internal {
         exports.extend(get_bigw_shopping_metadata_with_resource());
         exports.extend(get_golem_shopping_cart_metadata());
 
+        let metadata = ComponentMetadata::from_parts(
+            exports,
+            vec![],
+            HashMap::new(),
+            Some("my:agent".to_string()),
+            None,
+            vec![],
+        );
+
         let component_details = ComponentDetails {
             component_info: ComponentDependencyKey {
                 component_name: "test-component".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             },
-            metadata: exports,
-            agent_types: vec![],
+            metadata,
         };
 
         metadata_dict.insert(versioned_component_id, component_details);
@@ -3865,4 +4070,30 @@ async fn get_api_def_with_swagger_ui(path_pattern: &str) -> HttpApiDefinition {
     )
     .await
     .unwrap()
+}
+
+#[test]
+async fn test_api_def_with_request_id() {
+    let response_mapping = r#"
+       request.request_id.value
+    "#;
+
+    let api_specification: HttpApiDefinition =
+        get_api_def_with_worker_binding("/foo", response_mapping).await;
+
+    let session_store: Arc<dyn GatewaySession + Send + Sync> = internal::get_session_store();
+
+    let api_request = get_gateway_request("/foo", None, &HeaderMap::new(), JsonValue::Null);
+
+    let mut response = execute(
+        api_request,
+        &api_specification,
+        &session_store,
+        &TestIdentityProvider::default(),
+    )
+    .await;
+
+    let response_body = response.take_body().into_string().await.unwrap();
+
+    assert!(uuid::Uuid::from_str(&response_body).is_ok());
 }

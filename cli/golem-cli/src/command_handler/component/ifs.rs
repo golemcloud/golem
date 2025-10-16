@@ -194,7 +194,17 @@ impl IfsFileManager {
         component_file: &InitialComponentFile,
     ) -> anyhow::Result<Vec<R>> {
         // if it's a directory, we need to recursively load all files and combine them with their target paths and permissions.
-        let source_path = PathBuf::from(component_file.source.as_url().path());
+        let source_url = component_file.source.as_url();
+        let source_path = match source_url.scheme() {
+            "file" => PathBuf::from(source_url.to_string().replace("file:///", "")),
+            "" => PathBuf::from(source_url.path()),
+            s => bail!("Unexpected scheme {s} for local path processing"),
+        };
+
+        log_action(
+            "source",
+            source_path.display().to_string(),
+        );
 
         let mut results: Vec<R> = vec![];
         let mut queue: VecDeque<(PathBuf, ComponentFilePathWithPermissions)> =
@@ -389,6 +399,12 @@ impl FileProcessor<HashedFile> for FileHasher {
 
 // TODO: add this to manifest validation (too or instead of doing it here)?
 fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::Result<()> {
+    component_files.iter().for_each(|file| {
+        log_action( "ITER",
+                    file.source.as_url().to_string(),
+        );
+    });
+
     let non_unique_target_paths = component_files
         .iter()
         .map(|file| file.target.path.as_path())
@@ -407,3 +423,4 @@ fn validate_unique_targets(component_files: &[InitialComponentFile]) -> anyhow::
 
     Ok(())
 }
+

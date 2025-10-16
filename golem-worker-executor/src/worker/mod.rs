@@ -31,8 +31,9 @@ use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
     HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasSchedulerService, HasWasmtimeEngine, HasWorkerEnumerationService,
-    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
+    HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
@@ -1321,7 +1322,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let agent_id = if component.metadata.is_agent() {
                     let agent_id =
                         AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .await
                             .map_err(|err| {
                                 WorkerExecutorError::invalid_request(format!(
                                     "Invalid agent id: {}",
@@ -1406,7 +1406,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let agent_id = if component.metadata.is_agent() {
                     let agent_id =
                         AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .await
                             .map_err(|err| {
                                 WorkerExecutorError::invalid_request(format!(
                                     "Invalid agent id: {}",
@@ -1770,6 +1769,7 @@ impl RunningWorker {
             parent.config(),
             WorkerConfig::new(
                 worker_metadata.worker_id.clone(),
+                &parent.agent_id,
                 component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,
@@ -1786,6 +1786,7 @@ impl RunningWorker {
             parent.resource_limits(),
             parent.project_service(),
             parent.agent_types(),
+            parent.shard_service(),
         )
         .await?;
 

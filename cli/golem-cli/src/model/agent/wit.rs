@@ -14,12 +14,12 @@
 
 use crate::model::app::AppComponentName;
 use anyhow::{anyhow, bail, Context};
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
 use golem_wasm_ast::analysis::analysed_type::{case, variant};
 use golem_wasm_ast::analysis::AnalysedType;
-use heck::ToKebabCase;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -124,8 +124,12 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
+        writeln!(result, "  import golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  import golem:api/load-snapshot@1.1.7;")?;
         writeln!(result, "  import wasi:logging/logging;")?;
         writeln!(result, "  export golem:agent/guest;")?;
+        writeln!(result, "  export golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  export golem:api/load-snapshot@1.1.7;")?;
         for interface_name in &interface_names {
             writeln!(result, "  export {interface_name};")?;
         }
@@ -177,7 +181,7 @@ impl AgentWrapperGeneratorContextState {
         result: &mut String,
         agent: &AgentType,
     ) -> anyhow::Result<String> {
-        let interface_name = escape_wit_keyword(&agent.type_name.to_kebab_case());
+        let interface_name = escape_wit_keyword(&agent.type_name.to_wit_naming());
 
         writeln!(result, "/// {}", agent.description)?;
         writeln!(result, "interface {interface_name} {{")?;
@@ -197,7 +201,7 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
 
         for method in &agent.methods {
-            let name = escape_wit_keyword(&method.name.to_kebab_case());
+            let name = escape_wit_keyword(&method.name.to_wit_naming());
             writeln!(result, "  /// {}", method.description)?;
             write!(result, "  {name}: func(")?;
             self.write_parameter_list(result, &method.input_schema, &name)?;
@@ -297,7 +301,7 @@ impl AgentWrapperGeneratorContextState {
                     write!(
                         result,
                         "      {}",
-                        escape_wit_keyword(&case.name.to_kebab_case())
+                        escape_wit_keyword(&case.name.to_wit_naming())
                     )?;
                     if let Some(typ) = &case.typ {
                         write!(result, "({})", self.wit_type_reference(typ)?)?;
@@ -309,7 +313,7 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Enum(enum_) => {
                 writeln!(result, "    enum {name} {{")?;
                 for case in &enum_.cases {
-                    let case = escape_wit_keyword(&case.to_kebab_case());
+                    let case = escape_wit_keyword(&case.to_wit_naming());
                     writeln!(result, "      {case},")?;
                 }
                 writeln!(result, "    }}")?;
@@ -317,7 +321,7 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Flags(flags) => {
                 writeln!(result, "    flags {name} {{")?;
                 for case in &flags.names {
-                    let case = escape_wit_keyword(&case.to_kebab_case());
+                    let case = escape_wit_keyword(&case.to_wit_naming());
                     writeln!(result, "      {case},")?;
                 }
                 writeln!(result, "    }}")?;
@@ -328,7 +332,7 @@ impl AgentWrapperGeneratorContextState {
                     writeln!(
                         result,
                         "      {}: {},",
-                        escape_wit_keyword(&field.name.to_kebab_case()),
+                        escape_wit_keyword(&field.name.to_wit_naming()),
                         self.wit_type_reference(&field.typ)?
                     )?;
                 }
@@ -358,7 +362,7 @@ impl AgentWrapperGeneratorContextState {
                         write!(result, ", ")?;
                     }
 
-                    let param_name = &escape_wit_keyword(&element.name.to_kebab_case());
+                    let param_name = &escape_wit_keyword(&element.name.to_wit_naming());
                     write!(result, "{param_name}: ")?;
                     self.write_element_schema_type_ref(result, &element.schema)?;
                 }
@@ -510,7 +514,7 @@ impl AgentWrapperGeneratorContextState {
                 .name()
                 .map(|n| n.to_string())
                 .unwrap_or("element".to_string())
-                .to_kebab_case();
+                .to_wit_naming();
             let name = self.find_unused_name(proposed_name);
             self.type_names.insert(typ.clone(), name.clone());
             self.used_names.insert(name.clone());
@@ -531,7 +535,7 @@ impl AgentWrapperGeneratorContextState {
     fn multimodal_variant(cases: &[NamedElementSchema]) -> AnalysedType {
         let mut variant_cases = Vec::new();
         for named_element_schema in cases {
-            let case_name = escape_wit_keyword(&named_element_schema.name.to_kebab_case());
+            let case_name = escape_wit_keyword(&named_element_schema.name.to_wit_naming());
             let case_type = match &named_element_schema.schema {
                 ElementSchema::ComponentModel(schema) => schema.element_type.clone(),
                 ElementSchema::UnstructuredText(_) => variant(vec![]).named("text-reference"),
@@ -754,7 +758,8 @@ mod tests {
     use crate::model::agent::test;
     use crate::model::agent::test::{
         agent_type_with_wit_keywords, reproducer_for_issue_with_enums,
-        reproducer_for_multiple_types_called_element, single_agent_wrapper_types,
+        reproducer_for_issue_with_result_types, reproducer_for_multiple_types_called_element,
+        single_agent_wrapper_types,
     };
 
     use golem_common::model::agent::{
@@ -786,9 +791,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
             }
             "#
             ),
@@ -830,9 +839,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -985,9 +998,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
             }
@@ -1077,9 +1094,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
               export agent2;
@@ -1124,9 +1145,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -1193,9 +1218,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
             
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export assistant-agent;
               export weather-agent;
@@ -1240,9 +1269,13 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
               import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
@@ -1287,6 +1320,35 @@ mod tests {
                    }
                 "#
             },
+        )
+    }
+
+    #[test]
+    pub fn result_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_result_types();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// Constructs the agent bar-agent
+                interface bar-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                
+                  /// Constructs the agent bar-agent
+                  initialize: func();
+                
+                  get-definition: func() -> agent-type;
+                
+                  fun-either: func(either: result<string, string>) -> result<string, string>;
+                }
+            "#},
         )
     }
 

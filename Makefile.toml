@@ -68,8 +68,8 @@ run_task = [
         "wit-wasm-rpc",
         "wit-golem-common",
         "wit-golem-cli",
-        "wit-template-golem-agent-ts",
         "wit-test-components",
+        "wit-debugging-service-test-components",
         "wit-golem-templates",
         "wit-sdks",
     ] },
@@ -135,13 +135,6 @@ cp wit/deps/golem-agent cli/golem-cli/wit/deps
 cp wit/deps/logging cli/golem-cli/wit/deps
 """
 
-[tasks.wit-template-golem-agent-ts]
-private = true
-script_runner = "@duckscript"
-script = """
-glob_cp wit/deps/**/* cli/template-golem-agent-ts/wit/deps
-"""
-
 [tasks.wit-test-components]
 private = true
 script_runner = "@duckscript"
@@ -157,21 +150,15 @@ array_push ${components} http-client
 array_push ${components} ifs-update
 array_push ${components} ifs-update-inside-exported-function
 array_push ${components} invocation-context
-array_push ${components} js-1
-array_push ${components} js-4
 array_push ${components} key-value-service
 array_push ${components} networking
 array_push ${components} oplog-processor
 array_push ${components} promise
-array_push ${components} python-http-client
 array_push ${components} rdbms-service
 array_push ${components} rpc
 array_push ${components} runtime-service
 array_push ${components} scheduled-invocation
 array_push ${components} shopping-cart
-array_push ${components} tinygo-wasi
-array_push ${components} tinygo-wasi-http
-array_push ${components} ts-rpc
 array_push ${components} update-test-env-var
 array_push ${components} update-test-v2-11
 array_push ${components} update-test-v3-11
@@ -187,6 +174,21 @@ for component in ${components}
     rm -r test-components/${component}/wit/deps
     mkdir test-components/${component}/wit/deps
     glob_cp wit/deps/**/* test-components/${component}/wit/deps
+end
+"""
+
+[tasks.wit-debugging-service-test-components]
+private = true
+script_runner = "@duckscript"
+script = """
+components = array
+array_push ${components} shopping-cart
+
+for component in ${components}
+    echo "Updating wit directory for test component ${component}"
+    rm -r golem-debugging-service/test-components/${component}/wit/deps
+    mkdir golem-debugging-service/test-components/${component}/wit/deps
+    glob_cp wit/deps/**/* golem-debugging-service/test-components/${component}/wit/deps
 end
 """
 
@@ -540,7 +542,7 @@ dependencies = [
     "integration-tests-group3",
     "integration-tests-group4",
     "integration-tests-group5",
-    "cli-integration-tests"
+    "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
@@ -673,29 +675,6 @@ export GOLEM__TRACING__FILE__ENABLED=true
 cargo test \
 --package integration-tests \
 --test sharding ${@} \
--- --nocapture --test-threads=1
-'''
-
-[tasks.sharding-tests-debug.windows]
-script_runner = "pwsh"
-script_extension = "ps1"
-dependencies = ["build-bins"]
-script = '''
-Remove-Item -Recurse -Force logs, data -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path "logs"
-New-Item -ItemType Directory -Force -Path "data"
-
-$env:RUST_LOG="info,golem_test_framework::components=WARN"
-$env:RUST_BACKTRACE="1"
-$env:GOLEM__TRACING__FILE_DIR="..\\logs"
-$env:GOLEM__TRACING__FILE_TRUNCATE="false"
-$env:GOLEM__TRACING__FILE__ENABLED="true"
-
-$test_args = $args
-
-cargo test `
---package integration-tests `
---test sharding $test_args `
 -- --nocapture --test-threads=1
 '''
 
@@ -1347,19 +1326,6 @@ description = "Serve the schema.golem.cloud directory locally to help testing th
 install_crate = "miniserve"
 command = "miniserve"
 args = ["--interfaces", "127.0.0.1", "--port", "41357", "schema.golem.cloud"]
-
-## Agent template management
-[tasks.rebuild-ts-agent-template]
-description = "Rebuilds the TypeScript agent template WASM"
-script_runner = "@duckscript"
-script = '''
-cd cli/template-golem-agent-ts
-exec --fail-on-error npm update
-exec --fail-on-error npm install
-exec --fail-on-error npm run generate
-exec --fail-on-error npm run build
-cp dist/wrapper/target/wasm32-wasip1/release/golem_agent.wasm ../golem-templates/templates/ts/ts-app-common/wasm/golem_agent.wasm
-'''
 
 ## Cleanup
 [tasks.clear-v8]

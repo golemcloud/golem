@@ -14,7 +14,7 @@
 
 use crate::app::context::ApplicationContext;
 use crate::auth::{Auth, Authentication};
-use crate::command::shared_args::UpdateOrRedeployArgs;
+use crate::command::shared_args::DeployArgs;
 use crate::command::GolemCliGlobalFlags;
 use crate::command_handler::interactive::InteractiveHandler;
 use crate::config::AuthenticationConfig;
@@ -28,6 +28,7 @@ use crate::model::{app_raw, Format, ProjectReference};
 use crate::model::{AccountDetails, AccountId, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
 use anyhow::{anyhow, bail, Context as AnyhowContext};
+use colored::control::SHOULD_COLORIZE;
 use futures_util::future::BoxFuture;
 use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
 use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
@@ -49,6 +50,7 @@ use golem_client::api::WorkerClientLive as WorkerClientCloud;
 use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
 use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
 use golem_client::{Context as ContextCloud, Security};
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
@@ -57,7 +59,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, enabled, Level};
 use url::Url;
 use uuid::Uuid;
 
@@ -68,7 +70,7 @@ pub struct Context {
     config_dir: PathBuf,
     format: Format,
     local_server_auto_start: bool,
-    update_or_redeploy: UpdateOrRedeployArgs,
+    deploy_args: DeployArgs,
     profile_name: ProfileName,
     profile: Profile,
     available_profile_names: BTreeSet<ProfileName>,
@@ -81,6 +83,7 @@ pub struct Context {
     show_sensitive: bool,
     dev_mode: bool,
     server_no_limit_change: bool,
+    should_colorize: bool,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -114,7 +117,7 @@ impl Context {
 
         let mut yes = global_flags.yes;
         let dev_mode = global_flags.dev_mode;
-        let mut update_or_redeploy = UpdateOrRedeployArgs::none();
+        let mut deploy_args = DeployArgs::none();
 
         let mut app_context_config = ApplicationContextConfig::new(global_flags);
 
@@ -153,16 +156,20 @@ impl Context {
                 *start_local_server_yes.write().await = true;
             }
 
-            if manifest_profile.redeploy_workers == Some(true) {
-                update_or_redeploy.redeploy_agents = true;
+            if manifest_profile.redeploy_agents == Some(true) {
+                deploy_args.redeploy_agents = true;
             }
 
             if manifest_profile.redeploy_http_api == Some(true) {
-                update_or_redeploy.redeploy_http_api = true;
+                deploy_args.redeploy_http_api = true;
             }
 
             if manifest_profile.redeploy_all == Some(true) {
-                update_or_redeploy.redeploy_all = true;
+                deploy_args.redeploy_all = true;
+            }
+
+            if manifest_profile.reset == Some(true) {
+                deploy_args.reset = true;
             }
         }
 
@@ -182,10 +189,17 @@ impl Context {
 
         let format = format.unwrap_or(profile.profile.config.default_format);
 
-        let log_output = log_output_for_help.unwrap_or(match format {
-            Format::Json => Output::Stderr,
-            Format::Yaml => Output::Stderr,
-            Format::Text => Output::Stdout,
+        let log_output = log_output_for_help.unwrap_or_else(|| {
+            if enabled!(Level::ERROR) {
+                match format {
+                    Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
+                        Output::Stderr
+                    }
+                    Format::Text => Output::Stdout,
+                }
+            } else {
+                Output::BufferedUntilErr
+            }
         });
 
         set_log_output(log_output);
@@ -213,7 +227,7 @@ impl Context {
             config_dir,
             format,
             local_server_auto_start,
-            update_or_redeploy,
+            deploy_args,
             profile_name: profile.name,
             profile: profile.profile,
             available_profile_names,
@@ -225,6 +239,7 @@ impl Context {
             dev_mode,
             show_sensitive,
             server_no_limit_change,
+            should_colorize: SHOULD_COLORIZE.should_colorize(),
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -271,12 +286,16 @@ impl Context {
         self.show_sensitive
     }
 
-    pub fn update_or_redeploy(&self) -> &UpdateOrRedeployArgs {
-        &self.update_or_redeploy
+    pub fn deploy_args(&self) -> &DeployArgs {
+        &self.deploy_args
     }
 
     pub fn server_no_limit_change(&self) -> bool {
         self.server_no_limit_change
+    }
+
+    pub fn should_colorize(&self) -> bool {
+        self.should_colorize
     }
 
     pub async fn silence_app_context_init(&self) {
@@ -391,11 +410,13 @@ impl Context {
         &self,
     ) -> anyhow::Result<tokio::sync::RwLockWriteGuard<'_, ApplicationContextState>> {
         let mut state = self.app_context_state.write().await;
-        state.init(
-            &self.available_profile_names,
-            &self.app_context_config,
-            self.file_download_client.clone(),
-        )?;
+        state
+            .init(
+                &self.available_profile_names,
+                &self.app_context_config,
+                self.file_download_client.clone(),
+            )
+            .await?;
         Ok(state)
     }
 
@@ -448,9 +469,9 @@ impl Context {
         Ok(app_ctx.application.task_result_marker_dir())
     }
 
-    pub async fn set_rib_repl_dependencies(&self, dependencies: ReplComponentDependencies) {
+    pub async fn set_rib_repl_state(&self, state: RibReplState) {
         let mut rib_repl_state = self.rib_repl_state.write().await;
-        rib_repl_state.dependencies = dependencies;
+        *rib_repl_state = state;
     }
 
     pub async fn get_rib_repl_dependencies(&self) -> ReplComponentDependencies {
@@ -459,6 +480,11 @@ impl Context {
             component_dependencies: rib_repl_state.dependencies.component_dependencies.clone(),
             custom_instance_spec: rib_repl_state.dependencies.custom_instance_spec.clone(),
         }
+    }
+
+    pub async fn get_rib_repl_component_metadata(&self) -> ComponentMetadata {
+        let rib_repl_state = self.rib_repl_state.read().await;
+        rib_repl_state.component_metadata.clone()
     }
 
     pub fn templates(
@@ -684,6 +710,7 @@ struct ApplicationContextConfig {
     disable_app_manifest_discovery: bool,
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
+    dev_mode: bool,
 }
 
 impl ApplicationContextConfig {
@@ -706,6 +733,7 @@ impl ApplicationContextConfig {
                 version_override: global_flags.golem_rust_version,
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
+            dev_mode: global_flags.dev_mode,
         }
     }
 
@@ -750,7 +778,7 @@ impl ApplicationContextState {
         }
     }
 
-    fn init(
+    async fn init(
         &mut self,
         available_profile_names: &BTreeSet<ProfileName>,
         config: &ApplicationContextConfig,
@@ -770,6 +798,7 @@ impl ApplicationContextState {
             offline: config.wasm_rpc_client_build_offline,
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
+            dev_mode: config.dev_mode,
         };
 
         debug!(app_config = ?app_config, "Initializing application context");
@@ -783,6 +812,7 @@ impl ApplicationContextState {
                 app_config,
                 file_download_client,
             )
+            .await
             .map_err(Arc::new),
         );
 
@@ -837,7 +867,8 @@ impl ApplicationContextState {
 }
 
 pub struct RibReplState {
-    dependencies: ReplComponentDependencies,
+    pub dependencies: ReplComponentDependencies,
+    pub component_metadata: ComponentMetadata,
 }
 
 impl Default for RibReplState {
@@ -847,6 +878,7 @@ impl Default for RibReplState {
                 component_dependencies: vec![],
                 custom_instance_spec: vec![],
             },
+            component_metadata: ComponentMetadata::default(),
         }
     }
 }

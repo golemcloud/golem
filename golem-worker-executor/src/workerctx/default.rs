@@ -33,6 +33,7 @@ use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
@@ -467,7 +468,7 @@ impl FileSystemReading for Context {
 impl HostWasmRpc for Context {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::WorkerId,
+        worker_id: golem_wasm_rpc::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -674,6 +675,7 @@ impl WorkerCtx for Context {
         resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id.clone(),
@@ -700,6 +702,7 @@ impl WorkerCtx for Context {
             worker_fork,
             project_service,
             agent_types_service,
+            shard_service,
         )
         .await?;
         Ok(Self::new(golem_ctx, config, account_id, resource_limits))

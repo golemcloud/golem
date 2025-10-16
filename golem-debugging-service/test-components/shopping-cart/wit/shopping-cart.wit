@@ -41,7 +41,7 @@ interface api {
 }
 
 world shopping-cart {
-  import golem:api/host@1.1.6;
+  import golem:api/host@1.1.7;
 
   export api;
 }

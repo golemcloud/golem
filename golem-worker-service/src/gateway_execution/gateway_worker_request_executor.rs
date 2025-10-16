@@ -13,9 +13,13 @@
 // limitations under the License.
 
 use crate::gateway_execution::GatewayResolvedWorkerRequest;
+use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
+use golem_common::model::agent::AgentId;
+use golem_common::model::auth::{AuthCtx, TokenSecret};
 use golem_common::model::WorkerId;
+use golem_common::SafeDisplay;
 use golem_wasm_rpc::ValueAndType;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -61,11 +65,21 @@ impl<T: AsRef<str>> From<T> for WorkerRequestExecutorError {
 
 pub struct GatewayWorkerRequestExecutorDefault {
     worker_service: Arc<dyn WorkerService>,
+    component_service: Arc<dyn ComponentService>,
+    component_service_token: TokenSecret,
 }
 
 impl GatewayWorkerRequestExecutorDefault {
-    pub fn new(worker_service: Arc<dyn WorkerService>) -> Self {
-        Self { worker_service }
+    pub fn new(
+        worker_service: Arc<dyn WorkerService>,
+        component_service: Arc<dyn ComponentService>,
+        component_service_token: TokenSecret,
+    ) -> Self {
+        Self {
+            worker_service,
+            component_service,
+            component_service_token,
+        }
     }
 }
 
@@ -75,17 +89,32 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
         &self,
         resolved_worker_request: GatewayResolvedWorkerRequest,
     ) -> Result<WorkerResponse, WorkerRequestExecutorError> {
-        WorkerId::validate_worker_name(&resolved_worker_request.worker_name)?;
+        let component = self
+            .component_service
+            .get_by_version(
+                &resolved_worker_request.component_id,
+                resolved_worker_request.component_version,
+                &AuthCtx::new(self.component_service_token.clone()),
+            )
+            .await
+            .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
+        let raw_worker_name = resolved_worker_request.worker_name.to_string();
+        let worker_name = AgentId::parse(resolved_worker_request.worker_name, &component.metadata)
+            .ok()
+            .map(|agent_id| agent_id.to_string())
+            .unwrap_or(raw_worker_name);
+
+        WorkerId::validate_worker_name(&worker_name)?;
         debug!(
             component_id = resolved_worker_request.component_id.to_string(),
             function_name = resolved_worker_request.function_name,
-            worker_name = resolved_worker_request.worker_name,
+            worker_name = worker_name,
             "Executing invocation",
         );
 
         let worker_id = WorkerId {
             component_id: resolved_worker_request.component_id.clone(),
-            worker_name: resolved_worker_request.worker_name.clone(),
+            worker_name,
         };
 
         let type_annotated_value = self

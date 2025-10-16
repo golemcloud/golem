@@ -16,8 +16,9 @@ use crate::model::agent::wit::AgentWrapperGeneratorContext;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
-use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
+use heck::{ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use moonbit_component_generator::{
     to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
 };
@@ -71,6 +72,28 @@ pub fn generate_moonbit_wrapper(
         },
         "guest",
         AGENT_GUEST_MBT,
+    )?;
+
+    const AGENT_LOAD_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/load_snapshot.mbt");
+    const AGENT_SAVE_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/save_snapshot.mbt");
+
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "loadSnapshot",
+        AGENT_LOAD_SNAPSHOT_MBT,
+    )?;
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "saveSnapshot",
+        AGENT_SAVE_SNAPSHOT_MBT,
     )?;
 
     if ctx.has_types {
@@ -349,6 +372,33 @@ fn setup_dependencies(
     };
 
     depends_on_golem_agent_common(component, "interface/golem/agent/guest")?;
+
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/loadSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("loadSnapshot")
+            .join("loadSnapshot.mi"),
+        "loadSnapshot",
+    )?;
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/saveSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("saveSnapshot")
+            .join("saveSnapshot.mi"),
+        "saveSnapshot",
+    )?;
 
     if has_types {
         depends_on_golem_agent_common(
@@ -797,7 +847,7 @@ fn build_data_value(
             for named_element_schema in elements {
                 let case_name = named_element_schema
                     .name
-                    .to_kebab_case()
+                    .to_wit_naming()
                     .to_upper_camel_case();
                 writeln!(
                     result,
@@ -845,7 +895,7 @@ fn write_builder(
             writeln!(result, "{indent}  match {access} {{")?;
 
             for (case_idx, case) in variant.cases.iter().enumerate() {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
                 match &case.typ {
                     Some(_) => {
                         writeln!(
@@ -866,7 +916,7 @@ fn write_builder(
             writeln!(result, "{indent}  match {access} {{")?;
 
             for case in &variant.cases {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
                 match &case.typ {
                     Some(_) => {
                         writeln!(
@@ -901,7 +951,7 @@ fn write_builder(
             writeln!(result, "{indent}{builder}.result({access}.map(inner => {{")?;
             match &result_type.ok {
                 Some(ok) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -919,7 +969,7 @@ fn write_builder(
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             match &result_type.err {
                 Some(err) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -1153,7 +1203,7 @@ fn extract_data_value(
             writeln!(result, "{indent}values.map(pair => {{")?;
             writeln!(result, "{indent}  match pair.0 {{")?;
             for element in elements {
-                let case_name = element.name.to_kebab_case().to_upper_camel_case();
+                let case_name = element.name.to_wit_naming().to_upper_camel_case();
                 writeln!(result, "{indent}    \"{}\" => {{", element.name)?;
                 match &element.schema {
                     ElementSchema::ComponentModel(schema) => {
@@ -1230,7 +1280,7 @@ fn extract_wit_value(
             writeln!(result, "{indent}  match idx {{")?;
 
             for (idx, case) in variant.cases.iter().enumerate() {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
 
                 writeln!(result, "{indent}    {idx} => {{")?;
                 if let Some(inner_type) = &case.typ {
@@ -1255,15 +1305,13 @@ fn extract_wit_value(
         AnalysedType::Result(result_type) => {
             writeln!(result, "{indent}{from}.result().unwrap().map(inner => {{")?;
             if let Some(ok) = &result_type.ok {
-                extract_wit_value(result, ctx, ok, "inner", &format!("{indent}  "))?;
+                extract_wit_value(result, ctx, ok, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             if let Some(err) = &result_type.err {
-                writeln!(result, "{indent}  inner.map(inner => {{")?;
-                extract_wit_value(result, ctx, err, "inner", &format!("{indent}    "))?;
-                writeln!(result, "{indent}  }})")?;
+                extract_wit_value(result, ctx, err, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
@@ -1348,12 +1396,31 @@ fn extract_wit_value(
             writeln!(result, "{indent})")?;
         }
         AnalysedType::List(list) => {
-            writeln!(
-                result,
-                "{indent}{from}.list_elements().unwrap().map(item => {{"
-            )?;
-            extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
-            writeln!(result, "{indent}}})")?;
+            if matches!(
+                &*list.inner,
+                AnalysedType::U8(_)
+                    | AnalysedType::U32(_)
+                    | AnalysedType::U64(_)
+                    | AnalysedType::S32(_)
+                    | AnalysedType::S64(_)
+                    | AnalysedType::F32(_)
+                    | AnalysedType::F64(_)
+            ) {
+                // based on https://github.com/bytecodealliance/wit-bindgen/blob/main/crates/moonbit/src/lib.rs#L998-L1009
+                writeln!(
+                    result,
+                    "{indent}FixedArray::from_array({from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}}))")?;
+            } else {
+                writeln!(
+                    result,
+                    "{indent}{from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}})")?;
+            }
         }
         AnalysedType::Str(_) => {
             writeln!(result, "{indent}{from}.string().unwrap()")?;
@@ -1410,7 +1477,8 @@ mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
     use crate::model::agent::test::{
-        reproducer_for_issue_with_enums, reproducer_for_multiple_types_called_element,
+        reproducer_for_issue_with_enums, reproducer_for_issue_with_result_types,
+        reproducer_for_multiple_types_called_element,
     };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
@@ -1474,6 +1542,16 @@ mod tests {
     fn enum_type() {
         let component_name = "test:agent".into();
         let agent_types = reproducer_for_issue_with_enums();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn bug_result_types() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_issue_with_result_types();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

@@ -66,8 +66,12 @@ use uuid::Uuid;
 pub enum Format {
     #[serde(alias = "json")]
     Json,
+    #[serde(alias = "pretty-json", alias = "pretty")]
+    PrettyJson,
     #[serde(alias = "yaml")]
     Yaml,
+    #[serde(alias = "pretty-yaml")]
+    PrettyYaml,
     #[default]
     #[serde(alias = "text")]
     Text,
@@ -77,7 +81,9 @@ impl Display for Format {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Json => "json",
+            Self::PrettyJson => "pretty-json",
             Self::Yaml => "yaml",
+            Self::PrettyYaml => "pretty-yaml",
             Self::Text => "text",
         };
         Display::fmt(&s, f)
@@ -90,7 +96,9 @@ impl FromStr for Format {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "json" => Ok(Format::Json),
+            "pretty" | "pretty-json" => Ok(Format::PrettyJson),
             "yaml" => Ok(Format::Yaml),
+            "pretty-yaml" => Ok(Format::PrettyYaml),
             "text" => Ok(Format::Text),
             _ => {
                 let all = Format::iter()
@@ -408,33 +416,33 @@ impl FromStr for PathBufOrStdin {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WorkerUpdateMode {
+pub enum AgentUpdateMode {
     Automatic,
     Manual,
 }
 
-impl Display for WorkerUpdateMode {
+impl Display for AgentUpdateMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerUpdateMode::Automatic => {
+            AgentUpdateMode::Automatic => {
                 write!(f, "auto")
             }
-            WorkerUpdateMode::Manual => {
+            AgentUpdateMode::Manual => {
                 write!(f, "manual")
             }
         }
     }
 }
 
-impl FromStr for WorkerUpdateMode {
+impl FromStr for AgentUpdateMode {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "auto" => Ok(WorkerUpdateMode::Automatic),
-            "manual" => Ok(WorkerUpdateMode::Manual),
+            "auto" => Ok(AgentUpdateMode::Automatic),
+            "manual" => Ok(AgentUpdateMode::Manual),
             _ => Err(format!(
-                "Unknown worker update mode: {s}. Expected one of \"auto\", \"manual\""
+                "Unknown agent update mode: {s}. Expected one of \"auto\", \"manual\""
             )),
         }
     }
@@ -566,18 +574,21 @@ pub trait HasVerbosity {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkerConnectOptions {
+pub struct AgentLogStreamOptions {
     pub colors: bool,
     pub show_timestamp: bool,
     pub show_level: bool,
+    /// Only show entries coming from the agent, no output about invocation markers and stream status
+    pub logs_only: bool,
 }
 
-impl From<StreamArgs> for WorkerConnectOptions {
+impl From<StreamArgs> for AgentLogStreamOptions {
     fn from(args: StreamArgs) -> Self {
-        WorkerConnectOptions {
+        AgentLogStreamOptions {
             colors: SHOULD_COLORIZE.should_colorize(),
             show_timestamp: !args.stream_no_timestamp,
             show_level: !args.stream_no_log_level,
+            logs_only: args.logs_only,
         }
     }
 }

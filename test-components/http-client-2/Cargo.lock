@@ -68,7 +68,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "wit-bindgen-rt",
+ "wit-bindgen-rt 0.40.0",
 ]
 
 [[package]]
@@ -249,6 +249,7 @@ dependencies = [
 [[package]]
 name = "reqwest"
 version = "0.12.15"
+source = "git+https://github.com/zivergetech/reqwest?branch=update-sep-2025#284dbe506fc18c8ac0a21e6bf19b254f0b417e05"
 dependencies = [
  "base64",
  "bytes",
@@ -382,18 +383,18 @@ checksum = "b6c140620e7ffbb22c2dee59cafe6084a59b5ffc27a8859a5f0d494b5d52b6be"
 
 [[package]]
 name = "wasi"
-version = "0.12.1+wasi-0.2.0"
+version = "0.14.1+wasi-0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af274f03e73b7d85551b3f9e97b8a04d5c9aec703cfc227a3fe0595a7561c67a"
+checksum = "ad7df608df60a1c33e247881838b0f809512086e3e3bb1c18323b77eeb1f844e"
 dependencies = [
- "wit-bindgen",
+ "wit-bindgen-rt 0.39.0",
 ]
 
 [[package]]
-name = "wit-bindgen"
-version = "0.19.2"
+name = "wit-bindgen-rt"
+version = "0.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b37d270da94012e0ac490ac633ad5bdd76a10a3fb15069edb033c1b771ce931f"
+checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags",
 ]

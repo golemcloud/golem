@@ -18,7 +18,7 @@ use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, DbTransaction, Error, Rdbms, RdbmsPoolKey, RdbmsStatus,
     RdbmsTransactionStatus, RdbmsType,
 };
-use async_dropper_simple::{AsyncDrop, AsyncDropper};
+//use async_dropper_simple::{AsyncDrop, AsyncDropper};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use futures::future::BoxFuture;

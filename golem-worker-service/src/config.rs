@@ -223,6 +223,7 @@ pub struct ComponentServiceConfig {
     pub access_token: Uuid,
     pub retries: RetryConfig,
     pub connect_timeout: Duration,
+    pub cache_capacity: usize,
 }
 
 impl ComponentServiceConfig {
@@ -250,6 +251,7 @@ impl SafeDisplay for ComponentServiceConfig {
         let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "cache capacity: {}", self.cache_capacity);
         result
     }
 }
@@ -263,6 +265,7 @@ impl Default for ComponentServiceConfig {
                 .expect("invalid UUID"),
             retries: RetryConfig::max_attempts_3(),
             connect_timeout: Duration::from_secs(10),
+            cache_capacity: 1000,
         }
     }
 }
@@ -374,8 +377,6 @@ pub fn make_worker_service_config_loader() -> ConfigLoader<WorkerServiceConfig> 
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::path::PathBuf;
     use test_r::test;
 
     use super::make_worker_service_config_loader;
@@ -383,9 +384,6 @@ mod tests {
 
     #[test]
     pub fn config_is_loadable() {
-        env::set_current_dir(PathBuf::from(env!("CARGO_MANIFEST_DIR")))
-            .expect("Failed to set current directory");
-
         make_worker_service_config_loader()
             .load_or_dump_config()
             .expect("Failed to load config");

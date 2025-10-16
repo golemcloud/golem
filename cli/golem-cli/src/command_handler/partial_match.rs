@@ -125,7 +125,7 @@ impl ErrorHandler {
                 log_action(
                     "Checking",
                     format!(
-                        "provided worker name: {}",
+                        "provided agent name: {}",
                         worker_name.0.log_color_highlight()
                     ),
                 );
@@ -146,7 +146,7 @@ impl ErrorHandler {
                     };
 
                     logln(format!(
-                        "[{}]{} component: {} / worker: {}, {}",
+                        "[{}]{} component: {} / agent: {}, {}",
                         "ok".green(),
                         project_formatted,
                         worker_name_match.component_name.0.log_color_highlight(),
@@ -172,19 +172,18 @@ impl ErrorHandler {
                     )
                     .await
                 {
-                    let agent_type = self
+                    let agent_id = self
                         .ctx
                         .worker_handler()
                         .validate_worker_and_function_names(
                             &component,
                             &worker_name_match.worker_name,
                             None,
-                        )
-                        .await?;
+                        )?;
 
                     log_text_view(&AvailableFunctionNamesHelp::new(
                         &component,
-                        agent_type.as_ref(),
+                        agent_id.as_ref(),
                     ));
                     logln("");
                 }

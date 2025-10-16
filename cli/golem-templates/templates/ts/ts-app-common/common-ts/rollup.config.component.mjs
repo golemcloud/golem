@@ -1,4 +1,6 @@
 import alias from "@rollup/plugin-alias";
+import commonjs from "@rollup/plugin-commonjs";
+import json from "@rollup/plugin-json";
 import nodeResolve from "@rollup/plugin-node-resolve";
 import typescript from "@rollup/plugin-typescript";
 import url from "node:url";
@@ -63,6 +65,10 @@ export default (async () => { return await import("./src/main");})();
             nodeResolve({
                 extensions: [".mjs", ".js", ".node", ".ts"],
             }),
+            commonjs({
+                include: ["../../node_modules/**"],
+            }),
+            json(),
             typescript({
                 noEmitOnError: true,
                 include: [

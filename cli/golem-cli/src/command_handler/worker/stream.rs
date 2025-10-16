@@ -14,7 +14,7 @@
 
 use crate::command_handler::worker::parse_worker_error;
 use crate::command_handler::worker::stream_output::WorkerStreamOutput;
-use crate::model::{Format, WorkerConnectOptions};
+use crate::model::{AgentLogStreamOptions, Format};
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use futures_util::future::Either;
@@ -54,7 +54,7 @@ impl WorkerConnection {
         auth_token: String,
         component_id: Uuid,
         worker_name: String,
-        connect_options: WorkerConnectOptions,
+        connect_options: AgentLogStreamOptions,
         allow_insecure: bool,
         format: Format,
         idempotency_key: Option<IdempotencyKey>,

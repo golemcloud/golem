@@ -15,7 +15,6 @@
 use std::fmt::Debug;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use test_r::{tag_suite, test_dep};
-use golem_test_framework::config::{EnvBasedTestDependencies, EnvBasedTestDependenciesConfig};
 
 test_r::enable!();
 
@@ -39,12 +38,4 @@ impl Tracing {
 #[test_dep]
 fn tracing() -> Tracing {
     Tracing::init()
-}
-
-#[test_dep]
-pub async fn test_dependencies(_tracing: &Tracing) -> EnvBasedTestDependencies {
-    let env_config = EnvBasedTestDependenciesConfig::new();
-    let env = EnvBasedTestDependencies::new(env_config).await;
-
-    env
 }

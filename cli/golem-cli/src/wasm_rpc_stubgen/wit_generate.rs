@@ -87,8 +87,8 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
         );
         stub_interface.use_type(
             format!("golem:rpc/types@{GOLEM_RPC_WIT_VERSION}"),
-            "worker-id",
-            Some(Ident::new("golem-rpc-worker-id")),
+            "agent-id",
+            Some(Ident::new("golem-rpc-agent-id")),
         );
         stub_interface.use_type(
             format!("golem:rpc/types@{GOLEM_RPC_WIT_VERSION}"),
@@ -124,7 +124,7 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 let mut params = entity.constructor_params().to_encoder(def)?;
                 params
                     .items_mut()
-                    .insert(0, (Ident::new("worker-name"), Type::String));
+                    .insert(0, (Ident::new("agent-id"), Type::String));
                 constructor.set_params(params);
                 stub_functions.push(constructor);
             }
@@ -135,8 +135,8 @@ pub fn generate_client_package_from_stub_def(def: &StubDefinition) -> anyhow::Re
                 params.items_mut().insert(
                     0,
                     (
-                        Ident::new("worker-id"),
-                        Type::Named(Ident::new("golem-rpc-worker-id")),
+                        Ident::new("agent-id"),
+                        Type::Named(Ident::new("golem-rpc-agent-id")),
                     ),
                 );
                 custom_constructor.set_params(params);

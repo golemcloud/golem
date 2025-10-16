@@ -197,7 +197,7 @@ pub use golem_rust_macro::*;
 
 impl Display for PromiseId {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        write!(f, "{}/{}", self.worker_id, self.oplog_idx)
+        write!(f, "{}/{}", self.agent_id, self.oplog_idx)
     }
 }
 
@@ -207,19 +207,19 @@ impl FromStr for PromiseId {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let parts: Vec<&str> = s.split('/').collect();
         if parts.len() == 2 {
-            let worker_id = WorkerId::from_str(parts[0]).map_err(|_| {
-                format!("invalid worker id: {s} - expected format: <component_id>/<worker_name>")
+            let agent_id = AgentId::from_str(parts[0]).map_err(|_| {
+                format!("invalid agent id: {s} - expected format: <component_id>/<agent_id>")
             })?;
             let oplog_idx = parts[1]
                 .parse()
                 .map_err(|_| format!("invalid oplog index: {s} - expected integer"))?;
             Ok(Self {
-                worker_id,
+                agent_id,
                 oplog_idx,
             })
         } else {
             Err(format!(
-                "invalid promise id: {s} - expected format: <worker_id>/<oplog_idx>"
+                "invalid promise id: {s} - expected format: <agent_id>/<oplog_idx>"
             ))
         }
     }

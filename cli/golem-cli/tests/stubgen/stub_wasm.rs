@@ -541,7 +541,7 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
     assert_eq!(
         fun.parameters,
         vec![AnalysedFunctionParameter {
-            name: "worker-name".to_string(),
+            name: "agent-id".to_string(),
             typ: str()
         }]
     );
@@ -563,7 +563,7 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
     assert_eq!(
         custom_fun.parameters,
         vec![AnalysedFunctionParameter {
-            name: "worker-id".to_string(),
+            name: "agent-id".to_string(),
             typ: record(vec![
                 field(
                     "component-id",
@@ -576,9 +576,9 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
                     .named("component-id")
                     .owned("golem:rpc@0.2.2/types")
                 ),
-                field("worker-name", str()),
+                field("agent-id", str()),
             ])
-            .named("worker-id")
+            .named("agent-id")
             .owned("golem:rpc@0.2.2/types")
         }]
     );
@@ -607,7 +607,7 @@ fn assert_has_resource(
         fun.parameters,
         [
             vec![AnalysedFunctionParameter {
-                name: "worker-name".to_string(),
+                name: "agent-id".to_string(),
                 typ: str()
             }],
             constructor_parameters.to_vec()
@@ -633,7 +633,7 @@ fn assert_has_resource(
         custom_fun.parameters,
         [
             vec![AnalysedFunctionParameter {
-                name: "worker-id".to_string(),
+                name: "agent-id".to_string(),
                 typ: record(vec![
                     field(
                         "component-id",
@@ -646,9 +646,9 @@ fn assert_has_resource(
                         .named("component-id")
                         .owned("golem:rpc@0.2.2/types")
                     ),
-                    field("worker-name", str()),
+                    field("agent-id", str()),
                 ])
-                .named("worker-id")
+                .named("agent-id")
                 .owned("golem:rpc@0.2.2/types")
             }],
             constructor_parameters.to_vec()
