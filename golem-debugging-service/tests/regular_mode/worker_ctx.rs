@@ -208,7 +208,6 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
             self.durable_ctx.increase_memory(delta).await?;
             Ok(true)
         } else {
@@ -575,8 +574,11 @@ impl InvocationContextManagement for TestWorkerCtx {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

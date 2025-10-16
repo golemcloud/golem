@@ -367,6 +367,7 @@ async fn dynamic_function_call<
 
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+
             let demand = create_demand(&mut store, &remote_worker_id, span.span_id()).await?;
 
             let handle = {

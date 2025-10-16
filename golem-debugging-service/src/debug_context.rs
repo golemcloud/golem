@@ -465,8 +465,11 @@ impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(
