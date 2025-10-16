@@ -39,10 +39,9 @@ impl RibOutputTypeInfo {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::RibOutputType as ProtoRibOutputType;
     use crate::RibOutputTypeInfo;
-    use golem_api_grpc::proto::golem::rib::RibOutputType as ProtoRibOutputType;
     use golem_wasm::analysis::AnalysedType;
 
     impl From<RibOutputTypeInfo> for ProtoRibOutputType {

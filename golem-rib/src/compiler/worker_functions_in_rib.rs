@@ -73,11 +73,10 @@ pub struct WorkerFunctionType {
     pub return_type: Option<AnalysedType>,
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
+    use crate::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
     use crate::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
-    use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
-    use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
     use golem_wasm::analysis::AnalysedType;
 
     impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
@@ -140,12 +139,11 @@ mod protobuf {
 
     impl From<WorkerFunctionType> for WorkerFunctionTypeProto {
         fn from(value: WorkerFunctionType) -> Self {
-            let function_key =
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
-                    value.function_name,
-                );
+            let function_key = crate::proto::golem::rib::function_name_type::FunctionName::from(
+                value.function_name,
+            );
 
-            let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {
+            let function_name_type = crate::proto::golem::rib::FunctionNameType {
                 function_name: Some(function_key),
             };
 

@@ -13,7 +13,8 @@ license-file = "../LICENSE"
 harness = false
 
 [dependencies]
-golem-wasm = { workspace = true, features = ["host"] }
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true }
 
 bincode = { workspace = true }
 prost = { workspace = true }

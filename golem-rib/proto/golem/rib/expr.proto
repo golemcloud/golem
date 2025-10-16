@@ -4,7 +4,6 @@ package golem.rib;
 
 import "golem/rib/function_name.proto";
 import "golem/rib/type_name.proto";
-import "golem/common/uuid.proto";
 
 message Expr {
   oneof expr {
@@ -272,7 +271,7 @@ message CallType {
 
 message ComponentDependencyKey {
   string component_name = 1;
-  golem.common.UUID value = 2;
+  UUID value = 2;
   optional string root_package_name = 3;
   optional string root_package_version = 4;
   uint64 component_version = 5;
@@ -403,4 +402,9 @@ message ListReduceExpr {
   Expr iterable_expr = 3;
   Expr init_value_expr = 4;
   Expr yield_expr = 5;
+}
+
+message UUID {
+  uint64 high_bits = 1;
+  uint64 low_bits = 2;
 }

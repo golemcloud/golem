@@ -71,10 +71,9 @@ impl RibInputTypeInfo {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::RibInputType as ProtoRibInputType;
     use crate::RibInputTypeInfo;
-    use golem_api_grpc::proto::golem::rib::RibInputType as ProtoRibInputType;
     use golem_wasm::analysis::AnalysedType;
     use std::collections::HashMap;
 

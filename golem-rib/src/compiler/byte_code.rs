@@ -120,10 +120,9 @@ impl RibByteCode {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::RibByteCode as ProtoRibByteCode;
     use crate::RibByteCode;
-    use golem_api_grpc::proto::golem::rib::RibByteCode as ProtoRibByteCode;
 
     impl TryFrom<ProtoRibByteCode> for RibByteCode {
         type Error = String;

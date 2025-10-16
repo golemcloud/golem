@@ -16,7 +16,7 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-rib = { workspace = true, features = ["protobuf", "poem", "json_in_errors"] } # TODO: make these optionals
+golem-rib = { workspace = true }
 golem-wasm = { workspace = true, features = ["host"] }
 golem-wasm-derive = { workspace = true }
 

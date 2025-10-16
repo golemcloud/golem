@@ -547,10 +547,9 @@ parser! {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
-    use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-    use golem_api_grpc::proto::golem::rib::{
+    use crate::proto::golem::rib::type_name::Kind as InnerTypeName;
+    use crate::proto::golem::rib::{
         BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType,
         TupleType, TypeName as ProtoTypeName, VariantCase, VariantType,
     };

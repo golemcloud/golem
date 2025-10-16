@@ -285,12 +285,11 @@ mod protobuf {
 
     impl From<FunctionUsageConstraint> for FunctionConstraintProto {
         fn from(value: FunctionUsageConstraint) -> Self {
-            let function_name =
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
-                    value.function_signature.clone().function_name,
-                );
+            let function_name = rib::proto::golem::rib::function_name_type::FunctionName::from(
+                value.function_signature.clone().function_name,
+            );
 
-            let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {
+            let function_name_type = rib::proto::golem::rib::FunctionNameType {
                 function_name: Some(function_name),
             };
 

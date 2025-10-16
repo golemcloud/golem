@@ -14,8 +14,8 @@ path = "src/lib.rs"
 harness = false
 
 [dependencies]
-golem-rib = { workspace = true, default-features = true }
-golem-wasm = { workspace = true, features = ["host"] }
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
