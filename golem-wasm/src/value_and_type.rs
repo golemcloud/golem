@@ -27,13 +27,13 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
+#[cfg_attr(feature = "host", derive(::bincode::Encode, ::bincode::Decode))]
 pub struct ValueAndType {
     pub value: Value,
     pub typ: AnalysedType,
 }
 
-#[cfg(feature = "text")]
+#[cfg(feature = "host")]
 impl std::fmt::Display for ValueAndType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -74,14 +74,14 @@ impl From<ValueAndType> for AnalysedType {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl From<ValueAndType> for WitValue {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.value.into()
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl From<ValueAndType> for WitType {
     fn from(value_and_type: ValueAndType) -> Self {
         value_and_type.typ.into()
@@ -438,7 +438,7 @@ impl<K: AsRef<str>> IntoValueAndType for Record<K> {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for crate::WitValue {
     fn into_value(self) -> Value {
         // NOTE: this is different than From<WitValue> for Value. That conversion creates
@@ -455,7 +455,7 @@ impl IntoValue for crate::WitValue {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for WitNode {
     fn into_value(self) -> Value {
         use crate::WitNode;
@@ -600,7 +600,7 @@ impl IntoValue for WitNode {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for crate::Uri {
     fn into_value(self) -> Value {
         Value::Record(vec![Value::String(self.value)])
@@ -611,7 +611,7 @@ impl IntoValue for crate::Uri {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for WitType {
     fn into_value(self) -> Value {
         Value::Record(vec![self.nodes.into_value()])
@@ -625,7 +625,7 @@ impl IntoValue for WitType {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for NamedWitTypeNode {
     fn into_value(self) -> Value {
         Value::Record(vec![
@@ -644,7 +644,7 @@ impl IntoValue for NamedWitTypeNode {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for WitTypeNode {
     fn into_value(self) -> Value {
         match self {
@@ -802,7 +802,7 @@ impl IntoValue for Duration {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for crate::ResourceMode {
     fn into_value(self) -> Value {
         match self {
@@ -816,7 +816,7 @@ impl IntoValue for crate::ResourceMode {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for crate::RpcError {
     fn into_value(self) -> Value {
         match self {
@@ -851,7 +851,7 @@ impl IntoValue for crate::RpcError {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for ValueAndType {
     fn into_value(self) -> Value {
         let wit_value: WitValue = self.value.into();
@@ -867,7 +867,7 @@ impl IntoValue for ValueAndType {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for Value {
     fn into_value(self) -> Value {
         let wit_value: WitValue = self.into();
@@ -879,7 +879,7 @@ impl IntoValue for Value {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl IntoValue for AnalysedType {
     fn into_value(self) -> Value {
         let wit_type: WitType = self.into();
@@ -1112,7 +1112,7 @@ impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
     }
 }
 
-#[cfg(feature = "extra-bindings")]
+#[cfg(feature = "host")]
 mod extra_bindings {
     use crate::{IntoValue, IntoValueAndType, Value};
     use bigdecimal::BigDecimal;

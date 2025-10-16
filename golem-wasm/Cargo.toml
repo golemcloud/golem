@@ -52,48 +52,33 @@ protox = { workspace = true, optional = true }
 cargo_metadata = { workspace = true }
 
 [features]
-default = ["host", "extra-bindings"]
-host-bindings = ["dep:async-trait", "wasmtime"]
-host = [
-    "arbitrary",
-    "bincode",
-    "host-bindings",
-    "json",
-    "poem_openapi",
-    "protobuf",
-    "serde",
-    "text",
-    "dep:semver",
-    "dep:wasm-metadata",
-    "dep:wit-component",
-    "dep:wit-parser"
+default = ["host"]
 
-]
-arbitrary = ["dep:arbitrary"]
-bincode = ["dep:bincode"]
-extra-bindings = ["dep:bigdecimal", "dep:bit-vec", "dep:url"]
-json = [
+host = [
+    "dep:arbitrary",
+    "dep:async-recursion",
+    "dep:async-trait",
+    "dep:bigdecimal",
+    "dep:bincode",
+    "dep:bit-vec",
+    "dep:miette",
+    "dep:poem-openapi",
+    "dep:prost",
+    "dep:prost-build",
+    "dep:protox",
+    "dep:semver",
     "dep:serde",
     "dep:serde_json",
-    "dep:bigdecimal",
-
-]
-poem_openapi = [
-    "dep:poem-openapi",
-    "json",
-
-]
-protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "dep:protox", "dep:miette"]
-serde = ["dep:serde"]
-stub = ["dep:wit-bindgen-rt"]
-text = [ "dep:wasm-wave"]
-wasmtime = [
+    "dep:url",
+    "dep:wasm-metadata",
+    "dep:wasm-wave",
     "dep:wasmtime",
     "dep:wasmtime-wasi",
-    "dep:async-recursion",
-
+    "dep:wit-component",
+    "dep:wit-parser"
 ]
 
+stub = ["dep:wit-bindgen-rt"]
 
 [package.metadata.component]
 package = "golem:rpc"

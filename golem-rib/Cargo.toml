@@ -11,19 +11,17 @@ license-file = "../LICENSE"
 
 [features]
 default = ["json_in_errors", "protobuf", "poem"]
-json_in_errors = ["protobuf", "golem-wasm/json"]
+json_in_errors = ["protobuf"]
 protobuf = [
     "dep:golem-api-grpc",
-    "golem-wasm/protobuf",
 ]
 poem = [
     "dep:poem-openapi",
-    "golem-wasm/poem_openapi",
 ]
 
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true } # TODO: remove this dependency
-golem-wasm = { workspace = true, features = ["bincode", "text"] }
+golem-wasm = { workspace = true, features = ["host"] }
 
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }

@@ -16,19 +16,18 @@ mod model;
 pub use model::*;
 
 /// Protobuf representation of analysis results
-#[cfg(feature = "protobuf")]
+#[cfg(feature = "host")]
 pub mod protobuf;
 
 /// Wave format support for types.
 ///
 /// This module is optional and can be enabled with the `metadata` feature flag. It is enabled by default.
-#[cfg(feature = "text")]
+#[cfg(feature = "host")]
 pub mod wave;
 
 #[cfg(feature = "host")]
 pub mod wit_parser;
 
-use std::fmt::Debug;
 
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 

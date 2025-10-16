@@ -1,10 +1,10 @@
-#[cfg(feature = "protobuf")]
+#[cfg(feature = "host")]
 fn main() -> miette::Result<()> {
     let mut config = prost_build::Config::new();
-    config.type_attribute(".", "#[cfg(feature = \"protobuf\")]");
+    config.type_attribute(".", "#[cfg(feature = \"host\")]");
     config.type_attribute(
         ".",
-        "#[cfg_attr(feature=\"bincode\", derive(bincode::Encode, bincode::Decode))]",
+        "#[cfg_attr(feature=\"host\", derive(bincode::Encode, bincode::Decode))]",
     );
 
     let file_descriptors = protox::compile(
@@ -23,7 +23,7 @@ fn main() -> miette::Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "protobuf"))]
+#[cfg(not(feature = "host"))]
 fn main() -> std::io::Result<()> {
     Ok(())
 }

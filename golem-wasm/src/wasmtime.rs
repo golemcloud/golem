@@ -44,7 +44,7 @@ impl Display for EncodingError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
 pub struct ResourceTypeId {
     /// Name of the WIT resource
     pub name: String,

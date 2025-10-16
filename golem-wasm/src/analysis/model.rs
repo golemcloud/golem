@@ -12,19 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::analysis::analysed_type::{
-    bool, str, u32, u64, u8,
-};
 use crate::analysis::AnalysisResult;
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "json", serde(tag = "type"))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", serde(tag = "type"))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(
-    feature = "poem_openapi",
+    feature = "host",
     oai(discriminator_name = "type", one_of = true)
 )]
 pub enum AnalysedExport {
@@ -33,9 +30,9 @@ pub enum AnalysedExport {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunction {
     pub name: String,
     pub parameters: Vec<AnalysedFunctionParameter>,
@@ -73,227 +70,227 @@ impl AnalysedFunction {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedInstance {
     pub name: String,
     pub functions: Vec<AnalysedFunction>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeResult {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub ok: Option<Box<AnalysedType>>,
     pub err: Option<Box<AnalysedType>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct NameTypePair {
     pub name: String,
     pub typ: AnalysedType,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct NameOptionTypePair {
     pub name: String,
     pub typ: Option<AnalysedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeVariant {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub cases: Vec<NameOptionTypePair>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeOption {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeEnum {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub cases: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeFlags {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeRecord {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub fields: Vec<NameTypePair>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeTuple {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub items: Vec<AnalysedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeList {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub inner: Box<AnalysedType>,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeStr;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeChr;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeF64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeF32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS64;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS32;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU16;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS16;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeU8;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeS8;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeBool;
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct TypeHandle {
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub name: Option<String>,
-    #[cfg_attr(feature = "json", serde(skip_serializing_if = "Option::is_none"))]
+    #[cfg_attr(feature = "host", serde(skip_serializing_if = "Option::is_none"))]
     pub owner: Option<String>,
     pub resource_id: AnalysedResourceId,
     pub mode: AnalysedResourceMode,
 }
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "json", serde(tag = "type"))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", serde(tag = "type"))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(
-    feature = "poem_openapi",
+    feature = "host",
     oai(discriminator_name = "type", one_of = true)
 )]
 pub enum AnalysedType {
@@ -641,53 +638,53 @@ pub mod analysed_type {
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Enum))]
 pub enum AnalysedResourceMode {
     Owned,
     Borrowed,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::NewType))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::NewType))]
 pub struct AnalysedResourceId(pub u64);
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionParameter {
     pub name: String,
     pub typ: AnalysedType,
 }
 
 #[derive(Debug, Clone, PartialEq, Hash, Eq)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysedFunctionResult {
     pub typ: AnalysedType,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct InterfaceCouldNotBeAnalyzedWarning {
     pub name: String,
     pub failure: AnalysisFailure,
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "json", serde(tag = "type"))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Union))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", serde(tag = "type"))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Union))]
 #[cfg_attr(
-    feature = "poem_openapi",
+    feature = "host",
     oai(discriminator_name = "type", one_of = true)
 )]
 pub enum AnalysisWarning {
@@ -709,9 +706,9 @@ impl Display for AnalysisWarning {
 }
 
 #[derive(Debug, Clone)]
-#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "bincode", derive(bincode::Encode, bincode::Decode))]
-#[cfg_attr(feature = "poem_openapi", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "host", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
+#[cfg_attr(feature = "host", derive(poem_openapi::Object))]
 pub struct AnalysisFailure {
     pub reason: String,
 }
@@ -744,8 +741,8 @@ mod tests {
     use poem_openapi::types::ToJSON;
     use test_r::test;
 
-    #[cfg(feature = "poem_openapi")]
-    #[cfg(feature = "json")]
+    #[cfg(feature = "host")]
+    #[cfg(feature = "host")]
     #[test]
     fn analysed_export_poem_and_serde_are_compatible() {
         let export1 = AnalysedExport::Instance(AnalysedInstance {

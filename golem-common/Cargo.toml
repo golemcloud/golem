@@ -54,7 +54,6 @@ protobuf = [
     "dep:tonic",
     "dep:golem-api-grpc",
     "golem-rib/protobuf",
-    "golem-wasm/protobuf",
 ]
 redis = [
     "observability",

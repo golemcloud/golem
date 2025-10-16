@@ -15,52 +15,30 @@ use chrono::{DateTime, Utc};
 
 #[allow(unused)]
 #[rustfmt::skip]
-#[cfg(not(feature = "host-bindings"))]
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 mod bindings;
 
 #[cfg(test)]
 test_r::enable!();
 
+mod analysis;
+
 /// Implements bincode encoders and decoders for WitValue instances
-#[cfg(all(feature = "bincode", feature = "host-bindings"))]
+#[cfg(feature = "host")]
 pub mod bincode;
 
 /// A builder interface for WitValue instances
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 mod builder;
 
 /// Extension methods for extracting values from WitValue instances
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 mod extractor;
 
 /// Conversion to and from JSON, in the presence of golem-wasm-ast generated type information
-#[cfg(feature = "json")]
+#[cfg(feature = "host")]
 pub mod json;
-
-/// Poem OpenAPI integration for some types
-#[cfg(feature = "poem_openapi")]
-pub mod poem;
-
-/// Protobuf-defined value types and conversion to them
-#[cfg(feature = "protobuf")]
-pub mod protobuf;
-
-/// Serde instances for WitValue
-#[cfg(feature = "serde")]
-pub mod serde;
-
-/// Conversion to/from the WAVE format
-#[cfg(feature = "text")]
-mod text;
-
-mod value_and_type;
-
-/// Conversion to/from wasmtime's value representation
-#[cfg(feature = "wasmtime")]
-pub mod wasmtime;
-
-mod analysis;
 
 /// The metadata module defines data structures for representing various metadata extracted from WASM binaries.
 ///
@@ -68,38 +46,60 @@ mod analysis;
 #[cfg(feature = "host")]
 pub mod metadata;
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+/// Poem OpenAPI integration for some types
+#[cfg(feature = "host")]
+pub mod poem;
+
+/// Protobuf-defined value types and conversion to them
+#[cfg(feature = "host")]
+pub mod protobuf;
+
+/// Serde instances for WitValue
+#[cfg(feature = "host")]
+pub mod serde;
+
+/// Conversion to/from the WAVE format
+#[cfg(feature = "host")]
+mod text;
+
+mod value_and_type;
+
+/// Conversion to/from wasmtime's value representation
+#[cfg(feature = "host")]
+pub mod wasmtime;
+
+#[cfg(any(feature = "host", feature = "stub"))]
 use crate::builder::WitValueBuilder;
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 pub use builder::{NodeBuilder, WitValueBuilderExtensions};
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 pub use extractor::{WitNodePointer, WitValueExtractor};
 
-#[cfg(not(feature = "host-bindings"))]
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi;
 
-#[cfg(not(feature = "host-bindings"))]
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
-#[cfg(not(feature = "host-bindings"))]
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use golem_rpc_0_2_x::types::{
     AgentId, ComponentId, FutureInvokeResult, NodeIndex, ResourceMode, RpcError, Uri, Uuid,
     WasmRpc, WitNode, WitType, WitTypeNode, WitValue,
 };
 
-#[cfg(not(feature = "host-bindings"))]
+#[cfg(not(feature = "host"))]
 #[cfg(feature = "stub")]
 pub use bindings::wasi::io::poll::Pollable;
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub use wasmtime_wasi::p2::DynPollable;
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 mod generated {
     use ::wasmtime::component::bindgen;
     bindgen!({
@@ -118,13 +118,13 @@ mod generated {
     });
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub use generated::wasi;
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub use generated::golem::rpc0_2_2 as golem_rpc_0_2_x;
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub use golem_rpc_0_2_x::types::{
     AgentId, ComponentId, Host, HostWasmRpc, NodeIndex, ResourceMode, RpcError, Uri, Uuid, WitNode,
     WitType, WitTypeNode, WitValue,
@@ -157,12 +157,12 @@ impl From<uuid::Uuid> for Uuid {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 #[async_trait::async_trait]
 pub trait SubscribeAny: std::any::Any {
     async fn ready(&mut self);
@@ -170,12 +170,12 @@ pub trait SubscribeAny: std::any::Any {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub struct FutureInvokeResultEntry {
     pub payload: Box<dyn SubscribeAny + Send + Sync>,
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 #[async_trait::async_trait]
 impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
     async fn ready(&mut self) {
@@ -183,17 +183,17 @@ impl wasmtime_wasi::p2::Pollable for FutureInvokeResultEntry {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 pub struct CancellationTokenEntry {
     pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
 }
 
-#[cfg(feature = "text")]
+#[cfg(feature = "host")]
 pub use text::{parse_value_and_type, print_value_and_type};
 
 pub use value_and_type::*;
 
-#[cfg(all(feature = "arbitrary", feature = "host-bindings"))]
+#[cfg(feature="host")]
 impl arbitrary::Arbitrary<'_> for Uri {
     fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
         let uri = u.arbitrary::<String>()?;
@@ -201,7 +201,7 @@ impl arbitrary::Arbitrary<'_> for Uri {
     }
 }
 
-#[cfg(feature = "host-bindings")]
+#[cfg(feature = "host")]
 impl PartialEq for Uri {
     fn eq(&self, other: &Self) -> bool {
         self.value == other.value
@@ -210,8 +210,8 @@ impl PartialEq for Uri {
 
 /// A tree representation of Value - isomorphic to the protobuf Val type but easier to work with in Rust
 #[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bincode", derive(::bincode::Encode, ::bincode::Decode))]
+#[cfg_attr(feature = "host", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "host", derive(::bincode::Encode, ::bincode::Decode))]
 pub enum Value {
     Bool(bool),
     U8(u8),
@@ -243,7 +243,7 @@ pub enum Value {
     },
 }
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<Value> for WitValue {
     fn from(value: Value) -> Self {
         let mut builder = WitValueBuilder::new();
@@ -252,7 +252,7 @@ impl From<Value> for WitValue {
     }
 }
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 impl PartialEq for WitValue {
     fn eq(&self, other: &Self) -> bool {
         let a: Value = self.clone().into();
@@ -261,7 +261,7 @@ impl PartialEq for WitValue {
     }
 }
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 fn build_wit_value(value: Value, builder: &mut WitValueBuilder) -> NodeIndex {
     match value {
         Value::Bool(value) => builder.add_bool(value),
@@ -381,7 +381,7 @@ impl Value {
     }
 }
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 impl From<WitValue> for Value {
     fn from(value: WitValue) -> Self {
         assert!(!value.nodes.is_empty());
@@ -389,7 +389,7 @@ impl From<WitValue> for Value {
     }
 }
 
-#[cfg(any(feature = "host-bindings", feature = "stub"))]
+#[cfg(any(feature = "host", feature = "stub"))]
 fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     match node {
         WitNode::RecordValue(field_indices) => {
@@ -464,7 +464,7 @@ fn build_tree(node: &WitNode, nodes: &[WitNode]) -> Value {
     }
 }
 
-#[cfg(all(feature = "arbitrary", feature = "host-bindings"))]
+#[cfg(feature = "host")]
 impl<'a> arbitrary::Arbitrary<'a> for WitValue {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let arbitrary_value = u.arbitrary::<Value>()?;

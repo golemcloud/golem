@@ -72,7 +72,7 @@ impl ParseFromJSON for ValueAndType {
 
 impl IsObjectType for ValueAndType {}
 
-#[cfg(feature = "json")]
+#[cfg(feature = "host")]
 mod json {
     use crate::json::OptionallyValueAndTypeJson;
     use crate::analysis::AnalysedType;
