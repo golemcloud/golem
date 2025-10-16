@@ -203,7 +203,7 @@ type ParameterTuple = (String, openapiv3::Schema);
 
 // Helper function: Extracts parameters from a record and adds them to the appropriate collection
 fn extract_parameters_from_record(
-    record: &golem_wasm_ast::analysis::AnalysedType,
+    record: &golem_wasm::analysis::AnalysedType,
     path_parameters: &mut Vec<ParameterTuple>,
     query_parameters: &mut Vec<ParameterTuple>,
     header_parameters: &mut Vec<ParameterTuple>,
@@ -918,7 +918,7 @@ fn create_integer_schema(
 
 // Helper function: Converts AnalysedType to OpenAPI Schema
 fn create_schema_from_analysed_type(
-    analysed_type: &golem_wasm_ast::analysis::AnalysedType,
+    analysed_type: &golem_wasm::analysis::AnalysedType,
 ) -> openapiv3::Schema {
     use golem_wasm::analysis::AnalysedType;
 
@@ -1174,12 +1174,12 @@ fn create_schema_from_analysed_type(
             // Handle Option<Box<AnalysedType>> correctly by unwrapping
             let ok_type = match &type_result.ok {
                 Some(boxed_type) => &**boxed_type,
-                None => &AnalysedType::Str(golem_wasm_ast::analysis::TypeStr {}),
+                None => &AnalysedType::Str(golem_wasm::analysis::TypeStr {}),
             };
 
             let err_type = match &type_result.err {
                 Some(boxed_type) => &**boxed_type,
-                None => &AnalysedType::Str(golem_wasm_ast::analysis::TypeStr {}),
+                None => &AnalysedType::Str(golem_wasm::analysis::TypeStr {}),
             };
 
             // For Result, use oneOf with success and error schemas

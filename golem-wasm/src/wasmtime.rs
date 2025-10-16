@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{Uri, Value};
-use async_recursion::async_recursion;
-use async_trait::async_trait;
 use crate::analysis::analysed_type::{
     bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, s16, s32, s64, s8, str,
     tuple, u16, u32, u64, u8, unit_case, variant,
 };
 use crate::analysis::{AnalysedType, TypeResult};
+use crate::{Uri, Value};
+use async_recursion::async_recursion;
+use async_trait::async_trait;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 use wasmtime::component::{types, ResourceAny, Type, Val};

@@ -48,9 +48,7 @@ mod protobuf {
     impl From<RibOutputTypeInfo> for ProtoRibOutputType {
         fn from(value: RibOutputTypeInfo) -> Self {
             ProtoRibOutputType {
-                r#type: Some(golem_wasm::protobuf::Type::from(
-                    &value.analysed_type,
-                )),
+                r#type: Some(golem_wasm::protobuf::Type::from(&value.analysed_type)),
             }
         }
     }

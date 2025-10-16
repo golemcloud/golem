@@ -1790,9 +1790,7 @@ x-golem-api-definition-version: 0.0.1
 async fn test_path_query_header_parameter_combinations() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm::analysis::{
-        AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64,
-    };
+    use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64};
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
     use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
     use std::collections::HashMap;

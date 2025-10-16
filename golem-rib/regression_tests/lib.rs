@@ -2,9 +2,7 @@ test_r::enable!();
 
 use test_r::test;
 
-use golem_wasm::analysis::analysed_type::{
-    bool, f32, f64, field, record, s16, s32, str, u64, u8,
-};
+use golem_wasm::analysis::analysed_type::{bool, f32, f64, field, record, s16, s32, str, u64, u8};
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::ValueAndType;
 use rib::{

@@ -4661,6 +4661,7 @@ dependencies = [
  "itertools 0.14.0",
  "miette",
  "poem-openapi",
+ "pretty_assertions",
  "proptest",
  "proptest-arbitrary-interop",
  "prost 0.14.1",

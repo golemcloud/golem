@@ -343,7 +343,7 @@ impl ResourceLimiterAsync for DebugContext {
 impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::AgentId,
+        worker_id: golem_wasm::golem_rpc_0_2_x::types::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }

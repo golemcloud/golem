@@ -322,11 +322,11 @@ fn get_oplog_entry_from_public_oplog_entry(
         }
         PublicOplogEntry::ExportedFunctionInvoked(exported_function_invoked_parameters) => {
             // We discard the type info provided by the user to encode it as oplog payload by converting it to
-            // golem_wasm_rpc::protobuf::Val
+            // golem_wasm::protobuf::Val
             let vals = exported_function_invoked_parameters
                 .request
                 .into_iter()
-                .map(|x| golem_wasm_rpc::protobuf::Val::from(x.value))
+                .map(|x| golem_wasm::protobuf::Val::from(x.value))
                 .collect::<Vec<_>>();
 
             let serialized = golem_common::serialization::serialize(&vals)?;

@@ -20,10 +20,7 @@ use std::fmt::{Display, Formatter};
 #[cfg_attr(feature = "host", serde(tag = "type"))]
 #[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
-#[cfg_attr(
-    feature = "host",
-    oai(discriminator_name = "type", one_of = true)
-)]
+#[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
 pub enum AnalysedExport {
     Function(AnalysedFunction),
     Instance(AnalysedInstance),
@@ -289,10 +286,7 @@ pub struct TypeHandle {
 #[cfg_attr(feature = "host", serde(tag = "type"))]
 #[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
-#[cfg_attr(
-    feature = "host",
-    oai(discriminator_name = "type", one_of = true)
-)]
+#[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
 pub enum AnalysedType {
     Variant(TypeVariant),
     Result(TypeResult),
@@ -683,10 +677,7 @@ pub struct InterfaceCouldNotBeAnalyzedWarning {
 #[cfg_attr(feature = "host", serde(tag = "type"))]
 #[cfg_attr(feature = "host", derive(bincode::Encode, bincode::Decode))]
 #[cfg_attr(feature = "host", derive(poem_openapi::Union))]
-#[cfg_attr(
-    feature = "host",
-    oai(discriminator_name = "type", one_of = true)
-)]
+#[cfg_attr(feature = "host", oai(discriminator_name = "type", one_of = true))]
 pub enum AnalysisWarning {
     InterfaceCouldNotBeAnalyzed(InterfaceCouldNotBeAnalyzedWarning),
 }

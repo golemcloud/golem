@@ -202,7 +202,6 @@ impl FunctionUsageConstraint {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::component_constraint::{
         FunctionConstraints, FunctionSignature, FunctionUsageConstraint,

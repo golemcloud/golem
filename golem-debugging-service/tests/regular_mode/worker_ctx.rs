@@ -249,10 +249,7 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(
-        &mut self,
-        worker_id: golem_wasm_rpc::AgentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
 

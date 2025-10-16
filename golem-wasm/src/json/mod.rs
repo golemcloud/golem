@@ -14,8 +14,8 @@
 
 mod r#impl;
 
-use crate::ValueAndType;
 use crate::analysis::AnalysedType;
+use crate::ValueAndType;
 use serde::ser::Error;
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value as JsonValue;
@@ -116,8 +116,8 @@ impl<'de> Deserialize<'de> for ValueAndType {
 mod tests {
     use test_r::test;
 
-    use crate::{IntoValueAndType, Value, ValueAndType};
     use crate::analysis::analysed_type::{result_err, result_ok, str, tuple};
+    use crate::{IntoValueAndType, Value, ValueAndType};
 
     use serde_json::json;
 

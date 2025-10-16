@@ -634,7 +634,7 @@ impl WorkerService for WorkerServiceDefault {
         let mut result = Vec::new();
         for param in params {
             let val = param.value;
-            result.push(golem_wasm_rpc::protobuf::Val::from(val));
+            result.push(golem_wasm::protobuf::Val::from(val));
         }
         Ok(result)
     }

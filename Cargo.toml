@@ -87,7 +87,7 @@ license-file = "LICENSE"
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
-golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
+golem-common = { version = "=0.0.0", path = "golem-common" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-component-service = { path = "golem-component-service" }
 golem-openapi-client-generator = "=0.0.16"
@@ -97,7 +97,7 @@ golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
-golem-wasm = { version = "=0.0.0", path = "golem-wasm", default-features = false }
+golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
 golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-service = { path = "golem-worker-service" }

@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::ValueAndType;
 use crate::analysis::AnalysedType;
+use crate::ValueAndType;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
 use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
 use serde_json::Value;
@@ -74,8 +74,8 @@ impl IsObjectType for ValueAndType {}
 
 #[cfg(feature = "host")]
 mod json {
-    use crate::json::OptionallyValueAndTypeJson;
     use crate::analysis::AnalysedType;
+    use crate::json::OptionallyValueAndTypeJson;
     use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
     use poem_openapi::types::{IsObjectType, ParseFromJSON, ParseResult, ToJSON, Type};
     use serde_json::Value;

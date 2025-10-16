@@ -16,8 +16,8 @@
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
         #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
-        #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-        #[cfg_attr(feature = "model", serde(transparent))]
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
         pub struct $name(pub Uuid);
 
         impl $name {
@@ -71,7 +71,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
@@ -98,14 +97,12 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromParameter for $name {
             fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
                 Ok(Self(value.try_into()?))
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromJSON for $name {
             fn parse_from_json(
                 value: Option<serde_json::Value>,
@@ -120,7 +117,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ToJSON for $name {
             fn to_json(&self) -> Option<serde_json::Value> {
                 Some(serde_json::Value::String(self.0.to_string()))
@@ -133,7 +129,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "model")]
         impl golem_wasm::IntoValue for $name {
             fn into_value(self) -> golem_wasm::Value {
                 let (hi, lo) = self.0.as_u64_pair();
@@ -163,7 +158,6 @@ macro_rules! newtype_uuid {
         }
 
         $(
-            #[cfg(feature = "protobuf")]
             impl TryFrom<$proto_type> for $name {
                 type Error = String;
 
@@ -177,7 +171,6 @@ macro_rules! newtype_uuid {
                 }
             }
 
-            #[cfg(feature = "protobuf")]
             impl From<$name> for $proto_type {
                 fn from(value: $name) -> Self {
                     $proto_type {

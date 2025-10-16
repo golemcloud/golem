@@ -96,10 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/golem/workerexecutor/v1/worker_executor.proto",
             "proto/grpc/health/v1/health.proto",
         ],
-        [
-            &format!("{golem_wasm_root}/proto"),
-            &"proto".to_string(),
-        ],
+        [&format!("{golem_wasm_root}/proto"), &"proto".to_string()],
     )?;
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());

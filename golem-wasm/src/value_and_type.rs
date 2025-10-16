@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
-use crate::{NodeIndex, ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
 use crate::analysis::analysed_type::{
     case, list, option, result, result_err, result_ok, str, tuple, u32, unit_case, variant,
 };
@@ -21,6 +19,8 @@ use crate::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameTypePair, TypeEnum,
     TypeFlags,
 };
+use crate::golem_rpc_0_2_x::types::NamedWitTypeNode;
+use crate::{NodeIndex, ResourceMode, RpcError, Value, WitNode, WitType, WitTypeNode, WitValue};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::ops::Bound;
 use std::time::{Duration, Instant};
@@ -1114,12 +1114,12 @@ impl From<ValueAndType> for crate::golem_rpc_0_2_x::types::ValueAndType {
 
 #[cfg(feature = "host")]
 mod extra_bindings {
+    use crate::analysis::analysed_type::{bool, list, str};
+    use crate::analysis::{analysed_type, AnalysedType};
     use crate::{IntoValue, IntoValueAndType, Value};
     use bigdecimal::BigDecimal;
     use bit_vec::BitVec;
     use chrono::{Datelike, Offset, Timelike};
-    use crate::analysis::analysed_type::{bool, list, str};
-    use crate::analysis::{analysed_type, AnalysedType};
     use url::Url;
 
     impl IntoValue for BigDecimal {
@@ -1227,8 +1227,8 @@ mod extra_bindings {
 
 #[cfg(test)]
 mod tests {
-    use crate::{IntoValue, RpcError, WitType, WitValue};
     use crate::analysis::AnalysedType;
+    use crate::{IntoValue, RpcError, WitType, WitValue};
     use test_r::test;
 
     #[test]

@@ -28,7 +28,6 @@ pub mod wave;
 #[cfg(feature = "host")]
 pub mod wit_parser;
 
-
 pub type AnalysisResult<A> = Result<A, AnalysisFailure>;
 
 #[cfg(test)]

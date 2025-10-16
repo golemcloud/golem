@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::Value;
 use crate::analysis::{AnalysedFunctionParameter, AnalysedType};
+use crate::Value;
 
 include!(concat!(env!("OUT_DIR"), "/wasm.rpc.rs"));
 

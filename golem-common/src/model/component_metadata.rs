@@ -22,14 +22,12 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
 use golem_wasm::analysis::{
     AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     AnalysedType, TypeHandle,
 };
 use golem_wasm::metadata::Producers as WasmAstProducers;
-use golem_wasm::{
-    analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure},
-};
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
@@ -237,7 +235,6 @@ impl<'de, Context> BorrowDecode<'de, Context> for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::Type for ComponentMetadata {
     const IS_REQUIRED: bool =
         <ComponentMetadataInnerData as poem_openapi::types::Type>::IS_REQUIRED;
@@ -268,10 +265,8 @@ impl poem_openapi::types::Type for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::IsObjectType for ComponentMetadata {}
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
@@ -283,14 +278,12 @@ impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for ComponentMetadata {
     fn to_json(&self) -> Option<serde_json::Value> {
         self.data.to_json()
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromXML for ComponentMetadata {
     fn parse_from_xml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
@@ -302,14 +295,12 @@ impl poem_openapi::types::ParseFromXML for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToXML for ComponentMetadata {
     fn to_xml(&self) -> Option<serde_json::Value> {
         self.data.to_xml()
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
     fn parse_from_yaml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
@@ -321,19 +312,16 @@ impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToYAML for ComponentMetadata {
     fn to_yaml(&self) -> Option<serde_json::Value> {
         self.data.to_yaml()
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(
-    feature = "poem",
-    oai(rename = "ComponentMetadata", rename_all = "camelCase")
+#[derive(
+    Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
 )]
+#[oai(rename = "ComponentMetadata", rename_all = "camelCase")]
 #[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
 pub struct ComponentMetadataInnerData {
     pub exports: Vec<AnalysedExport>,
@@ -736,17 +724,19 @@ pub struct InvokableFunction {
     pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum DynamicLinkedInstance {
     WasmRpc(DynamicLinkedWasmRpc),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicLinkedWasmRpc {
     /// Maps resource names within the dynamic linked interface to target information
@@ -761,9 +751,10 @@ impl DynamicLinkedWasmRpc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WasmRpcTarget {
     pub interface_name: String,
@@ -788,10 +779,20 @@ impl Display for WasmRpcTarget {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerField {
     pub name: String,
@@ -799,10 +800,20 @@ pub struct ProducerField {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct VersionedName {
     pub name: String,
@@ -810,18 +821,29 @@ pub struct VersionedName {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
     /// Initial size of the linear memory in bytes
@@ -899,7 +921,6 @@ impl RawComponentMetadata {
             .map_err(ComponentProcessingError::Analysis)?;
         let root_package = wit_analysis.root_package_name();
 
-        #[cfg(feature = "observability")]
         for warning in wit_analysis.warnings() {
             tracing::warn!("Wit analysis warning: {}", warning);
         }
@@ -918,7 +939,7 @@ impl RawComponentMetadata {
         Ok(RawComponentMetadata {
             exports,
             producers: vec![], // TODO
-            memories: vec![], // TODO
+            memories: vec![],  // TODO
             binary_wit,
             root_package_name: root_package
                 .as_ref()
@@ -1158,7 +1179,6 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
     };
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component_metadata::{

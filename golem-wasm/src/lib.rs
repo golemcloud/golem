@@ -193,7 +193,7 @@ pub use text::{parse_value_and_type, print_value_and_type};
 
 pub use value_and_type::*;
 
-#[cfg(feature="host")]
+#[cfg(feature = "host")]
 impl arbitrary::Arbitrary<'_> for Uri {
     fn arbitrary(u: &mut arbitrary::Unstructured) -> arbitrary::Result<Self> {
         let uri = u.arbitrary::<String>()?;

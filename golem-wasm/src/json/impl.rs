@@ -12,15 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::json::ValueAndTypeJsonExtensions;
-use crate::{IntoValueAndType, Value, ValueAndType};
-use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use crate::analysis::analysed_type::{list, option, record, tuple, variant};
 use crate::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeEnum, TypeFlags, TypeHandle, TypeList, TypeOption, TypeRecord, TypeResult, TypeTuple,
     TypeVariant,
 };
+use crate::json::ValueAndTypeJsonExtensions;
+use crate::{IntoValueAndType, Value, ValueAndType};
+use bigdecimal::{BigDecimal, FromPrimitive, ToPrimitive};
 use serde_json::{Number, Value as JsonValue};
 use std::collections::{HashMap, HashSet};
 use std::str::FromStr;

@@ -37,11 +37,23 @@ newtype_uuid!(ProjectGrantId);
 newtype_uuid!(ProjectPolicyId);
 newtype_uuid!(TokenId, golem_api_grpc::proto::golem::token::TokenId);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Eq,
+    PartialEq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct ShardId {
     pub(crate) value: i64,
 }
@@ -90,7 +102,6 @@ impl Display for ShardId {
     }
 }
 
-#[cfg(feature = "model")]
 impl golem_wasm::IntoValue for ShardId {
     fn into_value(self) -> golem_wasm::Value {
         golem_wasm::Value::S64(self.value)
@@ -103,11 +114,20 @@ impl golem_wasm::IntoValue for ShardId {
 
 pub type ComponentVersion = u64;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
     pub worker_name: String,
@@ -172,7 +192,6 @@ impl AsRef<WorkerId> for &WorkerId {
     }
 }
 
-#[cfg(feature = "model")]
 impl golem_wasm::IntoValue for WorkerId {
     fn into_value(self) -> golem_wasm::Value {
         golem_wasm::Value::Record(vec![
@@ -190,14 +209,21 @@ impl golem_wasm::IntoValue for WorkerId {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(
-    feature = "model",
-    derive(serde::Serialize, serde::Deserialize, golem_wasm_derive::IntoValue)
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_wasm_derive::IntoValue,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct PromiseId {
     pub worker_id: WorkerId,
     pub oplog_idx: OplogIndex,
@@ -215,11 +241,22 @@ impl Display for PromiseId {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-#[cfg_attr(
-    feature = "model",
-    derive(serde::Serialize, serde::Deserialize, golem_wasm_derive::IntoValue)
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    Default,
+    poem_openapi::NewType,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_wasm_derive::IntoValue,
 )]
 pub struct OplogIndex(pub(crate) u64);
 
@@ -270,11 +307,21 @@ impl From<OplogIndex> for u64 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-#[cfg_attr(
-    feature = "model",
-    derive(serde::Serialize, serde::Deserialize, golem_wasm_derive::IntoValue)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    Default,
+    poem_openapi::NewType,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_wasm_derive::IntoValue,
 )]
 pub struct TransactionId(pub(crate) String);
 
@@ -306,7 +353,6 @@ impl From<String> for TransactionId {
     }
 }
 
-#[cfg(feature = "sql")]
 mod sql {
     use crate::model::TransactionId;
     use sqlx::encode::IsNull;

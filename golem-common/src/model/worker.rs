@@ -17,31 +17,29 @@ use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct WorkerCreationRequest {
     pub name: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-    #[cfg_attr(feature = "poem", oai(default))]
+    #[oai(default)]
     pub wasi_config_vars: WasiConfigVars,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct WasiConfigVarsEntry {
     pub key: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
-#[cfg_attr(
-    feature = "poem",
-    oai(from_multipart = false, from_parameter = false, to_header = false)
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, poem_openapi::NewType,
 )]
+#[oai(from_multipart = false, from_parameter = false, to_header = false)]
 pub struct WasiConfigVars(pub Vec<WasiConfigVarsEntry>);
 
 impl Default for WasiConfigVars {
@@ -82,7 +80,6 @@ impl IntoValue for WasiConfigVars {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use super::WasiConfigVars;
     use super::WasiConfigVarsEntry;

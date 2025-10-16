@@ -535,8 +535,7 @@ mod protobuf {
                     let typ = match return_type {
                         AnalysedTypeWithUnit::Unit => None,
                         AnalysedTypeWithUnit::Type(analysed_type) => {
-                            let typ =
-                                golem_wasm::protobuf::Type::from(&analysed_type);
+                            let typ = golem_wasm::protobuf::Type::from(&analysed_type);
                             Some(typ)
                         }
                     };

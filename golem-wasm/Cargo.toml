@@ -41,6 +41,7 @@ wit-component = { workspace = true, optional = true }
 wit-parser = { workspace = true, optional = true }
 
 [dev-dependencies]
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 proptest-arbitrary-interop = { workspace = true }
 test-r = { workspace = true }
@@ -106,8 +107,4 @@ harness = false
 
 [[test]]
 name = "metadata"
-harness = false
-
-[[test]]
-name = "roundtrip"
 harness = false

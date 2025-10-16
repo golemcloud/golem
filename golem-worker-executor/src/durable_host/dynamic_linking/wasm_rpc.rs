@@ -20,9 +20,7 @@ use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFun
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
 use golem_wasm::analysis::analysed_type::str;
-use golem_wasm::analysis::{
-    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
-};
+use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
 use golem_wasm::wasmtime::{decode_param, encode_output, ResourceStore, ResourceTypeId};
 use golem_wasm::{

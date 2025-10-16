@@ -17,8 +17,11 @@ use crate::analysis::analysed_type::{
     str, tuple, u16, u32, u64, u8, variant,
 };
 use crate::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType};
+use crate::protobuf::{
+    r#type, NameOptionTypePair, NameTypePair, PrimitiveType, Type, TypeEnum, TypeFlags, TypeHandle,
+    TypeList, TypeOption, TypePrimitive, TypeRecord, TypeResult, TypeTuple, TypeVariant,
+};
 use std::ops::Deref;
-use crate::protobuf::{r#type, NameOptionTypePair, NameTypePair, PrimitiveType, Type, TypeEnum, TypeFlags, TypeHandle, TypeList, TypeOption, TypePrimitive, TypeRecord, TypeResult, TypeTuple, TypeVariant};
 
 impl TryFrom<&Type> for AnalysedType {
     type Error = String;

@@ -25,10 +25,10 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true, default-features = true }
+golem-common = { workspace = true }
 golem-rib = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
-golem-wasm = { workspace = true, default-features = true }
+golem-wasm = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
