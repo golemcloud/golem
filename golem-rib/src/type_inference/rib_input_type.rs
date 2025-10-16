@@ -93,7 +93,7 @@ mod protobuf {
         fn from(value: RibInputTypeInfo) -> Self {
             let mut types = HashMap::new();
             for (key, value) in value.types {
-                types.insert(key, golem_wasm_ast::analysis::protobuf::Type::from(&value));
+                types.insert(key, golem_wasm::protobuf::Type::from(&value));
             }
             ProtoRibInputType { types }
         }

@@ -536,7 +536,7 @@ mod protobuf {
                         AnalysedTypeWithUnit::Unit => None,
                         AnalysedTypeWithUnit::Type(analysed_type) => {
                             let typ =
-                                golem_wasm_ast::analysis::protobuf::Type::from(&analysed_type);
+                                golem_wasm::protobuf::Type::from(&analysed_type);
                             Some(typ)
                         }
                     };
@@ -579,7 +579,7 @@ mod protobuf {
                     })
                 }
                 RibIR::PushVariant(name, return_type) => {
-                    let typ = golem_wasm_ast::analysis::protobuf::Type::from(&return_type);
+                    let typ = golem_wasm::protobuf::Type::from(&return_type);
 
                     Instruction::VariantConstruction(
                         golem_api_grpc::proto::golem::rib::VariantConstructionInstruction {
@@ -589,7 +589,7 @@ mod protobuf {
                     )
                 }
                 RibIR::PushEnum(name, return_type) => {
-                    let typ = golem_wasm_ast::analysis::protobuf::Type::from(&return_type);
+                    let typ = golem_wasm::protobuf::Type::from(&return_type);
 
                     Instruction::EnumConstruction(
                         golem_api_grpc::proto::golem::rib::EnumConstructionInstruction {
@@ -602,7 +602,7 @@ mod protobuf {
                 RibIR::PushFlag(flag) => Instruction::PushFlag(flag.into()),
                 RibIR::GetTag => Instruction::GetTag(GetTag {}),
                 RibIR::PushTuple(analysed_type, size) => {
-                    let typ = golem_wasm_ast::analysis::protobuf::Type::from(&analysed_type);
+                    let typ = golem_wasm::protobuf::Type::from(&analysed_type);
 
                     Instruction::PushTuple(PushTupleInstruction {
                         tuple_type: Some(typ),
