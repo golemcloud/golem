@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package golem.rib;
 
-import "wasm/ast/type.proto";
+import "wasm/rpc/type.proto";
 import "wasm/rpc/value_and_type.proto";
 import "golem/rib/function_name.proto";
 import "golem/rib/expr.proto";
@@ -13,13 +13,13 @@ message RibIR {
     wasm.rpc.ValueAndType push_lit = 1;
     VariableId assign_var = 2;
     VariableId load_var = 3;
-    wasm.ast.Type create_and_push_record = 4;
+    wasm.rpc.Type create_and_push_record = 4;
     string update_record = 5;
     PushListInstruction push_list = 6;
-    wasm.ast.Type create_some = 7;
+    wasm.rpc.Type create_some = 7;
     PushNoneInstruction create_none = 8;
-    wasm.ast.Type create_ok_result = 9;
-    wasm.ast.Type create_err_result = 10;
+    wasm.rpc.Type create_ok_result = 9;
+    wasm.rpc.Type create_err_result = 10;
     string select_field = 11;
     uint64 select_index = 12;
     EqualTo equal_to = 13;
@@ -30,7 +30,7 @@ message RibIR {
     JumpInstruction jump_if_false = 18;
     JumpInstruction jump = 19;
     JumpInstruction label = 20;
-    wasm.ast.Type deconstruct = 21;
+    wasm.rpc.Type deconstruct = 21;
     InvokeFunctionInstruction invoke_function = 22;
     string throw = 23;
     wasm.rpc.ValueAndType push_flag = 24;
@@ -48,10 +48,10 @@ message RibIR {
     AdvanceIterator advance_iterator = 36;
     SinkToList sink_to_list = 37;
     PushToSink push_to_sink = 38;
-    wasm.ast.Type plus = 39;
-    wasm.ast.Type minus = 40;
-    wasm.ast.Type multiply = 41;
-    wasm.ast.Type divide = 42;
+    wasm.rpc.Type plus = 39;
+    wasm.rpc.Type minus = 40;
+    wasm.rpc.Type multiply = 41;
+    wasm.rpc.Type divide = 42;
     IsEmpty is_empty = 43;
     SelectIndexV1 select_index_v1 = 44;
     Length length = 45;
@@ -101,7 +101,7 @@ message Local {
 }
 
 message PushListInstruction {
-  wasm.ast.Type list_type = 1;
+  wasm.rpc.Type list_type = 1;
   uint64 list_size = 2;
 }
 
@@ -110,12 +110,12 @@ message ConcatInstruction {
 }
 
 message PushTupleInstruction {
-  wasm.ast.Type tuple_type = 1;
+  wasm.rpc.Type tuple_type = 1;
   uint64 tuple_size = 2;
 }
 
 message PushNoneInstruction {
-  optional wasm.ast.Type none_type = 1;
+  optional wasm.rpc.Type none_type = 1;
 }
 
 message UpdateInstruction {}
@@ -127,7 +127,7 @@ message JumpInstruction {
 message InvokeFunctionInstruction {
   golem.rib.ComponentDependencyKey component = 1;
   uint64 argument_count = 2;
-  wasm.ast.Type return_type = 3;
+  wasm.rpc.Type return_type = 3;
   InstanceVariable instance_variable = 4;
 
 }
@@ -154,12 +154,12 @@ enum WorkerNamePresence {
 
 message VariantConstructionInstruction {
   string variant_name = 1;
-  wasm.ast.Type return_type = 3;
+  wasm.rpc.Type return_type = 3;
 }
 
 message EnumConstructionInstruction {
   string enum_name = 1;
-  wasm.ast.Type return_type = 2;
+  wasm.rpc.Type return_type = 2;
 }
 
 message CreateFunctionNameInstruction {
@@ -218,6 +218,6 @@ message PushToSink {}
 message AdvanceIterator {}
 
 message CreateSink {
-  wasm.ast.Type list_type = 1;
+  wasm.rpc.Type list_type = 1;
 }
 message ListToIterator {}

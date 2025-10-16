@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package golem.rib;
 
-import "wasm/ast/type.proto";
+import "wasm/rpc/type.proto";
 import "golem/rib/instance_type.proto";
 
 message WorkerFunctionsInRib {
@@ -11,6 +11,6 @@ message WorkerFunctionsInRib {
 
 message WorkerFunctionType {
     golem.rib.FunctionNameType function_name = 1;
-    repeated wasm.ast.Type parameter_types = 2;
-    optional wasm.ast.Type return_type = 3;
+    repeated wasm.rpc.Type parameter_types = 2;
+    optional wasm.rpc.Type return_type = 3;
 }

@@ -236,7 +236,7 @@ jobs:
       - name: Prepare WIT dependencies
         run: cargo make wit
       - name: Build wasm-rpc in stub mode
-        run: cargo component build -p golem-wasm-rpc --no-default-features --features stub
+        run: cargo component build -p golem-wasm --no-default-features --features stub
 
   build-golem-rust:
     runs-on: blacksmith

@@ -5,8 +5,7 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let wasm_rpc_root = find_package_root("golem-wasm-rpc");
-    let wasm_ast_root = find_package_root("golem-wasm-ast");
+    let golem_wasm_root = find_package_root("golem-wasm");
 
     let file_descriptors = protox::compile(
         [
@@ -98,8 +97,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/grpc/health/v1/health.proto",
         ],
         [
-            &format!("{wasm_rpc_root}/proto"),
-            &format!("{wasm_ast_root}/proto"),
+            &format!("{golem_wasm_root}/proto"),
             &"proto".to_string(),
         ],
     )?;
@@ -111,8 +109,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tonic_prost_build::configure()
         .build_server(true)
-        .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
-        .extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf")
+        .extern_path(".wasm.rpc", "::golem_wasm::protobuf")
         .include_file("mod.rs")
         .compile_fds(file_descriptors)
         .map_err(|e| miette!(e))?;

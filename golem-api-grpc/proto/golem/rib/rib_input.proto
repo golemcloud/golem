@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package golem.rib;
 
-import "wasm/ast/type.proto";
+import "wasm/rpc/type.proto";
 
 message RibInputType {
-    map<string, wasm.ast.Type> types = 1;
+    map<string, wasm.rpc.Type> types = 1;
 }

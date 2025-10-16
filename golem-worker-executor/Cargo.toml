@@ -28,9 +28,8 @@ golem-api-grpc = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-rib = { workspace = true, default-features = true }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, features = ["host", "extra-bindings"] }
-golem-wasm-rpc-derive = { workspace = true }
+golem-wasm = { workspace = true, features = ["host", "extra-bindings"] }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }

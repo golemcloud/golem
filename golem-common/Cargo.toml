@@ -30,8 +30,7 @@ base-model = []
 config = ["model", "dep:figment"]
 model = [
     "base-model",
-    "dep:golem-wasm-rpc",
-    "dep:golem-wasm-ast",
+    "dep:golem-wasm",
     "dep:golem-rib",
     "dep:wasmtime"
 ]
@@ -46,8 +45,6 @@ observability = [
 poem = [
     "dep:poem",
     "dep:poem-openapi",
-    "golem-wasm-ast/poem_openapi",
-    "golem-wasm-ast/poem_openapi",
     "golem-rib/poem",
 ]
 protobuf = [
@@ -57,8 +54,7 @@ protobuf = [
     "dep:tonic",
     "dep:golem-api-grpc",
     "golem-rib/protobuf",
-    "golem-wasm-ast/protobuf",
-    "golem-wasm-rpc/protobuf",
+    "golem-wasm/protobuf",
 ]
 redis = [
     "observability",
@@ -82,9 +78,8 @@ harness = false
 [dependencies]
 golem-api-grpc = { workspace = true, optional = true }
 golem-rib = { workspace = true, features = ["protobuf", "poem", "json_in_errors"], optional = true } # TODO: make these optionals
-golem-wasm-ast = { workspace = true, features = ["metadata", "parser", "wit-parser"], optional = true }
-golem-wasm-rpc = { workspace = true, features = ["host"], optional = true }
-golem-wasm-rpc-derive = { workspace = true }
+golem-wasm = { workspace = true, features = ["host"], optional = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }

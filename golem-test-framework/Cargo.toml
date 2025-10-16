@@ -18,8 +18,7 @@ golem-client = { workspace = true }
 golem-common = { workspace = true, default-features = true, features = ["agent-extraction"] }
 golem-rib = { workspace = true, default-features = true }
 golem-service-base = { workspace = true }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, features = ["host"] }
+golem-wasm = { workspace = true, features = ["host"] }
 
 anyhow = { workspace = true }
 async-dropper = { workspace = true, features = ["simple", "tokio"] }

@@ -3,7 +3,7 @@ syntax = "proto3";
 package golem.rib;
 
 import "golem/rib/expr.proto";
-import "wasm/ast/type.proto";
+import "wasm/rpc/type.proto";
 
 message FunctionDictionary {
   repeated FunctionEntry map = 1;
@@ -91,6 +91,6 @@ message FullyQualifiedResourceMethod {
 }
 
 message FunctionType {
-  repeated wasm.ast.Type parameter_types = 1;
-  optional wasm.ast.Type return_type = 2;
+  repeated wasm.rpc.Type parameter_types = 1;
+  optional wasm.rpc.Type return_type = 2;
 }

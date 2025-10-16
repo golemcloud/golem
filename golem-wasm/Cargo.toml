@@ -1,0 +1,128 @@
+[package]
+name = "golem-wasm"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem WASM base types"
+
+license-file = "../LICENSE"
+
+include = []
+
+[lib]
+path = "src/lib.rs"
+harness = false
+
+[dependencies]
+wit-bindgen-rt = { workspace = true, features = ["bitflags"], optional = true }
+
+arbitrary = { workspace = true, features = ["derive"], optional = true }
+async-recursion = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
+bigdecimal = { workspace = true, optional = true }
+bincode = { workspace = true, optional = true }
+bit-vec = { workspace = true, optional = true }
+chrono = { workspace = true }
+itertools = { workspace = true }
+poem-openapi = { workspace = true, optional = true }
+semver = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+uuid = { workspace = true }
+url = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
+wasmtime-wasi = { workspace = true, optional = true }
+wasm-wave = { workspace = true, optional = true }
+wasm-metadata = { workspace = true, optional = true }
+wit-component = { workspace = true, optional = true }
+wit-parser = { workspace = true, optional = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+proptest-arbitrary-interop = { workspace = true }
+test-r = { workspace = true }
+
+[build-dependencies]
+miette = { workspace = true, optional = true }
+prost-build = { workspace = true, optional = true }
+protox = { workspace = true, optional = true }
+cargo_metadata = { workspace = true }
+
+[features]
+default = ["host", "extra-bindings"]
+host-bindings = ["dep:async-trait", "wasmtime"]
+host = [
+    "arbitrary",
+    "bincode",
+    "host-bindings",
+    "json",
+    "poem_openapi",
+    "protobuf",
+    "serde",
+    "text",
+    "dep:semver",
+    "dep:wasm-metadata",
+    "dep:wit-component",
+    "dep:wit-parser"
+
+]
+arbitrary = ["dep:arbitrary"]
+bincode = ["dep:bincode"]
+extra-bindings = ["dep:bigdecimal", "dep:bit-vec", "dep:url"]
+json = [
+    "dep:serde",
+    "dep:serde_json",
+    "dep:bigdecimal",
+
+]
+poem_openapi = [
+    "dep:poem-openapi",
+    "json",
+
+]
+protobuf = ["dep:bincode", "dep:serde", "dep:prost", "dep:prost-build", "dep:protox", "dep:miette"]
+serde = ["dep:serde"]
+stub = ["dep:wit-bindgen-rt"]
+text = [ "dep:wasm-wave"]
+wasmtime = [
+    "dep:wasmtime",
+    "dep:wasmtime-wasi",
+    "dep:async-recursion",
+
+]
+
+
+[package.metadata.component]
+package = "golem:rpc"
+
+[package.metadata.component.target]
+path = "wit"
+world = "wasm-rpc"
+
+[package.metadata.component.target.dependencies]
+"golem:rpc" = { path = "wit/deps/golem-rpc" }
+"wasi:io" = { path = "wit/deps/io" }
+"wasi:clocks" = { path = "wit/deps/clocks" }
+
+[package.metadata.component.bindings]
+# See https://github.com/bytecodealliance/cargo-component/blob/main/src/metadata.rs#L62
+generate_unused_types = true
+
+[[test]]
+name = "exports"
+harness = false
+
+[[test]]
+name = "mems"
+harness = false
+
+[[test]]
+name = "metadata"
+harness = false
+
+[[test]]
+name = "roundtrip"
+harness = false

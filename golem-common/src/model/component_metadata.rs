@@ -27,7 +27,7 @@ use golem_wasm_ast::analysis::{
     AnalysedType, TypeHandle,
 };
 use golem_wasm_ast::core::Mem;
-use golem_wasm_ast::metadata::Producers as WasmAstProducers;
+use golem_wasm_rpc::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
     analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
     component::Component,
@@ -942,8 +942,8 @@ impl RawComponentMetadata {
     }
 }
 
-impl From<golem_wasm_ast::metadata::Producers> for Producers {
-    fn from(value: golem_wasm_ast::metadata::Producers) -> Self {
+impl From<golem_wasm_rpc::metadata::Producers> for Producers {
+    fn from(value: golem_wasm_rpc::metadata::Producers) -> Self {
         Self {
             fields: value
                 .fields
@@ -954,7 +954,7 @@ impl From<golem_wasm_ast::metadata::Producers> for Producers {
     }
 }
 
-impl From<Producers> for golem_wasm_ast::metadata::Producers {
+impl From<Producers> for golem_wasm_rpc::metadata::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value
@@ -966,8 +966,8 @@ impl From<Producers> for golem_wasm_ast::metadata::Producers {
     }
 }
 
-impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
-    fn from(value: golem_wasm_ast::metadata::ProducersField) -> Self {
+impl From<golem_wasm_rpc::metadata::ProducersField> for ProducerField {
+    fn from(value: golem_wasm_rpc::metadata::ProducersField) -> Self {
         Self {
             name: value.name,
             values: value
@@ -982,14 +982,14 @@ impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
     }
 }
 
-impl From<ProducerField> for golem_wasm_ast::metadata::ProducersField {
+impl From<ProducerField> for golem_wasm_rpc::metadata::ProducersField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
             values: value
                 .values
                 .into_iter()
-                .map(|value| golem_wasm_ast::metadata::VersionedName {
+                .map(|value| golem_wasm_rpc::metadata::VersionedName {
                     name: value.name,
                     version: value.version,
                 })
