@@ -809,11 +809,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let full_function_name = request.name();
 
-        tracing::warn!("begin get_or_create worker");
 
         let worker = self.get_or_create(request).await?;
 
-        tracing::warn!("end get_or_create worker");
 
         let idempotency_key = request
             .idempotency_key()?
@@ -827,7 +825,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .collect::<Result<Vec<_>, _>>()
             .map_err(|msg| WorkerExecutorError::ValueMismatch { details: msg })?;
 
-        tracing::warn!("begin invoke");
 
         worker
             .invoke(
