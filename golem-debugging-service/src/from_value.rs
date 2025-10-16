@@ -17,7 +17,7 @@ use golem_common::model::oplog::{OplogIndex, WorkerError};
 use golem_common::model::{ComponentId, ComponentVersion, PromiseId, WorkerId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
-use golem_wasm_rpc::Value;
+use golem_wasm::Value;
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
     SerializableHttpMethod, SerializableHttpRequest, SerializableResponse,

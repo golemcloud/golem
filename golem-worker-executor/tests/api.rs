@@ -38,8 +38,8 @@ use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, Type
 use golem_wasm::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeStr,
 };
-use golem_wasm_rpc::{IntoValue, Record};
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{IntoValue, Record};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use redis::Commands;
 use std::collections::HashMap;
 use std::env;

@@ -50,8 +50,8 @@ use golem_common::model::{
     OplogIndex, OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::wasmtime::ResourceStore;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::wasmtime::ResourceStore;
+use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Weak};
 use wasmtime::component::{Component, Instance, Linker};

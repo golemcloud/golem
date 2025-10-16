@@ -1,5 +1,5 @@
 use golem_wasm_ast::component::Component;
-use golem_wasm_rpc::::{Metadata, Producers, ProducersField, VersionedName};
+use golem_wasm::::{Metadata, Producers, ProducersField, VersionedName};
 use golem_wasm_ast::IgnoreAllButMetadata;
 use pretty_assertions::assert_eq;
 use test_r::test;

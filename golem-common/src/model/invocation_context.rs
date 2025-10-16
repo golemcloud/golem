@@ -20,7 +20,7 @@ use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::de::Error;

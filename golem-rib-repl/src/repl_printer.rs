@@ -16,7 +16,7 @@ use crate::ReplBootstrapError;
 use colored::Colorize;
 use golem_wasm::analysis::analysed_type::{record, str, u64};
 use golem_wasm::analysis::{AnalysedResourceMode, AnalysedType, NameTypePair, TypeHandle};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use rib::*;
 use std::collections::BTreeMap;
 use std::fmt::Display;

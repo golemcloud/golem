@@ -17,7 +17,7 @@ use crate::services::rpc::RpcError;
 use bincode::{Decode, Encode};
 use golem_common::model::agent::DataValue;
 use golem_common::model::{IdempotencyKey, ScheduleId, WorkerId};
-use golem_wasm_rpc::{ValueAndType, WitValue};
+use golem_wasm::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 
 #[derive(Debug, Clone, PartialEq, Encode, Decode)]

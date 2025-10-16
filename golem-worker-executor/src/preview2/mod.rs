@@ -61,7 +61,7 @@ pub use self::golem::durability as golem_durability;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
 use golem_wasm::analysis::analysed_type::r#enum;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm::{IntoValue, Value};
 
 impl IntoValue for golem_api_1_x::host::ForkResult {
     fn into_value(self) -> Value {

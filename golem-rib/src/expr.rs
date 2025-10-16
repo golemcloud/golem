@@ -31,7 +31,7 @@ use combine::Parser;
 use combine::{eof, EasyParser};
 use golem_api_grpc::proto::golem::rib::range_expr::RangeExpr;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
+use golem_wasm::{IntoValueAndType, ValueAndType};
 use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 use std::collections::VecDeque;

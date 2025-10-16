@@ -17,7 +17,7 @@ use crate::value_generator::generate_value;
 use crate::CommandRegistry;
 use colored::Colorize;
 use golem_wasm::analysis::{TypeEnum, TypeVariant};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use rib::{CustomInstanceSpec, Expr, VariableId};
 use rustyline::completion::Completer;
 use rustyline::highlight::Highlighter;

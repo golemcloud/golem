@@ -60,7 +60,7 @@ use golem_service_base::error::worker_executor::{
 };
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm::{IntoValue, Value, ValueAndType};
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};

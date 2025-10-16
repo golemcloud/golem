@@ -2588,7 +2588,7 @@ mod internal {
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
     };
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_service::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentDetails, ComponentMetadataDictionary,
     };

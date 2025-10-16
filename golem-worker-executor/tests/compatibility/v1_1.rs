@@ -16,7 +16,7 @@ use crate::compatibility::v1::backward_compatible;
 use goldenfile::Mint;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::analysed_type::bool;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use golem_worker_executor::durable_host::serialized::SerializableError;
 use golem_worker_executor::durable_host::wasm_rpc::serialized::SerializableInvokeResult;
 use golem_worker_executor::services::rpc::RpcError;

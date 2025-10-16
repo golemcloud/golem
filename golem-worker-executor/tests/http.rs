@@ -21,7 +21,7 @@ use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, RetryConfig};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use http::HeaderMap;
 use serde_json::json;
 use std::collections::HashMap;

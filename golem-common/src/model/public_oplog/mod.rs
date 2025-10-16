@@ -34,7 +34,7 @@ use crate::model::{
 use crate::model::{ProjectId, RetryConfig};
 use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};

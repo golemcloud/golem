@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use mime::Mime;
 use poem::web::headers::ContentType;
 use poem::web::WithContentType;
@@ -180,8 +180,8 @@ mod internal {
         AcceptHeaders, ContentTypeHeaderExt, ContentTypeMapError,
     };
     use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeList, TypeOption, TypeRecord};
-    use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
-    use golem_wasm_rpc::{Value, ValueAndType};
+    use golem_wasm::json::ValueAndTypeJsonExtensions;
+    use golem_wasm::{Value, ValueAndType};
     use poem::web::headers::ContentType;
     use poem::web::WithContentType;
     use poem::{Body, IntoResponse};
@@ -504,7 +504,7 @@ mod internal {
 mod tests {
     use super::*;
     use golem_wasm::analysis::analysed_type::{field, list, record, str};
-    use golem_wasm_rpc::{IntoValue, Value};
+    use golem_wasm::{IntoValue, Value};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
 
@@ -537,7 +537,7 @@ mod tests {
 
         use super::*;
         use golem_wasm::analysis::analysed_type::{u16, u8};
-        use golem_wasm_rpc::IntoValueAndType;
+        use golem_wasm::IntoValueAndType;
 
         fn get_content_type_and_body(input: &ValueAndType) -> (Option<String>, Body) {
             let response_body = internal::get_response_body(input).unwrap();
@@ -629,7 +629,7 @@ mod tests {
 
         use super::*;
         use golem_wasm::analysis::analysed_type::{u16, u8};
-        use golem_wasm_rpc::IntoValueAndType;
+        use golem_wasm::IntoValueAndType;
 
         fn get_content_type_and_body(
             input: &ValueAndType,
@@ -754,7 +754,7 @@ mod tests {
 
         use super::*;
         use golem_wasm::analysis::analysed_type::{u16, u8};
-        use golem_wasm_rpc::IntoValueAndType;
+        use golem_wasm::IntoValueAndType;
 
         fn get_content_type_and_body(
             input: &ValueAndType,

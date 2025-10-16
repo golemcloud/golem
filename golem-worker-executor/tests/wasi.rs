@@ -31,7 +31,7 @@ use golem_test_framework::dsl::{
     drain_connection, stderr_events, stdout_events, worker_error_logs, worker_error_message,
     worker_error_underlying_error, TestDslUnsafe,
 };
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use http::{HeaderMap, StatusCode};
 use std::collections::HashMap;
 use std::sync::atomic::AtomicU8;

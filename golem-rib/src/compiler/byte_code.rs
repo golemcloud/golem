@@ -167,7 +167,7 @@ mod internal {
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::{GetTypeHint, TypeHint};
     use golem_wasm::analysis::analysed_type::bool;
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
     pub(crate) fn process_expr(
@@ -961,7 +961,7 @@ mod compiler_tests {
     use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
     use golem_wasm::analysis::analysed_type;
     use golem_wasm::analysis::analysed_type::{field, list, record, s32, str};
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
     fn test_instructions_for_literal() {

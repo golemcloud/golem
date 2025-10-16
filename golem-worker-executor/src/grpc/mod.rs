@@ -65,8 +65,8 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
-use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::protobuf::Val;
+use golem_wasm::ValueAndType;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};

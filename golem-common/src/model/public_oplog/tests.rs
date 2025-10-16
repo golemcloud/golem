@@ -36,7 +36,7 @@ use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::regions::OplogRegion;
 use golem_wasm::analysis::analysed_type::{field, list, r#enum, record, s16, str, u64};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 #[cfg(feature = "poem")]
 use poem_openapi::types::ToJSON;
 

@@ -36,7 +36,7 @@ use golem_common::model::{
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::{Value, WitValue};
+use golem_wasm::{Value, WitValue};
 use golem_worker_executor::durable_host::http::serialized::{
     SerializableDnsErrorPayload, SerializableErrorCode, SerializableFieldSizePayload,
     SerializableResponse, SerializableResponseHeaders, SerializableTlsAlertReceivedPayload,

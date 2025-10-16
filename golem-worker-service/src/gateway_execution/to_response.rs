@@ -320,7 +320,7 @@ mod internal {
     use crate::path::Path;
 
     use crate::headers::ResolvedResponseHeaders;
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::ValueAndType;
     use poem::{Body, IntoResponse, ResponseParts};
     use rib::RibResult;
 
@@ -419,7 +419,7 @@ mod test {
     use crate::gateway_execution::to_response::ToHttpResponse;
     use golem_wasm::analysis::analysed_type::record;
     use golem_wasm::analysis::NameTypePair;
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use http::header::CONTENT_TYPE;
     use http::StatusCode;
     use rib::RibResult;

@@ -25,7 +25,7 @@ use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use rib::{ComponentDependency, ComponentDependencyKey, RibResult};
 use std::path::Path;
 use std::sync::Arc;

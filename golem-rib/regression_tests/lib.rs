@@ -6,7 +6,7 @@ use golem_wasm::analysis::analysed_type::{
     bool, f32, f64, field, record, s16, s32, str, u64, u8,
 };
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, Expr, Interpreter, RibCompiler,
     RibCompilerConfig, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
@@ -1418,7 +1418,7 @@ mod data_types {
 
 mod mock_data {
     use crate::{data_types, test_utils};
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::ValueAndType;
 
     pub(crate) fn ok_of_str() -> ValueAndType {
         test_utils::get_value_and_type(&data_types::result_of_str_type(), "ok(\"foo\")")
@@ -1720,7 +1720,7 @@ mod mock_interpreter {
 
     use golem_wasm::analysis::analysed_type::{field, record, str};
     use golem_wasm::analysis::AnalysedType;
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::ValueAndType;
     use rib::{ComponentDependencyKey, DefaultWorkerNameGenerator, InstructionId};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1943,7 +1943,7 @@ mod mock_interpreter {
 
 mod test_utils {
     use golem_wasm::analysis::*;
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::ValueAndType;
 
     pub(crate) fn get_value_and_type(
         analysed_type: &AnalysedType,

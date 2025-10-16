@@ -18,7 +18,7 @@ use golem_wasm::analysis::analysed_type::{
 };
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use std::sync::LazyLock;
 // The following wit is modelled here:
 //

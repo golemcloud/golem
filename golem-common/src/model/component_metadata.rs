@@ -27,7 +27,7 @@ use golem_wasm::analysis::{
     AnalysedType, TypeHandle,
 };
 use golem_wasm_ast::core::Mem;
-use golem_wasm_rpc::metadata::Producers as WasmAstProducers;
+use golem_wasm::metadata::Producers as WasmAstProducers;
 use golem_wasm_ast::{
     analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
     component::Component,

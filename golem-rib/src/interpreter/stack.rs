@@ -21,7 +21,7 @@ use golem_wasm::analysis::analysed_type::{list, option, record, str, tuple, vari
 use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
 };
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 
 #[derive(Debug)]
 pub struct InterpreterStack {

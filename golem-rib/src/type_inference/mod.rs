@@ -2472,7 +2472,7 @@ mod tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedType, TypeU32,
         };
-        use golem_wasm_rpc::{Value, ValueAndType};
+        use golem_wasm::{Value, ValueAndType};
         use uuid::Uuid;
 
         pub(crate) fn result(

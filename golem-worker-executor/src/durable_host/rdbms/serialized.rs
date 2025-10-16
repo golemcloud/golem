@@ -16,7 +16,7 @@ use crate::services::rdbms::{RdbmsIntoValueAndType, RdbmsPoolKey, RdbmsType};
 use bincode::Encode;
 use golem_common::model::TransactionId;
 use golem_wasm::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm::{IntoValue, Value, ValueAndType};
 
 #[derive(Debug, Clone, Encode)]
 pub struct RdbmsRequest<T: RdbmsType + 'static> {

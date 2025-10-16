@@ -360,7 +360,7 @@ mod internal {
     };
     use golem_wasm::analysis::AnalysedType;
     use golem_wasm::analysis::TypeResult;
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use crate::interpreter::rib_runtime_error::{
@@ -1537,7 +1537,7 @@ mod tests {
         str, tuple, u32, u64, u8, unit_case, variant,
     };
     use golem_wasm::analysis::AnalysedType;
-    use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
     async fn test_interpreter_for_literal() {
@@ -4895,7 +4895,7 @@ mod tests {
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };
-        use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
+        use golem_wasm::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
 

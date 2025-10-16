@@ -45,7 +45,7 @@ use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
 use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm::{IntoValue, Value};
 use golem_wasm_rpc_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;

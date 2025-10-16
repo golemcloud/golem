@@ -15,7 +15,7 @@
 use crate::{AnalysedTypeWithUnit, ComponentDependencyKey, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use serde::{Deserialize, Serialize};
 
 // To create any type, example, CreateOption, you have to feed a fully formed AnalysedType

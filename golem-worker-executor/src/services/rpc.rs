@@ -41,7 +41,7 @@ use bincode::{Decode, Encode};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{ValueAndType, WitValue};
+use golem_wasm::{ValueAndType, WitValue};
 use golem_wasm_rpc_derive::IntoValue;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use tokio::runtime::Handle;

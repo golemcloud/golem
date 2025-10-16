@@ -22,9 +22,9 @@ use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::Component;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
-use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
-use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::protobuf::Val;
+use golem_wasm::{Value, ValueAndType};
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::collections::BTreeMap;
 use std::sync::Arc;

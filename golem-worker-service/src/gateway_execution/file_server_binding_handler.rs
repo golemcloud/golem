@@ -25,7 +25,7 @@ use golem_common::SafeDisplay;
 use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_wasm::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use http::StatusCode;
 use poem::web::headers::ContentType;
 use rib::RibResult;

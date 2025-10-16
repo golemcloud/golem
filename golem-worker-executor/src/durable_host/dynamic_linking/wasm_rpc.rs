@@ -23,9 +23,9 @@ use golem_wasm::analysis::analysed_type::str;
 use golem_wasm::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
 };
-use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
-use golem_wasm_rpc::wasmtime::{decode_param, encode_output, ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{
+use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
+use golem_wasm::wasmtime::{decode_param, encode_output, ResourceStore, ResourceTypeId};
+use golem_wasm::{
     CancellationTokenEntry, HostWasmRpc, IntoValue, Uri, Value, WasmRpcEntry, WitValue,
 };
 use itertools::Itertools;
