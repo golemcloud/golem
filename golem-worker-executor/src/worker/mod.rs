@@ -426,8 +426,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             _ => panic!("impossible status after lock_stopped_worker"),
         };
 
-        tracing::warn!("here");
-
         // TODO: Not sure what to do with execution status here.
         Ok(())
     }
@@ -1257,7 +1255,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     fail_pending_invocations.is_some()
                 );
 
-                // TODO: faill pending invocations should be factored out of here and be guaranteed to run
+                // TODO: fail pending invocations should be factored out of here and be guaranteed to run
                 // even if there are multiple concurrent stop attempts.
                 if let Some(fail_pending_invocations) = fail_pending_invocations {
                     let queued_items = running
