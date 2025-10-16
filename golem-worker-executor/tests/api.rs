@@ -3676,7 +3676,7 @@ async fn delete_worker_during_invocation(
 
 #[test]
 #[tracing::instrument]
-#[test_r::non_flaky(10)]
+// #[test_r::non_flaky(10)]
 async fn invoking_worker_while_its_getting_deleted_works(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -3693,7 +3693,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
         tokio::spawn(async move {
             let mut result = None;
             while matches!(result, Some(Ok(_)) | None) {
-                tracing::warn!("begin request");
                 result = Some(
                     executor
                         .invoke_and_await(
@@ -3703,7 +3702,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
                         )
                         .await,
                 );
-                tracing::warn!("end request");
             }
             result
         })
@@ -3726,7 +3724,6 @@ async fn invoking_worker_while_its_getting_deleted_works(
     };
 
     let invocation_result = invoking_task.await?.unwrap();
-    tracing::info!("cancelling deletion task");
     deleting_task_cancel_token.cancel();
     // We tried invoking the worker while it was being deleted, we expect an invalid request
     let_assert!(

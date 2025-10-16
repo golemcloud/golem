@@ -1222,8 +1222,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await;
 
-        tracing::info!("stop_result: {stop_result:?}");
-
         // IMPORTANT: drop the lock here as the invocation loop might reenter this method after we drop a running worker.
         drop(instance_guard);
 
