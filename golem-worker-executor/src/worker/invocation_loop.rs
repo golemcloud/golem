@@ -947,6 +947,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 }
 
 /// Outcome of processing a single command within the inner invocation loop
+#[derive(Debug)]
 enum CommandOutcome {
     /// Break from both the inner and outer loops, there is no way to retry anything
     BreakOuterLoop,
