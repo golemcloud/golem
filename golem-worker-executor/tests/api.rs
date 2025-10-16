@@ -3613,3 +3613,60 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     check!(failure.is_err());
     check!(success.is_ok());
 }
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn delete_worker_during_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "delete-worker-during-invocation")
+        .await;
+
+    info!("Enqueuing invocations");
+    // Enqueuing a large number of invocations, each sleeping for 2 seconds
+    for _ in 0..25 {
+        let _ = executor
+            .invoke(
+                &worker_id,
+                "golem:it/api.{sleep}",
+                vec![2u64.into_value_and_type()],
+            )
+            .await
+            .unwrap();
+    }
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(2))
+        .await;
+
+    info!("Deleting the worker");
+    executor.delete_worker(&worker_id).await;
+
+    info!("Invoking again");
+    // Invoke it one more time - it should create a new instance and return successfully
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![1u64.into_value_and_type()],
+        )
+        .await;
+
+    let (metadata, _) = executor
+        .get_worker_metadata(&worker_id)
+        .await
+        .expect("The worker must be recreated");
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    check!(result == Ok(vec![Value::Result(Ok(None))]));
+    check!(metadata.last_known_status.pending_invocations.is_empty());
+}

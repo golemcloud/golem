@@ -664,7 +664,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub async fn store_invocation_failure(&self, key: &IdempotencyKey, trap_type: &TrapType) {
-        let guard = self.instance.lock().await;
         let pending = self.pending_invocations().await;
         let keys_to_fail = [
             vec![key],
@@ -695,7 +694,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 });
             }
         }
-        drop(guard)
     }
 
     pub async fn store_invocation_resuming(&self, key: &IdempotencyKey) {
