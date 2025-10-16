@@ -126,10 +126,6 @@ impl WorkerId {
         let length = name.len();
         if !(1..=512).contains(&length) {
             Err("Worker name must be between 1 and 512 characters")
-        } else if name.chars().any(|c| c.is_whitespace()) {
-            Err("Worker name must not contain whitespaces")
-        } else if name.contains('/') {
-            Err("Worker name must not contain '/'")
         } else if name.starts_with('-') {
             Err("Worker name must not start with '-'")
         } else {
