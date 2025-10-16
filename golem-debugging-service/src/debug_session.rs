@@ -33,7 +33,7 @@ use golem_common::model::{
     ComponentId, IdempotencyKey, OwnedWorkerId, PluginInstallationId, PromiseId, RetryConfig,
     WorkerId, WorkerMetadata,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::wasmtime::ResourceTypeId;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::durable_host::http::serialized::{
@@ -1490,8 +1490,8 @@ fn empty_payload() -> OplogPayload {
 mod tests {
     use crate::debug_session::{get_serializable_invoke_request, get_serializable_invoke_result};
     use golem_common::model::{ComponentId, IdempotencyKey, WorkerId};
-    use golem_wasm_ast::analysis::analysed_type::{case, str, variant};
-    use golem_wasm_ast::analysis::NameOptionTypePair;
+    use golem_wasm::analysis::analysed_type::{case, str, variant};
+    use golem_wasm::analysis::NameOptionTypePair;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_executor::durable_host::wasm_rpc::serialized::{
         EnrichedSerializableInvokeRequest, SerializableInvokeRequest, SerializableInvokeResult,

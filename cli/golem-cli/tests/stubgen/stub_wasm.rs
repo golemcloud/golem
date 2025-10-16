@@ -20,9 +20,9 @@ use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
-use golem_wasm_ast::analysis::analysed_type::*;
-use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::*;
+use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
     AnalysedResourceMode, AnalysedType, TypeHandle,
 };

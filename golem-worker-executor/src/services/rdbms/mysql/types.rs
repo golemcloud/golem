@@ -16,7 +16,7 @@ use crate::services::rdbms::{AnalysedTypeMerger, RdbmsIntoValueAndType};
 use bigdecimal::BigDecimal;
 use bincode::{Decode, Encode};
 use bit_vec::BitVec;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
 use std::fmt::Display;

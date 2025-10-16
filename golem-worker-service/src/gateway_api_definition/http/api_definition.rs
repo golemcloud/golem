@@ -38,7 +38,7 @@ use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_service_base::model::Component;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use poem_openapi::Enum;
 use rib::{ComponentDependencyKey, RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;

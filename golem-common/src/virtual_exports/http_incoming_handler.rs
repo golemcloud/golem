@@ -13,11 +13,11 @@
 // limitations under the License.
 
 use bytes::Bytes;
-use golem_wasm_ast::analysis::analysed_type::{
+use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, str, tuple, u16, u8, unit_case, variant,
 };
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedInstance};
 use golem_wasm_rpc::{Value, ValueAndType};
 use std::sync::LazyLock;
 // The following wit is modelled here:
@@ -83,7 +83,7 @@ pub static PARSED_FUNCTION_NAME: LazyLock<rib::ParsedFunctionName> =
 pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
     Vec<golem_wasm_ast::analysis::AnalysedFunctionParameter>,
 > = {
-    use golem_wasm_ast::analysis::*;
+    use golem_wasm::analysis::*;
     LazyLock::new(|| {
         vec![AnalysedFunctionParameter {
             name: "request".to_string(),
@@ -95,7 +95,7 @@ pub static ANALYZED_FUNCTION_PARAMETERS: LazyLock<
 pub static ANALYZED_FUNCTION_RESULT: LazyLock<
     Option<golem_wasm_ast::analysis::AnalysedFunctionResult>,
 > = {
-    use golem_wasm_ast::analysis::*;
+    use golem_wasm::analysis::*;
     LazyLock::new(|| {
         Some(AnalysedFunctionResult {
             typ: HttpResponse::analysed_type(),
@@ -104,7 +104,7 @@ pub static ANALYZED_FUNCTION_RESULT: LazyLock<
 };
 
 pub static ANALYZED_FUNCTION: LazyLock<AnalysedFunction> = {
-    use golem_wasm_ast::analysis::*;
+    use golem_wasm::analysis::*;
 
     LazyLock::new(|| AnalysedFunction {
         name: "handle".to_string(),

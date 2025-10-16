@@ -17,8 +17,8 @@ use crate::interpreter::rib_runtime_error::{
     empty_stack, insufficient_stack_items, type_mismatch_with_value,
 };
 use crate::{internal_corrupted_state, GetLiteralValue, RibInterpreterResult, TypeHint};
-use golem_wasm_ast::analysis::analysed_type::{list, option, record, str, tuple, variant};
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::{list, option, record, str, tuple, variant};
+use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeRecord, TypeResult,
 };
 use golem_wasm_rpc::{Value, ValueAndType};

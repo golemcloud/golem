@@ -14,7 +14,7 @@
 
 use crate::headers::ResolvedResponseHeaders;
 use crate::path::{Path, PathComponent};
-use golem_wasm_ast::analysis::{AnalysedType, TypeList, TypeRecord, TypeTuple};
+use golem_wasm::analysis::{AnalysedType, TypeList, TypeRecord, TypeTuple};
 use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::{Value, ValueAndType};
 use http::StatusCode;

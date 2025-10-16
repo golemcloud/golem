@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{ComponentDependencies, FunctionName, InferredExpr, RibCompilationError};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 
 // An easier data type that focus just on the side effecting function calls in Rib script.
 // These will not include variant or enum calls, that were originally
@@ -78,7 +78,7 @@ mod protobuf {
     use crate::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
     use golem_api_grpc::proto::golem::rib::WorkerFunctionType as WorkerFunctionTypeProto;
     use golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib as WorkerFunctionsInRibProto;
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
 
     impl TryFrom<WorkerFunctionsInRibProto> for WorkerFunctionsInRib {
         type Error = String;

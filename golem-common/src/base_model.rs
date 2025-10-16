@@ -182,7 +182,7 @@ impl golem_wasm_rpc::IntoValue for WorkerId {
     }
 
     fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-        use golem_wasm_ast::analysis::analysed_type::{field, record};
+        use golem_wasm::analysis::analysed_type::{field, record};
         record(vec![
             field("component_id", ComponentId::get_type()),
             field("worker_name", String::get_type()),

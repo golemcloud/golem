@@ -2583,8 +2583,8 @@ mod internal {
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-    use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
     };

@@ -33,7 +33,7 @@ use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};

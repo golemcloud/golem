@@ -18,8 +18,8 @@ use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
-use golem_wasm_ast::analysis::analysed_type::{case, variant};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{case, variant};
+use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -766,7 +766,7 @@ mod tests {
         AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
         DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
     };
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
     use indoc::indoc;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use mime::Mime;
 use poem::web::headers::ContentType;
@@ -179,7 +179,7 @@ mod internal {
     use crate::gateway_execution::http_content_type_mapper::{
         AcceptHeaders, ContentTypeHeaderExt, ContentTypeMapError,
     };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeEnum, TypeList, TypeOption, TypeRecord};
+    use golem_wasm::analysis::{AnalysedType, TypeEnum, TypeList, TypeOption, TypeRecord};
     use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
     use golem_wasm_rpc::{Value, ValueAndType};
     use poem::web::headers::ContentType;
@@ -503,7 +503,7 @@ mod internal {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_wasm_ast::analysis::analysed_type::{field, list, record, str};
+    use golem_wasm::analysis::analysed_type::{field, list, record, str};
     use golem_wasm_rpc::{IntoValue, Value};
     use poem::web::headers::ContentType;
     use poem::IntoResponse;
@@ -536,7 +536,7 @@ mod tests {
         use test_r::test;
 
         use super::*;
-        use golem_wasm_ast::analysis::analysed_type::{u16, u8};
+        use golem_wasm::analysis::analysed_type::{u16, u8};
         use golem_wasm_rpc::IntoValueAndType;
 
         fn get_content_type_and_body(input: &ValueAndType) -> (Option<String>, Body) {
@@ -628,7 +628,7 @@ mod tests {
         use test_r::test;
 
         use super::*;
-        use golem_wasm_ast::analysis::analysed_type::{u16, u8};
+        use golem_wasm::analysis::analysed_type::{u16, u8};
         use golem_wasm_rpc::IntoValueAndType;
 
         fn get_content_type_and_body(
@@ -753,7 +753,7 @@ mod tests {
         use test_r::test;
 
         use super::*;
-        use golem_wasm_ast::analysis::analysed_type::{u16, u8};
+        use golem_wasm::analysis::analysed_type::{u16, u8};
         use golem_wasm_rpc::IntoValueAndType;
 
         fn get_content_type_and_body(

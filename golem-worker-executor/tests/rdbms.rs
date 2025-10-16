@@ -21,7 +21,7 @@ use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::analysed_type;
+use golem_wasm::analysis::analysed_type;
 use golem_wasm_rpc::{Value, ValueAndType};
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;

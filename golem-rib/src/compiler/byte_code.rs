@@ -161,12 +161,12 @@ mod internal {
         InferredType, InstanceIdentifier, InstanceVariable, InstructionId, Range,
         RibByteCodeGenerationError, RibIR, TypeInternal, VariableId,
     };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeFlags};
+    use golem_wasm::analysis::{AnalysedType, TypeFlags};
     use std::collections::HashSet;
 
     use crate::call_type::{CallType, InstanceCreationType};
     use crate::type_inference::{GetTypeHint, TypeHint};
-    use golem_wasm_ast::analysis::analysed_type::bool;
+    use golem_wasm::analysis::analysed_type::bool;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use std::ops::Deref;
 
@@ -959,8 +959,8 @@ mod compiler_tests {
 
     use super::*;
     use crate::{ArmPattern, InferredType, MatchArm, RibCompiler, VariableId};
-    use golem_wasm_ast::analysis::analysed_type;
-    use golem_wasm_ast::analysis::analysed_type::{field, list, record, s32, str};
+    use golem_wasm::analysis::analysed_type;
+    use golem_wasm::analysis::analysed_type::{field, list, record, s32, str};
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -1465,7 +1465,7 @@ mod compiler_tests {
 
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{Expr, RibCompiler, RibCompilerConfig};
-        use golem_wasm_ast::analysis::analysed_type::str;
+        use golem_wasm::analysis::analysed_type::str;
 
         #[test]
         fn test_unknown_function() {
@@ -1557,7 +1557,7 @@ mod compiler_tests {
 
         use crate::compiler::byte_code::compiler_tests::internal;
         use crate::{Expr, RibCompiler, RibCompilerConfig};
-        use golem_wasm_ast::analysis::analysed_type::{
+        use golem_wasm::analysis::analysed_type::{
             case, field, list, option, r#enum, record, result, str, tuple, u32, u64, unit_case,
             variant,
         };
@@ -1895,8 +1895,8 @@ mod compiler_tests {
 
     mod internal {
         use crate::{ComponentDependency, ComponentDependencyKey, RibInputTypeInfo};
-        use golem_wasm_ast::analysis::analysed_type::{case, str, u64, unit_case, variant};
-        use golem_wasm_ast::analysis::*;
+        use golem_wasm::analysis::analysed_type::{case, str, u64, unit_case, variant};
+        use golem_wasm::analysis::*;
         use std::collections::HashMap;
         use uuid::Uuid;
 

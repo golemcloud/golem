@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use golem_common::model::ComponentType;
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm_ast::analysis::AnalysisContext;
+use golem_wasm::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::IgnoreAllButMetadata;
 use humansize::{ISizeFormatter, BINARY};

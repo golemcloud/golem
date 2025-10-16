@@ -16,7 +16,7 @@ use crate::compiler::{InstanceVariables, ReplCompilerOutput};
 use crate::value_generator::generate_value;
 use crate::CommandRegistry;
 use colored::Colorize;
-use golem_wasm_ast::analysis::{TypeEnum, TypeVariant};
+use golem_wasm::analysis::{TypeEnum, TypeVariant};
 use golem_wasm_rpc::ValueAndType;
 use rib::{CustomInstanceSpec, Expr, VariableId};
 use rustyline::completion::Completer;

@@ -26,8 +26,8 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use golem_service_base::model::{Component, ComponentName};
-use golem_wasm_ast::analysis::analysed_type::str;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::str;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance,
 };

@@ -25,7 +25,7 @@ use bincode::{BorrowDecode, Decode, Encode};
 use golem_common::model::TransactionId;
 use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
+use golem_wasm::analysis::{analysed_type, AnalysedType};
 use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
 use golem_wasm_rpc_derive::IntoValue;
 use itertools::Itertools;

@@ -26,8 +26,8 @@ use golem_common::model::agent::{
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wave::DisplayNamedFunc;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
@@ -591,12 +591,12 @@ mod tests {
     use test_r::test;
 
     use crate::model::component::render_exported_function;
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         bool, case, chr, f32, f64, field, flags, handle, list, option, r#enum, record, result,
         result_err, result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case,
         variant,
     };
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
         AnalysedResourceMode, AnalysedType,
     };

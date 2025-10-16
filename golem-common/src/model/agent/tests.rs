@@ -19,7 +19,7 @@ use crate::model::agent::{
     NamedElementValues, TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::analysed_type::{field, flags, list, record, u32};
+use golem_wasm::analysis::analysed_type::{field, flags, list, record, u32};
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;

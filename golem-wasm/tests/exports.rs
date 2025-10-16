@@ -1,9 +1,9 @@
-use golem_wasm_ast::analysis::analysed_type::{
+use golem_wasm::analysis::analysed_type::{
     case, f32, field, handle, list, record, result, result_err, str, tuple, u32, u64, unit_case,
     variant,
 };
-use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
 };

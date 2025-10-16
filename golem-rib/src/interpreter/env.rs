@@ -17,7 +17,7 @@ use crate::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
     RibComponentFunctionInvoke, RibInput, VariableId,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -128,7 +128,7 @@ mod internal {
         RibFunctionInvokeResult,
     };
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
 
     pub(crate) struct NoopRibFunctionInvoke;
 

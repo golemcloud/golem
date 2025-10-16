@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::{InferredExpr, RibCompilationError};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,7 +43,7 @@ impl RibOutputTypeInfo {
 mod protobuf {
     use crate::RibOutputTypeInfo;
     use golem_api_grpc::proto::golem::rib::RibOutputType as ProtoRibOutputType;
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
 
     impl From<RibOutputTypeInfo> for ProtoRibOutputType {
         fn from(value: RibOutputTypeInfo) -> Self {

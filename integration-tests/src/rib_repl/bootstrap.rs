@@ -6,7 +6,7 @@ use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;

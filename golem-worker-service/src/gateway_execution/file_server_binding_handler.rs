@@ -24,7 +24,7 @@ use golem_common::model::{ComponentFilePath, ComponentId, WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::model::Component;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::{Value, ValueAndType};
 use http::StatusCode;
 use poem::web::headers::ContentType;

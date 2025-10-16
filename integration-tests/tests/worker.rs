@@ -27,7 +27,7 @@ use golem_common::model::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
 };
 use golem_wasm_rpc::IntoValue;

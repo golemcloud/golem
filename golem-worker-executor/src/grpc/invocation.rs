@@ -21,7 +21,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::Component;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
+use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::protobuf::Val;
 use golem_wasm_rpc::{Value, ValueAndType};

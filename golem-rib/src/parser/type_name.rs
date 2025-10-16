@@ -20,7 +20,7 @@ use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::{attempt, between, choice, optional, sep_by, Parser};
 use combine::{parser, ParseError};
-use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
+use golem_wasm::analysis::{AnalysedType, TypeResult};
 use std::fmt::Display;
 use std::ops::Deref;
 

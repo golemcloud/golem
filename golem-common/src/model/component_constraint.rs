@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use rib::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
@@ -209,7 +209,7 @@ mod protobuf {
     };
     use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use rib::FunctionName;
 
     impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>

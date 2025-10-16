@@ -14,7 +14,7 @@
 
 use crate::{AnalysedTypeWithUnit, ComponentDependencyKey, ParsedFunctionSite, VariableId};
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use serde::{Deserialize, Serialize};
 
@@ -142,7 +142,7 @@ mod protobuf {
         LessThanOrEqualTo, Negate, Or, PushListInstruction, PushNoneInstruction,
         PushTupleInstruction, RibIr as ProtoRibIR, WitResource,
     };
-    use golem_wasm_ast::analysis::{AnalysedType, TypeStr};
+    use golem_wasm::analysis::{AnalysedType, TypeStr};
 
     impl TryFrom<golem_api_grpc::proto::golem::rib::FunctionReferenceType> for FunctionReferenceType {
         type Error = String;

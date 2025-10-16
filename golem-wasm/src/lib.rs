@@ -22,7 +22,7 @@ mod bindings;
 #[cfg(test)]
 test_r::enable!();
 
-mod analysis;
+pub mod analysis;
 
 /// Implements bincode encoders and decoders for WitValue instances
 #[cfg(feature = "host")]

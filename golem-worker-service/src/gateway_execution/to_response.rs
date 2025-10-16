@@ -417,8 +417,8 @@ mod test {
     };
     use crate::gateway_execution::request::RichRequest;
     use crate::gateway_execution::to_response::ToHttpResponse;
-    use golem_wasm_ast::analysis::analysed_type::record;
-    use golem_wasm_ast::analysis::NameTypePair;
+    use golem_wasm::analysis::analysed_type::record;
+    use golem_wasm::analysis::NameTypePair;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
     use http::header::CONTENT_TYPE;
     use http::StatusCode;

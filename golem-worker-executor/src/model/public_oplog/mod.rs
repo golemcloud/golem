@@ -64,10 +64,10 @@ use golem_common::model::{
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_ast::analysis::analysed_type::{
+use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
+use golem_wasm::analysis::{AnalysedFunctionParameter, AnalysedType};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;

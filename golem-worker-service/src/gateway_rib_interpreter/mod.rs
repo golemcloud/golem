@@ -18,7 +18,7 @@ use golem_common::model::auth::Namespace;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use golem_wasm_rpc::ValueAndType;
 use rib::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,

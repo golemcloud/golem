@@ -18,7 +18,7 @@ use crate::{
     CallType, DynamicParsedFunctionName, DynamicParsedFunctionReference, FunctionTypeRegistry,
     InferredType, ParsedFunctionSite, RegistryKey, RegistryValue, SemVer,
 };
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
+use golem_wasm::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};

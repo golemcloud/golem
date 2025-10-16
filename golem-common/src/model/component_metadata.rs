@@ -21,8 +21,8 @@ use bincode::de::BorrowDecoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{
     AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     AnalysedType, TypeHandle,
 };

@@ -48,7 +48,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
+use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm_rpc::protobuf::Val as ProtoVal;
 use golem_wasm_rpc::ValueAndType;
 use std::collections::BTreeMap;

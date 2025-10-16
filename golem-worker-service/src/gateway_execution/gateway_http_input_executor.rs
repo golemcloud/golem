@@ -49,8 +49,8 @@ use golem_common::model::invocation_context::{
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_wasm_ast::analysis::analysed_type::record;
-use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
+use golem_wasm::analysis::analysed_type::record;
+use golem_wasm::analysis::{AnalysedType, NameTypePair};
 use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
 use http::StatusCode;

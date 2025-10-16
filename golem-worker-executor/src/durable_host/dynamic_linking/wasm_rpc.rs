@@ -19,8 +19,8 @@ use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
-use golem_wasm_ast::analysis::analysed_type::str;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::str;
+use golem_wasm::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
 };
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};

@@ -22,7 +22,7 @@ use bytes::Bytes;
 use futures::{stream, StreamExt};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
 };
 use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};

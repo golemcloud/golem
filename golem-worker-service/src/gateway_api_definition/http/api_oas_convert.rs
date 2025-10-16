@@ -24,8 +24,8 @@ use crate::gateway_middleware::{CorsPreflightExpr, HttpCors};
 use crate::service::gateway::BoxConversionContext;
 use golem_common::model::component::VersionedComponentId;
 use golem_common::model::GatewayBindingType;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_ast::analysis::NameTypePair;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::analysis::NameTypePair;
 use http::StatusCode;
 use rib::RibInputTypeInfo;
 use serde::{Deserialize, Serialize};
@@ -920,7 +920,7 @@ fn create_integer_schema(
 fn create_schema_from_analysed_type(
     analysed_type: &golem_wasm_ast::analysis::AnalysedType,
 ) -> openapiv3::Schema {
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
 
     match analysed_type {
         // Handle boolean type

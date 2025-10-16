@@ -14,7 +14,7 @@
 
 use crate::{Expr, ExprVisitor, InferredExpr, RibCompilationError};
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -75,7 +75,7 @@ impl RibInputTypeInfo {
 mod protobuf {
     use crate::RibInputTypeInfo;
     use golem_api_grpc::proto::golem::rib::RibInputType as ProtoRibInputType;
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use std::collections::HashMap;
 
     impl TryFrom<ProtoRibInputType> for RibInputTypeInfo {

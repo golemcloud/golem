@@ -358,8 +358,8 @@ mod internal {
         RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult, TypeHint,
         VariableId,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_ast::analysis::TypeResult;
+    use golem_wasm::analysis::AnalysedType;
+    use golem_wasm::analysis::TypeResult;
     use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
@@ -371,7 +371,7 @@ mod internal {
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{s16, s32, s64, s8, str, u16, u32, u64, u8};
+    use golem_wasm::analysis::analysed_type::{s16, s32, s64, s8, str, u16, u32, u64, u8};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -1532,11 +1532,11 @@ mod tests {
         CustomInstanceSpec, Expr, GlobalVariableTypeSpec, InferredType, InstructionId,
         InterfaceName, Path, RibCompiler, RibCompilerConfig, VariableId,
     };
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, result_err, result_ok, s32,
         str, tuple, u32, u64, u8, unit_case, variant,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
@@ -4887,11 +4887,11 @@ mod tests {
             RibInput,
         };
         use async_trait::async_trait;
-        use golem_wasm_ast::analysis::analysed_type::{
+        use golem_wasm::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
             u64, unit_case, variant,
         };
-        use golem_wasm_ast::analysis::{
+        use golem_wasm::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };

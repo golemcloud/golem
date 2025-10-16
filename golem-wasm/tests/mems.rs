@@ -1,4 +1,4 @@
-use golem_wasm_ast::analysis::AnalysisContext;
+use golem_wasm::analysis::AnalysisContext;
 use golem_wasm_ast::component::Component;
 use golem_wasm_ast::core::{Limits, Mem, MemType};
 use golem_wasm_ast::IgnoreAllButMetadata;

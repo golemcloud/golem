@@ -82,11 +82,11 @@ mod tests {
         RibCompilerConfig, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         case, field, list, r#enum, str, u64, unit_case, variant,
     };
 
-    use golem_wasm_ast::analysis::analysed_type;
+    use golem_wasm::analysis::analysed_type;
     use test_r::test;
 
     #[test]
@@ -2467,8 +2467,8 @@ mod tests {
             VariableId,
         };
         use bigdecimal::BigDecimal;
-        use golem_wasm_ast::analysis::analysed_type::u64;
-        use golem_wasm_ast::analysis::{
+        use golem_wasm::analysis::analysed_type::u64;
+        use golem_wasm::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedType, TypeU32,
         };

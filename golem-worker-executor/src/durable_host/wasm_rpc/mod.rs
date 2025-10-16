@@ -39,7 +39,7 @@ use golem_common::model::{
 };
 use golem_common::serialization::try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_ast::analysis::analysed_type;
+use golem_wasm::analysis::analysed_type;
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
     CancellationToken, FutureInvokeResult, HostCancellationToken, HostFutureInvokeResult, Pollable,
     Uri,
