@@ -146,13 +146,6 @@ impl ExternalOperations<Self> for DebugContext {
             .await
     }
 
-    async fn on_worker_deleted<This: HasAll<Self> + Send + Sync>(
-        this: &This,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
         this: &This,
     ) -> Result<(), Error> {

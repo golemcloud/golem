@@ -101,12 +101,12 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
         self.workers.get(&worker_id).await
     }
 
-    pub fn remove(&self, worker_id: &WorkerId) {
-        self.workers.remove(worker_id);
+    pub async fn remove(&self, worker_id: &WorkerId) {
+        self.workers.remove(worker_id).await;
     }
 
-    pub fn snapshot(&self) -> Vec<(WorkerId, Arc<Worker<Ctx>>)> {
-        self.workers.iter().collect::<Vec<_>>()
+    pub async fn snapshot(&self) -> Vec<(WorkerId, Arc<Worker<Ctx>>)> {
+        self.workers.iter().await
     }
 
     pub async fn acquire(&self, memory: u64) -> OwnedSemaphorePermit {
@@ -198,7 +198,7 @@ impl<Ctx: WorkerCtx> ActiveWorkers<Ctx> {
 
             debug!("Collecting possibilities");
             // Collecting the workers which are currently idle but loaded into memory
-            let pairs = self.workers.iter().collect::<Vec<_>>();
+            let pairs = self.workers.iter().await;
             for (worker_id, worker) in pairs {
                 if worker.is_currently_idle_but_running().await {
                     if let Ok(mem) = worker.memory_requirement().await {

@@ -264,14 +264,13 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             self.waiting_for_command.store(false, Ordering::Release);
             let outcome = match cmd {
                 WorkerCommand::Invocation => {
-                    let message = self
-                        .active
-                        .write()
-                        .await
-                        .pop_front()
-                        .expect("Message should be present");
+                    let message = self.active.write().await.pop_front();
 
-                    self.invocation(message).await
+                    if let Some(message) = message {
+                        self.invocation(message).await
+                    } else {
+                        CommandOutcome::Continue
+                    }
                 }
                 WorkerCommand::ResumeReplay => self.resume_replay().await,
                 WorkerCommand::Interrupt(kind) => self.interrupt(kind).await,

@@ -2187,13 +2187,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         Ok(())
     }
 
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
