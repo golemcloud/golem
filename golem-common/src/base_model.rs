@@ -152,10 +152,7 @@ impl WorkerId {
         agent_id: S,
         resolver: impl AgentTypeResolver,
     ) -> Result<WorkerId, String> {
-        Ok(Self::from_agent_id(
-            component_id,
-            &AgentId::parse(agent_id, resolver)?,
-        )?)
+        Self::from_agent_id(component_id, &AgentId::parse(agent_id, resolver)?)
     }
 
     pub fn from_component_metadata_and_worker_id<S: AsRef<str>>(

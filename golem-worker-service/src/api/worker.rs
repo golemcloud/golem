@@ -184,7 +184,7 @@ impl WorkerApi {
     ) -> Result<Json<DeleteWorkerResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, auth)
             .await?;
         self.worker_service.delete(&worker_id, namespace).await?;
         Ok(Json(DeleteWorkerResponse {}))
@@ -247,7 +247,7 @@ impl WorkerApi {
             .is_authorized_by_component(
                 &target_worker_id.component_id,
                 ProjectAction::UpdateWorker,
-                &auth,
+                auth,
             )
             .await?;
 
@@ -334,7 +334,7 @@ impl WorkerApi {
             .is_authorized_by_component(
                 &target_worker_id.component_id,
                 ProjectAction::UpdateWorker,
-                &auth,
+                auth,
             )
             .await?;
 
@@ -408,7 +408,7 @@ impl WorkerApi {
 
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
         let response = self
             .worker_service
@@ -463,7 +463,7 @@ impl WorkerApi {
     ) -> Result<Json<InterruptResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
         self.worker_service
             .interrupt(&worker_id, recover_immediately.unwrap_or(false), namespace)
@@ -524,7 +524,7 @@ impl WorkerApi {
     ) -> Result<Json<model::WorkerMetadata>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, auth)
             .await?;
         let response = self
             .worker_service
@@ -746,7 +746,7 @@ impl WorkerApi {
     ) -> Result<Json<ResumeResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
         self.worker_service
             .resume(&worker_id, namespace, false)
@@ -792,7 +792,7 @@ impl WorkerApi {
     ) -> Result<Json<UpdateWorkerResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
         self.worker_service
             .update(
@@ -849,7 +849,7 @@ impl WorkerApi {
     ) -> Result<Json<GetOplogResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, auth)
             .await?;
 
         match (from, query) {
@@ -930,7 +930,7 @@ impl WorkerApi {
 
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, auth)
             .await?;
 
         let nodes = self
@@ -982,7 +982,7 @@ impl WorkerApi {
 
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, auth)
             .await?;
 
         let bytes = self
@@ -1038,7 +1038,7 @@ impl WorkerApi {
     ) -> Result<Json<ActivatePluginResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
 
         self.worker_service
@@ -1091,7 +1091,7 @@ impl WorkerApi {
     ) -> Result<Json<DeactivatePluginResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
 
         self.worker_service
@@ -1141,7 +1141,7 @@ impl WorkerApi {
     ) -> Result<Json<RevertWorkerResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
 
         self.worker_service
@@ -1194,7 +1194,7 @@ impl WorkerApi {
     ) -> Result<Json<CancelInvocationResponse>> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::UpdateWorker, auth)
             .await?;
 
         let canceled = self
@@ -1271,7 +1271,7 @@ impl WorkerApi {
     ) -> Result<ConnectWorkerStream> {
         let namespace = self
             .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, &auth)
+            .is_authorized_by_component(&worker_id.component_id, ProjectAction::ViewWorker, auth)
             .await?;
 
         let stream = self.worker_service.connect(&worker_id, namespace).await?;
@@ -1287,7 +1287,7 @@ impl WorkerApi {
     ) -> Result<(WorkerId, ComponentVersion)> {
         let latest_component = self
             .component_service
-            .get_latest_by_id(&component_id, &auth)
+            .get_latest_by_id(&component_id, auth)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
@@ -1299,7 +1299,7 @@ impl WorkerApi {
                 }))
             })?;
 
-        validated_worker_id(component_id, &latest_component.metadata, &worker_id)
+        validated_worker_id(component_id, &latest_component.metadata, worker_id)
             .map(|id| (id, latest_component.versioned_component_id.version))
     }
 
@@ -1317,7 +1317,7 @@ impl WorkerApi {
         // First we try with the latest version, which usually should be the happy path
         let latest_component_version = self
             .component_service
-            .get_latest_by_id(&component_id, &auth)
+            .get_latest_by_id(&component_id, auth)
             .await
             .map_err(|error| {
                 ApiEndpointError::NotFound(Json(ErrorBody {
@@ -1332,7 +1332,7 @@ impl WorkerApi {
         let id = validated_worker_id(
             component_id.clone(),
             &latest_component_version.metadata,
-            &worker_id,
+            worker_id,
         );
 
         // We return:
@@ -1353,7 +1353,7 @@ impl WorkerApi {
                     project_id: latest_component_version.owner.project_id,
                     account_id: latest_component_version.owner.account_id,
                 },
-                &auth,
+                auth,
             )
             .await
             .map_err(|error| {
@@ -1372,7 +1372,7 @@ impl WorkerApi {
             .take(all_component_versions.len() - 1)
         {
             let id_with_version =
-                validated_worker_id(component_id.clone(), &component.metadata, &worker_id);
+                validated_worker_id(component_id.clone(), &component.metadata, worker_id);
             if id_with_version.is_ok() {
                 return id_with_version;
             }
