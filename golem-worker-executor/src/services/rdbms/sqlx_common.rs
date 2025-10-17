@@ -123,9 +123,9 @@ where
     #[allow(dead_code)]
     pub(crate) async fn remove_pool(&self, key: &RdbmsPoolKey) -> Result<bool, Error> {
         let _ = self.pool_workers_cache.remove(key);
-        let pool = self.pool_cache.try_get(key);
+        let pool = self.pool_cache.try_get(key).await;
         if let Some(pool) = pool {
-            self.pool_cache.remove(key);
+            self.pool_cache.remove(key).await;
             pool.close().await;
             Ok(true)
         } else {

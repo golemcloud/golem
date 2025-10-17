@@ -345,13 +345,6 @@ impl ExternalOperations<Context> for Context {
             .await
     }
 
-    async fn on_worker_deleted<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
