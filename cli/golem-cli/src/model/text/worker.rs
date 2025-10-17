@@ -219,7 +219,7 @@ struct WorkerMetadataTableView {
     #[table(title = "Component name")]
     pub component_name: ComponentName,
     #[table(title = "Agent name")]
-    pub worker_name: WorkerName,
+    pub worker_name: String,
     #[table(title = "Component\nversion", justify = "Justify::Right")]
     pub component_version: u64,
     #[table(title = "Status", justify = "Justify::Right")]
@@ -232,7 +232,8 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
     fn from(value: &WorkerMetadataView) -> Self {
         Self {
             component_name: value.component_name.clone(),
-            worker_name: value.worker_name.clone(),
+            // TODO: pretty print, once we have "metadata-less" agent-type parsing
+            worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
             status: format_status(&value.status),
             component_version: value.component_version,
             created_at: value.created_at,
