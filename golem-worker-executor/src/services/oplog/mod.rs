@@ -405,7 +405,7 @@ impl OpenOplogs {
                 .oplogs
                 .get_or_insert(
                     worker_id,
-                    || Ok(()),
+                    || (),
                     async |_| {
                         let result = constructor_clone.create_oplog(close).await;
 
@@ -436,7 +436,7 @@ impl OpenOplogs {
 
                 break oplog;
             } else {
-                self.oplogs.remove(worker_id);
+                self.oplogs.remove(worker_id).await;
                 continue;
             }
         }

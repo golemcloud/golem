@@ -394,7 +394,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             worker.start_deleting().await?;
 
             self.worker_service().remove(&owned_worker_id).await;
-            self.active_workers().remove(&owned_worker_id.worker_id);
+            self.active_workers().remove(&owned_worker_id.worker_id).await;
             // ensure we are holding the worker while we are doing cleanup.
             drop(worker);
         }
@@ -596,7 +596,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers().remove(&owned_worker_id.worker_id).await;
                 }
                 WorkerStatus::Retrying => {
                     debug!("Marking worker scheduled to be retried as interrupted");
@@ -614,7 +614,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers().remove(&owned_worker_id.worker_id).await;
                 }
                 WorkerStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
@@ -638,7 +638,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await;
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers().remove(&owned_worker_id.worker_id).await;
                 }
             }
         }
@@ -845,7 +845,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (worker_id, worker_details) in self.active_workers().snapshot() {
+        for (worker_id, worker_details) in self.active_workers().snapshot().await {
             if self.shard_service().check_worker(&worker_id).is_err() {
                 if let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)

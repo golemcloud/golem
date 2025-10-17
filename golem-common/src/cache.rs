@@ -16,14 +16,11 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
-use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dashmap::try_result::TryResult::{Absent, Locked, Present};
-use dashmap::DashMap;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
@@ -59,7 +56,7 @@ pub trait SimpleCache<K, V, E> {
 }
 
 struct CacheState<K, PV, V, E> {
-    items: DashMap<K, Item<V, PV, E>>,
+    items: scc::HashMap<K, Item<V, PV, E>>,
     last_id: std::sync::atomic::AtomicU64,
     count: std::sync::atomic::AtomicUsize,
 }
@@ -76,8 +73,7 @@ impl<
     where
         F: AsyncFnOnce() -> Result<V, E>,
     {
-        self.get_or_insert(key, || Ok(()), async |_| f().await)
-            .await
+        self.get_or_insert(key, || (), async |_| f().await).await
     }
 }
 
@@ -103,8 +99,8 @@ impl<
 
         let state = Arc::new(CacheState {
             items: match capacity {
-                Some(capacity) => DashMap::with_capacity(capacity),
-                None => DashMap::new(),
+                Some(capacity) => scc::HashMap::with_capacity(capacity),
+                None => scc::HashMap::new(),
             },
             last_id: std::sync::atomic::AtomicU64::new(0),
             count: std::sync::atomic::AtomicUsize::new(0),
@@ -130,7 +126,7 @@ impl<
                 Some(tokio::task::spawn(async move {
                     loop {
                         tokio::time::sleep(period).await;
-                        cache_clone.background_evict(&eviction);
+                        cache_clone.background_evict(&eviction).await;
                     }
                 }))
             }
@@ -140,7 +136,7 @@ impl<
                 Some(tokio::task::spawn(async move {
                     loop {
                         tokio::time::sleep(period).await;
-                        cache_clone.background_evict(&eviction);
+                        cache_clone.background_evict(&eviction).await;
                     }
                 }))
             }
@@ -152,17 +148,19 @@ impl<
     }
 
     /// Tries to get a cached value for the given key. If the value is missing or is pending, it returns None.
-    #[allow(unused)]
-    pub fn try_get(&self, key: &K) -> Option<V> {
-        let result = match self.state.items.try_get(key) {
-            Present(item) => match item.deref() {
+    pub async fn try_get(&self, key: &K) -> Option<V> {
+        let result = self
+            .state
+            .items
+            .read_async(key, |_, item| match item {
                 Item::Pending { .. } => None,
                 Item::Cached { value, .. } => Some(value.clone()),
-            },
-            Absent | Locked => None,
-        };
+            })
+            .await
+            .flatten();
+
         if result.is_some() {
-            self.update_last_access(key);
+            self.update_last_access(key).await;
         }
         result
     }
@@ -170,19 +168,23 @@ impl<
     /// Gets a cached value for the given key. If the value is pending, it awaits it.
     /// If the pending value fails, it returns None.
     pub async fn get(&self, key: &K) -> Option<V> {
-        let result = match self.state.items.get(key) {
-            Some(item) => match item.deref() {
-                Item::Pending { tx, .. } => {
-                    let mut rx = tx.subscribe();
-                    rx.recv().await.ok().and_then(|r| r.ok())
-                }
-                Item::Cached { value, .. } => Some(value.clone()),
-            },
+        let entry = self
+            .state
+            .items
+            .read_async(key, |_, item| match item {
+                Item::Pending { tx, .. } => Err(tx.subscribe()),
+                Item::Cached { value, .. } => Ok(value.clone()),
+            })
+            .await;
+
+        let result = match entry {
+            Some(Ok(value)) => Some(value),
+            Some(Err(mut rx)) => rx.recv().await.ok().and_then(|r| r.ok()),
             None => None,
         };
 
         if result.is_some() {
-            self.update_last_access(key);
+            self.update_last_access(key).await;
         }
 
         result
@@ -192,13 +194,13 @@ impl<
     /// it is awaited instead of recreating it.
     pub async fn get_or_insert<F1, F2>(&self, key: &K, f1: F1, f2: F2) -> Result<V, E>
     where
-        F1: FnOnce() -> Result<PV, E>,
+        F1: FnOnce() -> PV,
         F2: AsyncFnOnce(&PV) -> Result<V, E>,
     {
         let mut eviction_needed = false;
         let result = {
             let own_id = self.state.last_id.fetch_add(1, Ordering::SeqCst);
-            let result = self.get_or_add_as_pending(key, own_id, f1)?;
+            let result = self.get_or_add_as_pending(key, own_id, f1).await?;
             match result {
                 Item::Pending {
                     ref tx,
@@ -210,13 +212,16 @@ impl<
 
                         let value = f2(&pending_value).await;
                         if let Ok(success_value) = &value {
-                            self.state.items.insert(
-                                key.clone(),
-                                Item::Cached {
-                                    value: success_value.clone(),
-                                    last_access: Instant::now(),
-                                },
-                            );
+                            self.state
+                                .items
+                                .upsert_async(
+                                    key.clone(),
+                                    Item::Cached {
+                                        value: success_value.clone(),
+                                        last_access: Instant::now(),
+                                    },
+                                )
+                                .await;
                             let old_count = self.state.count.fetch_add(1, Ordering::SeqCst);
 
                             record_cache_size(self.name, old_count.saturating_add(1));
@@ -225,7 +230,7 @@ impl<
                                 eviction_needed = true;
                             }
                         } else {
-                            self.state.items.remove(key);
+                            self.state.items.remove_async(key).await;
                         }
                         if tx.receiver_count() > 0 {
                             let _ = tx.send(value.clone());
@@ -242,14 +247,14 @@ impl<
                 Item::Cached { value, .. } => {
                     record_cache_hit(self.name);
 
-                    self.update_last_access(key);
+                    self.update_last_access(key).await;
                     Ok(value)
                 }
             }
         };
 
         if eviction_needed {
-            self.evict();
+            self.evict().await;
         }
 
         result
@@ -264,12 +269,12 @@ impl<
         f2: F2,
     ) -> Result<PendingOrFinal<PV, V>, E>
     where
-        F1: FnOnce() -> Result<PV, E>,
+        F1: FnOnce() -> PV,
         F2: FnOnce(&PV) -> Pin<Box<dyn Future<Output = Result<V, E>> + Send>> + Send + 'static,
     {
         {
             let own_id = self.state.last_id.fetch_add(1, Ordering::SeqCst);
-            let result = self.get_or_add_as_pending(key, own_id, f1)?;
+            let result = self.get_or_add_as_pending(key, own_id, f1).await?;
             match result {
                 Item::Pending {
                     ref tx,
@@ -288,20 +293,24 @@ impl<
                             async move {
                                 let value = f2(&pending_value_clone).await;
                                 if let Ok(success_value) = &value {
-                                    self_clone.state.items.insert(
-                                        key_clone,
-                                        Item::Cached {
-                                            value: success_value.clone(),
-                                            last_access: Instant::now(),
-                                        },
-                                    );
+                                    self_clone
+                                        .state
+                                        .items
+                                        .upsert_async(
+                                            key_clone,
+                                            Item::Cached {
+                                                value: success_value.clone(),
+                                                last_access: Instant::now(),
+                                            },
+                                        )
+                                        .await;
                                     let old_count =
                                         self_clone.state.count.fetch_add(1, Ordering::SeqCst);
 
                                     record_cache_size(self_clone.name, old_count.saturating_add(1));
 
                                     if Some(old_count) == self_clone.capacity {
-                                        self_clone.evict();
+                                        self_clone.evict().await;
                                     }
                                 }
                                 if tx_clone.receiver_count() > 0 {
@@ -317,30 +326,41 @@ impl<
                 Item::Cached { value, .. } => {
                     record_cache_hit(self.name);
 
-                    self.update_last_access(key);
+                    self.update_last_access(key).await;
                     Ok(PendingOrFinal::Final(value))
                 }
             }
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (K, V)> + '_ {
-        self.state.items.iter().filter_map(|r| match r.deref() {
-            Item::Pending { .. } => None,
-            Item::Cached { value, .. } => Some((r.key().clone(), value.clone())),
-        })
+    pub async fn iter(&self) -> Vec<(K, V)> {
+        let mut snapshotted_pairs = vec![];
+        self.state
+            .items
+            .iter_async(|key, value| {
+                match value {
+                    Item::Cached { value, .. } => {
+                        snapshotted_pairs.push((key.clone(), value.clone()));
+                    }
+                    Item::Pending { .. } => {}
+                }
+                true
+            })
+            .await;
+
+        snapshotted_pairs
     }
 
-    pub fn remove(&self, key: &K) {
-        let removed = self.state.items.remove(key).is_some();
+    pub async fn remove(&self, key: &K) {
+        let removed = self.state.items.remove_async(key).await.is_some();
         if removed {
             let count = self.state.count.fetch_sub(1, Ordering::SeqCst);
             record_cache_size(self.name, count.saturating_sub(1));
         }
     }
 
-    pub fn contains_key(&self, key: &K) -> bool {
-        self.state.items.contains_key(key)
+    pub async fn contains_key(&self, key: &K) -> bool {
+        self.state.items.contains_async(key).await
     }
 
     pub fn create_weak_remover(&self, key: K) -> impl FnOnce() {
@@ -348,7 +368,7 @@ impl<
         let name = self.name;
         move || {
             if let Some(state) = weak_state.upgrade() {
-                let removed = state.items.remove(&key).is_some();
+                let removed = state.items.remove_sync(&key).is_some();
                 if removed {
                     let count = state.count.fetch_sub(1, Ordering::SeqCst);
                     record_cache_size(name, count.saturating_sub(1));
@@ -357,91 +377,105 @@ impl<
         }
     }
 
-    fn evict(&self) {
+    async fn evict(&self) {
         record_cache_eviction(self.name, "full");
         match self.full_cache_eviction {
             FullCacheEvictionMode::None => {}
             FullCacheEvictionMode::LeastRecentlyUsed(count) => {
-                self.evict_least_recently_used(count);
+                self.evict_least_recently_used(count).await;
             }
         }
     }
 
-    fn background_evict(&self, mode: &BackgroundEvictionMode) {
+    async fn background_evict(&self, mode: &BackgroundEvictionMode) {
         record_cache_eviction(self.name, "background");
         match mode {
             BackgroundEvictionMode::None => {}
             BackgroundEvictionMode::LeastRecentlyUsed { count, .. } => {
-                self.evict_least_recently_used(*count)
+                self.evict_least_recently_used(*count).await
             }
-            BackgroundEvictionMode::OlderThan { ttl, .. } => self.evict_older_than(*ttl),
+            BackgroundEvictionMode::OlderThan { ttl, .. } => self.evict_older_than(*ttl).await,
         }
     }
 
-    fn evict_least_recently_used(&self, count: usize) {
-        let mut keys_to_keep: Vec<(K, u128)> = self
-            .state
+    async fn evict_least_recently_used(&self, count: usize) {
+        let mut keys_to_keep = vec![];
+        self.state
             .items
-            .iter()
-            .filter_map(|item| {
-                let k = item.key().clone();
-                match item.value() {
+            .iter_async(|key, value| {
+                match value {
                     Item::Cached { last_access, .. } => {
-                        Some((k, last_access.elapsed().as_millis()))
+                        keys_to_keep.push((key.clone(), last_access.elapsed().as_millis()))
                     }
-                    _ => None,
+                    _ => {}
                 }
+                true
             })
-            .collect();
+            .await;
+
         keys_to_keep.sort_by_key(|(_, v)| *v);
         keys_to_keep.truncate(keys_to_keep.len() - count);
         let keys_to_keep: HashSet<&K> = keys_to_keep.iter().map(|(k, _)| k).collect();
 
-        self.state.items.retain(|k, v| match v {
-            Item::Cached { .. } => keys_to_keep.contains(k),
-            Item::Pending { .. } => true,
-        });
+        self.state
+            .items
+            .retain_async(|k, v| match v {
+                Item::Cached { .. } => keys_to_keep.contains(k),
+                Item::Pending { .. } => true,
+            })
+            .await;
         self.state.count.store(keys_to_keep.len(), Ordering::SeqCst);
         record_cache_size(self.name, keys_to_keep.len());
     }
 
-    fn evict_older_than(&self, ttl: Duration) {
-        self.state.items.retain(|_, item| match item {
-            Item::Cached { last_access, .. } => last_access.elapsed() < ttl,
-            Item::Pending { .. } => true,
-        });
+    async fn evict_older_than(&self, ttl: Duration) {
+        self.state
+            .items
+            .retain_async(|_, item| match item {
+                Item::Cached { last_access, .. } => last_access.elapsed() < ttl,
+                Item::Pending { .. } => true,
+            })
+            .await;
         let count = self.state.items.len();
         self.state.count.store(count, Ordering::SeqCst);
         record_cache_size(self.name, count);
     }
 
-    fn update_last_access(&self, key: &K) {
-        self.state.items.entry(key.clone()).and_modify(|item| {
-            if let Item::Cached { last_access, .. } = item {
-                *last_access = Instant::now()
-            }
-        });
+    async fn update_last_access(&self, key: &K) {
+        self.state
+            .items
+            .update_async(key, |_, item| {
+                if let Item::Cached { last_access, .. } = item {
+                    *last_access = Instant::now()
+                }
+            })
+            .await;
     }
 
-    fn get_or_add_as_pending<F>(&self, key: &K, own_id: u64, f: F) -> Result<Item<V, PV, E>, E>
+    async fn get_or_add_as_pending<F>(
+        &self,
+        key: &K,
+        own_id: u64,
+        f: F,
+    ) -> Result<Item<V, PV, E>, E>
     where
-        F: FnOnce() -> Result<PV, E>,
+        F: FnOnce() -> PV,
     {
         Ok(self
             .state
             .items
-            .entry(key.clone())
-            .or_try_insert_with(|| {
-                f().map(|pending_value| {
-                    let (tx, _) = tokio::sync::broadcast::channel(1);
-                    Item::Pending {
-                        tx,
-                        id: own_id,
-                        pending_value,
-                    }
-                })
-            })?
-            .value()
+            .entry_async(key.clone())
+            .await
+            .or_insert_with(|| {
+                let pending_value = f();
+                let (tx, _) = tokio::sync::broadcast::channel(1);
+                Item::Pending {
+                    tx,
+                    id: own_id,
+                    pending_value,
+                }
+            })
+            .get()
             .clone())
     }
 }
