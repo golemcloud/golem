@@ -14,8 +14,8 @@
 
 // Builder for WitType, to be eventually upstreamed to `golem_wasm_rpc`
 
-use golem_wasm::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId};
-use golem_wasm::{NodeIndex, ResourceMode, WitType, WitTypeNode};
+use golem_wasm_rpc::golem_rpc_0_2_x::types::{NamedWitTypeNode, ResourceId};
+use golem_wasm_rpc::{NodeIndex, ResourceMode, WitType, WitTypeNode};
 
 pub trait WitTypeBuilderExtensions {
     fn builder() -> WitTypeBuilder;

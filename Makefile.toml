@@ -392,7 +392,7 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture --report-time $JUNIT_OPTS
+cargo test --workspace --lib --all-features --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
 cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
 '''
 
@@ -668,8 +668,8 @@ description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
     "publish-golem-wasm-ast",
-    "publish-golem-wasm-rpc-derive",
-    "publish-golem-wasm-rpc",
+    "publish-golem-wasm-derive",
+    "publish-golem-wasm",
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
