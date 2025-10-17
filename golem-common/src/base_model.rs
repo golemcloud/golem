@@ -105,9 +105,7 @@ impl golem_wasm_rpc::IntoValue for ShardId {
 
 pub type ComponentVersion = u64;
 
-// NOTE: this number is about the same size as the max length of a URL, which should be
-//       enough space for identity in practice
-static WORKER_ID_MAX_LENGTH: usize = 2048;
+static WORKER_ID_MAX_LENGTH: usize = 512;
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
