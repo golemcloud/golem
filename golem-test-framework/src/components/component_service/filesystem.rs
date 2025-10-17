@@ -206,16 +206,7 @@ impl FileSystemComponentService {
 
         let exports = raw_component_metadata.exports.to_vec();
 
-        let linear_memories: Vec<LinearMemory> = raw_component_metadata
-            .memories
-            .iter()
-            .cloned()
-            .map(|mem| LinearMemory {
-                initial: mem.mem_type.limits.min * 65536,
-                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
-            })
-            .collect::<Vec<_>>();
-
+        let linear_memories: Vec<LinearMemory> = raw_component_metadata.memories.clone();
         Ok((raw_component_metadata, linear_memories, exports))
     }
 

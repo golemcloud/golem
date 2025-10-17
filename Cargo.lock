@@ -4194,7 +4194,7 @@ dependencies = [
  "wasm-encoder 0.235.0",
  "wasm-metadata 0.235.0",
  "wasm-rquickjs",
- "wasmparser 0.235.0",
+ "wasmparser 0.229.0",
  "wasmtime",
  "wasmtime-wasi",
  "wax",
@@ -4283,6 +4283,7 @@ dependencies = [
  "url",
  "uuid",
  "wasm-wave",
+ "wasmparser 0.229.0",
  "wasmtime",
  "wasmtime-wasi",
  "wit-parser 0.235.0",
@@ -4680,6 +4681,7 @@ dependencies = [
  "uuid",
  "wasm-metadata 0.235.0",
  "wasm-wave",
+ "wasmparser 0.229.0",
  "wasmtime",
  "wasmtime-wasi",
  "wit-bindgen-rt 0.40.0",
@@ -12690,7 +12692,6 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap 2.11.0",
  "semver",
- "serde",
 ]
 
 [[package]]

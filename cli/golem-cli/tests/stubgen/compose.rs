@@ -24,7 +24,7 @@ use golem_cli::wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_cli::wasm_rpc_stubgen::wit_generate::UpdateCargoToml;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 use test_r::test;
 
@@ -48,9 +48,6 @@ async fn compose_with_single_stub() {
         .join("wasm32-wasip1")
         .join("debug")
         .join("caller_no_dep.wasm");
-
-    assert_is_component(&stub_wasm);
-    assert_is_component(&component_wasm);
 
     let dest_wasm = caller_dir.path().join("target/result.wasm");
     compose(
@@ -107,10 +104,4 @@ fn init_caller(name: &str) -> TempDir {
     .unwrap();
 
     temp_dir
-}
-
-fn assert_is_component(wasm_path: &Path) {
-    // TODO
-    // let _component: Component<DefaultAst> =
-    //     Component::from_bytes(&std::fs::read(wasm_path).unwrap()).unwrap();
 }

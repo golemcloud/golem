@@ -35,6 +35,7 @@ uuid = { workspace = true }
 url = { workspace = true, optional = true }
 wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
+wasmparser = { workspace = true , optional = true }
 wasm-wave = { workspace = true, optional = true }
 wasm-metadata = { workspace = true, optional = true }
 wit-component = { workspace = true, optional = true }
@@ -72,6 +73,7 @@ host = [
     "dep:serde_json",
     "dep:url",
     "dep:wasm-metadata",
+    "dep:wasmparser",
     "dep:wasm-wave",
     "dep:wasmtime",
     "dep:wasmtime-wasi",

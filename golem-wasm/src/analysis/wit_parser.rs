@@ -4,6 +4,7 @@ use crate::analysis::{
     AnalysedType, AnalysisFailure, AnalysisResult, AnalysisWarning,
     InterfaceCouldNotBeAnalyzedWarning, NameOptionTypePair, NameTypePair, TypeHandle,
 };
+use crate::metadata::Producers;
 use itertools::Itertools;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,6 +14,7 @@ use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use wasm_metadata::{Payload, Version};
+use wasmparser::KnownCustom;
 use wit_parser::decoding::DecodedWasm;
 use wit_parser::{
     Function, Handle, Interface, PackageName, Resolve, Type, TypeDef, TypeDefKind, WorldItem,
@@ -25,6 +27,8 @@ pub struct WitAnalysisContext {
     metadata_version: Option<Version>,
     resource_ids: Rc<RefCell<HashMap<TypeId, AnalysedResourceId>>>,
     warnings: Rc<RefCell<Vec<AnalysisWarning>>>,
+    linear_memories: Vec<wasmparser::MemoryType>,
+    producers: Vec<Producers>,
 }
 
 impl WitAnalysisContext {
@@ -36,12 +40,17 @@ impl WitAnalysisContext {
             AnalysisFailure::failed(format!("Failed to decode WASM component metadata: {err:#}"))
         })?;
         let metadata = payload.metadata();
+
+        let (linear_memories, producers) = Self::extract_additional_information(component_bytes)?;
+
         Ok(Self {
             wasm,
             metadata_name: metadata.name.clone(),
             metadata_version: metadata.version.clone(),
             resource_ids: Rc::new(RefCell::new(HashMap::new())),
             warnings: Rc::new(RefCell::new(Vec::new())),
+            linear_memories,
+            producers,
         })
     }
 
@@ -97,6 +106,15 @@ impl WitAnalysisContext {
 
             Ok(result)
         }
+    }
+
+    /// Gets all the linear memories defined in the component
+    pub fn linear_memories(&self) -> &[wasmparser::MemoryType] {
+        &self.linear_memories
+    }
+
+    pub fn producers(&self) -> &[Producers] {
+        &self.producers
     }
 
     /// Gets the component's root package name
@@ -200,6 +218,39 @@ impl WitAnalysisContext {
             name: package.name.interface_id(&interface_name),
             functions,
         })
+    }
+
+    fn extract_additional_information(
+        component_bytes: &[u8],
+    ) -> AnalysisResult<(Vec<wasmparser::MemoryType>, Vec<Producers>)> {
+        let mut memories = Vec::new();
+        let mut producers = Vec::new();
+
+        for payload in wasmparser::Parser::new(0).parse_all(component_bytes) {
+            let payload = payload.map_err(|err| AnalysisFailure::failed(err.to_string()))?;
+            match payload {
+                wasmparser::Payload::MemorySection(reader) => {
+                    for memory_type in reader {
+                        memories.push(
+                            memory_type.map_err(|err| AnalysisFailure::failed(err.to_string()))?,
+                        );
+                    }
+                }
+                wasmparser::Payload::CustomSection(reader) => {
+                    if let KnownCustom::Producers(_) = reader.as_known() {
+                        let parsed_producers = wasm_metadata::Producers::from_bytes(
+                            reader.data(),
+                            reader.data_offset(),
+                        )
+                        .map_err(|err| AnalysisFailure::failed(err.to_string()))?;
+                        producers.push(parsed_producers.into());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        Ok((memories, producers))
     }
 }
 

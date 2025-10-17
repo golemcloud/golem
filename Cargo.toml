@@ -320,7 +320,7 @@ wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
  wasm-rquickjs = "0.0.20"
 wasm-wave = "0.235"
-wasmparser = "0.235.0"
+wasmparser = "0.229.0"
 wasmprinter = "0.219.1"
 wasmtime = { version = "=33.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=33.0.0" }

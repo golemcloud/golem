@@ -21,11 +21,11 @@ mod invocation_context;
 mod plugins;
 mod worker;
 
-use rib::proto::golem::rib::Expr;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
+use rib::proto::golem::rib::Expr;
 use test_r::{tag_suite, test_dep};
 
 test_r::enable!();

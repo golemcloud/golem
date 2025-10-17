@@ -1312,8 +1312,7 @@ pub fn proto_val() {
     .into();
     let pv18: golem_wasm::protobuf::Val = Value::Enum(1).into();
     let pv19: golem_wasm::protobuf::Val = Value::Flags(vec![true, false, true]).into();
-    let pv20a: golem_wasm::protobuf::Val =
-        Value::Option(Some(Box::new(Value::Bool(true)))).into();
+    let pv20a: golem_wasm::protobuf::Val = Value::Option(Some(Box::new(Value::Bool(true)))).into();
     let pv20b: golem_wasm::protobuf::Val = Value::Option(None).into();
     let pv21a: golem_wasm::protobuf::Val =
         Value::Result(Ok(Some(Box::new(Value::Bool(true))))).into();

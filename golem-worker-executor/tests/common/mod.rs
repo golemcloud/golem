@@ -788,10 +788,7 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(
-        &mut self,
-        worker_id: golem_wasm::AgentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
 
@@ -1113,10 +1110,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(
-            &mut linker,
-            get_durable_ctx,
-        )?;
+        golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         Ok(linker)
     }
 }

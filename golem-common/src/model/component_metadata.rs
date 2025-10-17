@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
+use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
 #[derive(Clone, Default)]
 pub struct ComponentMetadata {
@@ -856,43 +857,21 @@ impl LinearMemory {
     const PAGE_SIZE: u64 = 65536;
 }
 
-// TODO -->
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Limits {
-    pub min: u64,
-    pub max: Option<u64>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MemType {
-    pub limits: Limits,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Mem {
-    pub mem_type: MemType,
-}
-
-impl From<Mem> for LinearMemory {
-    fn from(value: Mem) -> Self {
+impl From<wasmparser::MemoryType> for LinearMemory {
+    fn from(value: wasmparser::MemoryType) -> Self {
         Self {
-            initial: value.mem_type.limits.min * LinearMemory::PAGE_SIZE,
-            maximum: value
-                .mem_type
-                .limits
-                .max
-                .map(|m| m * LinearMemory::PAGE_SIZE),
+            initial: value.initial * LinearMemory::PAGE_SIZE,
+            maximum: value.maximum.map(|m| m * LinearMemory::PAGE_SIZE),
         }
     }
 }
-// <-- TODO
 
 /// Metadata of Component in terms of golem_wasm_ast types
 #[derive(Default)]
 pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<WasmAstProducers>,
-    pub memories: Vec<Mem>,
+    pub memories: Vec<LinearMemory>,
     pub binary_wit: Vec<u8>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
@@ -902,14 +881,6 @@ impl RawComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
     ) -> Result<RawComponentMetadata, ComponentProcessingError> {
-        // let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
-        //     .map_err(ComponentProcessingError::Parsing)?;
-
-        // let producers = component
-        //     .get_all_producers()
-        //     .into_iter()
-        //     .collect::<Vec<_>>();
-
         let wit_analysis =
             WitAnalysisContext::new(data).map_err(ComponentProcessingError::Analysis)?;
 
@@ -928,18 +899,19 @@ impl RawComponentMetadata {
         add_resource_drops(&mut exports);
         add_virtual_exports(&mut exports);
 
-        let exports = exports.into_iter().collect::<Vec<_>>();
+        let memories = wit_analysis
+            .linear_memories()
+            .iter()
+            .cloned()
+            .map(LinearMemory::from)
+            .collect();
 
-        // let memories: Vec<Mem> = analysis
-        //     .get_all_memories()
-        //     .map_err(ComponentProcessingError::Analysis)?
-        //     .into_iter()
-        //     .collect();
+        let producers = wit_analysis.producers().to_vec();
 
         Ok(RawComponentMetadata {
             exports,
-            producers: vec![], // TODO
-            memories: vec![],  // TODO
+            producers,
+            memories,
             binary_wit,
             root_package_name: root_package
                 .as_ref()
@@ -961,7 +933,7 @@ impl RawComponentMetadata {
 
         let exports = self.exports.into_iter().collect::<Vec<_>>();
 
-        let memories = self.memories.into_iter().map(LinearMemory::from).collect();
+        let memories = self.memories.into_iter().collect();
 
         ComponentMetadataInnerData {
             exports,
