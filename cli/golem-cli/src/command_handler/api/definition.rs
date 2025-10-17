@@ -606,7 +606,7 @@ impl ApiDefinitionCommandHandler {
             .iter()
             .map(|api_definition| {
                 format!(
-                    "- {} API definition {}@{}",
+                    "{} API definition {}@{}",
                     "Delete".log_color_warn(),
                     api_definition.id.as_str().log_color_highlight(),
                     api_definition.version.as_str().log_color_highlight()
@@ -614,7 +614,7 @@ impl ApiDefinitionCommandHandler {
             })
             .chain(to_redeploy.iter().map(|api_definition| {
                 format!(
-                    "- {} and {} API definition {}@{}",
+                    "{} and {} API definition {}@{}",
                     "Delete".log_color_warn(),
                     "redeploy".log_color_ok_highlight(),
                     api_definition.id.as_str().log_color_highlight(),

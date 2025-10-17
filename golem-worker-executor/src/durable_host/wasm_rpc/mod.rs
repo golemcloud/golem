@@ -1139,6 +1139,7 @@ pub async fn construct_wasm_rpc_resource<Ctx: WorkerCtx>(
     config: BTreeMap<String, String>,
 ) -> anyhow::Result<Resource<WasmRpcEntry>> {
     let span = create_rpc_connection_span(ctx, &remote_worker_id).await?;
+
     let stack = ctx
         .state
         .invocation_context
@@ -1268,16 +1269,19 @@ pub async fn create_rpc_connection_span<Ctx: InvocationContextManagement>(
     target_worker_id: &WorkerId,
 ) -> anyhow::Result<Arc<InvocationContextSpan>> {
     Ok(ctx
-        .start_span(&[
-            (
-                "name".to_string(),
-                AttributeValue::String("rpc-connection".to_string()),
-            ),
-            (
-                "target_worker_id".to_string(),
-                AttributeValue::String(target_worker_id.to_string()),
-            ),
-        ])
+        .start_span(
+            &[
+                (
+                    "name".to_string(),
+                    AttributeValue::String("rpc-connection".to_string()),
+                ),
+                (
+                    "target_worker_id".to_string(),
+                    AttributeValue::String(target_worker_id.to_string()),
+                ),
+            ],
+            false,
+        )
         .await?)
 }
 

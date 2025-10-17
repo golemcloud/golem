@@ -259,7 +259,7 @@ impl ApiDeploymentCommandHandler {
             .iter()
             .map(|api_deployment| {
                 format!(
-                    "- {} deployment {}",
+                    "{} deployment {}",
                     "Delete".log_color_warn(),
                     HttpApiDeploymentSite {
                         host: api_deployment.site.host.clone(),
@@ -271,7 +271,7 @@ impl ApiDeploymentCommandHandler {
             })
             .chain(to_redeploy.iter().map(|api_deployment| {
                 format!(
-                    "- {} and {} deployment {}",
+                    "{} and {} deployment {}",
                     "Delete".log_color_warn(),
                     "redeploy".log_color_ok_highlight(),
                     HttpApiDeploymentSite {
