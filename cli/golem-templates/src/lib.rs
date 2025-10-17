@@ -37,11 +37,11 @@ static WIT: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/wit/deps");
 static APP_MANIFEST_HEADER: &str = indoc! {"
 # Schema for IDEA:
 # $schema: https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
-# Schema for vscode-yaml
+# Schema for vscode-yaml:
 # yaml-language-server: $schema=https://schema.golem.cloud/app/golem/1.3.0/golem.schema.json
 
-# See https://learn.golem.cloud/docs/app-manifest#field-reference for field reference
-# For creating APIs see https://learn.golem.cloud/invoke/making-custom-apis
+# Field reference: https://learn.golem.cloud/app-manifest#field-reference
+# Creating HTTP APIs: https://learn.golem.cloud/invoke/making-custom-apis
 "};
 
 static APP_MANIFEST_COMPONENT_HINTS_TEMPLATE: &str = indoc! {""};

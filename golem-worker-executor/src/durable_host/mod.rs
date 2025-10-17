@@ -1603,10 +1603,13 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
         let span_id = self.state.current_span_id.clone();
         let span = self.start_child_span(&span_id, initial_attributes).await?;
-        self.state.current_span_id = span.span_id().clone();
+        if activate {
+            self.state.current_span_id = span.span_id().clone();
+        }
         Ok(span)
     }
 
@@ -1625,7 +1628,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         let span = if is_live {
             self.state
                 .invocation_context
-                .start_span(current_span_id, None)
+                .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else if let Some((_, entry)) = self
             .state
@@ -1643,14 +1646,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             let span = InvocationContextSpan::local()
                 .with_span_id(span_id)
                 .with_start(timestamp)
-                .with_parent(self.state.invocation_context.get(current_span_id).unwrap())
+                .with_parent(self.state.invocation_context.get(parent).unwrap())
                 .build();
             self.state.invocation_context.add_span(span.clone());
             span
         } else {
             self.state
                 .invocation_context
-                .start_span(current_span_id, None)
+                .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         };
 
@@ -1681,7 +1684,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::start_span(
                     span.start().unwrap_or(Timestamp::now_utc()),
                     span.span_id().clone(),
-                    Some(current_span_id.clone()),
+                    Some(parent.clone()),
                     span.linked_context().map(|link| link.span_id().clone()),
                     HashMap::from_iter(initial_attributes.iter().cloned()),
                 ))
@@ -2180,13 +2183,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         _this: &T,
         _project_id: &ProjectId,
         _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _worker_id: &WorkerId,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }

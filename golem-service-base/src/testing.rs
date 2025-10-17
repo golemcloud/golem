@@ -49,6 +49,9 @@ pub struct LocalFileSystemComponentMetadata {
     pub env: HashMap<String, String>,
 
     pub agent_types: Vec<AgentType>,
+
+    pub root_package_name: Option<String>,
+    pub root_package_version: Option<String>,
 }
 
 impl From<LocalFileSystemComponentMetadata> for Component {
@@ -68,8 +71,8 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.exports,
                 value.memories,
                 value.dynamic_linking,
-                None,
-                None,
+                value.root_package_name,
+                value.root_package_version,
                 value.agent_types,
             ),
             created_at: Default::default(),

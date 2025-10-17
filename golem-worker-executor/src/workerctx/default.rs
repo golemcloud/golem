@@ -345,13 +345,6 @@ impl ExternalOperations<Context> for Context {
             .await
     }
 
-    async fn on_worker_deleted<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
@@ -552,8 +545,11 @@ impl InvocationContextManagement for Context {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

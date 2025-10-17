@@ -375,12 +375,6 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError>;
 
-    /// Callback called when a worker is deleted
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError>;
-
     /// Callback called when the executor's shard assignment has been changed
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
@@ -417,7 +411,9 @@ pub trait InvocationContextManagement {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError>;
+
     async fn start_child_span(
         &mut self,
         parent: &SpanId,

@@ -259,6 +259,7 @@ rustc-hash = "2.1.1"
 rustls = { version = "0.23.23" }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
+scc = "3.3.2"
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.219"

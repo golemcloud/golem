@@ -146,13 +146,6 @@ impl ExternalOperations<Self> for DebugContext {
             .await
     }
 
-    async fn on_worker_deleted<This: HasAll<Self> + Send + Sync>(
-        this: &This,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
         this: &This,
     ) -> Result<(), Error> {
@@ -465,8 +458,11 @@ impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

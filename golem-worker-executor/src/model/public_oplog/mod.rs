@@ -1860,9 +1860,25 @@ fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
                 inherited,
             } => {
                 let linked_context = if let Some(linked_context) = linked_context {
-                    let id = result.len() as u64;
-                    let encoded_linked_context = encode_span_data(linked_context);
+                    let mut encoded_linked_context = encode_span_data(linked_context);
+
+                    // Before merging encoded_linked_context into result, we need to adjust the indices in it
+                    for spans in encoded_linked_context.iter_mut() {
+                        for span in spans.iter_mut() {
+                            match span {
+                                PublicSpanData::LocalSpan(local_span) => {
+                                    if let Some(idx) = local_span.linked_context.as_mut() {
+                                        *idx += (result.len() as u64) + 1;
+                                    }
+                                }
+                                PublicSpanData::ExternalSpan(_) => {}
+                            }
+                        }
+                    }
+
                     result.extend(encoded_linked_context);
+
+                    let id = result.len() as u64 + 1;
                     Some(id)
                 } else {
                     None

@@ -157,6 +157,8 @@ impl FileSystemComponentService {
             wasm_filename,
             env: env.clone(),
             agent_types,
+            root_package_name: raw_component_metadata.root_package_name.clone(),
+            root_package_version: raw_component_metadata.root_package_version.clone(),
         };
         write_metadata_to_file(
             metadata,
