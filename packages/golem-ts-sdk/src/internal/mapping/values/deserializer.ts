@@ -295,7 +295,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               return Result.err(deserialize(value.value.err, inbuiltErrType));
             }
 
-            if (value.value.ok && analysedType.resultType.okEmptyType) {
+            if ('ok' in value.value && analysedType.resultType.okEmptyType) {
               switch (analysedType.resultType.okEmptyType) {
                 case 'null':
                   return Result.ok(null);
@@ -306,7 +306,7 @@ export function deserialize(value: Value, analysedType: AnalysedType): any {
               }
             }
 
-            if (value.value.err && analysedType.resultType.errEmptyType) {
+            if ('err' in value.value && analysedType.resultType.errEmptyType) {
               switch (analysedType.resultType.errEmptyType) {
                 case 'null':
                   return Result.err(null);
