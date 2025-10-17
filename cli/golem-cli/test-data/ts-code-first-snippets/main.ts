@@ -1,4 +1,4 @@
-import {BaseAgent, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, Multimodal} from '@golemcloud/golem-ts-sdk';
+import {BaseAgent, Result, agent, UnstructuredText, UnstructuredBinary, WithRemoteMethods, Multimodal} from '@golemcloud/golem-ts-sdk';
 
 import * as Types from './model';
 import {
@@ -260,6 +260,20 @@ class FooAgent extends BaseAgent {
         return await this.barAgent.funResultLike(eitherOneOptional);
     }
 
+    // TODO: accept result type
+    async funBuiltinResultVS(result: string | undefined): Promise<Result<void, string>> {
+        return await this.barAgent.funBuiltinResultVS(result);
+    }
+
+    // TODO: accept result type
+    async funBuiltinResultSV(result: string | undefined): Promise<Result<string, void>> {
+        return await this.barAgent.funBuiltinResultSV(result);
+    }
+
+    // TODO: accept result type
+    async funBuiltinResultSN(result: string | number): Promise<Result<string, number>> {
+        return await this.barAgent.funBuiltinResultSN(result);
+    }
 
     async funNoReturn(text: string) {
         return await this.barAgent.funNoReturn(text);
@@ -423,6 +437,33 @@ class BarAgent extends BaseAgent {
 
     async funResultLike(eitherOneOptional: ResultLike): Promise<ResultLike> {
         return eitherOneOptional
+    }
+
+    // TODO: accept result type
+    funBuiltinResultVS(result: string | undefined): Result<void, string> {
+        if (result) {
+            return Result.err(result);
+        } else {
+            return Result.ok(undefined);
+        }
+    }
+
+    // TODO: accept result type
+    funBuiltinResultSV(result: string | undefined): Result<string, void> {
+        if (result) {
+            return Result.ok(result);
+        } else {
+            return Result.err(undefined);
+        }
+    }
+
+    // TODO: accept result type
+    funBuiltinResultSN(result: string | number): Result<string, number> {
+        if (typeof result == "string") {
+            return Result.ok(result);
+        } else {
+            return Result.err(result);
+        }
     }
 
     async funNoReturn(text: string) {

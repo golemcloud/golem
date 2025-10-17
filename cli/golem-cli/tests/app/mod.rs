@@ -1093,6 +1093,16 @@ async fn test_ts_code_first_complex() {
     )
     .await;
 
+    // Functions using the builtin result type
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"some("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"none"#]).await;
+
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"none"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"some("yay")"#]).await;
+
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case1("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case2(42)"#]).await;
+
     // TODO: fix root cause for this
     // An arrow function
     // run_and_assert(&ctx, "fun-arrow-sync", &[r#""foo""#]).await;
