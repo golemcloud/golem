@@ -77,12 +77,12 @@ run_task = [
 private = true
 script_runner = "@duckscript"
 script = """
-rm -r wasm-rpc/wit/deps
-mkdir wasm-rpc/wit/deps
-cp wit/deps/io wasm-rpc/wit/deps
-cp wit/deps/clocks wasm-rpc/wit/deps
-cp wit/deps/golem-1.x wasm-rpc/wit/deps
-cp wit/deps/golem-rpc wasm-rpc/wit/deps
+rm -r golem-wasm/wit/deps
+mkdir golem-wasm/wit/deps
+cp wit/deps/io golem-wasm/wit/deps
+cp wit/deps/clocks golem-wasm/wit/deps
+cp wit/deps/golem-1.x golem-wasm/wit/deps
+cp wit/deps/golem-rpc golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]
@@ -194,7 +194,7 @@ end
 private = true
 script_runner = "@duckscript"
 script = """
-rm -rf wasm-rpc/wit/deps
+rm -rf golem-wasm/wit/deps
 rm -rf golem-common/wit/deps
 rm -rf cli/golem-cli/wit/deps
 """
