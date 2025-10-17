@@ -104,18 +104,18 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
             .map(|agent_id| agent_id.to_string())
             .unwrap_or(raw_worker_name);
 
-        WorkerId::validate_worker_name(&worker_name)?;
+        let worker_id = WorkerId::from_agent_id_literal(
+            component.versioned_component_id.component_id.clone(),
+            &worker_name,
+            &component.metadata,
+        )?;
+
         debug!(
             component_id = resolved_worker_request.component_id.to_string(),
             function_name = resolved_worker_request.function_name,
             worker_name = worker_name,
             "Executing invocation",
         );
-
-        let worker_id = WorkerId {
-            component_id: resolved_worker_request.component_id.clone(),
-            worker_name,
-        };
 
         let type_annotated_value = self
             .worker_service

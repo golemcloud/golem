@@ -770,7 +770,7 @@ impl WorkerGrpcApi {
 
         let latest_component = self
             .component_service
-            .get_latest(&component_id, &auth)
+            .get_latest_by_id(&component_id, &auth)
             .await
             .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|_| GrpcWorkerError {
