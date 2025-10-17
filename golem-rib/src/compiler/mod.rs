@@ -23,7 +23,7 @@ use crate::{
     ComponentDependencies, ComponentDependencyKey, CustomInstanceSpec, Expr,
     GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo,
 };
-use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
+use golem_wasm::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 use std::error::Error;
 use std::fmt::Display;
 
@@ -913,10 +913,10 @@ mod compiler_error_tests {
 
     mod test_utils {
         use crate::{ComponentDependency, ComponentDependencyKey};
-        use golem_wasm_ast::analysis::analysed_type::{
+        use golem_wasm::analysis::analysed_type::{
             case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
         };
-        use golem_wasm_ast::analysis::{
+        use golem_wasm::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
         };

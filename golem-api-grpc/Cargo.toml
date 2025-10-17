@@ -13,8 +13,8 @@ license-file = "../LICENSE"
 harness = false
 
 [dependencies]
-golem-wasm-ast = { workspace = true, features = ["protobuf"] }
-golem-wasm-rpc = { workspace = true, features = ["host-bindings", "protobuf"] }
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true }
 
 bincode = { workspace = true }
 prost = { workspace = true }

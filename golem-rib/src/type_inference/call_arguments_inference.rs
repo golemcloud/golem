@@ -63,7 +63,7 @@ mod internal {
         ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod,
         FunctionCallError, FunctionName, InferredType, TypeInternal, TypeMismatchError,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use std::fmt::Display;
 
     pub(crate) fn resolve_call_argument_types(
@@ -462,7 +462,7 @@ mod function_parameters_inference_tests {
         ComponentDependencies, ComponentDependencyKey, Expr, InferredType, ParsedFunctionSite,
     };
     use bigdecimal::BigDecimal;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use uuid::Uuid;

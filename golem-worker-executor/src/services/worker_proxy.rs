@@ -34,7 +34,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_rpc::{Value, ValueAndType, WitValue};
+use golem_wasm::{Value, ValueAndType, WitValue};
 use http::Uri;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;

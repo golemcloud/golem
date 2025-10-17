@@ -15,9 +15,8 @@ include = ["src/**/*", "Cargo.toml", "build.rs", "openapi/**/*"]
 harness = false
 
 [dependencies]
-golem-common = { workspace = true, features = ["model", "tokio"] }
-golem-wasm-ast = { workspace = true, features = ["analysis"] }
-golem-wasm-rpc = { workspace = true, default-features = true }
+golem-common = { workspace = true }
+golem-wasm = { workspace = true, default-features = true }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }

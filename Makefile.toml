@@ -63,7 +63,7 @@ description = "Fetches the WIT dependencies based on wit/deps.toml"
 run_task = [
     { name = [
         "remove-wit-deps",
-        "wit-wasm-rpc",
+        "wit-golem-wasm",
         "wit-golem-common",
         "wit-golem-cli",
         "wit-test-components",
@@ -73,16 +73,16 @@ run_task = [
     ] },
 ]
 
-[tasks.wit-wasm-rpc]
+[tasks.wit-golem-wasm]
 private = true
 script_runner = "@duckscript"
 script = """
-rm -r wasm-rpc/wit/deps
-mkdir wasm-rpc/wit/deps
-cp wit/deps/io wasm-rpc/wit/deps
-cp wit/deps/clocks wasm-rpc/wit/deps
-cp wit/deps/golem-1.x wasm-rpc/wit/deps
-cp wit/deps/golem-rpc wasm-rpc/wit/deps
+rm -r golem-wasm/wit/deps
+mkdir golem-wasm/wit/deps
+cp wit/deps/io golem-wasm/wit/deps
+cp wit/deps/clocks golem-wasm/wit/deps
+cp wit/deps/golem-1.x golem-wasm/wit/deps
+cp wit/deps/golem-rpc golem-wasm/wit/deps
 """
 
 [tasks.wit-golem-common]
@@ -194,14 +194,14 @@ end
 private = true
 script_runner = "@duckscript"
 script = """
-rm -rf wasm-rpc/wit/deps
+rm -rf golem-wasm/wit/deps
 rm -rf golem-common/wit/deps
 rm -rf cli/golem-cli/wit/deps
 """
 
 [tasks.diff-wit]
 private = true
-script = "git diff --exit-code wit wasm-rpc/wit"
+script = "git diff --exit-code wit golem-wasm/wit"
 
 [tasks.check-wit]
 run_task = [{ name = ["remove-wit-deps", "wit", "diff-wit"] }]
@@ -392,8 +392,7 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo test --workspace --lib --all-features --exclude golem-wasm-rpc-derive -- --nocapture --report-time $JUNIT_OPTS
-cargo test -p golem-wasm-ast --tests --all-features -- --nocapture --report-time $JUNIT_OPTS
+cargo test --workspace --lib --all-features --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]
@@ -667,9 +666,8 @@ script = [
 description = "Publishes packages to crates.io"
 dependencies = [
     "build-release",
-    "publish-golem-wasm-ast",
-    "publish-golem-wasm-rpc-derive",
-    "publish-golem-wasm-rpc",
+    "publish-golem-wasm-derive",
+    "publish-golem-wasm",
     "publish-golem-api-grpc",
     "publish-golem-rib",
     "publish-golem-common",
@@ -707,37 +705,25 @@ foreach ($file in $cargoFiles)
 }
 '''
 
-[tasks.publish-golem-wasm-ast]
-description = "Publishes golem-wasm-ast package to crates.io"
+[tasks.publish-golem-wasm-derive]
+description = "Publishes golem-wasm-derive package to crates.io"
 command = "cargo"
 args = [
     "publish",
     "-p",
-    "golem-wasm-ast",
+    "golem-wasm-derive",
     "--all-features",
     "--allow-dirty",
     "--no-verify",
 ]
 
-[tasks.publish-golem-wasm-rpc-derive]
-description = "Publishes golem-wasm-rpc-derive package to crates.io"
+[tasks.publish-golem-wasm]
+description = "Publishes golem-wasm package to crates.io"
 command = "cargo"
 args = [
     "publish",
     "-p",
-    "golem-wasm-rpc-derive",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-wasm-rpc]
-description = "Publishes golem-wasm-rpc package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-wasm-rpc",
+    "golem-wasm",
     "--all-features",
     "--allow-dirty",
     "--no-verify",

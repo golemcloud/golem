@@ -23,8 +23,8 @@ use std::str::FromStr;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct ComponentOwner {
     pub project_id: ProjectId,
     pub account_id: AccountId,
@@ -56,9 +56,8 @@ impl FromStr for ComponentOwner {
     Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
 )]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-
+#[derive(poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct VersionedComponentId {
     pub component_id: ComponentId,
     pub version: ComponentVersion,
@@ -70,7 +69,6 @@ impl Display for VersionedComponentId {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::component::VersionedComponentId;
 

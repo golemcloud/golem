@@ -48,9 +48,9 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::protobuf::Val as ProtoVal;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::analysis::AnalysedFunctionResult;
+use golem_wasm::protobuf::Val as ProtoVal;
+use golem_wasm::ValueAndType;
 use std::collections::BTreeMap;
 use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
@@ -634,7 +634,7 @@ impl WorkerService for WorkerServiceDefault {
         let mut result = Vec::new();
         for param in params {
             let val = param.value;
-            result.push(golem_wasm_rpc::protobuf::Val::from(val));
+            result.push(golem_wasm::protobuf::Val::from(val));
         }
         Ok(result)
     }

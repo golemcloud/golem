@@ -786,7 +786,7 @@ mod test {
     use golem_common::read_only_lock;
     use golem_common::serialization::serialize;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use golem_wasm_rpc::Value;
+    use golem_wasm::Value;
     use pretty_assertions::assert_eq;
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;

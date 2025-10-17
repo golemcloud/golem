@@ -23,9 +23,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPluginScope {
     pub component_id: ComponentId,
@@ -39,9 +38,8 @@ pub struct PluginInstallation {
     pub parameters: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PluginInstallationAction {
     Install(PluginInstallationCreation),
@@ -49,17 +47,15 @@ pub enum PluginInstallationAction {
     Uninstall(PluginUninstallation),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginUninstallation {
     pub installation_id: PluginInstallationId,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationCreation {
     pub name: String,
@@ -69,18 +65,16 @@ pub struct PluginInstallationCreation {
     pub parameters: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationUpdate {
     pub priority: i32,
     pub parameters: HashMap<String, String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationUpdateWithId {
     pub installation_id: PluginInstallationId,
@@ -100,7 +94,6 @@ pub trait PluginInstallationTarget:
     + Sync
     + 'static
 {
-    #[cfg(feature = "sql")]
     type Row: crate::repo::RowMeta<sqlx::Sqlite>
         + crate::repo::RowMeta<sqlx::Postgres>
         + for<'r> sqlx::FromRow<'r, sqlx::sqlite::SqliteRow>
@@ -114,13 +107,11 @@ pub trait PluginInstallationTarget:
         + Unpin
         + 'static;
 
-    #[cfg(feature = "sql")]
     fn table_name() -> &'static str;
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginOwner {
     pub account_id: AccountId,
@@ -150,9 +141,8 @@ impl From<ComponentOwner> for PluginOwner {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginDefinition {
     pub id: PluginId,
@@ -167,8 +157,7 @@ pub struct PluginDefinition {
     pub deleted: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Enum)]
 #[repr(i8)]
 pub enum PluginType {
     ComponentTransformer = 0,
@@ -177,9 +166,8 @@ pub enum PluginType {
     App = 3,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum PluginTypeSpecificDefinition {
     ComponentTransformer(ComponentTransformerDefinition),
@@ -201,9 +189,8 @@ impl PluginTypeSpecificDefinition {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentTransformerDefinition {
     pub provided_wit_package: Option<String>,
@@ -212,38 +199,33 @@ pub struct ComponentTransformerDefinition {
     pub transform_url: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct OplogProcessorDefinition {
     pub component_id: ComponentId,
     pub component_version: ComponentVersion,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::NewType)]
 pub struct PluginWasmFileKey(pub String);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryPluginDefinition {
     pub blob_storage_key: PluginWasmFileKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AppPluginDefinition {
     pub blob_storage_key: PluginWasmFileKey,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPluginScope {
     pub project_id: ProjectId,
@@ -251,8 +233,8 @@ pub struct ProjectPluginScope {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 pub enum PluginScope {
     Global(Empty),
     Component(ComponentPluginScope),
@@ -297,9 +279,8 @@ impl Display for PluginScope {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentPluginInstallationTarget {
     pub component_id: ComponentId,
@@ -313,16 +294,13 @@ impl Display for ComponentPluginInstallationTarget {
 }
 
 impl PluginInstallationTarget for ComponentPluginInstallationTarget {
-    #[cfg(feature = "sql")]
     type Row = crate::repo::ComponentPluginInstallationRow;
 
-    #[cfg(feature = "sql")]
     fn table_name() -> &'static str {
         "component_plugin_installation"
     }
 }
 
-#[cfg(feature = "poem")]
 mod poem {
     use super::{ComponentId, PluginScope, ProjectId};
     use poem::web::Field;
@@ -366,7 +344,6 @@ mod poem {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use super::{
         AppPluginDefinition, ComponentTransformerDefinition, LibraryPluginDefinition,

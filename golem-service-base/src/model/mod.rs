@@ -27,9 +27,9 @@ use golem_common::model::{
     ComponentType, ComponentVersion, InitialComponentFile, ScanCursor, Timestamp, WorkerFilter,
     WorkerId,
 };
-use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
-use golem_wasm_rpc::ValueAndType;
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::json::OptionallyValueAndTypeJson;
+use golem_wasm::ValueAndType;
+use golem_wasm_derive::IntoValue;
 use poem_openapi::{Enum, NewType, Object, Union};
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;

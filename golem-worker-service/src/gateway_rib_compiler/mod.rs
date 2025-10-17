@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::component_metadata::ComponentMetadata;
-use golem_wasm_rpc::IntoValue;
+use golem_wasm::IntoValue;
 use rib::{
     CompilerOutput, ComponentDependency, ComponentDependencyKey, Expr, GlobalVariableTypeSpec,
     InferredType, InterfaceName, Path, RibCompilationError, RibCompiler, RibCompilerConfig,

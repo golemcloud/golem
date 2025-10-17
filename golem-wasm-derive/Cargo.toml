@@ -1,0 +1,24 @@
+[package]
+name = "golem-wasm-derive"
+version = "0.0.0"
+edition = "2021"
+
+homepage = "https://golem.cloud"
+repository = "https://github.com/golemcloud/golem"
+description = "Golem WASM related derivation macros"
+
+license-file = "../LICENSE"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+heck = { workspace = true }
+proc-macro2 = { workspace = true }
+quote = { workspace = true }
+syn = { workspace = true, features = ["full"] }
+
+[dev-dependencies]
+test-r = { workspace = true }
+
+[build-dependencies]

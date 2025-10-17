@@ -10,33 +10,34 @@ description = "Parser for Golem's Rib language"
 license-file = "../LICENSE"
 
 [features]
-default = ["json_in_errors", "protobuf", "poem"]
-json_in_errors = ["protobuf", "golem-wasm-rpc/json"]
-protobuf = [
-    "dep:golem-api-grpc",
-    "golem-wasm-ast/protobuf",
-    "golem-wasm-rpc/protobuf",
-]
+default = ["json_in_errors", "poem"]
+json_in_errors = []
 poem = [
     "dep:poem-openapi",
-    "golem-wasm-ast/poem_openapi",
-    "golem-wasm-rpc/poem_openapi",
 ]
 
 [dependencies]
-golem-api-grpc = { workspace = true, optional = true } # TODO: remove this dependency
-golem-wasm-ast = { workspace = true, features = ["analysis", "bincode"] }
-golem-wasm-rpc = { workspace = true, features = ["bincode", "typeinfo", "text"] }
+golem-wasm = { workspace = true }
 
 async-trait = { workspace = true }
 bigdecimal = { workspace = true }
 bincode = { workspace = true }
 combine = { workspace = true }
 poem-openapi = { workspace = true, optional = true }
+prost = { workspace = true }
+prost-types = { workspace = true }
 semver = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+tonic = { workspace = true }
+tonic-prost = { workspace = true }
 uuid = { workspace = true }
+
+[build-dependencies]
+cargo_metadata = { workspace = true }
+miette = { workspace = true }
+protox = { workspace = true }
+tonic-prost-build = { workspace = true }
 
 [dev-dependencies]
 test-r = { workspace = true }

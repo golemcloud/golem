@@ -14,8 +14,8 @@
 
 use crate::{ComponentDependencyKey, InstructionId};
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::ValueAndType;
 
 #[async_trait]
 pub trait RibComponentFunctionInvoke {

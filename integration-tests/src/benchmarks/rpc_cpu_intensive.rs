@@ -14,7 +14,7 @@ use std::collections::HashMap;
 // See the License for the specific language governing permissions and
 // limitations under the License.
 use async_trait::async_trait;
-use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
+use golem_wasm::{IntoValueAndType, ValueAndType};
 use tokio::task::JoinSet;
 
 use crate::benchmarks::{

@@ -20,9 +20,9 @@ use async_trait::async_trait;
 use golem_common::model::{ComponentId, WorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{Value, ValueAndType};
 use rib::{
     ComponentDependency, ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn,
     EvaluatedWorkerName, InstructionId, RibCompilerConfig, RibComponentFunctionInvoke,

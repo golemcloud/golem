@@ -465,21 +465,18 @@ impl ParsedFunctionName {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
     use crate::{
         DynamicParsedFunctionName, DynamicParsedFunctionReference, ParsedFunctionName,
         ParsedFunctionReference, ParsedFunctionSite, SemVer,
     };
-    use golem_api_grpc::proto::golem::rib::dynamic_parsed_function_reference::FunctionReference as ProtoDynamicFunctionReference;
     use semver::{BuildMetadata, Prerelease};
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::SemVersion> for SemVer {
+    impl TryFrom<crate::proto::golem::rib::SemVersion> for SemVer {
         type Error = String;
 
-        fn try_from(
-            value: golem_api_grpc::proto::golem::rib::SemVersion,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(value: crate::proto::golem::rib::SemVersion) -> Result<Self, Self::Error> {
             Ok(SemVer(semver::Version {
                 major: value.major,
                 minor: value.minor,
@@ -491,9 +488,9 @@ mod protobuf {
         }
     }
 
-    impl From<SemVer> for golem_api_grpc::proto::golem::rib::SemVersion {
+    impl From<SemVer> for crate::proto::golem::rib::SemVersion {
         fn from(value: SemVer) -> Self {
-            golem_api_grpc::proto::golem::rib::SemVersion {
+            crate::proto::golem::rib::SemVersion {
                 major: value.0.major,
                 minor: value.0.minor,
                 patch: value.0.patch,
@@ -503,22 +500,20 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionSite> for ParsedFunctionSite {
+    impl TryFrom<crate::proto::golem::rib::ParsedFunctionSite> for ParsedFunctionSite {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::ParsedFunctionSite,
+            value: crate::proto::golem::rib::ParsedFunctionSite,
         ) -> Result<Self, Self::Error> {
             let site = value.site.ok_or("Missing site".to_string())?;
             match site {
-                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(_) => {
-                    Ok(Self::Global)
-                }
-                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
-                    golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
+                crate::proto::golem::rib::parsed_function_site::Site::Global(_) => Ok(Self::Global),
+                crate::proto::golem::rib::parsed_function_site::Site::Interface(
+                    crate::proto::golem::rib::InterfaceFunctionSite { name },
                 ) => Ok(Self::Interface { name }),
-                golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
-                    golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
+                crate::proto::golem::rib::parsed_function_site::Site::PackageInterface(
+                    crate::proto::golem::rib::PackageInterfaceFunctionSite {
                         namespace,
                         package,
                         interface,
@@ -541,17 +536,17 @@ mod protobuf {
         }
     }
 
-    impl From<ParsedFunctionSite> for golem_api_grpc::proto::golem::rib::ParsedFunctionSite {
+    impl From<ParsedFunctionSite> for crate::proto::golem::rib::ParsedFunctionSite {
         fn from(value: ParsedFunctionSite) -> Self {
             let site = match value {
                 ParsedFunctionSite::Global => {
-                    golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Global(
-                        golem_api_grpc::proto::golem::rib::GlobalFunctionSite {},
+                    crate::proto::golem::rib::parsed_function_site::Site::Global(
+                        crate::proto::golem::rib::GlobalFunctionSite {},
                     )
                 }
                 ParsedFunctionSite::Interface { name } => {
-                    golem_api_grpc::proto::golem::rib::parsed_function_site::Site::Interface(
-                        golem_api_grpc::proto::golem::rib::InterfaceFunctionSite { name },
+                    crate::proto::golem::rib::parsed_function_site::Site::Interface(
+                        crate::proto::golem::rib::InterfaceFunctionSite { name },
                     )
                 }
                 ParsedFunctionSite::PackagedInterface {
@@ -559,56 +554,72 @@ mod protobuf {
                     package,
                     interface,
                     version,
-                } => {
-                    golem_api_grpc::proto::golem::rib::parsed_function_site::Site::PackageInterface(
-                        golem_api_grpc::proto::golem::rib::PackageInterfaceFunctionSite {
-                            namespace,
-                            package,
-                            interface,
-                            version: version.map(|v| v.into()),
-                        },
-                    )
-                }
+                } => crate::proto::golem::rib::parsed_function_site::Site::PackageInterface(
+                    crate::proto::golem::rib::PackageInterfaceFunctionSite {
+                        namespace,
+                        package,
+                        interface,
+                        version: version.map(|v| v.into()),
+                    },
+                ),
             };
-            golem_api_grpc::proto::golem::rib::ParsedFunctionSite { site: Some(site) }
+            crate::proto::golem::rib::ParsedFunctionSite { site: Some(site) }
         }
     }
 
     impl From<DynamicParsedFunctionReference>
-        for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference
+        for crate::proto::golem::rib::DynamicParsedFunctionReference
     {
         fn from(value: DynamicParsedFunctionReference) -> Self {
             let function = match value {
-                DynamicParsedFunctionReference::Function { function } => ProtoDynamicFunctionReference::Function(
-                    golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
-                ),
-                DynamicParsedFunctionReference::RawResourceConstructor { resource } => ProtoDynamicFunctionReference::RawResourceConstructor(
-                    golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference { resource },
-                ),
-                DynamicParsedFunctionReference::RawResourceMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceMethod(
-                    golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference { resource, method },
-                ),
-                DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => ProtoDynamicFunctionReference::RawResourceStaticMethod(
-                    golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference { resource, method },
-                ),
-                DynamicParsedFunctionReference::RawResourceDrop { resource } => ProtoDynamicFunctionReference::RawResourceDrop(
-                    golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
-                ),
+                DynamicParsedFunctionReference::Function { function } => {
+                    ProtoDynamicFunctionReference::Function(
+                        crate::proto::golem::rib::FunctionFunctionReference { function },
+                    )
+                }
+                DynamicParsedFunctionReference::RawResourceConstructor { resource } => {
+                    ProtoDynamicFunctionReference::RawResourceConstructor(
+                        crate::proto::golem::rib::RawResourceConstructorFunctionReference {
+                            resource,
+                        },
+                    )
+                }
+                DynamicParsedFunctionReference::RawResourceMethod { resource, method } => {
+                    ProtoDynamicFunctionReference::RawResourceMethod(
+                        crate::proto::golem::rib::RawResourceMethodFunctionReference {
+                            resource,
+                            method,
+                        },
+                    )
+                }
+                DynamicParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
+                    ProtoDynamicFunctionReference::RawResourceStaticMethod(
+                        crate::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                            resource,
+                            method,
+                        },
+                    )
+                }
+                DynamicParsedFunctionReference::RawResourceDrop { resource } => {
+                    ProtoDynamicFunctionReference::RawResourceDrop(
+                        crate::proto::golem::rib::RawResourceDropFunctionReference { resource },
+                    )
+                }
             };
 
-            golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference {
+            crate::proto::golem::rib::DynamicParsedFunctionReference {
                 function_reference: Some(function),
             }
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference>
+    impl TryFrom<crate::proto::golem::rib::DynamicParsedFunctionReference>
         for DynamicParsedFunctionReference
     {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionReference,
+            value: crate::proto::golem::rib::DynamicParsedFunctionReference,
         ) -> Result<Self, Self::Error> {
             let function = value
                 .function_reference
@@ -616,69 +627,63 @@ mod protobuf {
 
             match function {
                 ProtoDynamicFunctionReference::Function(
-                    golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+                    crate::proto::golem::rib::FunctionFunctionReference { function },
                 ) => Ok(Self::Function { function }),
                 ProtoDynamicFunctionReference::RawResourceConstructor(
-                    golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
-                        resource,
-                    },
+                    crate::proto::golem::rib::RawResourceConstructorFunctionReference { resource },
                 ) => Ok(Self::RawResourceConstructor { resource }),
                 ProtoDynamicFunctionReference::RawResourceMethod(
-                    golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                    crate::proto::golem::rib::RawResourceMethodFunctionReference {
                         resource,
                         method,
                     },
                 ) => Ok(Self::RawResourceMethod { resource, method }),
                 ProtoDynamicFunctionReference::RawResourceStaticMethod(
-                    golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                    crate::proto::golem::rib::RawResourceStaticMethodFunctionReference {
                         resource,
                         method,
                     },
                 ) => Ok(Self::RawResourceStaticMethod { resource, method }),
                 ProtoDynamicFunctionReference::RawResourceDrop(
-                    golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
-                        resource,
-                    },
+                    crate::proto::golem::rib::RawResourceDropFunctionReference { resource },
                 ) => Ok(Self::RawResourceDrop { resource }),
             }
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionReference>
-        for ParsedFunctionReference
-    {
+    impl TryFrom<crate::proto::golem::rib::ParsedFunctionReference> for ParsedFunctionReference {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::ParsedFunctionReference,
+            value: crate::proto::golem::rib::ParsedFunctionReference,
         ) -> Result<Self, Self::Error> {
             let function = value
                 .function_reference
                 .ok_or("Missing function".to_string())?;
             match function {
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(golem_api_grpc::proto::golem::rib::FunctionFunctionReference {
+                crate::proto::golem::rib::parsed_function_reference::FunctionReference::Function(crate::proto::golem::rib::FunctionFunctionReference {
                                                                                                               function
                                                                                                           }) => {
                     Ok(Self::Function { function })
                 }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(crate::proto::golem::rib::RawResourceConstructorFunctionReference {
                                                                                                                             resource
                                                                                                                         }) => {
                     Ok(Self::RawResourceConstructor { resource })
                 }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(crate::proto::golem::rib::RawResourceMethodFunctionReference {
                                                                                                                        resource,
                                                                                                                        method
                                                                                                                    }) => {
                     Ok(Self::RawResourceMethod { resource, method })
                 }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(crate::proto::golem::rib::RawResourceStaticMethodFunctionReference {
                                                                                                                              resource,
                                                                                                                              method
                                                                                                                          }) => {
                     Ok(Self::RawResourceStaticMethod { resource, method })
                 }
-                golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference {
+                crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(crate::proto::golem::rib::RawResourceDropFunctionReference {
                                                                                                                      resource
                                                                                                                  }) => {
                     Ok(Self::RawResourceDrop { resource })
@@ -687,52 +692,50 @@ mod protobuf {
         }
     }
 
-    impl From<ParsedFunctionReference> for golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
+    impl From<ParsedFunctionReference> for crate::proto::golem::rib::ParsedFunctionReference {
         fn from(value: ParsedFunctionReference) -> Self {
             let function = match value {
-                ParsedFunctionReference::Function { function } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::Function(
-                    golem_api_grpc::proto::golem::rib::FunctionFunctionReference { function },
+                ParsedFunctionReference::Function { function } => crate::proto::golem::rib::parsed_function_reference::FunctionReference::Function(
+                    crate::proto::golem::rib::FunctionFunctionReference { function },
                 ),
                 ParsedFunctionReference::RawResourceConstructor { resource } => {
-                    golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(
-                        golem_api_grpc::proto::golem::rib::RawResourceConstructorFunctionReference {
+                    crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceConstructor(
+                        crate::proto::golem::rib::RawResourceConstructorFunctionReference {
                             resource,
                         },
                     )
                 }
                 ParsedFunctionReference::RawResourceMethod { resource, method } => {
-                    golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(
-                        golem_api_grpc::proto::golem::rib::RawResourceMethodFunctionReference {
+                    crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceMethod(
+                        crate::proto::golem::rib::RawResourceMethodFunctionReference {
                             resource,
                             method,
                         },
                     )
                 }
                 ParsedFunctionReference::RawResourceStaticMethod { resource, method } => {
-                    golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(
-                        golem_api_grpc::proto::golem::rib::RawResourceStaticMethodFunctionReference {
+                    crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceStaticMethod(
+                        crate::proto::golem::rib::RawResourceStaticMethodFunctionReference {
                             resource,
                             method,
                         },
                     )
                 }
-                ParsedFunctionReference::RawResourceDrop { resource } => golem_api_grpc::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(
-                    golem_api_grpc::proto::golem::rib::RawResourceDropFunctionReference { resource },
+                ParsedFunctionReference::RawResourceDrop { resource } => crate::proto::golem::rib::parsed_function_reference::FunctionReference::RawResourceDrop(
+                    crate::proto::golem::rib::RawResourceDropFunctionReference { resource },
                 ),
             };
-            golem_api_grpc::proto::golem::rib::ParsedFunctionReference {
+            crate::proto::golem::rib::ParsedFunctionReference {
                 function_reference: Some(function),
             }
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName>
-        for DynamicParsedFunctionName
-    {
+    impl TryFrom<crate::proto::golem::rib::DynamicParsedFunctionName> for DynamicParsedFunctionName {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName,
+            value: crate::proto::golem::rib::DynamicParsedFunctionName,
         ) -> Result<Self, Self::Error> {
             let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
             let function = DynamicParsedFunctionReference::try_from(
@@ -742,11 +745,11 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::ParsedFunctionName> for ParsedFunctionName {
+    impl TryFrom<crate::proto::golem::rib::ParsedFunctionName> for ParsedFunctionName {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::ParsedFunctionName,
+            value: crate::proto::golem::rib::ParsedFunctionName,
         ) -> Result<Self, Self::Error> {
             let site = ParsedFunctionSite::try_from(value.site.ok_or("Missing site".to_string())?)?;
             let function = ParsedFunctionReference::try_from(
@@ -756,20 +759,18 @@ mod protobuf {
         }
     }
 
-    impl From<ParsedFunctionName> for golem_api_grpc::proto::golem::rib::ParsedFunctionName {
+    impl From<ParsedFunctionName> for crate::proto::golem::rib::ParsedFunctionName {
         fn from(value: ParsedFunctionName) -> Self {
-            golem_api_grpc::proto::golem::rib::ParsedFunctionName {
+            crate::proto::golem::rib::ParsedFunctionName {
                 site: Some(value.site.into()),
                 function: Some(value.function.into()),
             }
         }
     }
 
-    impl From<DynamicParsedFunctionName>
-        for golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName
-    {
+    impl From<DynamicParsedFunctionName> for crate::proto::golem::rib::DynamicParsedFunctionName {
         fn from(value: DynamicParsedFunctionName) -> Self {
-            golem_api_grpc::proto::golem::rib::DynamicParsedFunctionName {
+            crate::proto::golem::rib::DynamicParsedFunctionName {
                 site: Some(value.site.into()),
                 function: Some(value.function.into()),
             }

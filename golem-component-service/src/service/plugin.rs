@@ -28,7 +28,7 @@ use golem_common::model::plugin::{PluginOwner, PluginScope};
 use golem_common::model::PluginId;
 use golem_common::repo::{PluginOwnerRow, PluginScopeRow};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use std::fmt::Debug;
 use std::sync::Arc;
 

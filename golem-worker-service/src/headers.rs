@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{Value, ValueAndType};
 use http::HeaderMap;
 use poem::web::headers::ContentType;
 use rib::GetLiteralValue;
@@ -75,8 +75,8 @@ impl ResolvedResponseHeaders {
 #[cfg(test)]
 mod test {
     use crate::headers::ResolvedResponseHeaders;
-    use golem_wasm_ast::analysis::analysed_type::{field, record};
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::analysis::analysed_type::{field, record};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use http::{HeaderMap, HeaderValue};
     use test_r::test;
 

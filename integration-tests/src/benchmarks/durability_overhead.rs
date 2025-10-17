@@ -21,7 +21,7 @@ use golem_common::model::WorkerId;
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm_rpc::IntoValueAndType;
+use golem_wasm::IntoValueAndType;
 
 struct DurabilityOverhead {
     config: RunConfig,

@@ -17,8 +17,8 @@ use crate::{
     FunctionType, FunctionTypeRegistry, InstanceCreationType, InterfaceName, PackageName,
     TypeParameter,
 };
-use golem_wasm_ast::analysis::TypeEnum;
-use golem_wasm_ast::analysis::{AnalysedExport, TypeVariant};
+use golem_wasm::analysis::TypeEnum;
+use golem_wasm::analysis::{AnalysedExport, TypeVariant};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Default, Hash, Clone, Eq, PartialEq, PartialOrd, Ord)]

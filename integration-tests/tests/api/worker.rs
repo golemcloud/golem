@@ -23,7 +23,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::{log_event, InvokeResult, LogEvent, WorkerId};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::Value;
+use golem_wasm::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test};

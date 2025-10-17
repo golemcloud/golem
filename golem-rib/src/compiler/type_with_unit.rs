@@ -14,8 +14,8 @@
 
 use crate::{GetTypeHint, InferredType, InstanceType, TypeInternal};
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{bool, field, record, str, tuple};
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::{bool, field, record, str, tuple};
+use golem_wasm::analysis::{
     AnalysedResourceId, AnalysedResourceMode, AnalysedType, NameOptionTypePair, NameTypePair,
     TypeBool, TypeChr, TypeEnum, TypeF32, TypeF64, TypeFlags, TypeHandle, TypeList, TypeOption,
     TypeRecord, TypeResult, TypeS16, TypeS32, TypeS64, TypeS8, TypeStr, TypeTuple, TypeU16,

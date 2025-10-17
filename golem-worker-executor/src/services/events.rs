@@ -14,7 +14,7 @@
 
 use golem_common::model::{IdempotencyKey, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use tokio::sync::broadcast::error::RecvError;
 
 pub struct Events {

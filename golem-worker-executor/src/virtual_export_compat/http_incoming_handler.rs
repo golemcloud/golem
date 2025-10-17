@@ -16,7 +16,7 @@ use bytes::Bytes;
 use golem_common::virtual_exports::http_incoming_handler::*;
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::Value;
+use golem_wasm::Value;
 use http::{HeaderName, HeaderValue};
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;

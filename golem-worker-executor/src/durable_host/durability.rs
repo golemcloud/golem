@@ -29,7 +29,7 @@ use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogIndex, Pe
 use golem_common::model::Timestamp;
 use golem_common::serialization::{deserialize, serialize, try_deserialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use std::fmt::{Debug, Display};
 use std::marker::PhantomData;
 use tracing::error;

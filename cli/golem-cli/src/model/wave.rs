@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::{
     AnalysedFunction, AnalysedType, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };
 

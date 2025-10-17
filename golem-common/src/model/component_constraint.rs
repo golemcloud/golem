@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use rib::{FunctionName, WorkerFunctionType, WorkerFunctionsInRib};
 use std::collections::HashMap;
 
@@ -202,14 +202,13 @@ impl FunctionUsageConstraint {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::component_constraint::{
         FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
     };
     use golem_api_grpc::proto::golem::component::FunctionConstraint as FunctionConstraintProto;
     use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use rib::FunctionName;
 
     impl TryFrom<golem_api_grpc::proto::golem::component::FunctionConstraintCollection>
@@ -286,12 +285,11 @@ mod protobuf {
 
     impl From<FunctionUsageConstraint> for FunctionConstraintProto {
         fn from(value: FunctionUsageConstraint) -> Self {
-            let function_name =
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::from(
-                    value.function_signature.clone().function_name,
-                );
+            let function_name = rib::proto::golem::rib::function_name_type::FunctionName::from(
+                value.function_signature.clone().function_name,
+            );
 
-            let function_name_type = golem_api_grpc::proto::golem::rib::FunctionNameType {
+            let function_name_type = rib::proto::golem::rib::FunctionNameType {
                 function_name: Some(function_name),
             };
 

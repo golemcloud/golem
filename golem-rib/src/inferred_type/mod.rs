@@ -28,7 +28,7 @@ use crate::rib_source_span::SourceSpan;
 use crate::type_inference::GetTypeHint;
 use crate::TypeName;
 use bigdecimal::BigDecimal;
-use golem_wasm_ast::analysis::*;
+use golem_wasm::analysis::*;
 use std::fmt::{Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::ops::Deref;
@@ -690,7 +690,7 @@ impl From<&AnalysedType> for InferredType {
             AnalysedType::Flags(vs) => InferredType::flags(vs.names.clone()),
             AnalysedType::Enum(vs) => InferredType::from_enum_cases(vs),
             AnalysedType::Option(t) => InferredType::option(t.inner.as_ref().into()),
-            AnalysedType::Result(golem_wasm_ast::analysis::TypeResult { ok, err, .. }) => {
+            AnalysedType::Result(golem_wasm::analysis::TypeResult { ok, err, .. }) => {
                 InferredType::result(
                     ok.as_ref().map(|t| t.as_ref().into()),
                     err.as_ref().map(|t| t.as_ref().into()),

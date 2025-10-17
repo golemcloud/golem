@@ -20,7 +20,7 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::auth::{AuthCtx, TokenSecret};
 use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;

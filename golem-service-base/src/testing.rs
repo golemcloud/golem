@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 
 use crate::model::{Component, ComponentName};

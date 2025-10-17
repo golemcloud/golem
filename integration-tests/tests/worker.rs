@@ -27,11 +27,9 @@ use golem_common::model::{
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::{
-    analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle,
-};
-use golem_wasm_rpc::IntoValue;
-use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::analysis::{analysed_type, AnalysedResourceId, AnalysedResourceMode, TypeHandle};
+use golem_wasm::IntoValue;
+use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
 use rand::seq::IteratorRandom;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};

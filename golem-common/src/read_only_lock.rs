@@ -43,7 +43,6 @@ pub mod std {
     }
 }
 
-#[cfg(feature = "tokio")]
 pub mod tokio {
     use std::sync::Arc;
     use tokio::sync::{RwLock, RwLockReadGuard};

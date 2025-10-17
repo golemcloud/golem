@@ -19,7 +19,7 @@ use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use std::future::Future;
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};

@@ -11,80 +11,14 @@ license-file = "../LICENSE"
 
 build = "build.rs"
 
-[features]
-default = [
-    "base-model",
-    "config",
-    "model",
-    "observability",
-    "poem",
-    "protobuf",
-    "redis",
-    "serialization",
-    "sql",
-    "tokio",
-]
-
-agent-extraction = ["dep:wasmtime-wasi", "dep:wit-parser"]
-base-model = []
-config = ["model", "dep:figment"]
-model = [
-    "base-model",
-    "dep:golem-wasm-rpc",
-    "dep:golem-wasm-ast",
-    "dep:golem-rib",
-    "dep:wasmtime"
-]
-observability = [
-    "config",
-    "dep:console-subscriber",
-    "dep:prometheus",
-    "dep:tracing",
-    "dep:tracing-subscriber",
-    "dep:tracing-serde",
-]
-poem = [
-    "dep:poem",
-    "dep:poem-openapi",
-    "golem-wasm-ast/poem_openapi",
-    "golem-wasm-ast/poem_openapi",
-    "golem-rib/poem",
-]
-protobuf = [
-    "observability",
-    "tokio",
-    "dep:prost-types",
-    "dep:tonic",
-    "dep:golem-api-grpc",
-    "golem-rib/protobuf",
-    "golem-wasm-ast/protobuf",
-    "golem-wasm-rpc/protobuf",
-]
-redis = [
-    "observability",
-    "serialization",
-    "dep:fred"
-]
-serialization = []
-sql = [
-    "model",
-    "dep:sqlx"
-]
-tokio = [
-    "observability",
-    "model",
-    "dep:tokio"
-]
-
 [lib]
 harness = false
 
 [dependencies]
-golem-api-grpc = { workspace = true, optional = true }
-golem-rib = { workspace = true, features = ["protobuf", "poem", "json_in_errors"], optional = true } # TODO: make these optionals
-golem-wasm-ast = { workspace = true, features = ["metadata", "parser", "wit-parser"], optional = true }
-golem-wasm-rpc = { workspace = true, features = ["host"], optional = true }
-golem-wasm-rpc-derive = { workspace = true }
+golem-api-grpc = { workspace = true }
+golem-rib = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -93,11 +27,11 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true }
 combine = { workspace = true }
-console-subscriber = { workspace = true, optional = true }
+console-subscriber = { workspace = true }
 dashmap = { workspace = true }
 derive_more = { workspace = true }
-figment = { workspace = true, optional = true }
-fred = { workspace = true, optional = true }
+figment = { workspace = true }
+fred = { workspace = true }
 heck = { workspace = true }
 http = { workspace = true }
 humantime-serde = { workspace = true }
@@ -105,10 +39,10 @@ iso8601-timestamp = { workspace = true }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 nonempty-collections = { workspace = true }
-poem = { workspace = true, optional = true }
-poem-openapi = { workspace = true, optional = true }
-prometheus = { workspace = true, optional = true }
-prost-types = { workspace = true, optional = true }
+poem = { workspace = true }
+poem-openapi = { workspace = true }
+prometheus = { workspace = true }
+prost-types = { workspace = true }
 rand = { workspace = true }
 range-set-blaze = { workspace = true }
 regex = { workspace = true }
@@ -117,22 +51,23 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 shadow-rs = { workspace = true }
-sqlx = { workspace = true, optional = true }
+sqlx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
-tokio = { workspace = true, optional = true }
-tonic = { workspace = true, optional = true }
-tracing = { workspace = true, optional = true }
-tracing-subscriber = { workspace = true, optional = true }
-tracing-serde = { workspace = true, optional = true }
+tokio = { workspace = true }
+tonic = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-serde = { workspace = true }
 typed-path = { workspace = true }
 url = { workspace = true }
 uuid = { workspace = true }
-wasmtime = { workspace = true, optional = true }
-wasmtime-wasi = { workspace = true, optional = true }
-wit-parser = { workspace = true, optional = true }
+wasmtime = { workspace = true }
+wasmtime-wasi = { workspace = true }
+wasmparser = { workspace = true }
+wit-parser = { workspace = true }
 wasm-wave = { workspace = true }
 
 [dev-dependencies]

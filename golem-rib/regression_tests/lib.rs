@@ -2,11 +2,9 @@ test_r::enable!();
 
 use test_r::test;
 
-use golem_wasm_ast::analysis::analysed_type::{
-    bool, f32, f64, field, record, s16, s32, str, u64, u8,
-};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::analysis::analysed_type::{bool, f32, f64, field, record, s16, s32, str, u64, u8};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::ValueAndType;
 use rib::{
     EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, Expr, Interpreter, RibCompiler,
     RibCompilerConfig, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput,
@@ -701,7 +699,7 @@ mod component_metadata {
 
 mod function_metadata {
     use crate::{data_types, test_utils};
-    use golem_wasm_ast::analysis::AnalysedExport;
+    use golem_wasm::analysis::AnalysedExport;
 
     pub(crate) fn function_unit_response() -> Vec<AnalysedExport> {
         test_utils::get_function_component_metadata(
@@ -1158,11 +1156,11 @@ mod function_metadata {
 }
 
 mod data_types {
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         bool, case, chr, f32, f64, field, flags, list, option, r#enum, record, result, s16, s32,
         s64, s8, str, tuple, u16, u32, u64, u8, unit_case, variant,
     };
-    use golem_wasm_ast::analysis::*;
+    use golem_wasm::analysis::*;
 
     // Result
     pub(crate) fn result_of_str_type() -> AnalysedType {
@@ -1418,7 +1416,7 @@ mod data_types {
 
 mod mock_data {
     use crate::{data_types, test_utils};
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::ValueAndType;
 
     pub(crate) fn ok_of_str() -> ValueAndType {
         test_utils::get_value_and_type(&data_types::result_of_str_type(), "ok(\"foo\")")
@@ -1718,9 +1716,9 @@ mod mock_interpreter {
     };
     use async_trait::async_trait;
 
-    use golem_wasm_ast::analysis::analysed_type::{field, record, str};
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::analysis::analysed_type::{field, record, str};
+    use golem_wasm::analysis::AnalysedType;
+    use golem_wasm::ValueAndType;
     use rib::{ComponentDependencyKey, DefaultWorkerNameGenerator, InstructionId};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -1942,14 +1940,14 @@ mod mock_interpreter {
 }
 
 mod test_utils {
-    use golem_wasm_ast::analysis::*;
-    use golem_wasm_rpc::ValueAndType;
+    use golem_wasm::analysis::*;
+    use golem_wasm::ValueAndType;
 
     pub(crate) fn get_value_and_type(
         analysed_type: &AnalysedType,
         wasm_wave_str: &str,
     ) -> ValueAndType {
-        let result = golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str);
+        let result = golem_wasm::parse_value_and_type(analysed_type, wasm_wave_str);
 
         match result {
             Ok(value) => value,
@@ -1958,7 +1956,7 @@ mod test_utils {
     }
 
     pub(crate) fn convert_value_and_type_to_str(value: &ValueAndType) -> String {
-        golem_wasm_rpc::print_value_and_type(value).unwrap()
+        golem_wasm::print_value_and_type(value).unwrap()
     }
 
     pub(crate) fn get_function_component_metadata(

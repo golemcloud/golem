@@ -52,7 +52,6 @@ pub fn deserialize_with_version<T: Decode<()>>(data: &[u8], version: u8) -> Resu
     match try_deserialize_with_version(data, version)? {
         Some(value) => Ok(value),
         None => {
-            #[cfg(feature = "observability")]
             tracing::error!(
                 version,
                 data = format!("{:?}", data),

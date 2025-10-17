@@ -23,7 +23,7 @@ pub fn infer_enums(expr: &mut Expr, component_dependencies: &ComponentDependenci
 mod internal {
     use crate::call_type::CallType;
     use crate::{ComponentDependencies, Expr, ExprVisitor};
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
 
     pub(crate) fn convert_identifiers_to_enum_function_calls(
         expr: &mut Expr,

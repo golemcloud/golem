@@ -60,11 +60,11 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm_rpc::golem_rpc_0_2_x::types::{
+use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{
     CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
 use std::collections::{BTreeMap, HashSet};
@@ -421,10 +421,7 @@ impl FileSystemReading for Context {
 }
 
 impl HostWasmRpc for Context {
-    async fn new(
-        &mut self,
-        worker_id: golem_wasm_rpc::AgentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
 

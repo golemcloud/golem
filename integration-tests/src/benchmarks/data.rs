@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use rand::distr::{Alphanumeric, SampleString};
 use rand::rng;
 

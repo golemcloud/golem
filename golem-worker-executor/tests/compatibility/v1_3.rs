@@ -30,8 +30,8 @@ use golem_common::model::{
     WorkerInvocation, WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
-use golem_wasm_rpc::wasmtime::ResourceTypeId;
-use golem_wasm_rpc::Value;
+use golem_wasm::wasmtime::ResourceTypeId;
+use golem_wasm::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;

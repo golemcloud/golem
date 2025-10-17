@@ -19,9 +19,9 @@ use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::analysis::{analysed_type, AnalysedType};
+use golem_wasm::{IntoValue, Value};
+use golem_wasm_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -89,7 +89,6 @@ impl<'de> Deserialize<'de> for TraceId {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::Type for TraceId {
     const IS_REQUIRED: bool = true;
     type RawValueType = Self;
@@ -116,14 +115,12 @@ impl poem_openapi::types::Type for TraceId {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromParameter for TraceId {
     fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
         Ok(Self::from_string(value)?)
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for TraceId {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         match value {
@@ -136,7 +133,6 @@ impl poem_openapi::types::ParseFromJSON for TraceId {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for TraceId {
     fn to_json(&self) -> Option<serde_json::Value> {
         Some(serde_json::Value::String(self.to_string()))
@@ -205,7 +201,6 @@ impl<'de> Deserialize<'de> for SpanId {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::Type for SpanId {
     const IS_REQUIRED: bool = true;
     type RawValueType = Self;
@@ -232,14 +227,12 @@ impl poem_openapi::types::Type for SpanId {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromParameter for SpanId {
     fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
         Ok(Self::from_string(value)?)
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for SpanId {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         match value {
@@ -252,7 +245,6 @@ impl poem_openapi::types::ParseFromJSON for SpanId {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for SpanId {
     fn to_json(&self) -> Option<serde_json::Value> {
         Some(serde_json::Value::String(self.to_string()))
@@ -947,7 +939,6 @@ impl Debug for InvocationContextStack {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::invocation_context::{
         AttributeValue, InvocationContextSpan, InvocationContextStack,
@@ -1272,7 +1263,6 @@ mod tests {
         assert_eq!(stack, decoded);
     }
 
-    #[cfg(feature = "protobuf")]
     #[test]
     fn protobuf_serialization() {
         let stack = example_stack_1();

@@ -61,7 +61,7 @@ use golem_common::model::{
 use golem_common::widen_infallible;
 use golem_service_base::model::{ComponentName, PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_service_base::replayable_stream::ReplayableStream;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};

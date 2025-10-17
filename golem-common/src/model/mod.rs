@@ -24,10 +24,8 @@ pub mod invocation_context;
 pub mod lucene;
 pub mod oplog;
 pub mod plugin;
-#[cfg(feature = "poem")]
 mod poem;
 pub mod project;
-#[cfg(feature = "protobuf")]
 pub mod protobuf;
 pub mod public_oplog;
 pub mod regions;
@@ -43,10 +41,10 @@ use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValue, Value};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::analysis::analysed_type::{field, list, record, str, tuple, u32, u64};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{IntoValue, Value};
+use golem_wasm_derive::IntoValue;
 use http::Uri;
 use rand::prelude::IteratorRandom;
 use serde::{de, Deserialize, Deserializer, Serialize, Serializer};
@@ -59,16 +57,11 @@ use std::time::{Duration, SystemTime};
 use typed_path::Utf8UnixPathBuf;
 use uuid::{uuid, Uuid};
 
-#[cfg(feature = "poem")]
 pub trait PoemTypeRequirements:
     poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON
 {
 }
 
-#[cfg(not(feature = "poem"))]
-pub trait PoemTypeRequirements {}
-
-#[cfg(feature = "poem")]
 impl<
         T: poem_openapi::types::Type
             + poem_openapi::types::ParseFromJSON
@@ -77,20 +70,9 @@ impl<
 {
 }
 
-#[cfg(not(feature = "poem"))]
-impl<T> PoemTypeRequirements for T {}
-
-#[cfg(feature = "poem")]
 pub trait PoemMultipartTypeRequirements: poem_openapi::types::ParseFromMultipartField {}
 
-#[cfg(not(feature = "poem"))]
-pub trait PoemMultipartTypeRequirements {}
-
-#[cfg(feature = "poem")]
 impl<T: poem_openapi::types::ParseFromMultipartField> PoemMultipartTypeRequirements for T {}
-
-#[cfg(not(feature = "poem"))]
-impl<T> PoemMultipartTypeRequirements for T {}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
@@ -564,8 +546,8 @@ impl IntoValue for WorkerMetadata {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Encode, Decode)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct WorkerResourceDescription {
     pub created_at: Timestamp,
     pub resource_owner: String,
@@ -723,8 +705,19 @@ pub struct SuccessfulUpdateRecord {
 ///
 /// This is always recorded together with the current oplog index, and it can only be used
 /// as a source of truth if there are no newer oplog entries since the record.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Enum,
+)]
 pub enum WorkerStatus {
     /// The worker is running an invoked function
     Running,
@@ -1003,9 +996,10 @@ impl Display for AccountId {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerNameFilter {
     pub comparator: StringFilterComparator,
@@ -1024,9 +1018,10 @@ impl Display for WorkerNameFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerStatusFilter {
     pub comparator: FilterComparator,
@@ -1045,9 +1040,10 @@ impl Display for WorkerStatusFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerVersionFilter {
     pub comparator: FilterComparator,
@@ -1066,9 +1062,10 @@ impl Display for WorkerVersionFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerCreatedAtFilter {
     pub comparator: FilterComparator,
@@ -1087,9 +1084,10 @@ impl Display for WorkerCreatedAtFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerEnvFilter {
     pub name: String,
@@ -1113,9 +1111,10 @@ impl Display for WorkerEnvFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerWasiConfigVarsFilter {
     pub name: String,
@@ -1143,9 +1142,10 @@ impl Display for WorkerWasiConfigVarsFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerAndFilter {
     pub filters: Vec<WorkerFilter>,
@@ -1171,9 +1171,10 @@ impl Display for WorkerAndFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerOrFilter {
     pub filters: Vec<WorkerFilter>,
@@ -1199,9 +1200,10 @@ impl Display for WorkerOrFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WorkerNotFilter {
     filter: Box<WorkerFilter>,
@@ -1221,9 +1223,10 @@ impl Display for WorkerNotFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum WorkerFilter {
     Name(WorkerNameFilter),
@@ -1456,8 +1459,9 @@ impl FromStr for WorkerFilter {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Enum,
+)]
 pub enum StringFilterComparator {
     Equal,
     NotEqual,
@@ -1539,8 +1543,9 @@ impl Display for StringFilterComparator {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, poem_openapi::Enum,
+)]
 pub enum FilterComparator {
     Equal,
     NotEqual,
@@ -1621,9 +1626,19 @@ impl From<FilterComparator> for i32 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, Default)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    Default,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ScanCursor {
     pub cursor: u64,
@@ -1777,8 +1792,19 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    poem_openapi::Enum,
+)]
 #[repr(i32)]
 pub enum ComponentType {
     Durable = 0,
@@ -1819,16 +1845,14 @@ impl FromStr for ComponentType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
 
 /// Key that can be used to identify a component file.
 /// All files with the same content will have the same key.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, poem_openapi::NewType)]
 pub struct InitialComponentFileKey(pub String);
 
 impl Display for InitialComponentFileKey {
@@ -1912,10 +1936,9 @@ impl TryFrom<&str> for ComponentFilePath {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, poem_openapi::Enum)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
+#[oai(rename_all = "kebab-case")]
 pub enum ComponentFilePermissions {
     ReadOnly,
     ReadWrite,
@@ -1937,9 +1960,8 @@ impl ComponentFilePermissions {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InitialComponentFile {
     pub key: InitialComponentFileKey,
@@ -1953,9 +1975,8 @@ impl InitialComponentFile {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentFilePathWithPermissions {
     pub path: ComponentFilePath,
@@ -1974,9 +1995,8 @@ impl Display for ComponentFilePathWithPermissions {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Clone, Debug, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentFilePathWithPermissionsList {
     pub values: Vec<ComponentFilePathWithPermissions>,
@@ -2012,10 +2032,11 @@ pub struct ComponentFileSystemNode {
 }
 
 // Custom Deserialize is replaced with Simple Deserialize
-#[derive(Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Encode, Decode, Default, Deserialize, poem_openapi::Enum,
+)]
 #[serde(rename_all = "kebab-case")]
-#[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
+#[oai(rename_all = "kebab-case")]
 pub enum GatewayBindingType {
     #[default]
     Default,
@@ -2037,17 +2058,17 @@ impl TryFrom<String> for GatewayBindingType {
     }
 }
 
-impl From<WorkerId> for golem_wasm_rpc::AgentId {
+impl From<WorkerId> for golem_wasm::AgentId {
     fn from(worker_id: WorkerId) -> Self {
-        golem_wasm_rpc::AgentId {
+        golem_wasm::AgentId {
             component_id: worker_id.component_id.into(),
             agent_id: worker_id.worker_name,
         }
     }
 }
 
-impl From<golem_wasm_rpc::AgentId> for WorkerId {
-    fn from(host: golem_wasm_rpc::AgentId) -> Self {
+impl From<golem_wasm::AgentId> for WorkerId {
+    fn from(host: golem_wasm::AgentId) -> Self {
         Self {
             component_id: host.component_id.into(),
             worker_name: host.agent_id,
@@ -2055,8 +2076,8 @@ impl From<golem_wasm_rpc::AgentId> for WorkerId {
     }
 }
 
-impl From<golem_wasm_rpc::ComponentId> for ComponentId {
-    fn from(host: golem_wasm_rpc::ComponentId) -> Self {
+impl From<golem_wasm::ComponentId> for ComponentId {
+    fn from(host: golem_wasm::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
@@ -2064,12 +2085,12 @@ impl From<golem_wasm_rpc::ComponentId> for ComponentId {
     }
 }
 
-impl From<ComponentId> for golem_wasm_rpc::ComponentId {
+impl From<ComponentId> for golem_wasm::ComponentId {
     fn from(component_id: ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
-        golem_wasm_rpc::ComponentId {
-            uuid: golem_wasm_rpc::Uuid {
+        golem_wasm::ComponentId {
+            uuid: golem_wasm::Uuid {
                 high_bits,
                 low_bits,
             },

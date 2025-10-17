@@ -20,10 +20,8 @@ use golem_common::model::OplogIndex;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::{
-    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
-};
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
+use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use log::info;
 use test_r::{inherit_test_dep, test};
 

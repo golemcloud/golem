@@ -20,7 +20,7 @@ use combine::parser::char;
 use combine::parser::char::{char, spaces, string};
 use combine::{attempt, between, choice, optional, sep_by, Parser};
 use combine::{parser, ParseError};
-use golem_wasm_ast::analysis::{AnalysedType, TypeResult};
+use golem_wasm::analysis::{AnalysedType, TypeResult};
 use std::fmt::Display;
 use std::ops::Deref;
 
@@ -547,10 +547,9 @@ parser! {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
-    use golem_api_grpc::proto::golem::rib::type_name::Kind as InnerTypeName;
-    use golem_api_grpc::proto::golem::rib::{
+    use crate::proto::golem::rib::type_name::Kind as InnerTypeName;
+    use crate::proto::golem::rib::{
         BasicTypeName, EnumType, FlagType, KeyValue, ListType, OptionType, RecordType, ResultType,
         TupleType, TypeName as ProtoTypeName, VariantCase, VariantType,
     };
