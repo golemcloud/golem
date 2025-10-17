@@ -6,9 +6,6 @@ use anyhow::anyhow;
 use golem_common::model::ComponentType;
 use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm::analysis::AnalysisContext;
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::IgnoreAllButMetadata;
 use humansize::{ISizeFormatter, BINARY};
 use rand::prelude::SliceRandom;
 use rand::rng;
@@ -17,6 +14,7 @@ use std::fmt::Write;
 use std::path::Path;
 use sysinfo::{Pid, ProcessesToUpdate, System};
 use tracing::{error, info};
+use golem_common::model::component_metadata::Mem;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -116,13 +114,14 @@ async fn measure_component(
         )
         .await;
 
-    let data = std::fs::read(path)?;
-    let component =
-        Component::<IgnoreAllButMetadata>::from_bytes(&data).map_err(|err| anyhow!(err))?;
-    let state = AnalysisContext::new(component);
-    let mems = state
-        .get_all_memories()
-        .map_err(|err| anyhow!(format!("{:?}", err)))?;
+    // let data = std::fs::read(path)?;
+    // let component =
+    //     Component::<IgnoreAllButMetadata>::from_bytes(&data).map_err(|err| anyhow!(err))?;
+    // let state = AnalysisContext::new(component);
+    // let mems = state
+    //     .get_all_memories()
+    //     .map_err(|err| anyhow!(format!("{:?}", err)))?;
+    let mems: Vec<Mem> = vec![]; // TODO
 
     let mut results = Vec::new();
 

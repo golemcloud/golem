@@ -2234,12 +2234,9 @@ dependencies = [
 
 [[package]]
 name = "cookie-factory"
-version = "0.3.3"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9885fa71e26b8ab7855e2ec7cae6e9b380edff76cd052e07c683a0319d51b3a2"
-dependencies = [
- "futures",
-]
+checksum = "396de984970346b0d9e93d1415082923c679e5ae5c3ee3dcbd104f5610af126b"
 
 [[package]]
 name = "cordyceps"
@@ -8862,7 +8859,8 @@ dependencies = [
 [[package]]
 name = "redis-protocol"
 version = "5.0.1"
-source = "git+https://github.com/golemcloud/redis-protocol.rs.git?branch=unpin-cookie-factory#8cdd82630a2b478eaf99e3645744f7b1b96942fa"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65deb7c9501fbb2b6f812a30d59c0253779480853545153a51d8e9e444ddc99f"
 dependencies = [
  "bytes 1.10.1",
  "bytes-utils",

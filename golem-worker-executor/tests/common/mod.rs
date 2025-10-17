@@ -790,7 +790,7 @@ impl FileSystemReading for TestWorkerCtx {
 impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::AgentId,
+        worker_id: golem_wasm::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -831,7 +831,7 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn schedule_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+        datetime: golem_wasm::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
     ) -> anyhow::Result<()> {
@@ -843,10 +843,10 @@ impl HostWasmRpc for TestWorkerCtx {
     async fn schedule_cancelable_invocation(
         &mut self,
         self_: Resource<WasmRpc>,
-        datetime: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+        datetime: golem_wasm::wasi::clocks::wall_clock::Datetime,
         function_name: String,
         function_params: Vec<WitValue>,
-    ) -> anyhow::Result<Resource<golem_wasm_rpc::golem_rpc_0_2_x::types::CancellationToken>> {
+    ) -> anyhow::Result<Resource<golem_wasm::golem_rpc_0_2_x::types::CancellationToken>> {
         self.durable_ctx
             .schedule_cancelable_invocation(self_, datetime, function_name, function_params)
             .await
@@ -1113,7 +1113,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         durability::durability::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
         golem_agent::host::add_to_linker_get_host(&mut linker, get_durable_ctx)?;
-        golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(
+        golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(
             &mut linker,
             get_durable_ctx,
         )?;

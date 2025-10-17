@@ -2385,7 +2385,7 @@ mod tests {
             .unwrap();
 
         let expected = r#"["foo", "bar"]"#;
-        let expected_value = golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
+        let expected_value = golem_wasm::parse_value_and_type(&list(str()), expected).unwrap();
 
         assert_eq!(result, expected_value);
     }
@@ -2417,7 +2417,7 @@ mod tests {
 
         let expected = r#"[]"#;
         let expected_value_and_type =
-            golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
+            golem_wasm::parse_value_and_type(&list(str()), expected).unwrap();
 
         assert_eq!(result, expected_value_and_type);
     }
@@ -5371,7 +5371,7 @@ mod tests {
             analysed_type: &AnalysedType,
             wasm_wave_str: &str,
         ) -> ValueAndType {
-            golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
+            golem_wasm::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
         pub(crate) fn interpreter_with_noop_function_invoke(

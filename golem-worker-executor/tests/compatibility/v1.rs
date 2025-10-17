@@ -1277,51 +1277,51 @@ pub fn serializable_file_times() {
 
 #[test]
 pub fn proto_val() {
-    let pv1: golem_wasm_rpc::protobuf::Val = Value::Bool(true).into();
-    let pv2: golem_wasm_rpc::protobuf::Val = Value::U8(1).into();
-    let pv3: golem_wasm_rpc::protobuf::Val = Value::U16(12345).into();
-    let pv4: golem_wasm_rpc::protobuf::Val = Value::U32(123456789).into();
-    let pv5: golem_wasm_rpc::protobuf::Val = Value::U64(12345678901234567890).into();
-    let pv6: golem_wasm_rpc::protobuf::Val = Value::S8(-1).into();
-    let pv7: golem_wasm_rpc::protobuf::Val = Value::S16(-12345).into();
-    let pv8: golem_wasm_rpc::protobuf::Val = Value::S32(-123456789).into();
-    let pv9: golem_wasm_rpc::protobuf::Val = Value::S64(-1234567890123456789).into();
-    let pv10: golem_wasm_rpc::protobuf::Val = Value::F32(1.234).into();
-    let pv11: golem_wasm_rpc::protobuf::Val = Value::F64(1.234_567_890_123_456_7).into();
-    let pv12: golem_wasm_rpc::protobuf::Val = Value::Char('a').into();
-    let pv13: golem_wasm_rpc::protobuf::Val = Value::String("hello world".to_string()).into();
-    let pv14: golem_wasm_rpc::protobuf::Val =
+    let pv1: golem_wasm::protobuf::Val = Value::Bool(true).into();
+    let pv2: golem_wasm::protobuf::Val = Value::U8(1).into();
+    let pv3: golem_wasm::protobuf::Val = Value::U16(12345).into();
+    let pv4: golem_wasm::protobuf::Val = Value::U32(123456789).into();
+    let pv5: golem_wasm::protobuf::Val = Value::U64(12345678901234567890).into();
+    let pv6: golem_wasm::protobuf::Val = Value::S8(-1).into();
+    let pv7: golem_wasm::protobuf::Val = Value::S16(-12345).into();
+    let pv8: golem_wasm::protobuf::Val = Value::S32(-123456789).into();
+    let pv9: golem_wasm::protobuf::Val = Value::S64(-1234567890123456789).into();
+    let pv10: golem_wasm::protobuf::Val = Value::F32(1.234).into();
+    let pv11: golem_wasm::protobuf::Val = Value::F64(1.234_567_890_123_456_7).into();
+    let pv12: golem_wasm::protobuf::Val = Value::Char('a').into();
+    let pv13: golem_wasm::protobuf::Val = Value::String("hello world".to_string()).into();
+    let pv14: golem_wasm::protobuf::Val =
         Value::List(vec![Value::Bool(true), Value::Bool(false)]).into();
-    let pv15: golem_wasm_rpc::protobuf::Val =
+    let pv15: golem_wasm::protobuf::Val =
         Value::Tuple(vec![Value::Bool(true), Value::Char('x')]).into();
-    let pv16: golem_wasm_rpc::protobuf::Val = Value::Record(vec![
+    let pv16: golem_wasm::protobuf::Val = Value::Record(vec![
         Value::Bool(true),
         Value::Char('x'),
         Value::List(vec![]),
     ])
     .into();
-    let pv17a: golem_wasm_rpc::protobuf::Val = Value::Variant {
+    let pv17a: golem_wasm::protobuf::Val = Value::Variant {
         case_idx: 1,
         case_value: Some(Box::new(Value::Record(vec![Value::Option(None)]))),
     }
     .into();
-    let pv17b: golem_wasm_rpc::protobuf::Val = Value::Variant {
+    let pv17b: golem_wasm::protobuf::Val = Value::Variant {
         case_idx: 1,
         case_value: None,
     }
     .into();
-    let pv18: golem_wasm_rpc::protobuf::Val = Value::Enum(1).into();
-    let pv19: golem_wasm_rpc::protobuf::Val = Value::Flags(vec![true, false, true]).into();
-    let pv20a: golem_wasm_rpc::protobuf::Val =
+    let pv18: golem_wasm::protobuf::Val = Value::Enum(1).into();
+    let pv19: golem_wasm::protobuf::Val = Value::Flags(vec![true, false, true]).into();
+    let pv20a: golem_wasm::protobuf::Val =
         Value::Option(Some(Box::new(Value::Bool(true)))).into();
-    let pv20b: golem_wasm_rpc::protobuf::Val = Value::Option(None).into();
-    let pv21a: golem_wasm_rpc::protobuf::Val =
+    let pv20b: golem_wasm::protobuf::Val = Value::Option(None).into();
+    let pv21a: golem_wasm::protobuf::Val =
         Value::Result(Ok(Some(Box::new(Value::Bool(true))))).into();
-    let pv21b: golem_wasm_rpc::protobuf::Val =
+    let pv21b: golem_wasm::protobuf::Val =
         Value::Result(Err(Some(Box::new(Value::Bool(true))))).into();
-    let pv21c: golem_wasm_rpc::protobuf::Val = Value::Result(Ok(None)).into();
-    let pv21d: golem_wasm_rpc::protobuf::Val = Value::Result(Err(None)).into();
-    let pv22: golem_wasm_rpc::protobuf::Val = Value::Handle {
+    let pv21c: golem_wasm::protobuf::Val = Value::Result(Ok(None)).into();
+    let pv21d: golem_wasm::protobuf::Val = Value::Result(Err(None)).into();
+    let pv22: golem_wasm::protobuf::Val = Value::Handle {
         uri: "uri".to_string(),
         resource_id: 123,
     }

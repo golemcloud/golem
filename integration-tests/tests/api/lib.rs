@@ -21,7 +21,7 @@ mod invocation_context;
 mod plugins;
 mod worker;
 
-use golem_api_grpc::proto::golem::rib::Expr;
+use rib::proto::golem::rib::Expr;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_test_framework::config::{
     EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,

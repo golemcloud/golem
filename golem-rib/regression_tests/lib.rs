@@ -1947,7 +1947,7 @@ mod test_utils {
         analysed_type: &AnalysedType,
         wasm_wave_str: &str,
     ) -> ValueAndType {
-        let result = golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str);
+        let result = golem_wasm::parse_value_and_type(analysed_type, wasm_wave_str);
 
         match result {
             Ok(value) => value,
@@ -1956,7 +1956,7 @@ mod test_utils {
     }
 
     pub(crate) fn convert_value_and_type_to_str(value: &ValueAndType) -> String {
-        golem_wasm_rpc::print_value_and_type(value).unwrap()
+        golem_wasm::print_value_and_type(value).unwrap()
     }
 
     pub(crate) fn get_function_component_metadata(
