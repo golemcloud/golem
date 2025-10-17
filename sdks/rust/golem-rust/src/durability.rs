@@ -198,7 +198,7 @@ mod tests {
     use crate::bindings::golem::durability::durability::DurableFunctionType;
     use crate::value_and_type::type_builder::TypeNodeBuilder;
     use crate::value_and_type::{FromValueAndType, IntoValue};
-    use golem_wasm::{NodeBuilder, WitValueExtractor};
+    use golem_wasm_rpc::{NodeBuilder, WitValueExtractor};
     use std::io::Error;
 
     // This is not an actual runnable test - with no host implementation - but verifies through

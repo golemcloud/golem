@@ -24,7 +24,7 @@ use std::collections::Bound;
 use std::collections::HashMap;
 use std::hash::Hash;
 
-pub use golem_wasm::{NodeBuilder, WitValueExtractor};
+pub use golem_wasm_rpc::{NodeBuilder, WitValueExtractor};
 pub use type_builder::TypeNodeBuilder;
 
 /// Specific trait to convert a type into a pair of `WitValue` and `WitType`.
