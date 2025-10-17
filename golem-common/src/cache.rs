@@ -403,11 +403,8 @@ impl<
         self.state
             .items
             .iter_async(|key, value| {
-                match value {
-                    Item::Cached { last_access, .. } => {
-                        keys_to_keep.push((key.clone(), last_access.elapsed().as_millis()))
-                    }
-                    _ => {}
+                if let Item::Cached { last_access, .. } = value {
+                    keys_to_keep.push((key.clone(), last_access.elapsed().as_millis()))
                 }
                 true
             })

@@ -3676,7 +3676,7 @@ async fn delete_worker_during_invocation(
 
 #[test]
 #[tracing::instrument]
-// #[test_r::non_flaky(10)]
+#[test_r::non_flaky(10)]
 async fn invoking_worker_while_its_getting_deleted_works(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

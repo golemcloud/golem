@@ -413,14 +413,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// Transition the worker into a deleting state.
     /// Rejects all new invocations and stops any running execution.
     pub async fn start_deleting(&self) -> Result<(), WorkerExecutorError> {
-        let mut instance_guard = self
-            .lock_stopped_worker(Some(WorkerExecutorError::invalid_request(
-                "Worker is being deleted",
-            )))
-            .await;
+        let error = WorkerExecutorError::invalid_request("Worker is being deleted");
+        let mut instance_guard = self.lock_stopped_worker(Some(error.clone())).await;
         match &*instance_guard {
             WorkerInstance::Unloaded => {
                 *instance_guard = WorkerInstance::Deleting;
+                // More invocations might have been enqueued since the worker has stopped
+                self.fail_pending_invocation(error).await;
             }
             WorkerInstance::Deleting => {}
             _ => panic!("impossible status after lock_stopped_worker"),
@@ -753,6 +752,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 false
             }
+            // TODO: this probably wants to cooperate with memory free up
             WorkerInstance::Stopping(_) => {
                 debug!(
                     "Worker {} is stopping, cannot be used to free up memory",
@@ -760,6 +760,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 );
                 false
             }
+            // TODO: this probably wants to cooperate with memory free up
             WorkerInstance::Deleting => {
                 debug!(
                     "Worker {} is deleting, cannot be used to free up memory",
@@ -1228,6 +1229,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         instance_guard: &mut MutexGuard<'_, WorkerInstance>,
         called_from_invocation_loop: bool,
+        // Only respected when this is the call that triggered the stop
         fail_pending_invocations: Option<WorkerExecutorError>,
     ) -> StopResult {
         // Temporarily set the instance to unloaded so we can work with the old value.
@@ -1257,47 +1259,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
                 // TODO: fail pending invocations should be factored out of here and be guaranteed to run
                 // even if there are multiple concurrent stop attempts.
-                if let Some(fail_pending_invocations) = fail_pending_invocations {
-                    let queued_items = running
-                        .queue
-                        .write()
-                        .await
-                        .drain(..)
-                        .collect::<VecDeque<_>>();
-
-                    // Publishing the provided initialization error to all pending invocations.
-                    // We cannot persist these failures, so they remain pending in the oplog, and
-                    // on next recovery they will be retried, but we still want waiting callers
-                    // to get the error.
-                    for item in queued_items {
-                        match item {
-                            QueuedWorkerInvocation::External {
-                                invocation: inner,
-                                canceled,
-                            } => {
-                                if !canceled {
-                                    if let Some(idempotency_key) =
-                                        inner.invocation.idempotency_key()
-                                    {
-                                        self.events().publish(Event::InvocationCompleted {
-                                            worker_id: self.owned_worker_id.worker_id(),
-                                            idempotency_key: idempotency_key.clone(),
-                                            result: Err(fail_pending_invocations.clone()),
-                                        })
-                                    }
-                                }
-                            }
-                            QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
-                                let _ = sender.send(Err(fail_pending_invocations.clone()));
-                            }
-                            QueuedWorkerInvocation::ReadFile { sender, .. } => {
-                                let _ = sender.send(Err(fail_pending_invocations.clone()));
-                            }
-                            QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
-                                let _ = sender.send(Err(fail_pending_invocations.clone()));
-                            }
-                        }
-                    }
+                if let Some(error) = fail_pending_invocations {
+                    self.fail_pending_invocation(error).await;
                 };
 
                 // when stopping via the invocation loop we can stop immediately, no need to go via the stopping status
@@ -1336,6 +1299,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 drop(instance_guard);
 
                 notify.set();
+            }
+        }
+    }
+
+    async fn fail_pending_invocation(&self, error: WorkerExecutorError) {
+        let queued_items = self.queue.write().await.drain(..).collect::<VecDeque<_>>();
+
+        // Publishing the provided initialization error to all pending invocations.
+        // We cannot persist these failures, so they remain pending in the oplog, and
+        // on next recovery they will be retried, but we still want waiting callers
+        // to get the error.
+        for item in queued_items {
+            match item {
+                QueuedWorkerInvocation::External {
+                    invocation: inner,
+                    canceled,
+                } => {
+                    if !canceled {
+                        if let Some(idempotency_key) = inner.invocation.idempotency_key() {
+                            self.events().publish(Event::InvocationCompleted {
+                                worker_id: self.owned_worker_id.worker_id(),
+                                idempotency_key: idempotency_key.clone(),
+                                result: Err(error.clone()),
+                            })
+                        }
+                    }
+                }
+                QueuedWorkerInvocation::GetFileSystemNode { sender, .. } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::ReadFile { sender, .. } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
+                QueuedWorkerInvocation::AwaitReadyToProcessCommands { sender } => {
+                    let _ = sender.send(Err(error.clone()));
+                }
             }
         }
     }
