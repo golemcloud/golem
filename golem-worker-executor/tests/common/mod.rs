@@ -450,13 +450,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         .await
     }
 
-    async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {

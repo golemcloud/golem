@@ -451,22 +451,6 @@ script = '''
 cargo test --package golem-worker-executor --test integration :tag:group3 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
-[tasks.worker-executor-tests-group4]
-dependencies = ["wit"]
-description = "Runs worker executor tests only (group 4/8)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:group4 -- --report-time --nocapture $JUNIT_OPTS
-'''
-
-[tasks.worker-executor-tests-group5]
-dependencies = ["wit"]
-description = "Runs worker executor tests only (group 5/8)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:group5 -- --report-time --nocapture $JUNIT_OPTS
-'''
-
 [tasks.integration-tests]
 description = "Runs all integration tests"
 dependencies = [
