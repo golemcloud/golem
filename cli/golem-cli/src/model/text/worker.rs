@@ -64,7 +64,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Agent name", &self.worker_name, format_main_id);
+            .fmt_field_option("Agent name", &self.worker_name, format_worker_name);
 
         fields.build()
     }
@@ -156,7 +156,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_version,
                 format_id,
             )
-            .fmt_field("Agent name", &self.metadata.worker_name, format_main_id)
+            .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -863,6 +863,11 @@ fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
 
 fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).expect("Failed to convert value to string")
+}
+
+// TODO: pretty print
+fn format_worker_name(worker_name: &WorkerName) -> String {
+    textwrap::wrap(&worker_name.to_string(), 80).join("\n")
 }
 
 #[allow(dead_code)]

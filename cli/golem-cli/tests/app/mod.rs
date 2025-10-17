@@ -1611,6 +1611,67 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     ));
 }
 
+#[test]
+async fn test_naming_extremes() {
+    let mut ctx = TestContext::new();
+    let app_name = "test_naming_extremes";
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
+    assert!(outputs.success());
+
+    let component_source_code = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-agent")
+            .join("src")
+            .join("main.ts"),
+    );
+
+    fs::copy(
+        "test-data/ts-code-first-snippets/main.ts",
+        &component_source_code,
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            flag::YES,
+            r#"test-agent("x")"#,
+            "test-all",
+        ])
+        .await;
+    assert!(outputs.success());
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::GET,
+            &format!("string-agent(    \"{}\"    )", " ".repeat(447)), // HTTP API should normalize it
+        ])
+        .await;
+    assert!(outputs.success());
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::GET,
+            &format!(
+                "struct-agent(  {{x:\"{}\"  ,  y    : \"{}\", z: \"{}\" }})", // HTTP API should normalize it
+                " ".repeat(102),
+                " ".repeat(102),
+                "/".repeat(102)
+            ),
+        ])
+        .await;
+    assert!(outputs.success());
+}
+
 enum CommandOutput {
     Stdout(String),
     Stderr(String),
