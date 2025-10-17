@@ -55,6 +55,7 @@ poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 prost-types = { workspace = true }
 reqwest = { workspace = true }
+scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, features = [
@@ -77,7 +78,7 @@ uuid = { workspace = true }
 wasmtime-wasi = { workspace = true, optional = true }
 
 [dev-dependencies]
-assert2 = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }
