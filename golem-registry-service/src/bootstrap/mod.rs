@@ -21,6 +21,7 @@ use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};
 use crate::repo::component::{ComponentRepo, DbComponentRepo};
+use crate::repo::deployment::{DbDeploymentRepo, DeploymentRepo};
 use crate::repo::environment::{DbEnvironmentRepo, EnvironmentRepo};
 use crate::repo::environment_plugin_grant::{
     DbEnvironmentPluginGrantRepo, EnvironmentPluginGrantRepo,
@@ -36,9 +37,11 @@ use crate::services::account::AccountService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::application::ApplicationService;
 use crate::services::auth::AuthService;
-use crate::services::component::ComponentService;
+use crate::services::component::{ComponentService, ComponentWriteService};
 use crate::services::component_compilation::ComponentCompilationServiceDisabled;
 use crate::services::component_object_store::ComponentObjectStore;
+use crate::services::component_transformer_plugin_caller::ComponentTransformerPluginCallerDefault;
+use crate::services::deployment::DeploymentService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
@@ -69,6 +72,7 @@ pub struct Services {
     pub application_service: Arc<ApplicationService>,
     pub auth_service: Arc<AuthService>,
     pub component_service: Arc<ComponentService>,
+    pub component_write_service: Arc<ComponentWriteService>,
     pub environment_service: Arc<EnvironmentService>,
     pub login_system: LoginSystem,
     pub plan_service: Arc<PlanService>,
@@ -77,6 +81,7 @@ pub struct Services {
     pub reports_service: Arc<ReportsService>,
     pub plugin_registration_service: Arc<PluginRegistrationService>,
     pub environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
+    pub deployment_service: Arc<DeploymentService>,
 }
 
 struct Repos {
@@ -93,6 +98,7 @@ struct Repos {
     reports_repo: Arc<dyn ReportsRepo>,
     plugin_repo: Arc<dyn PluginRepo>,
     environment_plugin_grant_repo: Arc<dyn EnvironmentPluginGrantRepo>,
+    deployment_repo: Arc<dyn DeploymentRepo>,
 }
 
 impl Services {
@@ -152,24 +158,10 @@ impl Services {
         ));
 
         let component_service = Arc::new(ComponentService::new(
-            repos.component_repo,
-            component_object_store,
-            component_compilation_service,
-            initial_component_files,
-            plugin_wasm_files.clone(),
-            account_usage_service,
+            repos.component_repo.clone(),
+            component_object_store.clone(),
             environment_service.clone(),
         ));
-
-        let login_system = LoginSystem::new(
-            &config.login,
-            account_service.clone(),
-            token_service.clone(),
-            repos.oauth2_token_repo.clone(),
-            repos.oauth2_webflow_state_repo.clone(),
-        )?;
-
-        let reports_service = Arc::new(ReportsService::new(repos.reports_repo.clone()));
 
         let plugin_registration_service = Arc::new(PluginRegistrationService::new(
             repos.plugin_repo.clone(),
@@ -184,10 +176,44 @@ impl Services {
             plugin_registration_service.clone(),
         ));
 
+        let component_transformer_plugin_caller =
+            Arc::new(ComponentTransformerPluginCallerDefault::new(
+                config.component_transformer_plugin_caller.clone(),
+            ));
+
+        let component_write_service = Arc::new(ComponentWriteService::new(
+            repos.component_repo,
+            component_object_store,
+            component_compilation_service,
+            initial_component_files,
+            plugin_wasm_files.clone(),
+            account_usage_service,
+            environment_service.clone(),
+            environment_plugin_grant_service.clone(),
+            plugin_registration_service.clone(),
+            component_transformer_plugin_caller.clone(),
+        ));
+
+        let login_system = LoginSystem::new(
+            &config.login,
+            account_service.clone(),
+            token_service.clone(),
+            repos.oauth2_token_repo.clone(),
+            repos.oauth2_webflow_state_repo.clone(),
+        )?;
+
+        let reports_service = Arc::new(ReportsService::new(repos.reports_repo.clone()));
+
+        let deployment_service = Arc::new(DeploymentService::new(
+            environment_service.clone(),
+            repos.deployment_repo.clone(),
+        ));
+
         Ok(Self {
             account_service,
             application_service,
             component_service,
+            component_write_service,
             environment_service,
             token_service,
             login_system,
@@ -197,6 +223,7 @@ impl Services {
             reports_service,
             plugin_registration_service,
             environment_plugin_grant_service,
+            deployment_service,
         })
     }
 }
@@ -227,6 +254,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let plugin_repo = Arc::new(DbPluginRepo::logged(db_pool.clone()));
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
+            let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -242,6 +270,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 reports_repo,
                 plugin_repo,
                 environment_plugin_grant_repo,
+                deployment_repo,
             })
         }
         DbConfig::Sqlite(sqlite_config) => {
@@ -266,6 +295,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
             let plugin_repo = Arc::new(DbPluginRepo::logged(db_pool.clone()));
             let environment_plugin_grant_repo =
                 Arc::new(DbEnvironmentPluginGrantRepo::logged(db_pool.clone()));
+            let deployment_repo = Arc::new(DbDeploymentRepo::logged(db_pool.clone()));
 
             Ok(Repos {
                 account_repo,
@@ -281,6 +311,7 @@ async fn make_repos(db_config: &DbConfig) -> anyhow::Result<Repos> {
                 reports_repo,
                 plugin_repo,
                 environment_plugin_grant_repo,
+                deployment_repo,
             })
         }
     }

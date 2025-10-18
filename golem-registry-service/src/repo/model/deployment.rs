@@ -17,8 +17,10 @@ use crate::repo::model::component::ComponentRevisionIdentityRecord;
 use crate::repo::model::hash::SqlBlake3Hash;
 use crate::repo::model::http_api_definition::HttpApiDefinitionRevisionIdentityRecord;
 use crate::repo::model::http_api_deployment::HttpApiDeploymentRevisionIdentityRecord;
-use golem_common::error_forwarding;
-use golem_common::model::diff;
+use golem_common::model::deployment::{Deployment, DeploymentPlan};
+use golem_common::model::diff::{self, Hash, Hashable};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -31,8 +33,8 @@ pub enum DeployRepoError {
         "Deployment hash mismatch: requested hash: {requested_hash:?}, actual hash: {actual_hash:?}."
     )]
     DeploymentHashMismatch {
-        requested_hash: SqlBlake3Hash,
         actual_hash: SqlBlake3Hash,
+        requested_hash: SqlBlake3Hash,
     },
     #[error("Version already exists: {version}")]
     VersionAlreadyExists { version: String },
@@ -67,6 +69,12 @@ pub enum DeployValidationError {
     },
 }
 
+impl SafeDisplay for DeployValidationError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct CurrentDeploymentRevisionRecord {
     pub environment_id: Uuid,
@@ -74,21 +82,32 @@ pub struct CurrentDeploymentRevisionRecord {
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
     pub deployment_revision_id: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct CurrentDeploymentExtRevisionRecord {
+    #[sqlx(flatten)]
+    pub revision: CurrentDeploymentRevisionRecord,
+
     pub deployment_version: String,
+    pub deployment_hash: SqlBlake3Hash,
+}
+
+impl From<CurrentDeploymentExtRevisionRecord> for Deployment {
+    fn from(value: CurrentDeploymentExtRevisionRecord) -> Self {
+        Self {
+            environment_id: EnvironmentId(value.revision.environment_id),
+            revision: value.revision.deployment_revision_id.into(),
+            version: value.deployment_version,
+            deployment_hash: Hash::new(value.deployment_hash.into_blake3_hash()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
 pub struct CurrentDeploymentRecord {
     pub environment_id: Uuid,
     pub current_revision_id: i64,
-}
-
-#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
-pub struct DeploymentComponentRevisionRecord {
-    pub environment_id: Uuid,
-    pub deployment_revision_id: i64,
-    pub component_id: Uuid,
-    pub component_revision_id: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
@@ -99,6 +118,25 @@ pub struct DeploymentRevisionRecord {
     pub hash: SqlBlake3Hash,
     #[sqlx(flatten)]
     pub audit: RevisionAuditFields,
+}
+
+impl From<DeploymentRevisionRecord> for Deployment {
+    fn from(value: DeploymentRevisionRecord) -> Self {
+        Self {
+            environment_id: EnvironmentId(value.environment_id),
+            revision: value.revision_id.into(),
+            version: value.version,
+            deployment_hash: Hash::new(value.hash.into_blake3_hash()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct DeploymentComponentRevisionRecord {
+    pub environment_id: Uuid,
+    pub deployment_revision_id: i64,
+    pub component_id: Uuid,
+    pub component_revision_id: i64,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -128,6 +166,15 @@ pub struct DeploymentIdentity {
     pub http_api_deployments: Vec<HttpApiDeploymentRevisionIdentityRecord>,
 }
 
+impl From<DeploymentIdentity> for DeploymentPlan {
+    fn from(value: DeploymentIdentity) -> Self {
+        Self {
+            deployment_hash: value.to_diffable().hash(),
+            components: value.components.into_iter().map(|c| c.into()).collect(),
+        }
+    }
+}
+
 pub struct DeployedDeploymentIdentity {
     pub deployment_revision: DeploymentRevisionRecord,
     pub identity: DeploymentIdentity,
@@ -142,7 +189,7 @@ impl DeploymentIdentity {
                 .map(|component| {
                     (
                         component.name.clone(),
-                        diff::HashOf::from_blake3_hash(component.hash.unwrap().into()), // TODO: unwrap
+                        diff::HashOf::from_blake3_hash(component.hash.into()),
                     )
                 })
                 .collect(),

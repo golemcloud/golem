@@ -15,13 +15,12 @@
 use super::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
-use crate::services::component::ComponentService;
+use crate::services::component::{ComponentService, ComponentWriteService};
 use golem_common::api::Page;
-use golem_common::model::component::Component;
+use golem_common::model::component::ComponentCreation;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::component::ComponentName;
-use golem_common::model::component::ComponentType;
-use golem_common::model::component::NewComponentData;
-use golem_common::model::deployment::DeploymentRevisionId;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -36,6 +35,7 @@ use tracing::Instrument;
 
 pub struct EnvironmentComponentsApi {
     component_service: Arc<ComponentService>,
+    component_write_service: Arc<ComponentWriteService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -46,9 +46,14 @@ pub struct EnvironmentComponentsApi {
     tag = ApiTags::Component
 )]
 impl EnvironmentComponentsApi {
-    pub fn new(component_service: Arc<ComponentService>, auth_service: Arc<AuthService>) -> Self {
+    pub fn new(
+        component_service: Arc<ComponentService>,
+        component_write_service: Arc<ComponentWriteService>,
+        auth_service: Arc<AuthService>,
+    ) -> Self {
         Self {
             component_service,
+            component_write_service,
             auth_service,
         }
     }
@@ -66,7 +71,7 @@ impl EnvironmentComponentsApi {
         environment_id: Path<EnvironmentId>,
         payload: CreateComponentRequest,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let record = recorded_http_api_request!(
             "create_component",
             environment_id = environment_id.0.to_string(),
@@ -87,24 +92,17 @@ impl EnvironmentComponentsApi {
         environment_id: EnvironmentId,
         payload: CreateComponentRequest,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let data = payload.component_wasm.into_vec().await?;
         let files_archive = payload.files.map(|f| f.into_file());
 
-        let metadata = payload.metadata.0;
-
-        let component: Component = self
-            .component_service
+        let component: ComponentDto = self
+            .component_write_service
             .create(
                 &environment_id,
-                &metadata.component_name,
-                metadata.component_type.unwrap_or(ComponentType::Durable),
+                payload.metadata.0,
                 data,
                 files_archive,
-                metadata.file_options.unwrap_or_default(),
-                metadata.dynamic_linking.unwrap_or_default(),
-                metadata.env.unwrap_or_default(),
-                metadata.agent_types.unwrap_or_default(),
                 &auth,
             )
             .await?
@@ -123,7 +121,7 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Component>>> {
+    ) -> ApiResult<Json<Page<ComponentDto>>> {
         let record = recorded_http_api_request!(
             "get_environment_components",
             environment_id = environment_id.0.to_string(),
@@ -143,13 +141,13 @@ impl EnvironmentComponentsApi {
         &self,
         environment_id: EnvironmentId,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Component>>> {
-        let components: Vec<Component> = self
+    ) -> ApiResult<Json<Page<ComponentDto>>> {
+        let components: Vec<ComponentDto> = self
             .component_service
             .list_staged_components(&environment_id, &auth)
             .await?
             .into_iter()
-            .map(Component::from)
+            .map(ComponentDto::from)
             .collect();
 
         Ok(Json(Page { values: components }))
@@ -166,7 +164,7 @@ impl EnvironmentComponentsApi {
         environment_id: Path<EnvironmentId>,
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let record = recorded_http_api_request!(
             "get_environment_component",
             environment_id = environment_id.0.to_string(),
@@ -188,8 +186,8 @@ impl EnvironmentComponentsApi {
         environment_id: EnvironmentId,
         component_name: ComponentName,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
-        let component: Component = self
+    ) -> ApiResult<Json<ComponentDto>> {
+        let component: ComponentDto = self
             .component_service
             .get_staged_component(environment_id, component_name, &auth)
             .await?
@@ -208,9 +206,9 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_components(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Page<Component>>> {
+    ) -> ApiResult<Json<Page<ComponentDto>>> {
         let record = recorded_http_api_request!(
             "get_deployment_components",
             environment_id = environment_id.0.to_string(),
@@ -230,15 +228,15 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_components_internal(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevisionId,
+        deployment_revision_id: DeploymentRevision,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Page<Component>>> {
-        let components: Vec<Component> = self
+    ) -> ApiResult<Json<Page<ComponentDto>>> {
+        let components: Vec<ComponentDto> = self
             .component_service
             .list_deployed_components(&environment_id, deployment_revision_id, &auth)
             .await?
             .into_iter()
-            .map(Component::from)
+            .map(ComponentDto::from)
             .collect();
 
         Ok(Json(Page { values: components }))
@@ -254,10 +252,10 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_component(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         component_name: Path<ComponentName>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<Component>> {
+    ) -> ApiResult<Json<ComponentDto>> {
         let record = recorded_http_api_request!(
             "get_deployment_component",
             environment_id = environment_id.0.to_string(),
@@ -283,11 +281,11 @@ impl EnvironmentComponentsApi {
     async fn get_deployment_component_internal(
         &self,
         environment_id: EnvironmentId,
-        deployment_revision_id: DeploymentRevisionId,
+        deployment_revision_id: DeploymentRevision,
         component_name: ComponentName,
         auth: AuthCtx,
-    ) -> ApiResult<Json<Component>> {
-        let component: Component = self
+    ) -> ApiResult<Json<ComponentDto>> {
+        let component: ComponentDto = self
             .component_service
             .get_deployed_component(
                 environment_id,
@@ -305,7 +303,7 @@ impl EnvironmentComponentsApi {
 #[derive(Multipart)]
 #[oai(rename_all = "camelCase")]
 struct CreateComponentRequest {
-    metadata: JsonField<NewComponentData>,
+    metadata: JsonField<ComponentCreation>,
     component_wasm: Upload,
     files: Option<TempFileUpload>,
 }

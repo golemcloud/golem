@@ -16,12 +16,15 @@ use crate::model::auth::AuthorizationError;
 use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::application::ApplicationError;
+use crate::services::component_transformer_plugin_caller::TransformationFailedReason;
 use crate::services::environment::EnvironmentError;
-use golem_common::model::account::AccountId;
+use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
+use crate::services::plugin_registration::PluginRegistrationError;
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentId, PluginInstallationId};
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
 
@@ -52,12 +55,6 @@ pub enum ComponentError {
     },
     #[error("Plugin does not implement golem:api/oplog-processor")]
     InvalidOplogProcessorPlugin,
-    #[error("Plugin not found: {account_id}/{plugin_name}@{plugin_version}")]
-    PluginNotFound {
-        account_id: AccountId,
-        plugin_name: String,
-        plugin_version: String,
-    },
     #[error("Invalid plugin scope for {plugin_name}@{plugin_version} {details}")]
     InvalidPluginScope {
         plugin_name: String,
@@ -68,14 +65,26 @@ pub enum ComponentError {
     ConcurrentUpdate,
     #[error("Current revision for update is incorrect")]
     InvalidCurrentRevision,
-    #[error("Plugin installation not found: {installation_id}")]
-    PluginInstallationNotFound {
-        installation_id: PluginInstallationId,
-    },
     #[error("Environment not found: {0}")]
     ParentEnvironmentNotFound(EnvironmentId),
     #[error("Requested component not found")]
     NotFound,
+    #[error("Plugin not found in the environment for id: {0}")]
+    EnvironmentPluginNotFound(EnvironmentPluginGrantId),
+    #[error("Referenced plugin installation with priority {0} not found")]
+    PluginInstallationNotFound(i32),
+    #[error("Multiple plugins with same priority {0}")]
+    ConflictingPluginPriority(i32),
+    #[error("Failed to componse component with plugin with priority {plugin_priority}")]
+    PluginCompositionFailed {
+        plugin_priority: i32,
+        cause: anyhow::Error,
+    },
+    #[error("Component transformer plugin with priority {plugin_priority} failed with: {reason}")]
+    ComponentTransformerPluginFailed {
+        plugin_priority: i32,
+        reason: TransformationFailedReason,
+    },
     #[error(transparent)]
     Unauthorized(#[from] AuthorizationError),
     #[error(transparent)]
@@ -93,12 +102,15 @@ impl SafeDisplay for ComponentError {
             Self::InvalidComponentName { .. } => self.to_string(),
             Self::LimitExceeded { .. } => self.to_string(),
             Self::InvalidOplogProcessorPlugin => self.to_string(),
-            Self::PluginNotFound { .. } => self.to_string(),
+            Self::EnvironmentPluginNotFound(_) => self.to_string(),
             Self::InvalidPluginScope { .. } => self.to_string(),
             Self::ConcurrentUpdate => self.to_string(),
             Self::InvalidCurrentRevision => self.to_string(),
-            Self::PluginInstallationNotFound { .. } => self.to_string(),
+            Self::PluginInstallationNotFound(_) => self.to_string(),
             Self::ParentEnvironmentNotFound(_) => self.to_string(),
+            Self::ConflictingPluginPriority(_) => self.to_string(),
+            Self::PluginCompositionFailed { .. } => self.to_string(),
+            Self::ComponentTransformerPluginFailed { .. } => self.to_string(),
             Self::NotFound => self.to_string(),
             Self::Unauthorized(_) => self.to_string(),
             Self::InternalError(_) => "Internal error".to_string(),
@@ -111,7 +123,9 @@ error_forwarding!(
     RepoError,
     ApplicationError,
     ComponentRepoError,
-    EnvironmentError
+    EnvironmentError,
+    EnvironmentPluginGrantError,
+    PluginRegistrationError,
 );
 
 impl From<AccountUsageError> for ComponentError {

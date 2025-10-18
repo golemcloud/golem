@@ -17,7 +17,7 @@ use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use golem_common::api::{CreateApiDeploymentRequest, Page};
 use golem_common::model::api_deployment::{ApiDeployment, ApiSiteString};
-use golem_common::model::deployment::DeploymentRevisionId;
+use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -160,7 +160,7 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployments(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Page<ApiDeployment>>> {
         let record = recorded_http_api_request!(
@@ -186,7 +186,7 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployments_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_revision_id: DeploymentRevisionId,
+        _deployment_revision_id: DeploymentRevision,
         _auth: AuthCtx,
     ) -> ApiResult<Json<Page<ApiDeployment>>> {
         todo!()
@@ -202,7 +202,7 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployment(
         &self,
         environment_id: Path<EnvironmentId>,
-        deployment_revision_id: Path<DeploymentRevisionId>,
+        deployment_revision_id: Path<DeploymentRevision>,
         site: Path<ApiSiteString>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<ApiDeployment>> {
@@ -231,7 +231,7 @@ impl EnvironmentApiDeploymentsApi {
     async fn get_deployment_api_deployment_internal(
         &self,
         _environment_id: EnvironmentId,
-        _deployment_revision_id: DeploymentRevisionId,
+        _deployment_revision_id: DeploymentRevision,
         _site: ApiSiteString,
         _auth: AuthCtx,
     ) -> ApiResult<Json<ApiDeployment>> {

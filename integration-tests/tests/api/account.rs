@@ -18,8 +18,8 @@ use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError, RegistryServiceUpdateAccountError,
 };
 use golem_client::model::AccountRole;
-use golem_client::model::UpdatedAccountData;
-use golem_common::model::account::{AccountRevision, NewAccountData};
+use golem_client::model::AccountUpdate;
+use golem_common::model::account::{AccountCreation, AccountRevision};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
 use uuid::Uuid;
@@ -69,7 +69,7 @@ async fn update_account(deps: &EnvBasedTestDependencies) -> anyhow::Result<()> {
     let account = client
         .update_account(
             &user.account_id.0,
-            &UpdatedAccountData {
+            &AccountUpdate {
                 name: new_name.clone(),
                 email: new_email.clone(),
             },
@@ -130,7 +130,7 @@ async fn create_account_with_duplicate_email_fails(
 
     {
         let account = client
-            .create_account(&NewAccountData {
+            .create_account(&AccountCreation {
                 name: Uuid::new_v4().to_string(),
                 email: email.clone(),
             })
@@ -141,7 +141,7 @@ async fn create_account_with_duplicate_email_fails(
 
     {
         let failed_account_creation = client
-            .create_account(&NewAccountData {
+            .create_account(&AccountCreation {
                 name: Uuid::new_v4().to_string(),
                 email: email.clone(),
             })
@@ -169,7 +169,7 @@ async fn update_account_with_duplicate_email_fails(
 
     {
         let account = client
-            .create_account(&NewAccountData {
+            .create_account(&AccountCreation {
                 name: Uuid::new_v4().to_string(),
                 email: conflicting_email.clone(),
             })
@@ -180,7 +180,7 @@ async fn update_account_with_duplicate_email_fails(
 
     {
         let account = client
-            .create_account(&NewAccountData {
+            .create_account(&AccountCreation {
                 name: Uuid::new_v4().to_string(),
                 email: format!("{}@golem.cloud", Uuid::new_v4()),
             })
@@ -189,7 +189,7 @@ async fn update_account_with_duplicate_email_fails(
         let failed_account_update = client
             .update_account(
                 &account.id.0,
-                &UpdatedAccountData {
+                &AccountUpdate {
                     name: account.name,
                     email: conflicting_email.clone(),
                 },
@@ -215,14 +215,14 @@ async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result
     let conflicting_email = format!("{}@golem.cloud", Uuid::new_v4());
 
     let account_1 = client
-        .create_account(&NewAccountData {
+        .create_account(&AccountCreation {
             name: Uuid::new_v4().to_string(),
             email: conflicting_email.clone(),
         })
         .await?;
 
     let account_2 = client
-        .create_account(&NewAccountData {
+        .create_account(&AccountCreation {
             name: Uuid::new_v4().to_string(),
             email: format!("{}@golem.cloud", Uuid::new_v4()),
         })
@@ -231,7 +231,7 @@ async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result
     let account_1 = client
         .update_account(
             &account_1.id.0,
-            &UpdatedAccountData {
+            &AccountUpdate {
                 name: account_1.name,
                 email: format!("{}@golem.cloud", Uuid::new_v4()),
             },
@@ -241,7 +241,7 @@ async fn emails_can_be_reused(deps: &EnvBasedTestDependencies) -> anyhow::Result
     let account_2 = client
         .update_account(
             &account_2.id.0,
-            &UpdatedAccountData {
+            &AccountUpdate {
                 name: account_2.name,
                 email: conflicting_email.clone(),
             },

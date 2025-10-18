@@ -1049,6 +1049,7 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 #[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::base64::Base64;
+    use crate::model::component::ComponentType;
     use crate::model::component_metadata::{
         ComponentMetadata, ComponentMetadataInnerCache, ComponentMetadataInnerData,
         DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory, ProducerField, Producers,
@@ -1303,7 +1304,8 @@ mod protobuf {
             Ok(Self {
                 interface_name: value.interface_name,
                 component_name: value.component_name,
-                component_type: value.component_type.try_into()?,
+                component_type: ComponentType::from_repr(value.component_type)
+                    .ok_or("Invalid component type".to_string())?,
             })
         }
     }

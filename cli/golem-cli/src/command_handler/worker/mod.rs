@@ -53,10 +53,11 @@ use golem_client::model::{
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
 use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentType};
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
-use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_common::model::IdempotencyKey;
 use golem_wasm_ast::analysis::AnalysedType;
 use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
 use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
@@ -214,7 +215,7 @@ impl WorkerCommandHandler {
         );
 
         self.new_worker(
-            component.versioned_component_id.component_id.0,
+            component.component_id.0,
             worker_name.clone(),
             arguments,
             env.into_iter().collect(),
@@ -411,7 +412,7 @@ impl WorkerCommandHandler {
         let connection = WorkerConnection::new(
             self.ctx.worker_service_url().clone(),
             self.ctx.auth_token().await?,
-            &component.versioned_component_id.component_id,
+            &component.component_id,
             worker_name.0.clone(),
             stream_args.into(),
             self.ctx.allow_insecure(),
@@ -477,7 +478,7 @@ impl WorkerCommandHandler {
                 let result = clients
                     .worker
                     .get_oplog(
-                        &component.versioned_component_id.component_id.0,
+                        &component.component_id.0,
                         &worker_name.0,
                         from,
                         batch_size,
@@ -558,11 +559,7 @@ impl WorkerCommandHandler {
 
             clients
                 .worker
-                .revert_worker(
-                    &component.versioned_component_id.component_id.0,
-                    &worker_name.0,
-                    &target,
-                )
+                .revert_worker(&component.component_id.0, &worker_name.0, &target)
                 .await
                 .map(|_| ())
                 .map_service_error()?
@@ -601,7 +598,7 @@ impl WorkerCommandHandler {
         let canceled = clients
             .worker
             .cancel_invocation(
-                &component.versioned_component_id.component_id.0,
+                &component.component_id.0,
                 &worker_name.0,
                 &idempotency_key.value,
             )
@@ -850,10 +847,7 @@ impl WorkerCommandHandler {
         let result = {
             let result = clients
                 .worker
-                .get_worker_metadata(
-                    &component.versioned_component_id.component_id.0,
-                    &worker_name.0,
-                )
+                .get_worker_metadata(&component.component_id.0, &worker_name.0)
                 .await
                 .map_service_error()?;
 
@@ -879,11 +873,8 @@ impl WorkerCommandHandler {
             format!("worker {}", format_worker_name_match(&worker_name_match)),
         );
 
-        self.delete(
-            component.versioned_component_id.component_id.0,
-            &worker_name.0,
-        )
-        .await?;
+        self.delete(component.component_id.0, &worker_name.0)
+            .await?;
 
         log_action(
             "Deleted",
@@ -933,7 +924,7 @@ impl WorkerCommandHandler {
                 let connection = WorkerConnection::new(
                     self.ctx.worker_service_url().clone(),
                     self.ctx.auth_token().await?,
-                    &component.versioned_component_id.component_id,
+                    &component.component_id,
                     worker_name.0.clone(),
                     stream_args.into(),
                     self.ctx.allow_insecure(),
@@ -958,7 +949,7 @@ impl WorkerCommandHandler {
             clients
                 .worker
                 .invoke_function(
-                    &component.versioned_component_id.component_id.0,
+                    &component.component_id.0,
                     &worker_name.0,
                     Some(&idempotency_key.value),
                     function_name,
@@ -972,7 +963,7 @@ impl WorkerCommandHandler {
                 clients
                     .worker_invoke
                     .invoke_and_await_function(
-                        &component.versioned_component_id.component_id.0,
+                        &component.component_id.0,
                         &worker_name.0,
                         Some(&idempotency_key.value),
                         function_name,
@@ -1452,10 +1443,7 @@ impl WorkerCommandHandler {
 
         clients
             .worker
-            .resume_worker(
-                &component.versioned_component_id.component_id.0,
-                &worker_name.0,
-            )
+            .resume_worker(&component.component_id.0, &worker_name.0)
             .await
             .map(|_| ())
             .map_service_error()?;
@@ -1474,7 +1462,7 @@ impl WorkerCommandHandler {
         clients
             .worker
             .interrupt_worker(
-                &component.versioned_component_id.component_id.0,
+                &component.component_id.0,
                 &worker_name.0,
                 Some(recover_immediately),
             )

@@ -16,9 +16,9 @@ use crate::api::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::token::TokenService;
-use golem_common::api::{CreateTokenRequest, Page};
+use golem_common::api::Page;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::{Token, TokenWithSecret};
+use golem_common::model::auth::{Token, TokenCreation, TokenWithSecret};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
@@ -102,7 +102,7 @@ impl AccountTokensApi {
     async fn create_token(
         &self,
         account_id: Path<AccountId>,
-        request: Json<CreateTokenRequest>,
+        request: Json<TokenCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let record =
@@ -121,7 +121,7 @@ impl AccountTokensApi {
     async fn create_token_internal(
         &self,
         account_id: AccountId,
-        request: CreateTokenRequest,
+        request: TokenCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<TokenWithSecret>> {
         let result = self

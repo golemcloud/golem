@@ -15,18 +15,20 @@
 use super::ApiResult;
 use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
+use crate::services::deployment::DeploymentService;
 use crate::services::environment::EnvironmentService;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantService;
 use crate::services::environment_share::EnvironmentShareService;
 use golem_common::api::Page;
-use golem_common::api::environment::DeployEnvironmentRequest;
 use golem_common::model::account::AccountId;
-use golem_common::model::deployment::Deployment;
+use golem_common::model::deployment::{
+    Deployment, DeploymentCreation, DeploymentPlan, DeploymentRevision,
+};
 use golem_common::model::environment::*;
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, NewEnvironmentPluginGrantData,
+    EnvironmentPluginGrant, EnvironmentPluginGrantCreation,
 };
-use golem_common::model::environment_share::{EnvironmentShare, NewEnvironmentShareData};
+use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::poem::NoContentResponse;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -42,6 +44,7 @@ pub struct EnvironmentsApi {
     environment_service: Arc<EnvironmentService>,
     environment_share_service: Arc<EnvironmentShareService>,
     environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
+    deployment_service: Arc<DeploymentService>,
     auth_service: Arc<AuthService>,
 }
 
@@ -55,12 +58,14 @@ impl EnvironmentsApi {
         environment_service: Arc<EnvironmentService>,
         environment_share_service: Arc<EnvironmentShareService>,
         environment_plugin_grant_service: Arc<EnvironmentPluginGrantService>,
+        deployment_service: Arc<DeploymentService>,
         auth_service: Arc<AuthService>,
     ) -> Self {
         Self {
             environment_service,
             environment_share_service,
             environment_plugin_grant_service,
+            deployment_service,
             auth_service,
         }
     }
@@ -97,7 +102,7 @@ impl EnvironmentsApi {
         auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
         let environment = self.environment_service.get(&environment_id, &auth).await?;
-        Ok(Json(environment.value))
+        Ok(Json(environment))
     }
 
     /// Update environment by id.
@@ -109,7 +114,7 @@ impl EnvironmentsApi {
     pub async fn update_environment(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<UpdatedEnvironmentData>,
+        payload: Json<EnvironmentUpdate>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Environment>> {
         let record = recorded_http_api_request!(
@@ -130,7 +135,7 @@ impl EnvironmentsApi {
     async fn update_environment_internal(
         &self,
         environment_id: EnvironmentId,
-        payload: UpdatedEnvironmentData,
+        payload: EnvironmentUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<Environment>> {
         let result = self
@@ -177,75 +182,7 @@ impl EnvironmentsApi {
         Ok(NoContentResponse::NoContent)
     }
 
-    /// Get hash of the currently deployed environment
-    #[oai(
-        path = "/:environment_id/current-deployment/hash",
-        method = "get",
-        operation_id = "get_deployed_environment_hash"
-    )]
-    async fn get_deployed_environment_hash(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<EnvironmentHash>> {
-        let record = recorded_http_api_request!(
-            "get_deployed_environment_hash",
-            environment_id = environment_id.0.to_string(),
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_deployed_environment_hash_internal(environment_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployed_environment_hash_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _token: AuthCtx,
-    ) -> ApiResult<Json<EnvironmentHash>> {
-        todo!()
-    }
-
-    /// Get summary of the currently deployed environment
-    #[oai(
-        path = "/:environment_id/current-deployment/summary",
-        method = "get",
-        operation_id = "get_deployed_environment_summary"
-    )]
-    async fn get_deployed_environment_summary(
-        &self,
-        environment_id: Path<EnvironmentId>,
-        token: GolemSecurityScheme,
-    ) -> ApiResult<Json<EnvironmentSummary>> {
-        let record = recorded_http_api_request!(
-            "get_deployed_environment_summary",
-            environment_id = environment_id.0.to_string(),
-        );
-
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
-
-        let response = self
-            .get_deployed_environment_summary_internal(environment_id.0, auth)
-            .instrument(record.span.clone())
-            .await;
-
-        record.result(response)
-    }
-
-    async fn get_deployed_environment_summary_internal(
-        &self,
-        _environment_id: EnvironmentId,
-        _token: AuthCtx,
-    ) -> ApiResult<Json<EnvironmentSummary>> {
-        todo!()
-    }
-
-    /// Get the current deployment plan. This is equivalent to a summary of the current staging area.
+    /// Get the current deployment plan
     #[oai(
         path = "/:environment_id/plan",
         method = "get",
@@ -255,7 +192,7 @@ impl EnvironmentsApi {
         &self,
         environment_id: Path<EnvironmentId>,
         token: GolemSecurityScheme,
-    ) -> ApiResult<Json<EnvironmentSummary>> {
+    ) -> ApiResult<Json<DeploymentPlan>> {
         let record = recorded_http_api_request!(
             "get_environment_deployment_plan",
             environment_id = environment_id.0.to_string(),
@@ -273,10 +210,14 @@ impl EnvironmentsApi {
 
     async fn get_environment_deployment_plan_internal(
         &self,
-        _environment_id: EnvironmentId,
-        _token: AuthCtx,
-    ) -> ApiResult<Json<EnvironmentSummary>> {
-        todo!()
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<DeploymentPlan>> {
+        let deployment_plan = self
+            .deployment_service
+            .get_current_deployment_plan(&environment_id, &auth)
+            .await?;
+        Ok(Json(deployment_plan))
     }
 
     /// Get all deployments in this environment
@@ -308,10 +249,16 @@ impl EnvironmentsApi {
 
     async fn get_deployments_internal(
         &self,
-        _environment_id: EnvironmentId,
-        _token: AuthCtx,
+        environment_id: EnvironmentId,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Page<Deployment>>> {
-        todo!()
+        let deployments = self
+            .deployment_service
+            .list_deployments(&environment_id, &auth)
+            .await?;
+        Ok(Json(Page {
+            values: deployments,
+        }))
     }
 
     /// Deploy the current staging area of this environment
@@ -324,7 +271,7 @@ impl EnvironmentsApi {
     async fn deploy_environment(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<DeployEnvironmentRequest>,
+        payload: Json<DeploymentCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<Deployment>> {
         let record = recorded_http_api_request!(
@@ -344,11 +291,60 @@ impl EnvironmentsApi {
 
     async fn deploy_environment_internal(
         &self,
-        _environment_id: EnvironmentId,
-        _payload: DeployEnvironmentRequest,
-        _token: AuthCtx,
+        environment_id: EnvironmentId,
+        payload: DeploymentCreation,
+        auth: AuthCtx,
     ) -> ApiResult<Json<Deployment>> {
-        todo!()
+        let deployment = self
+            .deployment_service
+            .create_deployment(&environment_id, payload, &auth)
+            .await?;
+        Ok(Json(deployment))
+    }
+
+    /// Get the deployment plan of a deployed deployment
+    #[oai(
+        path = "/:environment_id/deployments/:deployment_id/plan",
+        method = "get",
+        operation_id = "get_environment_deployed_deployment_plan"
+    )]
+    async fn get_environment_deployed_deployment_plan(
+        &self,
+        environment_id: Path<EnvironmentId>,
+        deployment_id: Path<DeploymentRevision>,
+        token: GolemSecurityScheme,
+    ) -> ApiResult<Json<DeploymentPlan>> {
+        let record = recorded_http_api_request!(
+            "get_environment_deployed_deployment_plan",
+            environment_id = environment_id.0.to_string(),
+            deployment_id = deployment_id.0.to_string(),
+        );
+
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
+        let response = self
+            .get_environment_deployed_deployment_plan_internal(
+                environment_id.0,
+                deployment_id.0,
+                auth,
+            )
+            .instrument(record.span.clone())
+            .await;
+
+        record.result(response)
+    }
+
+    async fn get_environment_deployed_deployment_plan_internal(
+        &self,
+        environment_id: EnvironmentId,
+        deployment_id: DeploymentRevision,
+        auth: AuthCtx,
+    ) -> ApiResult<Json<DeploymentPlan>> {
+        let deployment_plan = self
+            .deployment_service
+            .get_deployed_deployment_summary(&environment_id, deployment_id, &auth)
+            .await?;
+        Ok(Json(deployment_plan))
     }
 
     /// Deploy the current staging area of this environment
@@ -361,7 +357,7 @@ impl EnvironmentsApi {
     async fn create_environment_share(
         &self,
         environment_id: Path<EnvironmentId>,
-        payload: Json<NewEnvironmentShareData>,
+        payload: Json<EnvironmentShareCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -382,7 +378,7 @@ impl EnvironmentsApi {
     async fn create_environment_share_internal(
         &self,
         environment_id: EnvironmentId,
-        payload: NewEnvironmentShareData,
+        payload: EnvironmentShareCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let actor = AccountId(Uuid::new_v4());
@@ -445,7 +441,7 @@ impl EnvironmentsApi {
     pub async fn create_environment_plugin_grant(
         &self,
         environment_id: Path<EnvironmentId>,
-        data: Json<NewEnvironmentPluginGrantData>,
+        data: Json<EnvironmentPluginGrantCreation>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let record = recorded_http_api_request!(
@@ -466,7 +462,7 @@ impl EnvironmentsApi {
     async fn create_environment_plugin_grant_internal(
         &self,
         environment_id: EnvironmentId,
-        data: NewEnvironmentPluginGrantData,
+        data: EnvironmentPluginGrantCreation,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentPluginGrant>> {
         let grant = self

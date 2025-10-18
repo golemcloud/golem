@@ -26,8 +26,7 @@ use crate::model::public_oplog::{
     SuccessfulUpdateParameters, TimestampParameter,
 };
 use crate::model::{
-    AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, ProjectId, Timestamp,
-    WorkerId,
+    AccountId, ComponentId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, WorkerId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 use uuid::Uuid;
@@ -48,6 +47,7 @@ fn rounded_ts(ts: Timestamp) -> Timestamp {
 #[cfg(feature = "poem")]
 fn create_serialization_poem_serde_equivalence() {
     use crate::model::component::ComponentRevision;
+    use crate::model::environment::EnvironmentId;
 
     let entry = PublicOplogEntry::Create(CreateParameters {
         timestamp: rounded_ts(Timestamp::now_utc()),
@@ -64,7 +64,7 @@ fn create_serialization_poem_serde_equivalence() {
             .collect(),
         created_by: AccountId::new_v4(),
         wasi_config_vars: BTreeMap::from_iter(vec![("A".to_string(), "B".to_string())]).into(),
-        project_id: ProjectId::new_v4(),
+        environment_id: EnvironmentId::new_v4(),
         parent: Some(WorkerId {
             component_id: ComponentId(
                 Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),

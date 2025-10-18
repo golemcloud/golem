@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::ComponentId;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentName, PluginInstallation, VersionedComponentId};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentName, InstalledPlugin};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, ComponentProcessingError, DynamicLinkedInstance,
@@ -38,7 +38,7 @@ pub struct NewComponentRevision {
     pub env: BTreeMap<String, String>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub object_store_key: String,
-    pub installed_plugins: Vec<PluginInstallation>,
+    pub installed_plugins: Vec<InstalledPlugin>,
 
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
     pub agent_types: Vec<AgentType>,
@@ -55,6 +55,7 @@ impl NewComponentRevision {
         wasm_hash: Hash,
         object_store_key: String,
         dynamic_linking: HashMap<String, DynamicLinkedInstance>,
+        installed_plugins: Vec<InstalledPlugin>,
         agent_types: Vec<AgentType>,
     ) -> Self {
         Self {
@@ -68,7 +69,7 @@ impl NewComponentRevision {
             env,
             wasm_hash,
             object_store_key,
-            installed_plugins: Vec::new(),
+            installed_plugins,
             dynamic_linking,
             agent_types,
         }
@@ -107,8 +108,8 @@ impl NewComponentRevision {
 
 #[derive(Debug, Clone)]
 pub struct FinalizedComponentRevision {
-    pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
+    pub environment_id: EnvironmentId,
     pub component_name: ComponentName,
     pub component_type: ComponentType,
     pub original_files: Vec<InitialComponentFile>,
@@ -117,7 +118,7 @@ pub struct FinalizedComponentRevision {
     pub env: BTreeMap<String, String>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub object_store_key: String,
-    pub installed_plugins: Vec<PluginInstallation>,
+    pub installed_plugins: Vec<InstalledPlugin>,
 
     pub transformed_object_store_key: String,
     pub metadata: ComponentMetadata,
@@ -126,15 +127,16 @@ pub struct FinalizedComponentRevision {
 
 #[derive(Debug, Clone)]
 pub struct Component {
+    pub id: ComponentId,
+    pub revision: ComponentRevision,
     pub environment_id: EnvironmentId,
-    pub versioned_component_id: VersionedComponentId,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
-    pub installed_plugins: Vec<PluginInstallation>,
+    pub installed_plugins: Vec<InstalledPlugin>,
     pub env: BTreeMap<String, String>,
 
     /// Hash of the wasm before any transformations
@@ -149,8 +151,8 @@ pub struct Component {
 impl Component {
     pub fn into_new_revision(self) -> NewComponentRevision {
         NewComponentRevision {
+            component_id: self.id,
             environment_id: self.environment_id,
-            component_id: self.versioned_component_id.component_id,
             component_name: self.component_name,
             component_type: self.component_type,
             original_files: self.original_files,
@@ -167,11 +169,12 @@ impl Component {
     }
 }
 
-impl From<Component> for golem_common::model::component::Component {
+impl From<Component> for golem_common::model::component::ComponentDto {
     fn from(value: Component) -> Self {
         Self {
+            id: value.id,
+            revision: value.revision,
             environment_id: value.environment_id,
-            versioned_component_id: value.versioned_component_id,
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,

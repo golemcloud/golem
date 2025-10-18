@@ -12,29 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::newtype_uuid;
+use crate::model::component::ComponentId;
 use bincode::{Decode, Encode};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
-
-newtype_uuid!(
-    ComponentId,
-    golem_api_grpc::proto::golem::component::ComponentId
-);
-
-newtype_uuid!(ProjectId, golem_api_grpc::proto::golem::common::ProjectId);
-
-newtype_uuid!(PluginId, golem_api_grpc::proto::golem::component::PluginId);
-
-newtype_uuid!(
-    PluginInstallationId,
-    golem_api_grpc::proto::golem::common::PluginInstallationId
-);
-
-newtype_uuid!(PlanId, golem_api_grpc::proto::golem::account::PlanId);
-newtype_uuid!(ProjectGrantId);
-newtype_uuid!(ProjectPolicyId);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord, Hash, Encode, Decode)]
 #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]

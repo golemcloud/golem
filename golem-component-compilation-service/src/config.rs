@@ -26,7 +26,7 @@ use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
-use golem_worker_executor::services::golem_config::CompiledComponentServiceConfig;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {

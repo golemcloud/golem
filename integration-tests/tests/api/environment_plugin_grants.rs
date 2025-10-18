@@ -21,9 +21,9 @@ use golem_client::api::{
 };
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::base64::Base64;
-use golem_common::model::environment_plugin_grant::NewEnvironmentPluginGrantData;
+use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
-    NewPluginRegistrationData, OplogProcessorPluginSpec, PluginSpecDto,
+    OplogProcessorPluginSpec, PluginRegistrationCreation, PluginSpecDto,
 };
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use test_r::{inherit_test_dep, test};
@@ -58,15 +58,15 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     let plugin = client_1
         .create_plugin(
             &user_1.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: plugin_component.versioned_component_id.component_id,
-                    component_revision: plugin_component.versioned_component_id.version,
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -78,7 +78,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         let result = client_2
             .create_environment_plugin_grant(
                 &shared_env.id.0,
-                &NewEnvironmentPluginGrantData {
+                &EnvironmentPluginGrantCreation {
                     plugin_id: plugin.id.clone(),
                 },
             )
@@ -94,7 +94,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
     let plugin_grant = client_1
         .create_environment_plugin_grant(
             &shared_env.id.0,
-            &NewEnvironmentPluginGrantData {
+            &EnvironmentPluginGrantCreation {
                 plugin_id: plugin.id.clone(),
             },
         )
@@ -203,15 +203,15 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
     let plugin = client_1
         .create_plugin(
             &user_1.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: plugin_component.versioned_component_id.component_id,
-                    component_revision: plugin_component.versioned_component_id.version,
+                    component_id: plugin_component.id,
+                    component_revision: plugin_component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -222,7 +222,7 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
         let result = client_1
             .create_environment_plugin_grant(
                 &unrelated_env.id.0,
-                &NewEnvironmentPluginGrantData {
+                &EnvironmentPluginGrantCreation {
                     plugin_id: plugin.id.clone(),
                 },
             )
@@ -267,15 +267,15 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
     let plugin = client_1
         .create_plugin(
             &user_1.account_id.0,
-            &NewPluginRegistrationData {
+            &PluginRegistrationCreation {
                 name: "test-oplog-processor".to_string(),
                 version: "1.0.0".to_string(),
                 description: "description".to_string(),
                 icon: Base64(Vec::new()),
                 homepage: "https://golem.cloud".to_string(),
                 spec: PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
-                    component_id: plugin_component.versioned_component_id.component_id.clone(),
-                    component_revision: plugin_component.versioned_component_id.version,
+                    component_id: plugin_component.id.clone(),
+                    component_revision: plugin_component.revision,
                 }),
             },
             None::<Vec<u8>>,
@@ -285,7 +285,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
     let plugin_grant = client_1
         .create_environment_plugin_grant(
             &shared_env.id.0,
-            &NewEnvironmentPluginGrantData {
+            &EnvironmentPluginGrantCreation {
                 plugin_id: plugin.id.clone(),
             },
         )
@@ -303,9 +303,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
 
     // User 2 cannot directly see component that is part of the plugin
     {
-        let result = client_2
-            .get_component(&plugin_component.versioned_component_id.component_id.0)
-            .await;
+        let result = client_2.get_component(&plugin_component.id.0).await;
         assert!(
             let Err(golem_client::Error::Item(
                 RegistryServiceGetComponentError::Error404(_)

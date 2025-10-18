@@ -45,6 +45,15 @@ fn main() -> anyhow::Result<()> {
                 .build(),
         );
 
+        let num_cpus = std::thread::available_parallelism()?;
+
+        // We don't want rayon to starve the tokio async pool from doing async work. Can allocate more cpus
+        // to rayon if the cpu bound work is being to slow.
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(num_cpus.get().div_ceil(2))
+            .build_global()
+            .unwrap();
+
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?

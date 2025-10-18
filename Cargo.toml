@@ -9,12 +9,12 @@ members = [
     # "golem-debugging-service",
     "golem-service-base",
     # "golem-component-service",
-    # "golem-component-compilation-service",
+    "golem-component-compilation-service",
     "golem-registry-service",
     "golem-rib",
     "golem-rib-repl",
     "golem-test-framework",
-    # "golem-shard-manager",
+    "golem-shard-manager",
     # "golem-worker-executor",
     # "golem-worker-service",
     "integration-tests",
@@ -245,6 +245,7 @@ protox = "0.9.0"
 quote = "1.0.37"
 rand = "0.9.0"
 range-set-blaze = "0.1.16"
+rayon = "1.11.0"
 redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }

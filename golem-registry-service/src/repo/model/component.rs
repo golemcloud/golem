@@ -17,17 +17,19 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, Revis
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::error_forwarding;
-use golem_common::model::ComponentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
-    InitialComponentFile, InitialComponentFileKey, PluginInstallation, VersionedComponentId,
+    InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
 };
+use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, DynamicLinkedWasmRpc,
 };
-use golem_common::model::diff::{self, Hashable};
+use golem_common::model::deployment::DeploymentPlanComponentEntry;
+use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
@@ -344,9 +346,7 @@ impl ComponentRevisionRecord {
         diff::Component {
             metadata: diff::ComponentMetadata {
                 version: Some(self.version.clone()),
-                component_type: self
-                    .component_type
-                    .try_into()
+                component_type: ComponentType::from_repr(self.component_type)
                     .expect("expected valid component type"),
                 env: self
                     .env
@@ -471,27 +471,27 @@ impl TryFrom<ComponentExtRevisionRecord> for Component {
 
     fn try_from(value: ComponentExtRevisionRecord) -> Result<Self, Self::Error> {
         Ok(Self {
+            id: ComponentId(value.revision.component_id),
+            revision: ComponentRevision(value.revision.revision_id as u64),
             environment_id: EnvironmentId(value.environment_id),
-            versioned_component_id: VersionedComponentId {
-                component_id: ComponentId(value.revision.component_id),
-                version: ComponentRevision(value.revision.revision_id as u64),
-            },
             component_name: ComponentName(value.name),
             component_size: value.revision.size as u64,
             metadata: value.revision.metadata.into(),
             created_at: value.revision.audit.created_at.into(),
-            component_type: value
-                .revision
-                .component_type
-                .try_into()
-                .map_err(|e| anyhow!("Failed converting component type: {e}"))?,
+            component_type: ComponentType::from_repr(value.revision.component_type)
+                .ok_or(anyhow!("Failed converting component type"))?,
             files: value
                 .revision
                 .files
                 .into_iter()
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
-            installed_plugins: vec![], // TODO
+            installed_plugins: value
+                .revision
+                .plugins
+                .into_iter()
+                .map(|p| p.into())
+                .collect(),
             env: value.revision.env.0,
             object_store_key: value.revision.object_store_key,
             wasm_hash: blake3::Hash::from(value.revision.binary_hash).into(),
@@ -586,16 +586,16 @@ impl ComponentPluginInstallationRecord {
     }
 
     fn from_model(
-        plugin_installation: PluginInstallation,
+        plugin_installation: InstalledPlugin,
         component_id: Uuid,
         actor: &AccountId,
     ) -> Self {
         Self {
             component_id,
             revision_id: 0,
-            plugin_id: plugin_installation.id.0,
-            plugin_name: plugin_installation.name,
-            plugin_version: plugin_installation.version,
+            plugin_id: plugin_installation.plugin_id.0,
+            plugin_name: "".to_string(),
+            plugin_version: "".to_string(),
             audit: RevisionAuditFields::new(actor.0),
             priority: plugin_installation.priority,
             parameters: Json::from(
@@ -608,11 +608,32 @@ impl ComponentPluginInstallationRecord {
     }
 }
 
+impl From<ComponentPluginInstallationRecord> for InstalledPlugin {
+    fn from(value: ComponentPluginInstallationRecord) -> Self {
+        Self {
+            plugin_id: PluginRegistrationId(value.plugin_id),
+            priority: value.priority,
+            parameters: value.parameters.0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct ComponentRevisionIdentityRecord {
     pub component_id: Uuid,
     pub name: String,
     pub revision_id: i64,
     pub version: String,
-    pub hash: Option<SqlBlake3Hash>,
+    pub hash: SqlBlake3Hash,
+}
+
+impl From<ComponentRevisionIdentityRecord> for DeploymentPlanComponentEntry {
+    fn from(value: ComponentRevisionIdentityRecord) -> Self {
+        Self {
+            id: ComponentId(value.component_id),
+            revision: value.revision_id.into(),
+            name: ComponentName(value.name),
+            hash: Hash::new(value.hash.into_blake3_hash()),
+        }
+    }
 }

@@ -19,7 +19,7 @@ use golem_client::api::{
     RegistryServiceGetAccountApplicationError, RegistryServiceListAccountApplicationsError,
     RegistryServiceUpdateApplicationError,
 };
-use golem_common::model::application::{NewApplicationData, UpdatedApplicationData};
+use golem_common::model::application::{ApplicationCreation, ApplicationUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
@@ -160,7 +160,7 @@ async fn cannot_create_two_applications_with_same_name(
         let result = client
             .create_application(
                 &user.account_id.0,
-                &NewApplicationData {
+                &ApplicationCreation {
                     name: app_1.name.clone(),
                 },
             )
@@ -177,7 +177,7 @@ async fn cannot_create_two_applications_with_same_name(
         let result = client
             .update_application(
                 &app_2.id.0,
-                &UpdatedApplicationData {
+                &ApplicationUpdate {
                     new_name: Some(app_1.name.clone()),
                 },
             )
@@ -198,7 +198,7 @@ async fn cannot_create_two_applications_with_same_name(
         let app_3 = client
             .create_application(
                 &user.account_id.0,
-                &NewApplicationData {
+                &ApplicationCreation {
                     name: app_1.name.clone(),
                 },
             )
@@ -211,7 +211,7 @@ async fn cannot_create_two_applications_with_same_name(
     client
         .update_application(
             &app_2.id.0,
-            &UpdatedApplicationData {
+            &ApplicationUpdate {
                 new_name: Some(app_1.name.clone()),
             },
         )

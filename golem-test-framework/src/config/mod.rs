@@ -25,8 +25,8 @@ pub use cli::{CliParams, CliTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::api::RegistryServiceClient;
-use golem_client::model::{AccountRole, CreateTokenRequest};
-use golem_common::model::account::NewAccountData;
+use golem_client::model::{AccountRole, TokenCreation};
+use golem_common::model::account::AccountCreation;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
@@ -94,7 +94,7 @@ pub trait TestDependencies: Send + Sync {
             .await;
 
         let name = Uuid::new_v4().to_string();
-        let account_data = NewAccountData {
+        let account_data = AccountCreation {
             email: format!("{name}@golem.cloud"),
             name,
         };
@@ -104,7 +104,7 @@ pub trait TestDependencies: Send + Sync {
         let token = client
             .create_token(
                 &account.id.0,
-                &CreateTokenRequest {
+                &TokenCreation {
                     expires_at: DateTime::<Utc>::MAX_UTC,
                 },
             )

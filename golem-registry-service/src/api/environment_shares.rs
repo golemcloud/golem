@@ -17,7 +17,7 @@ use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::environment_share::EnvironmentShareService;
 use golem_common::model::environment_share::{
-    EnvironmentShare, EnvironmentShareId, UpdatedEnvironmentShareData,
+    EnvironmentShare, EnvironmentShareId, EnvironmentShareUpdate,
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
@@ -96,7 +96,7 @@ impl EnvironmentSharesApi {
     pub async fn update_environment_share(
         &self,
         environment_share_id: Path<EnvironmentShareId>,
-        data: Json<UpdatedEnvironmentShareData>,
+        data: Json<EnvironmentShareUpdate>,
         token: GolemSecurityScheme,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let record = recorded_http_api_request!(
@@ -117,7 +117,7 @@ impl EnvironmentSharesApi {
     async fn update_environment_share_internal(
         &self,
         environment_share_id: EnvironmentShareId,
-        data: UpdatedEnvironmentShareData,
+        data: EnvironmentShareUpdate,
         auth: AuthCtx,
     ) -> ApiResult<Json<EnvironmentShare>> {
         let share = self

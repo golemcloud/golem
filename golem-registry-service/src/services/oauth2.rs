@@ -29,7 +29,7 @@ use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use anyhow::anyhow;
 use applying::Apply;
 use chrono::{Duration, Utc};
-use golem_common::model::account::{AccountId, NewAccountData};
+use golem_common::model::account::{AccountCreation, AccountId};
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{
     EncodedOAuth2DeviceflowSession, OAuth2DeviceflowData, OAuth2Provider, OAuth2WebflowData,
@@ -137,7 +137,7 @@ impl OAuth2Service {
             None => {
                 // This will also link the external id to the account id, ensure that no additional
                 // accounts are created in the future.
-                self.make_token(provider.clone(), external_login, account_id)
+                self.make_token(*provider, external_login, account_id)
                     .await?
             }
         };
@@ -152,7 +152,7 @@ impl OAuth2Service {
     ) -> Result<OAuth2WebflowData, OAuth2Error> {
         let metadata = OAuth2WebflowStateMetadata {
             redirect,
-            provider: provider.clone(),
+            provider: *provider,
         };
 
         let state = self
@@ -349,7 +349,7 @@ impl OAuth2Service {
 
         let account = self
             .account_service
-            .create(NewAccountData { name, email }, &AuthCtx::system())
+            .create(AccountCreation { name, email }, &AuthCtx::system())
             .await?;
 
         Ok(account.id)

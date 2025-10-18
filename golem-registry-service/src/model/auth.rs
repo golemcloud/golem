@@ -13,16 +13,13 @@
 // limitations under the License.
 
 use golem_common::SafeDisplay;
-use golem_common::model::PlanId;
 use golem_common::model::account::AccountId;
+use golem_common::model::account::PlanId;
 use golem_common::model::auth::{
     AccountAction, AccountRole, EnvironmentAction, EnvironmentRole, GlobalAction, PlanAction,
 };
 use std::collections::HashSet;
 use std::hash::Hash;
-use uuid::uuid;
-
-pub const SYSTEM_ACCOUNT_ID: AccountId = AccountId(uuid!("00000000-0000-0000-0000-000000000000"));
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorizationError {
@@ -61,7 +58,7 @@ impl AuthCtx {
     /// Get the sytem AuthCtx for system initiated action
     pub fn system() -> AuthCtx {
         AuthCtx {
-            account_id: SYSTEM_ACCOUNT_ID.clone(),
+            account_id: AccountId::SYSTEM.clone(),
             account_plan_id: None,
             account_roles: HashSet::from([AccountRole::Admin]),
         }
@@ -212,6 +209,26 @@ impl AuthCtx {
             EnvironmentAction::DeleteEnvironmentPluginGrant => {
                 has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
             }
+            EnvironmentAction::DeployEnvironment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewDeployment => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::ViewDeploymentPlan => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
         };
 
         if !is_allowed {

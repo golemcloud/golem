@@ -19,7 +19,7 @@ use golem_client::api::{
     RegistryServiceGetApplicationEnvironmentError, RegistryServiceListApplicationEnvironmentsError,
     RegistryServiceUpdateEnvironmentError,
 };
-use golem_common::model::environment::{NewEnvironmentData, UpdatedEnvironmentData};
+use golem_common::model::environment::{EnvironmentCreation, EnvironmentUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test};
@@ -103,7 +103,7 @@ async fn other_users_cannot_get_applications(
 
     {
         let result = client.list_application_environments(&app.id.0).await;
-        assert!(let Err(golem_client::Error::Item(RegistryServiceListApplicationEnvironmentsError::Error403(_))) = result);
+        assert!(let Err(golem_client::Error::Item(RegistryServiceListApplicationEnvironmentsError::Error404(_))) = result);
     }
 
     Ok(())
@@ -128,7 +128,7 @@ async fn deleting_account_hides_environments(
         let result = admin_client.list_application_environments(&app.id.0).await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceListApplicationEnvironmentsError::Error403(_)
+                RegistryServiceListApplicationEnvironmentsError::Error404(_)
             )) = result
         );
     }
@@ -163,7 +163,7 @@ async fn deleting_application_hides_environments(
         let result = client.list_application_environments(&app.id.0).await;
         assert!(
             let Err(golem_client::Error::Item(
-                RegistryServiceListApplicationEnvironmentsError::Error403(_)
+                RegistryServiceListApplicationEnvironmentsError::Error404(_)
             )) = result
         );
     }
@@ -197,7 +197,7 @@ async fn cannot_create_two_environments_with_same_name(
         let result = client
             .create_environment(
                 &app.id.0,
-                &NewEnvironmentData {
+                &EnvironmentCreation {
                     name: env_1.name.clone(),
                     compatibility_check: false,
                     version_check: false,
@@ -217,7 +217,7 @@ async fn cannot_create_two_environments_with_same_name(
         let result = client
             .update_environment(
                 &env_2.id.0,
-                &UpdatedEnvironmentData {
+                &EnvironmentUpdate {
                     new_name: Some(env_1.name.clone()),
                 },
             )
@@ -238,7 +238,7 @@ async fn cannot_create_two_environments_with_same_name(
         let env_3 = client
             .create_environment(
                 &app.id.0,
-                &NewEnvironmentData {
+                &EnvironmentCreation {
                     name: env_1.name.clone(),
                     compatibility_check: false,
                     version_check: false,
@@ -254,7 +254,7 @@ async fn cannot_create_two_environments_with_same_name(
     client
         .update_environment(
             &env_2.id.0,
-            &UpdatedEnvironmentData {
+            &EnvironmentUpdate {
                 new_name: Some(env_1.name.clone()),
             },
         )

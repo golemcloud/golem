@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use crate::config::ComponentTransformerPluginCallerConfig;
-use crate::model::component::Component;
+use crate::model::component::NewComponentRevision;
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
 use golem_common::model::base64::Base64;
+use golem_common::model::component::ComponentName;
 use golem_common::model::component::{
-    ComponentFilePath, ComponentFilePermissions, ComponentType, InitialComponentFile,
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, InitialComponentFile,
 };
-use golem_common::model::component::{ComponentName, VersionedComponentId};
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::retries::with_retries;
 use http::StatusCode;
 use reqwest::multipart::{Form, Part};
@@ -50,10 +49,10 @@ pub struct ComponentTransformerResponse {
 pub trait ComponentTransformerPluginCaller: Send + Sync {
     async fn call_remote_transformer_plugin(
         &self,
-        component: &Component,
+        component: &NewComponentRevision,
         data: &[u8],
         url: String,
-        parameters: &HashMap<String, String>,
+        parameters: &BTreeMap<String, String>,
     ) -> Result<ComponentTransformerResponse, TransformationFailedReason>;
 }
 
@@ -99,10 +98,10 @@ impl ComponentTransformerPluginCallerDefault {
 impl ComponentTransformerPluginCaller for ComponentTransformerPluginCallerDefault {
     async fn call_remote_transformer_plugin(
         &self,
-        component: &Component,
+        component: &NewComponentRevision,
         data: &[u8],
         url: String,
-        parameters: &HashMap<String, String>,
+        parameters: &BTreeMap<String, String>,
     ) -> Result<ComponentTransformerResponse, TransformationFailedReason> {
         let serializable_component: SerializableComponent = component.clone().into();
         let response = with_retries(
@@ -196,24 +195,18 @@ impl ComponentTransformerPluginCaller for ComponentTransformerPluginCallerDefaul
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SerializableComponent {
-    pub versioned_component_id: VersionedComponentId,
+    pub component_id: ComponentId,
     pub component_name: ComponentName,
-    pub component_size: u64,
-    pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
     pub component_type: ComponentType,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
 }
 
-impl From<Component> for SerializableComponent {
-    fn from(value: Component) -> Self {
+impl From<NewComponentRevision> for SerializableComponent {
+    fn from(value: NewComponentRevision) -> Self {
         Self {
-            versioned_component_id: value.versioned_component_id,
+            component_id: value.component_id,
             component_name: value.component_name,
-            component_size: value.component_size,
-            metadata: value.metadata,
-            created_at: value.created_at,
             component_type: value.component_type,
             files: value.files,
             env: value.env,

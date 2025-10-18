@@ -6,6 +6,7 @@ import public "golem/component/agent.proto";
 import public "golem/component/component_id.proto";
 import public "golem/common/project_id.proto";
 import public "golem/component/v1/component_error.proto";
+import public "golem/common/environment.proto";
 
 service AgentTypesService {
   rpc GetAll (GetAllRequest) returns (GetAllResponse);
@@ -13,7 +14,7 @@ service AgentTypesService {
 }
 
 message GetAllRequest {
-  golem.common.ProjectId projectId = 1;
+  golem.common.EnvironmentId environment_id = 1;
 }
 
 message GetAllResponse {
@@ -28,7 +29,7 @@ message GetAllSuccessResponse {
 }
 
 message GetRequest {
-  golem.common.ProjectId projectId = 1;
+  golem.common.EnvironmentId environment_id = 1;
   string agentType = 2;
 }
 
@@ -40,6 +41,6 @@ message GetResponse {
 }
 
 message RegisteredAgentType {
-  golem.component.AgentType agentType = 1;
+  golem.component.AgentType agent_type = 1;
   golem.component.ComponentId implementedBy = 2;
 }

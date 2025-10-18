@@ -31,17 +31,16 @@ declare_structs! {
         pub expires_at: chrono::DateTime<Utc>,
     }
 
+    pub struct TokenCreation {
+        pub expires_at: chrono::DateTime<Utc>,
+    }
+
     pub struct TokenWithSecret {
         pub id: TokenId,
         pub secret: TokenSecret,
         pub account_id: AccountId,
         pub created_at: chrono::DateTime<Utc>,
         pub expires_at: chrono::DateTime<Utc>,
-    }
-
-    pub struct AccountAuthorisation {
-        pub token: Token,
-        pub roles: Vec<AccountRole>,
     }
 }
 
@@ -57,14 +56,14 @@ impl TokenWithSecret {
 }
 
 declare_enums! {
-    #[derive(Eq, Hash, FromRepr, EnumIter)]
+    #[derive(Hash, FromRepr, EnumIter)]
     #[repr(i32)]
     pub enum AccountRole {
         Admin = 0,
         MarketingAdmin = 1,
     }
 
-    #[derive(Eq, Hash, FromRepr, EnumIter)]
+    #[derive(Hash, FromRepr, EnumIter)]
     #[repr(i32)]
     pub enum EnvironmentRole {
         Admin = 0,
@@ -144,10 +143,13 @@ pub enum EnvironmentAction {
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
     DeleteShare,
+    DeployEnvironment,
     UpdateComponent,
     UpdateEnvironment,
     UpdateShare,
     ViewComponent,
+    ViewDeployment,
+    ViewDeploymentPlan,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
     ViewShares,

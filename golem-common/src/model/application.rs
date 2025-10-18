@@ -49,11 +49,11 @@ declare_structs! {
         pub name: ApplicationName,
     }
 
-    pub struct NewApplicationData {
+    pub struct ApplicationCreation {
         pub name: ApplicationName,
     }
 
-    pub struct UpdatedApplicationData {
+    pub struct ApplicationUpdate {
         pub new_name: Option<ApplicationName>,
     }
 }

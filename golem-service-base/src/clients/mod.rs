@@ -14,8 +14,7 @@
 
 pub mod auth;
 pub mod limit;
-pub mod plugin;
-pub mod project;
+// pub mod plugin;
 
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, HasConfigExamples};

@@ -14,7 +14,6 @@
 
 use super::environment::{EnvironmentError, EnvironmentService};
 use super::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
-use crate::model::WithEnvironmentCtx;
 use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment_plugin_grant::EnvironmentPluginGrantRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
@@ -24,7 +23,7 @@ use crate::repo::model::environment_plugin_grant::{
 use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
-    EnvironmentPluginGrant, EnvironmentPluginGrantId, NewEnvironmentPluginGrantData,
+    EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
@@ -88,7 +87,7 @@ impl EnvironmentPluginGrantService {
     pub async fn create(
         &self,
         environment_id: EnvironmentId,
-        data: NewEnvironmentPluginGrantData,
+        data: EnvironmentPluginGrantCreation,
         auth: &AuthCtx,
     ) -> Result<EnvironmentPluginGrant, EnvironmentPluginGrantError> {
         let environment = self
@@ -223,10 +222,7 @@ impl EnvironmentPluginGrantService {
         &self,
         environment_plugin_grant_id: &EnvironmentPluginGrantId,
         auth: &AuthCtx,
-    ) -> Result<
-        (EnvironmentPluginGrant, WithEnvironmentCtx<Environment>),
-        EnvironmentPluginGrantError,
-    > {
+    ) -> Result<(EnvironmentPluginGrant, Environment), EnvironmentPluginGrantError> {
         let grant: EnvironmentPluginGrant = self
             .environment_plugin_grant_repo
             .get_by_id(&environment_plugin_grant_id.0)

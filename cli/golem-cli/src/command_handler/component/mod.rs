@@ -35,11 +35,11 @@ use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::fmt::{log_error, log_warn};
 use crate::model::worker::WorkerUpdateMode;
 use anyhow::{anyhow, bail};
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentType};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
-use golem_common::model::ComponentId;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -598,9 +598,9 @@ impl ComponentCommandHandler {
                 .worker_handler()
                 .update_component_workers(
                     &component.component_name,
-                    &component.versioned_component_id.component_id,
+                    &component.component_id,
                     update,
-                    component.versioned_component_id.version.0,
+                    component.revision.0,
                     await_updates,
                 )
                 .await?;
@@ -625,10 +625,7 @@ impl ComponentCommandHandler {
         for component in components {
             self.ctx
                 .worker_handler()
-                .redeploy_component_workers(
-                    &component.component_name,
-                    &component.versioned_component_id.component_id,
-                )
+                .redeploy_component_workers(&component.component_name, &component.component_id)
                 .await?;
         }
 
@@ -947,7 +944,7 @@ impl ComponentCommandHandler {
         Ok(self
             .component(environment, component_name.into(), None)
             .await?
-            .map(|c| ComponentId(c.versioned_component_id.component_id.0)))
+            .map(|c| ComponentId(c.component_id.0)))
     }
 
     pub async fn latest_component_by_id(

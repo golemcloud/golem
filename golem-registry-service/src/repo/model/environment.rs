@@ -12,18 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::RecordWithEnvironmentCtx;
 use super::datetime::SqlDateTime;
 use super::environment_share::environment_roles_from_bit_vector;
-use crate::model::WithEnvironmentCtx;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
 use crate::repo::model::hash::SqlBlake3Hash;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::diff;
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::diff::Hashable;
-use golem_common::model::environment::{Environment, EnvironmentId, EnvironmentName};
+use golem_common::model::diff::{self};
+use golem_common::model::environment::{
+    Environment, EnvironmentCreation, EnvironmentCurrentDeploymentView, EnvironmentId,
+    EnvironmentName, EnvironmentRevision,
+};
 use golem_service_base::repo::RepoError;
 use sqlx::{FromRow, types::Json};
 use std::collections::{BTreeMap, HashSet};
@@ -42,13 +44,18 @@ pub enum EnvironmentRepoError {
 error_forwarding!(EnvironmentRepoError, RepoError);
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
-pub struct EnvironmentRecord {
+pub struct EnvironmentExtRecord {
     pub environment_id: Uuid,
     pub name: String,
     pub application_id: Uuid,
     #[sqlx(flatten)]
     pub audit: AuditFields,
     pub current_revision_id: i64,
+
+    pub owner_account_id: Uuid,
+    pub environment_roles_from_shares: i32,
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_hash: Option<SqlBlake3Hash>,
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
@@ -65,6 +72,19 @@ pub struct EnvironmentRevisionRecord {
 }
 
 impl EnvironmentRevisionRecord {
+    pub fn from_new_model(environment: EnvironmentCreation, actor: AccountId) -> Self {
+        Self {
+            environment_id: EnvironmentId::new_v4().0,
+            revision_id: EnvironmentRevision::INITIAL.into(),
+            name: environment.name.0,
+            hash: SqlBlake3Hash::empty(),
+            compatibility_check: environment.compatibility_check,
+            version_check: environment.version_check,
+            security_overrides: environment.security_overrides,
+            audit: DeletableRevisionAuditFields::new(actor.0),
+        }
+    }
+
     pub fn from_model(environment: Environment, audit: DeletableRevisionAuditFields) -> Self {
         Self {
             environment_id: environment.id.0,
@@ -121,11 +141,25 @@ impl EnvironmentRevisionRecord {
 }
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct MinimalEnvironmentExtRevisionRecord {
+    pub application_id: Uuid,
+
+    #[sqlx(flatten)]
+    pub revision: EnvironmentRevisionRecord,
+}
+
+#[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct EnvironmentExtRevisionRecord {
     pub application_id: Uuid,
 
     #[sqlx(flatten)]
     pub revision: EnvironmentRevisionRecord,
+
+    pub owner_account_id: Uuid,
+    pub environment_roles_from_shares: i32,
+
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_hash: Option<SqlBlake3Hash>,
 }
 
 impl From<EnvironmentExtRevisionRecord> for Environment {
@@ -138,25 +172,26 @@ impl From<EnvironmentExtRevisionRecord> for Environment {
             compatibility_check: value.revision.compatibility_check,
             version_check: value.revision.version_check,
             security_overrides: value.revision.security_overrides,
-        }
-    }
-}
 
-impl From<RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>>
-    for WithEnvironmentCtx<Environment>
-{
-    fn from(record: RecordWithEnvironmentCtx<EnvironmentExtRevisionRecord>) -> Self {
-        Self {
-            value: record.value.into(),
-            owner_account_id: AccountId(record.owner_account_id),
+            owner_account_id: AccountId(value.owner_account_id),
             roles_from_shares: HashSet::from_iter(environment_roles_from_bit_vector(
-                record.environment_roles_from_shares,
+                value.environment_roles_from_shares,
             )),
+
+            current_deployment: Option::zip(
+                value.current_deployment_revision,
+                value.current_deployment_hash,
+            )
+            .map(|(revision, hash)| EnvironmentCurrentDeploymentView {
+                revision: revision.into(),
+                hash: hash.into_blake3_hash().into(),
+            }),
         }
     }
 }
 
-// Remove when https://github.com/launchbadge/sqlx/issues/2934 is fixed
+// Special record for listing environments. Parent context is mandatory while the environment itself and all children are mandatory
+// Simplify when https://github.com/launchbadge/sqlx/issues/2934 is fixed
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct OptionalEnvironmentExtRevisionRecord {
     pub application_id: Option<Uuid>,
@@ -170,10 +205,26 @@ pub struct OptionalEnvironmentExtRevisionRecord {
     pub compatibility_check: Option<bool>,
     pub version_check: Option<bool>,
     pub security_overrides: Option<bool>,
+
+    pub owner_account_id: Uuid,
+    pub environment_roles_from_shares: i32,
+
+    pub current_deployment_revision: Option<i64>,
+    pub current_deployment_hash: Option<SqlBlake3Hash>,
 }
 
 impl OptionalEnvironmentExtRevisionRecord {
-    pub fn flatten(self) -> Option<EnvironmentExtRevisionRecord> {
+    pub fn owner_account_id(&self) -> AccountId {
+        AccountId(self.owner_account_id)
+    }
+
+    pub fn environment_roles_from_shares(&self) -> HashSet<EnvironmentRole> {
+        HashSet::from_iter(environment_roles_from_bit_vector(
+            self.environment_roles_from_shares,
+        ))
+    }
+
+    pub fn into_revision_record(self) -> Option<EnvironmentExtRevisionRecord> {
         let application_id = self.application_id?;
         let environment_id = self.environment_id?;
         let revision_id = self.revision_id?;
@@ -201,21 +252,13 @@ impl OptionalEnvironmentExtRevisionRecord {
                 version_check,
                 security_overrides,
             },
-        })
-    }
-}
 
-impl From<RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>>
-    for WithEnvironmentCtx<Option<Environment>>
-{
-    fn from(record: RecordWithEnvironmentCtx<OptionalEnvironmentExtRevisionRecord>) -> Self {
-        Self {
-            value: record.value.flatten().map(|v| v.into()),
-            owner_account_id: AccountId(record.owner_account_id),
-            roles_from_shares: HashSet::from_iter(environment_roles_from_bit_vector(
-                record.environment_roles_from_shares,
-            )),
-        }
+            owner_account_id: self.owner_account_id,
+            environment_roles_from_shares: self.environment_roles_from_shares,
+
+            current_deployment_revision: self.current_deployment_revision,
+            current_deployment_hash: self.current_deployment_hash,
+        })
     }
 }
 

@@ -17,9 +17,13 @@ use super::base64::Base64;
 use super::component::ComponentRevision;
 use super::ComponentId;
 use crate::model::Empty;
-use crate::{declare_structs, declare_unions, newtype_uuid};
+use crate::{declare_structs, declare_transparent_newtypes, declare_unions, newtype_uuid};
 
 newtype_uuid!(PluginRegistrationId);
+
+declare_transparent_newtypes! {
+    pub struct PluginWasmFileKey(pub String);
+}
 
 declare_structs! {
     pub struct PluginRegistrationDto {
@@ -33,7 +37,7 @@ declare_structs! {
         pub spec: PluginSpecDto,
     }
 
-    pub struct NewPluginRegistrationData {
+    pub struct PluginRegistrationCreation {
         pub name: String,
         pub version: String,
         pub description: String,

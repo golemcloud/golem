@@ -35,98 +35,156 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
         "0.0.0",
         false,
         true,
+        // To keep this more organized, group the mappings here by module in ::golem_common::model
         &[
-            (
-                "ComponentFileOptions",
-                "golem_common::model::component::ComponentFileOptions",
-            ),
-            (
-                "NewComponentData",
-                "golem_common::model::component::NewComponentData",
-            ),
-            (
-                "UpdatedComponentData",
-                "golem_common::model::component::UpdatedComponentData",
-            ),
-            (
-                "NewPluginRegistrationData",
-                "golem_common::model::plugin_registration::NewPluginRegistrationData",
-            ),
-            (
-                "PluginRegistrationDto",
-                "golem_common::model::plugin_registration::PluginRegistrationDto",
-            ),
-            (
-                "ComponentTransformerPluginSpec",
-                "golem_common::model::plugin_registration::ComponentTransformerPluginSpec",
-            ),
-            ("PluginScope", "golem_common::model::plugin::PluginScope"),
+            // Account
             ("Account", "golem_common::model::account::Account"),
             (
-                "NewAccountData",
-                "golem_common::model::account::NewAccountData",
+                "AccountCreation",
+                "golem_common::model::account::AccountCreation",
             ),
             (
-                "UpdatedAccountData",
-                "golem_common::model::account::UpdatedAccountData",
+                "AccountUpdate",
+                "golem_common::model::account::AccountUpdate",
             ),
-            ("Token", "golem_common::model::auth::Token"),
-            (
-                "TokenWithSecret",
-                "golem_common::model::auth::TokenWithSecret",
-            ),
+            ("Plan", "golem_common::model::account::Plan"),
+            // Application
             (
                 "Application",
                 "golem_common::model::application::Application",
             ),
             (
-                "NewApplicationData",
-                "golem_common::model::application::NewApplicationData",
+                "ApplicationCreation",
+                "golem_common::model::application::ApplicationCreation",
             ),
             (
-                "UpdatedApplicationData",
-                "golem_common::model::application::UpdatedApplicationData",
+                "ApplicationUpdate",
+                "golem_common::model::application::ApplicationUpdate",
             ),
+            // Auth
+            ("Token", "golem_common::model::auth::Token"),
+            ("TokenCreation", "golem_common::model::auth::TokenCreation"),
+            (
+                "TokenWithSecret",
+                "golem_common::model::auth::TokenWithSecret",
+            ),
+            ("AccountRole", "golem_common::model::auth::AccountRole"),
+            (
+                "EnvironmentRole",
+                "golem_common::model::auth::EnvironmentRole",
+            ),
+            // Component
+            (
+                "ComponentCreation",
+                "golem_common::model::component::ComponentCreation",
+            ),
+            (
+                "ComponentUpdate",
+                "golem_common::model::component::ComponentUpdate",
+            ),
+            (
+                "ComponentDto",
+                "golem_common::model::component::ComponentDto",
+            ),
+            (
+                "ComponentFileOptions",
+                "golem_common::model::component::ComponentFileOptions",
+            ),
+            (
+                "InstalledPlugin",
+                "golem_common::model::component::InstalledPlugin",
+            ),
+            (
+                "PluginInstallation",
+                "golem_common::model::component::PluginInstallation",
+            ),
+            (
+                "PluginInstallationUpdate",
+                "golem_common::model::component::PluginInstallationUpdate",
+            ),
+            (
+                "PluginUninstallation",
+                "golem_common::model::component::PluginUninstallation",
+            ),
+            // Component Metadata
+            (
+                "ComponentMetadata",
+                "golem_common::model::component_metadata::ComponentMetadata",
+            ),
+            // Deployment
+            ("Deployment", "golem_common::model::deployment::Deployment"),
+            (
+                "DeploymentCreation",
+                "golem_common::model::deployment::DeploymentCreation",
+            ),
+            (
+                "DeploymentPlan",
+                "golem_common::model::deployment::DeploymentPlan",
+            ),
+            (
+                "DeploymentPlanComponentEntry",
+                "golem_common::model::deployment::DeploymentPlanComponentEntry",
+            ),
+            // Environment
+            (
+                "Environment",
+                "golem_common::model::environment::Environment",
+            ),
+            (
+                "EnvironmentCreation",
+                "golem_common::model::environment::EnvironmentCreation",
+            ),
+            (
+                "EnvironmentUpdate",
+                "golem_common::model::environment::EnvironmentUpdate",
+            ),
+            // Environment Plugin Grant
+            (
+                "EnvironmentPluginGrant",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrant",
+            ),
+            (
+                "EnvironmentPluginGrantCreation",
+                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation",
+            ),
+            // Environment Share
+            (
+                "EnvironmentShare",
+                "golem_common::model::environment_share::EnvironmentShare",
+            ),
+            (
+                "EnvironmentShareCreation",
+                "golem_common::model::environment_share::EnvironmentShareCreation",
+            ),
+            (
+                "EnvironmentShareUpdate",
+                "golem_common::model::environment_share::EnvironmentShareUpdate",
+            ),
+            // Plugin Registration
+            (
+                "PluginRegistrationDto",
+                "golem_common::model::plugin_registration::PluginRegistrationDto",
+            ),
+            (
+                "PluginRegistrationCreation",
+                "golem_common::model::plugin_registration::PluginRegistrationCreation",
+            ),
+            (
+                "ComponentTransformerPluginSpec",
+                "golem_common::model::plugin_registration::ComponentTransformerPluginSpec",
+            ),
+            (
+                "OplogProcessorPluginSpec",
+                "golem_common::model::plugin_registration::OplogProcessorPluginSpec",
+            ),
+            // TODO: Leftovers
+            ("PluginScope", "golem_common::model::plugin::PluginScope"),
             (
                 "RegisteredAgentType",
                 "golem_common::model::agent::RegisteredAgentType",
             ),
             ("ShardId", "golem_common::model::ShardId"),
             ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
-            (
-                "NewEnvironmentData",
-                "golem_common::model::environment::NewEnvironmentData",
-            ),
-            (
-                "UpdatedEnvironmentData",
-                "golem_common::model::environment::UpdatedEnvironmentData",
-            ),
-            (
-                "Environment",
-                "golem_common::model::environment::Environment",
-            ),
-            ("Component", "golem_common::model::component::Component"),
-            ("AccountRole", "golem_common::model::auth::AccountRole"),
-            (
-                "EnvironmentShare",
-                "golem_common::model::environment_share::EnvironmentShare",
-            ),
-            (
-                "NewEnvironmentShareData",
-                "golem_common::model::environment_share::NewEnvironmentShareData",
-            ),
-            (
-                "UpdatedEnvironmentShareData",
-                "golem_common::model::environment_share::UpdatedEnvironmentShareData",
-            ),
-            (
-                "EnvironmentPluginGrant",
-                "golem_common::model::environment_plugin_grant::EnvironmentPluginGrant",
-            ),
-            (
-                "NewEnvironmentPluginGrantData",
-                "golem_common::model::environment_plugin_grant::NewEnvironmentPluginGrantData",
-            ),
             // ("AgentType", "golem_common::model::agent::AgentType"),
             // ("AgentType", "golem_common::model::agent::AgentType"),
             // ("DataSchema", "golem_common::model::agent::DataSchema"),
@@ -135,10 +193,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
             ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
             // ("PluginScope", "golem_common::model::plugin::PluginScope"),
-            (
-                "ComponentMetadata",
-                "golem_common::model::component_metadata::ComponentMetadata",
-            ),
+
             // (
             //    "ComponentFilePathWithPermissionsList",
             //    "golem_common::model::ComponentFilePathWithPermissionsList",
