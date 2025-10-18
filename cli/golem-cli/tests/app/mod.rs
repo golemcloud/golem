@@ -1616,6 +1616,8 @@ async fn test_naming_extremes() {
     let mut ctx = TestContext::new();
     let app_name = "test_naming_extremes";
 
+    ctx.start_server();
+
     let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
     assert!(outputs.success());
 
@@ -1632,7 +1634,7 @@ async fn test_naming_extremes() {
     );
 
     fs::copy(
-        "test-data/ts-code-first-snippets/main.ts",
+        "test-data/ts-code-first-snippets/naming_extremes.ts",
         &component_source_code,
     )
     .unwrap();
