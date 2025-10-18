@@ -172,27 +172,25 @@ async fn agent_env_inheritance(
     let mut child_env_vars = BTreeMap::new();
 
     if let Ok(results) = result {
-        if let Some(result) = results.first() {
-            if let Value::Record(fields) = result {
-                let parent = &fields[0];
-                let child = &fields[1];
+        if let Some(Value::Record(fields)) = results.first() {
+            let parent = &fields[0];
+            let child = &fields[1];
 
-                if let Value::List(parent_env_vars_list) = parent {
-                    for env_var in parent_env_vars_list {
-                        if let Value::Record(env_var_kv) = env_var {
-                            if let Value::String(key) = &env_var_kv[0] {
-                                parent_env_vars.insert(key.clone(), env_var_kv[1].clone());
-                            }
+            if let Value::List(parent_env_vars_list) = parent {
+                for env_var in parent_env_vars_list {
+                    if let Value::Record(env_var_kv) = env_var {
+                        if let Value::String(key) = &env_var_kv[0] {
+                            parent_env_vars.insert(key.clone(), env_var_kv[1].clone());
                         }
                     }
                 }
+            }
 
-                if let Value::List(child_env_vars_list) = child {
-                    for env_var in child_env_vars_list {
-                        if let Value::Record(env_var_kv) = env_var {
-                            if let Value::String(key) = &env_var_kv[0] {
-                                child_env_vars.insert(key.clone(), env_var_kv[1].clone());
-                            }
+            if let Value::List(child_env_vars_list) = child {
+                for env_var in child_env_vars_list {
+                    if let Value::Record(env_var_kv) = env_var {
+                        if let Value::String(key) = &env_var_kv[0] {
+                            child_env_vars.insert(key.clone(), env_var_kv[1].clone());
                         }
                     }
                 }
