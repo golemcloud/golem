@@ -33,7 +33,24 @@ pub enum EnvironmentReference {
         account_email: String,
         application_name: ApplicationName,
         environment_name: EnvironmentName,
+        auto_create: bool,
     },
+}
+
+impl TryFrom<&str> for EnvironmentReference {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl TryFrom<String> for EnvironmentReference {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
 }
 
 impl FromStr for EnvironmentReference {
@@ -53,6 +70,7 @@ impl FromStr for EnvironmentReference {
                 account_email: segments.pop().unwrap().into(),
                 application_name: segments.pop().unwrap().parse()?,
                 environment_name: segments.pop().unwrap().parse()?,
+                auto_create: false,
             }),
             _ => Err(formatdoc! {"
                 Unknown format for environment: {}. Expected one of:
@@ -78,6 +96,7 @@ impl Display for EnvironmentReference {
                 account_email,
                 environment_name,
                 application_name,
+                auto_create: _,
             } => write!(
                 f,
                 "{}/{}/{}",
@@ -87,13 +106,13 @@ impl Display for EnvironmentReference {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ResolvedEnvironmentIdentity {
     pub resolved_from: Option<EnvironmentReference>,
 
     pub account_id: AccountId,
-    pub account_email: String,
-    pub app_id: ApplicationId,
-    pub app_name: ApplicationName,
-    pub env_id: EnvironmentId,
-    pub env_name: EnvironmentName,
+    pub application_id: ApplicationId,
+    pub application_name: ApplicationName,
+    pub environment_id: EnvironmentId,
+    pub environment_name: EnvironmentName,
 }

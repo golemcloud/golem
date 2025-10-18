@@ -21,6 +21,7 @@ use crate::command::shared_args::{
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
+use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
@@ -32,6 +33,10 @@ use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::WorkerUpdateMode;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
+use golem_client::api::ApplicationClient;
+use golem_client::model::NewApplicationData;
+use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
 use golem_templates::add_component_by_template;
 use golem_templates::model::{
@@ -417,6 +422,50 @@ impl AppCommandHandler {
 
         // TODO: atomic
         todo!();
+    }
+
+    pub async fn get_remote_application(
+        &self,
+        account_id: &AccountId,
+        application_name: &ApplicationName,
+    ) -> anyhow::Result<Option<golem_client::model::Application>> {
+        self.ctx
+            .golem_clients()
+            .await?
+            .application
+            .get_account_application(&account_id.0, &application_name.0)
+            .await
+            .map_service_error_not_found_as_opt()
+    }
+
+    pub async fn get_or_create_remote_application(
+        &self,
+    ) -> anyhow::Result<Option<golem_client::model::Application>> {
+        let Some(application_name) = self.ctx.application_name() else {
+            return Ok(None);
+        };
+
+        let account_id = self.ctx.account_id().await?;
+
+        match self
+            .get_remote_application(&account_id, &application_name)
+            .await?
+        {
+            Some(application) => Ok(Some(application)),
+            None => Ok(Some(
+                self.ctx
+                    .golem_clients()
+                    .await?
+                    .application
+                    .create_application(
+                        &account_id.0,
+                        &NewApplicationData {
+                            name: application_name,
+                        },
+                    )
+                    .await?,
+            )),
+        }
     }
 
     pub async fn build(
