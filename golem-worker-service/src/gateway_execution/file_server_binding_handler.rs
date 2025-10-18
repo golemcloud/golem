@@ -290,10 +290,10 @@ impl FileServerBindingHandler for DefaultFileServerBindingHandler {
             // Read write files need to be fetched from a running worker.
             // Ask the worker service to get the file contents. If no worker is running, one will be started.
 
-            let worker_id = WorkerId::from_agent_id_literal(
+            let worker_id = WorkerId::from_component_metadata_and_worker_id(
                 component_id.clone(),
-                worker_name,
                 &component_metadata.metadata,
+                worker_name,
             )
             .map_err(|e| {
                 FileServerBindingError::InternalError(format!("Invalid worker name: {e}"))

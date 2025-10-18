@@ -98,22 +98,17 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
             )
             .await
             .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
-        let raw_worker_name = resolved_worker_request.worker_name.to_string();
-        let worker_name = AgentId::parse(resolved_worker_request.worker_name, &component.metadata)
-            .ok()
-            .map(|agent_id| agent_id.to_string())
-            .unwrap_or(raw_worker_name);
 
-        let worker_id = WorkerId::from_agent_id_literal(
+        let worker_id = WorkerId::from_component_metadata_and_worker_id(
             component.versioned_component_id.component_id.clone(),
-            &worker_name,
             &component.metadata,
+            resolved_worker_request.worker_name,
         )?;
 
         debug!(
             component_id = resolved_worker_request.component_id.to_string(),
             function_name = resolved_worker_request.function_name,
-            worker_name = worker_name,
+            worker_name = worker_id.worker_name.clone(),
             "Executing invocation",
         );
 
