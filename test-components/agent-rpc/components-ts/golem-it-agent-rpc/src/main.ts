@@ -2,6 +2,12 @@ import {
     BaseAgent,
     agent,
 } from '@golemcloud/golem-ts-sdk';
+import * as process from "node:process";
+
+type EnvVar = {
+    key: string,
+    value: string
+}
 
 @agent()
 class TestAgent extends BaseAgent {
@@ -24,6 +30,16 @@ class TestAgent extends BaseAgent {
         }
         return result;
     }
+
+    async envVarTest(): Promise<{ parent: EnvVar[], child: EnvVar[] }> {
+        const childAgent = ChildAgent.get(0);
+        const child = await childAgent.envVars();
+        const parent = Object.entries(process.env).map(([key, value]) => ({key, value: value ?? ''}));
+        return {
+            parent,
+            child
+        }
+    }
 }
 
 @agent()
@@ -39,6 +55,10 @@ class ChildAgent extends BaseAgent {
         const sleepAmount = Math.random() * 1000 + 500;
         await sleep(sleepAmount);
         return this.id;
+    }
+
+    envVars(): EnvVar[] {
+        return Object.entries(process.env).map(([key, value]) => ({key, value: value ?? ''}));
     }
 }
 
