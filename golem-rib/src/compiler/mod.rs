@@ -74,6 +74,13 @@ impl RibCompiler {
         })
     }
 
+    pub fn get_custom_instance_names(&self) -> Vec<String> {
+        self.custom_instance_spec
+            .iter()
+            .map(|spec| spec.instance_name.clone())
+            .collect::<Vec<_>>()
+    }
+
     // Currently supports only 1 component and hence really only one InstanceType
     pub fn get_component_dependencies(&self) -> ComponentDependencies {
         self.component_dependency.clone()
@@ -167,7 +174,7 @@ impl RibCompilerConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentDependency {
     component_dependency_key: ComponentDependencyKey,
     component_exports: Vec<AnalysedExport>,
@@ -1113,6 +1120,7 @@ mod compiler_error_tests {
                 component_dependency_key: ComponentDependencyKey {
                     component_name: "some_name".to_string(),
                     component_id: Uuid::new_v4(),
+                    component_version: 0,
                     root_package_name: None,
                     root_package_version: None,
                 },

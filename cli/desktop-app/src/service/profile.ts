@@ -49,7 +49,7 @@ export class ProfileService {
     options: {
       setActive?: boolean;
       componentUrl?: string;
-      workerUrl?: string;
+      agentUrl?: string;
       cloudUrl?: string;
       defaultFormat?: string;
     } = {},
@@ -62,8 +62,8 @@ export class ProfileService {
     if (options.componentUrl) {
       args.push("--component-url", options.componentUrl);
     }
-    if (options.workerUrl) {
-      args.push("--worker-url", options.workerUrl);
+    if (options.agentUrl) {
+      args.push("--agent-url", options.agentUrl);
     }
     if (options.cloudUrl) {
       args.push("--cloud-url", options.cloudUrl);
@@ -99,12 +99,12 @@ export class ProfileService {
       });
     } catch (_e) {
       toast({
-        title: "Error in calling golem CLI",
+        title: "Error from golem CLI",
         description: String(_e),
         variant: "destructive",
         duration: 5000,
       });
-      throw new Error("Error in calling golem CLI");
+      throw new Error("Error from golem CLI");
     }
 
     let parsedResult;

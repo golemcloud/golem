@@ -34,11 +34,11 @@ use crate::service::gateway::api_definition_validator::ValidationErrors;
 use crate::service::gateway::security_scheme::SecuritySchemeService;
 use crate::service::gateway::BoxConversionContext;
 use bincode::{Decode, Encode};
-use golem_common::model::agent::AgentType;
 use golem_common::model::auth::Namespace;
 use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_service_base::model::Component;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType};
+use golem_wasm_ast::analysis::AnalysedType;
 use poem_openapi::Enum;
 use rib::{ComponentDependencyKey, RibCompilationError, RibInputTypeInfo};
 use serde::de::Error;
@@ -671,8 +671,7 @@ pub struct ComponentMetadataDictionary {
 #[derive(Clone, Debug)]
 pub struct ComponentDetails {
     pub component_info: ComponentDependencyKey,
-    pub metadata: Vec<AnalysedExport>,
-    pub agent_types: Vec<AgentType>,
+    pub metadata: ComponentMetadata,
 }
 
 impl ComponentMetadataDictionary {
@@ -683,14 +682,14 @@ impl ComponentMetadataDictionary {
             let component_info = ComponentDependencyKey {
                 component_name: component.component_name.0.clone(),
                 component_id: component.versioned_component_id.component_id.0,
+                component_version: component.versioned_component_id.version,
                 root_package_name: component.metadata.root_package_name().clone(),
                 root_package_version: component.metadata.root_package_version().clone(),
             };
 
             let component_details = ComponentDetails {
                 component_info,
-                metadata: component.metadata.exports().to_vec(),
-                agent_types: component.metadata.agent_types().to_vec(),
+                metadata: component.metadata.clone(),
             };
 
             metadata.insert(component.versioned_component_id.clone(), component_details);
@@ -735,7 +734,6 @@ impl CompiledRoute {
                 let component_dependency = vec![ComponentDependencyWithAgentInfo::new(
                     component_details.component_info.clone(),
                     component_details.metadata.clone(),
-                    component_details.agent_types.clone(),
                 )];
 
                 let binding = WorkerBindingCompiled::from_raw_worker_binding(
@@ -773,7 +771,6 @@ impl CompiledRoute {
                     vec![ComponentDependencyWithAgentInfo::new(
                         component_details.component_info.clone(),
                         component_details.metadata.clone(),
-                        component_details.agent_types.clone(),
                     )];
 
                 let binding = FileServerBindingCompiled::from_raw_file_server_worker_binding(

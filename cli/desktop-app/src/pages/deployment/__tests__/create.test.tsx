@@ -135,6 +135,7 @@ vi.mock("zod", () => {
     regex: vi.fn().mockReturnThis(),
     refine: vi.fn().mockReturnThis(),
     transform: vi.fn().mockReturnThis(),
+    optional: vi.fn().mockReturnThis(),
   };
 
   return {

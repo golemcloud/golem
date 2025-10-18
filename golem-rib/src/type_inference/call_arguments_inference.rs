@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{ComponentDependencies, Expr, FunctionCallError};
+use crate::{ComponentDependencies, CustomInstanceSpec, Expr, FunctionCallError};
 use std::collections::VecDeque;
 
 // Resolving function arguments and return types based on function type registry
@@ -23,6 +23,7 @@ use std::collections::VecDeque;
 pub fn infer_function_call_types(
     expr: &mut Expr,
     component_dependency: &ComponentDependencies,
+    custom_instance_spec: &[CustomInstanceSpec],
 ) -> Result<(), FunctionCallError> {
     let mut visitor = VecDeque::new();
     visitor.push_back(expr);
@@ -42,6 +43,7 @@ pub fn infer_function_call_types(
                 component_dependency,
                 args,
                 inferred_type,
+                custom_instance_spec,
             )?;
         } else {
             expr.visit_expr_nodes_lazy(&mut visitor);
@@ -57,9 +59,9 @@ mod internal {
     use crate::rib_source_span::SourceSpan;
     use crate::type_inference::GetTypeHint;
     use crate::{
-        ActualType, ComponentDependencies, DynamicParsedFunctionName, ExpectedType, Expr,
-        FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod, FunctionCallError,
-        FunctionName, InferredType, TypeMismatchError,
+        ActualType, ComponentDependencies, CustomInstanceSpec, DynamicParsedFunctionName,
+        ExpectedType, Expr, FullyQualifiedResourceConstructor, FullyQualifiedResourceMethod,
+        FunctionCallError, FunctionName, InferredType, TypeInternal, TypeMismatchError,
     };
     use golem_wasm_ast::analysis::AnalysedType;
     use std::fmt::Display;
@@ -70,15 +72,20 @@ mod internal {
         component_dependency: &ComponentDependencies,
         args: &mut [Expr],
         function_result_inferred_type: &mut InferredType,
+        custom_instance_spec: &[CustomInstanceSpec],
     ) -> Result<(), FunctionCallError> {
         let cloned = call_type.clone();
 
         match call_type {
             CallType::InstanceCreation(instance) => match instance {
                 InstanceCreationType::WitWorker { .. } => {
-                    for arg in args.iter_mut() {
-                        if arg.inferred_type().is_unknown() {
-                            arg.add_infer_type_mut(InferredType::string());
+                    // If there is a custom instance spec, we completely discard about tagging anything
+                    // that's in the worker instance argument to be a string
+                    if custom_instance_spec.is_empty() {
+                        for arg in args.iter_mut() {
+                            if arg.inferred_type().is_unknown() {
+                                arg.add_infer_type_mut(InferredType::string());
+                            }
                         }
                     }
 
@@ -422,6 +429,19 @@ mod internal {
         parameter_types: &[AnalysedType],
     ) -> Result<(), FunctionCallError> {
         for (arg, param_type) in args.iter_mut().zip(parameter_types) {
+            // This is to get around a variant conflict problem and is not the best solution
+            if let AnalysedType::Variant(type_variant) = param_type {
+                if let TypeInternal::Variant(collections) =
+                    arg.inferred_type_mut().internal_type_mut()
+                {
+                    *collections = type_variant
+                        .cases
+                        .iter()
+                        .map(|case| (case.name.clone(), case.typ.as_ref().map(InferredType::from)))
+                        .collect();
+                }
+            }
+
             check_function_arguments(function_name, param_type, arg)?;
             arg.add_infer_type_mut(
                 InferredType::from(param_type).add_origin(TypeOrigin::Declared(arg.source_span())),
@@ -470,6 +490,7 @@ mod function_parameters_inference_tests {
         let component_info = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
+            component_version: 0,
             root_package_name: None,
             root_package_version: None,
         };
@@ -488,7 +509,7 @@ mod function_parameters_inference_tests {
         let function_type_registry = get_component_dependencies();
 
         let mut expr = Expr::from_text(rib_expr).unwrap();
-        expr.infer_function_call_types(&function_type_registry)
+        expr.infer_function_call_types(&function_type_registry, &[])
             .unwrap();
 
         let let_binding = Expr::let_binding("x", Expr::number(BigDecimal::from(1)), None);

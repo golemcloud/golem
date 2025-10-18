@@ -29,6 +29,7 @@ use tracing::debug;
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
+#[derive(Debug, Clone)]
 pub struct FileUseToken {
     _handle: Arc<CacheEntry>,
 }
@@ -172,6 +173,7 @@ impl FileLoader {
                     target.display()
                 );
                 tokio::fs::copy(&cache_entry_path, target).await?;
+                return Ok(());
             }
         }
 
@@ -215,7 +217,7 @@ impl FileLoader {
 
                 let counter = self
                     .item_counter
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 let path = self.cache_dir.path().join(counter.to_string());
 
                 match self
@@ -297,6 +299,7 @@ type Cache = Mutex<HashMap<InitialComponentFileKey, Weak<CacheEntry>>>;
 
 type CacheEntry = Mutex<Result<InitializedCacheEntry, String>>;
 
+#[derive(Debug)]
 struct InitializedCacheEntry {
     path: PathBuf,
 }

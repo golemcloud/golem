@@ -229,11 +229,13 @@ pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_confirm: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_workers: Option<bool>,
+    pub redeploy_agents: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_http_api: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_all: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reset: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -356,12 +358,12 @@ pub struct ComponentProperties {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_type: Option<AppComponentType>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<InitialComponentFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plugins: Vec<PluginInstallation>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<HashMap<String, String>>,
 }
 
 impl ComponentProperties {
@@ -394,16 +396,19 @@ impl ComponentProperties {
             self.component_type = overrides.component_type;
         }
 
-        if !overrides.files.is_empty() {
-            self.files.extend(overrides.files);
+        let files = overrides.files.unwrap_or_default();
+        if !files.is_empty() {
+            self.files.get_or_insert_with(Vec::new).extend(files);
         }
 
-        if !overrides.plugins.is_empty() {
-            self.plugins.extend(overrides.plugins);
+        let plugins = overrides.plugins.unwrap_or_default();
+        if !plugins.is_empty() {
+            self.plugins.get_or_insert_with(Vec::new).extend(plugins);
         }
 
-        if !overrides.env.is_empty() {
-            self.env.extend(overrides.env);
+        let env = overrides.env.unwrap_or_default();
+        if !env.is_empty() {
+            self.env.get_or_insert_with(HashMap::new).extend(env);
         }
 
         self

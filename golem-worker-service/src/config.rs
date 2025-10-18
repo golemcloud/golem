@@ -224,6 +224,7 @@ pub struct ComponentServiceConfig {
     pub access_token: Uuid,
     pub retries: RetryConfig,
     pub connect_timeout: Duration,
+    pub cache_capacity: usize,
 }
 
 impl ComponentServiceConfig {
@@ -251,6 +252,7 @@ impl SafeDisplay for ComponentServiceConfig {
         let _ = writeln!(&mut result, "connect timeout: {:?}", self.connect_timeout);
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
+        let _ = writeln!(&mut result, "cache capacity: {}", self.cache_capacity);
         result
     }
 }
@@ -264,6 +266,7 @@ impl Default for ComponentServiceConfig {
                 .expect("invalid UUID"),
             retries: RetryConfig::max_attempts_3(),
             connect_timeout: Duration::from_secs(10),
+            cache_capacity: 1000,
         }
     }
 }

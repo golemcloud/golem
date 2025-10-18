@@ -53,6 +53,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .get(project_id, bucket.clone(), key.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, (bucket, key), result).await
         } else {
             durability.replay(self).await
@@ -114,6 +115,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .set(project_id, bucket, key, outgoing_value)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -159,6 +161,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .delete(project_id, bucket, key)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -204,6 +207,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .exists(project_id, bucket, key)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await

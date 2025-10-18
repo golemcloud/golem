@@ -215,6 +215,11 @@ impl OplogIndex {
         OplogIndex(self.0 - 1)
     }
 
+    /// Subtract the given number of entries from the oplog index
+    pub fn subtract(&self, n: u64) -> OplogIndex {
+        OplogIndex(self.0 - n)
+    }
+
     /// Gets the next oplog index
     pub fn next(&self) -> OplogIndex {
         OplogIndex(self.0 + 1)
@@ -241,5 +246,78 @@ impl Display for OplogIndex {
 impl From<OplogIndex> for u64 {
     fn from(value: OplogIndex) -> Self {
         value.0
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, Default)]
+#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
+#[cfg_attr(
+    feature = "model",
+    derive(serde::Serialize, serde::Deserialize, golem_wasm_rpc_derive::IntoValue)
+)]
+pub struct TransactionId(pub(crate) String);
+
+impl TransactionId {
+    pub fn new<Id: Display>(id: Id) -> Self {
+        Self(id.to_string())
+    }
+
+    pub fn generate() -> Self {
+        Self::new(uuid::Uuid::new_v4())
+    }
+}
+
+impl Display for TransactionId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<TransactionId> for String {
+    fn from(value: TransactionId) -> Self {
+        value.0
+    }
+}
+
+impl From<String> for TransactionId {
+    fn from(value: String) -> Self {
+        TransactionId(value)
+    }
+}
+
+#[cfg(feature = "sql")]
+mod sql {
+    use crate::model::TransactionId;
+    use sqlx::encode::IsNull;
+    use sqlx::error::BoxDynError;
+    use sqlx::postgres::PgTypeInfo;
+    use sqlx::{Database, Postgres, Type};
+    use std::io::Write;
+
+    impl sqlx::Decode<'_, Postgres> for TransactionId {
+        fn decode(value: <Postgres as Database>::ValueRef<'_>) -> Result<Self, BoxDynError> {
+            let bytes = value.as_bytes()?;
+            Ok(TransactionId(
+                u64::from_be_bytes(bytes.try_into()?).to_string(),
+            ))
+        }
+    }
+
+    impl sqlx::Encode<'_, Postgres> for TransactionId {
+        fn encode_by_ref(
+            &self,
+            buf: &mut <Postgres as Database>::ArgumentBuffer<'_>,
+        ) -> Result<IsNull, BoxDynError> {
+            let u64 = self.0.parse::<u64>()?;
+            let bytes = u64.to_be_bytes();
+            buf.write_all(&bytes)?;
+            Ok(IsNull::No)
+        }
+    }
+
+    impl Type<Postgres> for TransactionId {
+        fn type_info() -> PgTypeInfo {
+            PgTypeInfo::with_name("xid8")
+        }
     }
 }

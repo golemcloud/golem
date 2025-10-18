@@ -342,12 +342,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .promise_id
             .as_ref()
             .ok_or(WorkerExecutorError::invalid_request("promise_id not found"))?;
+
         let owned_worker_id = extract_owned_worker_id(
             &(&request, promise_id.clone()),
             |(_, r)| &r.worker_id,
             |(r, _)| &r.project_id,
         )?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let data = request.data;
@@ -356,39 +357,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .clone()
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
+
         let completed = self.promise_service().complete(promise_id, data).await?;
-
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-            .await?
-            .ok_or(WorkerExecutorError::worker_not_found(
-                owned_worker_id.worker_id(),
-            ))?;
-
-        let should_activate = match &metadata.last_known_status.status {
-            WorkerStatus::Interrupted
-            | WorkerStatus::Running
-            | WorkerStatus::Suspended
-            | WorkerStatus::Retrying => true,
-            WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Idle => false,
-        };
-
-        if should_activate {
-            // By making sure the worker is in memory. If it was suspended because of waiting
-            // for a promise, replaying that call will now not suspend as the promise has been
-            // completed, and the worker will continue running.
-            Worker::get_or_create_running(
-                &self.services,
-                &account_id,
-                &owned_worker_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-            )
-            .await?;
-        }
 
         let success = golem::workerexecutor::v1::CompletePromiseSuccess { completed };
 
@@ -404,43 +374,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        if let Some(metadata) =
-            Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await?
+        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+            .await
+            .is_some()
         {
-            let should_interrupt = match &metadata.last_known_status.status {
-                WorkerStatus::Idle
-                | WorkerStatus::Running
-                | WorkerStatus::Suspended
-                | WorkerStatus::Retrying => true,
-                WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Interrupted => false,
-            };
+            let worker = Worker::get_or_create_suspended(
+                self,
+                &account_id,
+                &owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
+            .await?;
 
-            if should_interrupt {
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    &account_id,
-                    &owned_worker_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                )
-                .await?;
+            worker.start_deleting().await?;
 
-                if let Some(mut await_interrupted) =
-                    worker.set_interrupting(InterruptKind::Interrupt).await
-                {
-                    await_interrupted.recv().await.unwrap();
-                }
-
-                worker.stop().await;
-            }
-
-            Ctx::on_worker_deleted(self, &owned_worker_id.worker_id).await?;
             self.worker_service().remove(&owned_worker_id).await;
-            self.active_workers().remove(&owned_worker_id.worker_id);
+            self.active_workers()
+                .remove(&owned_worker_id.worker_id)
+                .await;
+
+            // ensure we are holding the worker while we are doing cleanup.
+            drop(worker);
         }
 
         Ok(())
@@ -562,45 +521,40 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             ))?
             .into();
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await?;
-
-        match metadata {
-            Some(metadata) => {
-                if metadata
-                    .last_known_status
-                    .pending_invocations
-                    .iter()
-                    .any(|invocation| {
-                        invocation.invocation.idempotency_key() == Some(&idempotency_key)
-                    })
-                {
-                    let worker = Worker::get_or_create_suspended(
-                        self,
-                        &account_id,
-                        &owned_worker_id,
-                        None,
-                        None,
-                        None,
-                        None,
-                        None,
-                        &InvocationContextStack::fresh(),
-                    )
-                    .await?;
-                    worker.cancel_invocation(idempotency_key).await?;
-                    Ok(true)
-                } else if metadata
-                    .last_known_status
-                    .invocation_results
-                    .contains_key(&idempotency_key)
-                {
-                    Ok(false)
-                } else {
-                    Err(WorkerExecutorError::invalid_request("Invocation not found"))
-                }
-            }
-            None => Err(WorkerExecutorError::worker_not_found(
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+            .await
+            .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
-            )),
+            ))?;
+
+        if metadata
+            .last_known_status
+            .pending_invocations
+            .iter()
+            .any(|invocation| invocation.invocation.idempotency_key() == Some(&idempotency_key))
+        {
+            let worker = Worker::get_or_create_suspended(
+                self,
+                &account_id,
+                &owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
+            .await?;
+            worker.cancel_invocation(idempotency_key).await?;
+            Ok(true)
+        } else if metadata
+            .last_known_status
+            .invocation_results
+            .contains_key(&idempotency_key)
+        {
+            Ok(false)
+        } else {
+            Err(WorkerExecutorError::invalid_request("Invocation not found"))
         }
     }
 
@@ -613,27 +567,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await?;
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await;
 
-        match metadata {
-            None => {
-                // Worker does not exist, we still check if it is in the list active workers due to some inconsistency
-                if let Some((_, worker)) = self
-                    .active_workers()
-                    .snapshot()
-                    .iter()
-                    .find(|(id, _)| id == &owned_worker_id.worker_id)
-                {
-                    worker
-                        .set_interrupting(if request.recover_immediately {
-                            InterruptKind::Restart
-                        } else {
-                            InterruptKind::Interrupt
-                        })
-                        .await;
-                }
-            }
-            Some(metadata) => match &metadata.last_known_status.status {
+        if let Some(metadata) = metadata {
+            match &metadata.last_known_status.status {
                 WorkerStatus::Exited => {
                     warn!("Attempted interrupting worker which already exited")
                 }
@@ -662,7 +599,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers()
+                        .remove(&owned_worker_id.worker_id)
+                        .await;
                 }
                 WorkerStatus::Retrying => {
                     debug!("Marking worker scheduled to be retried as interrupted");
@@ -680,7 +619,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers()
+                        .remove(&owned_worker_id.worker_id)
+                        .await;
                 }
                 WorkerStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
@@ -704,11 +645,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await;
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers()
+                        .remove(&owned_worker_id.worker_id)
+                        .await;
                 }
-            },
+            }
         }
-
         Ok(())
     }
 
@@ -724,7 +666,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let force_resume = request.force.unwrap_or(false);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-            .await?
+            .await
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
             ))?;
@@ -842,7 +784,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
 
-        let metadata = self.worker_service().get(&owned_worker_id).await;
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id).await;
 
         if let Some(metadata) = &metadata {
             self.ensure_not_failed(&owned_worker_id, metadata).await?;
@@ -855,6 +797,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+
         Worker::get_or_create_suspended(
             self,
             &account_id,
@@ -911,7 +854,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (worker_id, worker_details) in self.active_workers().snapshot() {
+        for (worker_id, worker_details) in self.active_workers().snapshot().await {
             if self.shard_service().check_worker(&worker_id).is_err() {
                 if let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
@@ -947,8 +890,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-            .await?
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
+            .await
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
             ))?;
@@ -1060,8 +1003,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let mut metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
-            .await?
+        let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
+            .await
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
             ))?;
@@ -1134,21 +1077,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         debug!("Enqueuing update");
                         worker.enqueue_update(update_description.clone()).await;
 
-                        if metadata.last_known_status.status == WorkerStatus::Failed {
-                            // If the worker was previously in a permanently failed state,
-                            // we reset this state to Retrying, so we can fix the failure cause
-                            // with an update.
-                            metadata.last_known_status.status = WorkerStatus::Retrying;
-                        }
-                        let mut skipped_regions =
-                            metadata.last_known_status.skipped_regions.clone();
-                        let (pending_updates, temporary_skipped_regions) =
-                            worker.pending_updates().await;
-                        skipped_regions.set_override(temporary_skipped_regions);
-                        metadata.last_known_status.pending_updates = pending_updates;
-                        metadata.last_known_status.skipped_regions = skipped_regions;
-                        worker.update_status(metadata.last_known_status).await;
-
                         debug!("Resuming initialization to perform the update",);
                         Worker::start_if_needed(worker.clone()).await?;
                     }
@@ -1205,7 +1133,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.enqueue_manual_update(request.target_version).await;
+                worker.enqueue_manual_update(request.target_version).await?;
             }
         }
 
@@ -1222,7 +1150,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
-            .await?
+            .await
             .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
             ))?;
@@ -1556,15 +1484,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let metadata = self.worker_service().get(&owned_worker_id).await;
-        let worker_status =
-            Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
+        let metadata = Worker::get_latest_metadata(&self.services, &owned_worker_id).await;
 
         match metadata {
             Some(metadata) => {
                 // Worker exists
-
-                if worker_status
+                if metadata
+                    .last_known_status
                     .active_plugins
                     .contains(&plugin_installation_id)
                 {
@@ -1630,58 +1556,53 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let metadata = self.worker_service().get(&owned_worker_id).await;
-        let worker_status =
-            Ctx::compute_latest_worker_status(self, &owned_worker_id, &metadata).await?;
-
-        match metadata {
-            Some(metadata) => {
-                // Worker exists
-
-                if !worker_status
-                    .active_plugins
-                    .contains(&plugin_installation_id)
-                {
-                    warn!("Plugin is already deactivated");
-                    Ok(())
-                } else {
-                    let component_metadata = self
-                        .component_service()
-                        .get_metadata(
-                            &owned_worker_id.worker_id.component_id,
-                            Some(metadata.last_known_status.component_version),
-                        )
-                        .await?;
-
-                    if component_metadata
-                        .installed_plugins
-                        .iter()
-                        .any(|installation| installation.id == plugin_installation_id)
-                    {
-                        let worker = Worker::get_or_create_suspended(
-                            self,
-                            &account_id,
-                            &owned_worker_id,
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                            &InvocationContextStack::fresh(),
-                        )
-                        .await?;
-                        worker.deactivate_plugin(plugin_installation_id).await?;
-                        Ok(())
-                    } else {
-                        Err(WorkerExecutorError::invalid_request(
-                            "Plugin installation does not belong to this worker's component",
-                        ))
-                    }
-                }
-            }
-            None => Err(WorkerExecutorError::worker_not_found(
+        let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+            .await
+            .ok_or(WorkerExecutorError::worker_not_found(
                 owned_worker_id.worker_id(),
-            )),
+            ))?;
+
+        // Worker exists
+        if !metadata
+            .last_known_status
+            .active_plugins
+            .contains(&plugin_installation_id)
+        {
+            warn!("Plugin is already deactivated");
+            Ok(())
+        } else {
+            let component_metadata = self
+                .component_service()
+                .get_metadata(
+                    &owned_worker_id.worker_id.component_id,
+                    Some(metadata.last_known_status.component_version),
+                )
+                .await?;
+
+            if component_metadata
+                .installed_plugins
+                .iter()
+                .any(|installation| installation.id == plugin_installation_id)
+            {
+                let worker = Worker::get_or_create_suspended(
+                    self,
+                    &account_id,
+                    &owned_worker_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &InvocationContextStack::fresh(),
+                )
+                .await?;
+                worker.deactivate_plugin(plugin_installation_id).await?;
+                Ok(())
+            } else {
+                Err(WorkerExecutorError::invalid_request(
+                    "Plugin installation does not belong to this worker's component",
+                ))
+            }
         }
     }
 
@@ -1759,9 +1680,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             status: Into::<golem::worker::WorkerStatus>::into(latest_status.status.clone()).into(),
             retry_count: last_error_and_retry_count
                 .as_ref()
-                .map(|last_error| last_error.retry_count)
+                .and_then(|last_error| {
+                    latest_status
+                        .current_retry_count
+                        .get(&last_error.retry_from)
+                        .copied()
+                })
                 .unwrap_or_default(),
-
             pending_invocation_count: latest_status.pending_invocations.len() as u64,
             updates,
             created_at: Some(metadata.created_at.into()),

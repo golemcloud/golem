@@ -215,10 +215,15 @@ impl PlanLimitService for PlanLimitServiceDefault {
     ) -> Result<ResourceLimits, PlanLimitError> {
         let plan = self.get_plan(account_id).await?;
         let fuel = self.account_fuel_repo.get(account_id).await?;
-        let available_fuel = plan.plan_data.monthly_gas_limit - fuel;
+        let available_fuel = plan
+            .plan_data
+            .monthly_gas_limit
+            .checked_sub(fuel)
+            .unwrap_or(0);
+
         Ok(ResourceLimits {
             available_fuel,
-            max_memory_per_worker: 100 * 1024 * 1024,
+            max_memory_per_worker: plan.plan_data.max_memory_per_worker,
         })
     }
 

@@ -30,7 +30,7 @@ export interface RouteRequestData {
 export interface GatewayBindingData {
   bindingType: GatewayBindingType;
   component?: GatewayBindingComponent;
-  workerName?: string;
+  agentName?: string;
   idempotencyKey?: string;
   response?: string;
   corsPreflight?: HttpCors;

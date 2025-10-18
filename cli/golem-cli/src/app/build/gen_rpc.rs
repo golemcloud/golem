@@ -67,7 +67,7 @@ pub async fn gen_rpc(ctx: &mut ApplicationContext) -> anyhow::Result<()> {
             any_changed |= changed;
         }
         if any_changed {
-            ctx.update_wit_context()?;
+            ctx.update_wit_context().await?;
         }
     }
 
@@ -103,7 +103,7 @@ async fn create_generated_base_wit(
                 || !task_result_marker.is_up_to_date()
                 || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
             || inputs,
-            || [component_generated_base_wit.clone()],
+            || [&component_generated_base_wit],
         ) {
             log_skipping_up_to_date(format!(
                 "creating generated base wit directory for {}",
@@ -280,8 +280,8 @@ fn create_generated_wit(
             ctx.config.skip_up_to_date_checks
                 || !task_result_marker.is_up_to_date()
                 || !ctx.wit.is_dep_graph_up_to_date(component_name)?,
-            || [component_generated_base_wit.clone()],
-            || [component_generated_wit.clone()],
+            || [&component_generated_base_wit],
+            || [&component_generated_wit],
         ) {
             log_skipping_up_to_date(format!(
                 "creating generated wit directory for {}",
@@ -405,9 +405,9 @@ async fn build_client(
         || client_sources,
         || {
             if component.dep_type == DependencyType::StaticWasmRpc {
-                vec![client_wit.clone(), client_wasm.clone()]
+                vec![&client_wit, &client_wasm]
             } else {
-                vec![client_wit.clone()]
+                vec![&client_wit]
             }
         },
     ) {

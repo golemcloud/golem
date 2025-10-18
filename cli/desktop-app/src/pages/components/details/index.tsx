@@ -3,45 +3,45 @@ import { useEffect, useState, useMemo } from "react";
 import { API } from "@/service";
 import { MetricCard } from "./widgets/metrixCard";
 import { ExportsList } from "./widgets/exportsList";
-import { WorkerStatus } from "./widgets/workerStatus";
+import { AgentStatus } from "./widgets/agentStatus";
 
 import { ComponentList } from "@/types/component";
-import { Worker, WorkerStatus as IWorkerStatus } from "@/types/worker";
+import { Agent, AgentStatus as IAgentStatus } from "@/types/agent";
 
 export const ComponentDetails = () => {
   const { componentId = "", appId } = useParams();
   const [component, setComponent] = useState<ComponentList | null>(null);
-  const [workerStatus, setWorkerStatus] = useState<IWorkerStatus>({});
+  const [agentStatus, setAgentStatus] = useState<IAgentStatus>({});
   const [error, setError] = useState<Error | null>(null);
 
   useEffect(() => {
     if (!componentId) return;
 
-    // Fetch component info and worker status in parallel
+    // Fetch component info and agent status in parallel
     Promise.all([
       API.componentService.getComponentByIdAsKey(appId!),
-      API.workerService.findWorker(appId!, componentId),
+      API.agentService.findAgent(appId!, componentId),
     ])
-      .then(([componentMap, workerResponse]) => {
+      .then(([componentMap, agentResponse]) => {
         // 1. Set the component data
         const foundComponent = componentMap[componentId] || null;
         setComponent(foundComponent);
 
-        // 2. Build a worker status map
-        const status: IWorkerStatus = {
+        // 2. Build a agent status map
+        const status: IAgentStatus = {
           Idle: 0,
           Running: 0,
           Suspended: 0,
           Failed: 0,
         };
-        workerResponse.workers.forEach((worker: Worker) => {
-          status[worker.status as keyof IWorkerStatus] =
-            (status[worker.status as keyof IWorkerStatus] || 0) + 1;
+        agentResponse.workers.forEach((agent: Agent) => {
+          status[agent.status as keyof IAgentStatus] =
+            (status[agent.status as keyof IAgentStatus] || 0) + 1;
         });
-        setWorkerStatus(status);
+        setAgentStatus(status);
       })
       .catch(err => {
-        console.error("Error fetching component/worker data:", err);
+        console.error("Error fetching component/agent data:", err);
         setError(err);
       });
   }, [componentId]);
@@ -55,13 +55,13 @@ export const ComponentDetails = () => {
     return versionList[versionList.length - 1] || 0;
   }, [component]);
 
-  const activeWorkers = useMemo(() => {
+  const activeAgents = useMemo(() => {
     return (
-      (workerStatus.Running || 0) +
-      (workerStatus.Idle || 0) +
-      (workerStatus.Failed || 0)
+      (agentStatus.Running || 0) +
+      (agentStatus.Idle || 0) +
+      (agentStatus.Failed || 0)
     );
-  }, [workerStatus]);
+  }, [agentStatus]);
 
   // Optional: you could handle error states or loading states
   if (error) {
@@ -89,23 +89,23 @@ export const ComponentDetails = () => {
                 type="version"
               />
               <MetricCard
-                title="Active Workers"
-                value={activeWorkers}
+                title="Active Agents"
+                value={activeAgents}
                 type="active"
               />
               <MetricCard
-                title="Running Workers"
-                value={workerStatus.Running || 0}
+                title="Running Agents"
+                value={agentStatus.Running || 0}
                 type="running"
               />
               <MetricCard
-                title="Failed Workers"
-                value={workerStatus.Failed || 0}
+                title="Failed Agents"
+                value={agentStatus.Failed || 0}
                 type="failed"
               />
             </div>
 
-            {/* Exports & Worker Status */}
+            {/* Exports & Agent Status */}
             <div
               className={`grid gap-4 ${
                 component.componentType === "Durable" ? "md:grid-cols-2" : ""
@@ -118,7 +118,7 @@ export const ComponentDetails = () => {
                 }
               />
               {component.componentType === "Durable" && (
-                <WorkerStatus workerStatus={workerStatus} />
+                <AgentStatus agentStatus={agentStatus} />
               )}
             </div>
           </div>

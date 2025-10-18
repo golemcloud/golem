@@ -13,8 +13,12 @@
 // limitations under the License.
 
 use crate::log::{log_action, LogColorize};
+use crate::model::text::fmt::format_stderr;
+use anyhow::anyhow;
 use golem_common::model::agent::AgentType;
+use itertools::Itertools;
 use std::path::Path;
+use wasmtime_wasi::p2::pipe;
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
 /// If it does not, it fails.
@@ -30,5 +34,37 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         ),
     );
 
-    golem_common::model::agent::extraction::extract_agent_types(wasm_path).await
+    let stdout = pipe::MemoryOutputPipe::new(usize::MAX);
+    let stderr = pipe::MemoryOutputPipe::new(usize::MAX);
+
+    golem_common::model::agent::extraction::extract_agent_types_with_streams(
+        wasm_path,
+        Some(stdout.clone()),
+        Some(stderr.clone()),
+        true,
+    )
+    .await
+    .map_err(|err| {
+        let stdout_contents = stdout.contents();
+        let stderr_contents = stderr.contents();
+        let stdout = String::from_utf8_lossy(&stdout_contents);
+        let stderr = String::from_utf8_lossy(&stderr_contents);
+
+        if stderr.contains("JavaScript error:") || stderr.contains("JavaScript exception:") {
+            let stderr = stderr
+                .lines()
+                .filter(|line| {
+                    !line.starts_with("thread '<unnamed>' panicked at ")
+                        && !line.starts_with("stack backtrace:")
+                        && !line.starts_with("note: Some details are omitted,")
+                })
+                .join("\n");
+            return anyhow!(format_stderr(&stderr));
+        }
+
+        println!("{}", stdout);
+        eprintln!("{}", stderr);
+
+        err
+    })
 }

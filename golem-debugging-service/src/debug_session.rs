@@ -307,6 +307,9 @@ fn get_oplog_entry_from_public_oplog_entry(
                 PublicDurableFunctionType::WriteRemoteBatched(params) => {
                     DurableFunctionType::WriteRemoteBatched(params.index)
                 }
+                PublicDurableFunctionType::WriteRemoteTransaction(params) => {
+                    DurableFunctionType::WriteRemoteTransaction(params.index)
+                }
             };
 
             Ok(OplogEntry::ImportedFunctionInvoked {
@@ -346,6 +349,7 @@ fn get_oplog_entry_from_public_oplog_entry(
         PublicOplogEntry::Error(error) => Ok(OplogEntry::Error {
             timestamp: error.timestamp,
             error: WorkerError::Unknown(error.error),
+            retry_from: error.retry_from,
         }),
         PublicOplogEntry::NoOp(timestamp_parameter) => Ok(OplogEntry::NoOp {
             timestamp: timestamp_parameter.timestamp,
@@ -389,6 +393,21 @@ fn get_oplog_entry_from_public_oplog_entry(
         }
         PublicOplogEntry::PendingUpdate(_) => {
             Err("Cannot override an oplog with a pending update".to_string())?
+        }
+        PublicOplogEntry::BeginRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a begin remote transaction".to_string())?
+        }
+        PublicOplogEntry::PreCommitRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a pre commit remote transaction".to_string())?
+        }
+        PublicOplogEntry::CommittedRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a committed remote transaction".to_string())?
+        }
+        PublicOplogEntry::PreRollbackRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a pre rollback remote transaction".to_string())?
+        }
+        PublicOplogEntry::RolledBackRemoteTransaction(_) => {
+            Err("Cannot override an oplog with a rolled back remote transaction".to_string())?
         }
         PublicOplogEntry::SuccessfulUpdate(successful_update_params) => {
             let plugin_installation_ids: HashSet<PluginInstallationId> = successful_update_params
@@ -632,14 +651,11 @@ fn convert_request_value_and_type_to_oplog_payload(
         "wall_clock::now" => Ok(empty_payload()),
         "wall_clock::resolution" => Ok(empty_payload()),
         "golem::api::create_promise" => Ok(empty_payload()),
-        "golem::api::delete_promise" => {
-            let payload = PromiseId::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
         "golem::api::complete_promise" => {
             let payload = PromiseId::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
+        "golem::api::get-promise-result::get" => Ok(empty_payload()),
         "golem::api::update-worker" => {
             let payload: UpdateWorkerInfo = UpdateWorkerInfo::from_value(&value_and_type.value)?;
 
@@ -771,10 +787,6 @@ fn convert_request_value_and_type_to_oplog_payload(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload = SerializableScheduleId::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
-        "golem::api::poll_promise" => {
-            let payload = PromiseId::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_component_id" => {
@@ -946,21 +958,18 @@ fn convert_response_value_and_type_to_oplog_payload(
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem_delete_promise" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
         "golem::api::create_promise" => {
             let payload: Result<PromiseId, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
-        "golem::api::delete_promise" => {
-            let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
         "golem::api::complete_promise" => {
             let payload: Result<bool, SerializableError> =
+                Result::from_value(&value_and_type.value)?;
+            create_oplog_payload(&payload)
+        }
+        "golem::api::get-promise-result::get" => {
+            let payload: Result<Vec<u8>, SerializableError> =
                 Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
@@ -1121,11 +1130,6 @@ fn convert_response_value_and_type_to_oplog_payload(
         }
         "golem::rpc::cancellation-token::cancel" => {
             let payload: Result<(), SerializableError> = Result::from_value(&value_and_type.value)?;
-            create_oplog_payload(&payload)
-        }
-        "golem::api::poll_promise" => {
-            let payload: Result<Option<Vec<u8>>, SerializableError> =
-                Result::from_value(&value_and_type.value)?;
             create_oplog_payload(&payload)
         }
         "golem::api::resolve_component_id" => {

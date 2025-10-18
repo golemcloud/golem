@@ -23,7 +23,6 @@ pub mod base64;
 pub mod certificate;
 pub mod component;
 pub mod component_constraint;
-#[cfg(feature = "tokio")]
 pub mod component_metadata;
 pub mod deployment;
 pub mod diff;
@@ -666,6 +665,9 @@ pub struct WorkerStatusRecord {
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update
     pub component_version_for_replay: ComponentRevision,
+    /// The number of encountered error entries grouped by their 'retry_from' index, calculated from
+    /// the last invocation boundary.
+    pub current_retry_count: HashMap<OplogIndex, u32>,
 }
 
 impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
@@ -688,6 +690,7 @@ impl<Context> bincode::Decode<Context> for WorkerStatusRecord {
             active_plugins: Decode::decode(decoder)?,
             deleted_regions: Decode::decode(decoder)?,
             component_version_for_replay: Decode::decode(decoder)?,
+            current_retry_count: Decode::decode(decoder)?,
         })
     }
 }
@@ -713,6 +716,7 @@ impl<'de, Context> BorrowDecode<'de, Context> for WorkerStatusRecord {
             active_plugins: BorrowDecode::borrow_decode(decoder)?,
             deleted_regions: BorrowDecode::borrow_decode(decoder)?,
             component_version_for_replay: BorrowDecode::borrow_decode(decoder)?,
+            current_retry_count: BorrowDecode::borrow_decode(decoder)?,
         })
     }
 }
@@ -737,6 +741,7 @@ impl Default for WorkerStatusRecord {
             active_plugins: HashSet::new(),
             deleted_regions: DeletedRegions::new(),
             component_version_for_replay: ComponentRevision(0),
+            current_retry_count: HashMap::new(),
         }
     }
 }
@@ -1667,7 +1672,7 @@ impl FromStr for ScanCursor {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Encode, Decode, Serialize, Deserialize)]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -1675,6 +1680,20 @@ pub enum LogLevel {
     Warn,
     Error,
     Critical,
+}
+
+impl Display for LogLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            LogLevel::Trace => "trace",
+            LogLevel::Debug => "debug",
+            LogLevel::Info => "info",
+            LogLevel::Warn => "warn",
+            LogLevel::Error => "error",
+            LogLevel::Critical => "critical",
+        };
+        write!(f, "{}", s)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -1811,20 +1830,20 @@ impl TryFrom<String> for GatewayBindingType {
     }
 }
 
-impl From<WorkerId> for golem_wasm_rpc::WorkerId {
+impl From<WorkerId> for golem_wasm_rpc::AgentId {
     fn from(worker_id: WorkerId) -> Self {
-        golem_wasm_rpc::WorkerId {
+        golem_wasm_rpc::AgentId {
             component_id: worker_id.component_id.into(),
-            worker_name: worker_id.worker_name,
+            agent_id: worker_id.worker_name,
         }
     }
 }
 
-impl From<golem_wasm_rpc::WorkerId> for WorkerId {
-    fn from(host: golem_wasm_rpc::WorkerId) -> Self {
+impl From<golem_wasm_rpc::AgentId> for WorkerId {
+    fn from(host: golem_wasm_rpc::AgentId) -> Self {
         Self {
             component_id: host.component_id.into(),
-            worker_name: host.worker_name,
+            worker_name: host.agent_id,
         }
     }
 }

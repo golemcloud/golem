@@ -128,7 +128,11 @@ impl FileSystemComponentService {
         let agent_types = if skip_analysis {
             vec![]
         } else {
-            extract_agent_types(&target_path).await.unwrap_or_default()
+            extract_agent_types(&target_path, false)
+                .await
+                .map_err(|err| {
+                    AddComponentError::Other(format!("Failed analyzing component: {err}"))
+                })?
         };
 
         let size = tokio::fs::metadata(&target_path)
@@ -153,6 +157,8 @@ impl FileSystemComponentService {
             wasm_filename,
             env: env.clone(),
             agent_types,
+            root_package_name: raw_component_metadata.root_package_name.clone(),
+            root_package_version: raw_component_metadata.root_package_version.clone(),
         };
         write_metadata_to_file(
             metadata,

@@ -16,9 +16,12 @@ use crate::model::agent::wit::AgentWrapperGeneratorContext;
 use anyhow::{anyhow, Context};
 use camino::Utf8Path;
 use golem_client::model::AnalysedType;
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{AgentType, DataSchema, ElementSchema, NamedElementSchemas};
 use heck::{ToKebabCase, ToLowerCamelCase, ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
-use moonbit_component_generator::{MoonBitComponent, MoonBitPackage, Warning, WarningControl};
+use moonbit_component_generator::{
+    to_moonbit_ident, MoonBitComponent, MoonBitPackage, Warning, WarningControl,
+};
 use std::fmt::Write;
 use std::path::Path;
 use wit_parser::PackageName;
@@ -36,8 +39,10 @@ pub fn generate_moonbit_wrapper(
         .context("Defining bindgen packages")?;
 
     let moonbit_root_package = component.moonbit_root_package()?;
-    let pkg_namespace = to_moonbit_ident(component.root_pkg_namespace()?);
-    let pkg_name = to_moonbit_ident(component.root_pkg_name()?);
+    let pkg_namespace = component.root_pkg_namespace()?.to_snake_case();
+    let escaped_pkg_namespace = to_moonbit_ident(&pkg_namespace);
+    let pkg_name = component.root_pkg_name()?.to_snake_case();
+    let escaped_pkg_name = to_moonbit_ident(&pkg_name);
 
     // Adding the builder and extractor packages
     add_builder_package(&mut component, &moonbit_root_package)?;
@@ -47,8 +52,8 @@ pub fn generate_moonbit_wrapper(
         &mut component,
         ctx.has_types,
         &moonbit_root_package,
-        &pkg_namespace,
-        &pkg_name,
+        &escaped_pkg_namespace,
+        &escaped_pkg_name,
         &ctx.agent_types,
     )?;
 
@@ -67,6 +72,28 @@ pub fn generate_moonbit_wrapper(
         },
         "guest",
         AGENT_GUEST_MBT,
+    )?;
+
+    const AGENT_LOAD_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/load_snapshot.mbt");
+    const AGENT_SAVE_SNAPSHOT_MBT: &str = include_str!("../../../agent_wrapper/save_snapshot.mbt");
+
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "loadSnapshot",
+        AGENT_LOAD_SNAPSHOT_MBT,
+    )?;
+    component.write_interface_stub(
+        &PackageName {
+            namespace: "golem".to_string(),
+            name: "api".to_string(),
+            version: None,
+        },
+        "saveSnapshot",
+        AGENT_SAVE_SNAPSHOT_MBT,
     )?;
 
     if ctx.has_types {
@@ -94,10 +121,10 @@ pub fn generate_moonbit_wrapper(
 
         component.set_warning_control(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             vec![
-                // These are disabled so we don't have to check if the generated inside of try .. catch is always
+                // These are disabled so we don't have to check if the generated inside try .. catch is always
                 // capable of throwing an exception
                 WarningControl::Disable(Warning::Specific(23)),
                 WarningControl::Disable(Warning::Specific(11)),
@@ -266,8 +293,8 @@ fn setup_dependencies(
     component: &mut MoonBitComponent,
     has_types: bool,
     moonbit_root_package: &str,
-    pkg_namespace: &str,
-    pkg_name: &str,
+    escaped_pkg_namespace: &str,
+    escaped_pkg_name: &str,
     agent_types: &[AgentType],
 ) -> anyhow::Result<()> {
     // NOTE: setting up additional dependencies. this could be automatically done by a better implementation of define_bindgen_packages
@@ -305,8 +332,8 @@ fn setup_dependencies(
 
     let depends_on_types = |component: &mut MoonBitComponent,
                             has_types: bool,
-                            pkg_namespace: &str,
-                            pkg_name: &str,
+                            escaped_pkg_namespace: &str,
+                            escaped_pkg_name: &str,
                             name: &str| {
         if has_types {
             component.add_dependency(
@@ -317,8 +344,8 @@ fn setup_dependencies(
                     .join("build")
                     .join("gen")
                     .join("interface")
-                    .join(pkg_namespace)
-                    .join(pkg_name)
+                    .join(escaped_pkg_namespace)
+                    .join(escaped_pkg_name)
                     .join("types")
                     .join("types.mi"),
                 "types",
@@ -346,10 +373,37 @@ fn setup_dependencies(
 
     depends_on_golem_agent_common(component, "interface/golem/agent/guest")?;
 
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/loadSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("loadSnapshot")
+            .join("loadSnapshot.mi"),
+        "loadSnapshot",
+    )?;
+    component.add_dependency(
+        &format!("{moonbit_root_package}/gen/interface/golem/api/saveSnapshot"),
+        &Utf8Path::new("target")
+            .join("wasm")
+            .join("release")
+            .join("build")
+            .join("interface")
+            .join("golem")
+            .join("api")
+            .join("saveSnapshot")
+            .join("saveSnapshot.mi"),
+        "saveSnapshot",
+    )?;
+
     if has_types {
         depends_on_golem_agent_common(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/types"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/types"),
         )?;
     }
 
@@ -358,23 +412,23 @@ fn setup_dependencies(
 
         depends_on_golem_agent_common(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
         depends_on_golem_agent_guest(
             component,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
         depends_on_types(
             component,
             has_types,
-            pkg_namespace,
-            pkg_name,
-            &format!("gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"),
+            escaped_pkg_namespace,
+            escaped_pkg_name,
+            &format!("gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
         )?;
 
         component.add_dependency(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             &Utf8Path::new("target")
                 .join("wasm")
@@ -386,7 +440,7 @@ fn setup_dependencies(
         )?;
         component.add_dependency(
             &format!(
-                "{moonbit_root_package}/gen/interface/{pkg_namespace}/{pkg_name}/{agent_name}"
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
             ),
             &Utf8Path::new("target")
                 .join("wasm")
@@ -396,6 +450,34 @@ fn setup_dependencies(
                 .join("extractor.mi"),
             "extractor",
         )?;
+        component.add_dependency(
+            &format!(
+                "{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"
+            ),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("wasi")
+                .join("logging")
+                .join("logging")
+                .join("logging.mi"),
+            "logging",
+        )?;
+        component.add_dependency(
+            &format!("{moonbit_root_package}/gen/interface/{escaped_pkg_namespace}/{escaped_pkg_name}/{agent_name}"),
+            &Utf8Path::new("target")
+                .join("wasm")
+                .join("release")
+                .join("build")
+                .join("interface")
+                .join("golem")
+                .join("rpc")
+                .join("types")
+                .join("types.mi"),
+            "rpcTypes",
+        )?; // NOTE: cannot use depends_on_wasm_rpc_types because needs a different alias
     }
 
     depends_on_golem_agent_common(component, "gen/interface/golem/agent/guest")?;
@@ -446,10 +528,7 @@ fn generate_agent_stub(
 
     let constructor_params =
         to_moonbit_parameter_list(ctx, &agent.constructor.input_schema, "constructor", false)?;
-    writeln!(
-        result,
-        "pub fn initialize({constructor_params}) -> Result[Unit, @common.AgentError] {{"
-    )?;
+    writeln!(result, "pub fn initialize({constructor_params}) -> Unit {{")?;
     writeln!(result, "  let encoded_params = try ")?;
     build_data_value(
         &mut result,
@@ -460,13 +539,16 @@ fn generate_agent_stub(
     writeln!(result, "    catch {{")?;
     writeln!(
         result,
-        "      BuilderError(msg) => return Err(@common.AgentError::InvalidInput(msg))"
+        "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", msg); panic(); }}"
     )?;
     writeln!(result, "    }}")?;
     writeln!(
         result,
-        "  @guest.initialize(\"{original_agent_name}\", encoded_params)"
+        "  match @guest.initialize(\"{original_agent_name}\", encoded_params) {{"
     )?;
+    writeln!(result, "    Ok(result) => result")?;
+    writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} initialize\", error.to_string()); panic(); }}")?;
+    writeln!(result, "  }}")?;
     writeln!(result, "}}")?;
     writeln!(result)?;
 
@@ -484,30 +566,35 @@ fn generate_agent_stub(
         let moonbit_return_type =
             to_moonbit_return_type(ctx, &method.output_schema, original_method_name)?;
 
-        writeln!(result, "pub fn {method_name}({moonbit_param_defs}) -> Result[{moonbit_return_type}, @common.AgentError] {{")?;
+        writeln!(
+            result,
+            "pub fn {method_name}({moonbit_param_defs}) -> {moonbit_return_type} {{"
+        )?;
         writeln!(result, "  let input = try ")?;
         build_data_value(&mut result, ctx, &method.input_schema, original_method_name)?;
         writeln!(result, "    catch {{")?;
         writeln!(
             result,
-            "      BuilderError(msg) => return Err(@common.AgentError::InvalidInput(msg))"
+            "      BuilderError(msg) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", msg); panic(); }}"
         )?;
         writeln!(result, "    }}")?;
 
         writeln!(
             result,
-            "  @guest.invoke(\"{original_method_name}\", input).bind(result => {{"
+            "  let result = match @guest.invoke(\"{original_method_name}\", input) {{"
         )?;
+        writeln!(result, "    Ok(result) => result")?;
+        writeln!(result, "    Err(error) => {{ @logging.log(@logging.Level::ERROR, \"{original_agent_name} {method_name}\", error.to_string()); panic(); }}")?;
+        writeln!(result, "  }}")?;
 
         extract_data_value(
             &mut result,
             ctx,
             &method.output_schema,
-            "    ",
+            "  ",
             original_method_name,
         )?;
 
-        writeln!(result, "  }})")?;
         writeln!(result, "}}")?;
         writeln!(result)?;
     }
@@ -551,7 +638,9 @@ fn to_moonbit_parameter_list(
         }
         DataSchema::Multimodal(_) => {
             // multi-modal input is represented as a list of a generated variant type
-            let name = format!("{context}-input");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-input");
+
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -616,7 +705,8 @@ fn to_moonbit_return_type(
         }
         DataSchema::Multimodal(_) => {
             // multi-modal output is represented as a list of a generated variant type
-            let name = format!("{context}-output");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-output");
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -760,7 +850,9 @@ fn build_data_value(
             writeln!(result, "     ])")?;
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            let name = format!("{context}-input");
+            let context_kebab = context.to_kebab_case();
+
+            let name = format!("{context_kebab}-input");
             let type_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -773,7 +865,7 @@ fn build_data_value(
             for named_element_schema in elements {
                 let case_name = named_element_schema
                     .name
-                    .to_kebab_case()
+                    .to_wit_naming()
                     .to_upper_camel_case();
                 writeln!(
                     result,
@@ -821,7 +913,7 @@ fn write_builder(
             writeln!(result, "{indent}  match {access} {{")?;
 
             for (case_idx, case) in variant.cases.iter().enumerate() {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
                 match &case.typ {
                     Some(_) => {
                         writeln!(
@@ -842,7 +934,7 @@ fn write_builder(
             writeln!(result, "{indent}  match {access} {{")?;
 
             for case in &variant.cases {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
                 match &case.typ {
                     Some(_) => {
                         writeln!(
@@ -877,7 +969,7 @@ fn write_builder(
             writeln!(result, "{indent}{builder}.result({access}.map(inner => {{")?;
             match &result_type.ok {
                 Some(ok) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -895,7 +987,7 @@ fn write_builder(
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             match &result_type.err {
                 Some(err) => {
-                    writeln!(result, "{indent}  Some(builder => {{")?;
+                    writeln!(result, "{indent}  Some(fn (builder: @builder.ItemBuilder) -> Unit raise @builder.BuilderError {{")?;
                     write_builder(
                         result,
                         ctx,
@@ -1049,7 +1141,6 @@ fn extract_data_value(
     match schema {
         DataSchema::Tuple(NamedElementSchemas { elements }) => {
             if elements.is_empty() {
-                writeln!(result, "{indent}Ok(())")?;
             } else if elements.len() == 1 {
                 writeln!(
                     result,
@@ -1062,9 +1153,7 @@ fn extract_data_value(
                             result,
                             "{indent}let wit_value = @extractor.extract_component_model_value(values[0])"
                         )?;
-                        writeln!(result, "{indent}Ok(")?;
                         extract_wit_value(result, ctx, &schema.element_type, "wit_value", indent)?;
-                        writeln!(result, "{indent})")?;
                     }
                     ElementSchema::UnstructuredText(_) => {
                         writeln!(
@@ -1084,7 +1173,6 @@ fn extract_data_value(
                     result,
                     "{indent}let values = @extractor.extract_tuple(result)"
                 )?;
-                writeln!(result, "{indent}Ok((")?;
                 for (idx, element) in elements.iter().enumerate() {
                     match &element.schema {
                         ElementSchema::ComponentModel(schema) => {
@@ -1116,11 +1204,11 @@ fn extract_data_value(
                         }
                     }
                 }
-                writeln!(result, "{indent}))")?;
             }
         }
         DataSchema::Multimodal(NamedElementSchemas { elements }) => {
-            let name = format!("{context}-output");
+            let context_kebab = context.to_kebab_case();
+            let name = format!("{context_kebab}-output");
             let variant_name = ctx
                 .multimodal_variants
                 .get(&name)
@@ -1131,10 +1219,10 @@ fn extract_data_value(
                 result,
                 "{indent}let values = @extractor.extract_multimodal(result)"
             )?;
-            writeln!(result, "{indent}Ok(values.map(pair => {{")?;
+            writeln!(result, "{indent}values.map(pair => {{")?;
             writeln!(result, "{indent}  match pair.0 {{")?;
             for element in elements {
-                let case_name = element.name.to_kebab_case().to_upper_camel_case();
+                let case_name = element.name.to_wit_naming().to_upper_camel_case();
                 writeln!(result, "{indent}    \"{}\" => {{", element.name)?;
                 match &element.schema {
                     ElementSchema::ComponentModel(schema) => {
@@ -1151,7 +1239,7 @@ fn extract_data_value(
                             result,
                             ctx,
                             &schema.element_type,
-                            "wit_value",
+                            "@extractor.extract(wit_value)",
                             &format!("{indent}          "),
                         )?;
                         writeln!(result, "{indent}          )")?;
@@ -1181,7 +1269,7 @@ fn extract_data_value(
                 writeln!(result, "{indent}    }}")?;
             }
             writeln!(result, "{indent}  }}")?;
-            writeln!(result, "{indent}}}))")?;
+            writeln!(result, "{indent}}})")?;
         }
     }
 
@@ -1211,7 +1299,7 @@ fn extract_wit_value(
             writeln!(result, "{indent}  match idx {{")?;
 
             for (idx, case) in variant.cases.iter().enumerate() {
-                let case_name = case.name.to_kebab_case().to_upper_camel_case();
+                let case_name = case.name.to_wit_naming().to_upper_camel_case();
 
                 writeln!(result, "{indent}    {idx} => {{")?;
                 if let Some(inner_type) = &case.typ {
@@ -1236,15 +1324,13 @@ fn extract_wit_value(
         AnalysedType::Result(result_type) => {
             writeln!(result, "{indent}{from}.result().unwrap().map(inner => {{")?;
             if let Some(ok) = &result_type.ok {
-                extract_wit_value(result, ctx, ok, "inner", &format!("{indent}  "))?;
+                extract_wit_value(result, ctx, ok, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
             writeln!(result, "{indent}}}).map_err(inner => {{")?;
             if let Some(err) = &result_type.err {
-                writeln!(result, "{indent}  inner.map(inner => {{")?;
-                extract_wit_value(result, ctx, err, "inner", &format!("{indent}    "))?;
-                writeln!(result, "{indent}  }})")?;
+                extract_wit_value(result, ctx, err, "inner.unwrap()", &format!("{indent}    "))?;
             } else {
                 writeln!(result, "{indent}  ()")?;
             }
@@ -1263,7 +1349,7 @@ fn extract_wit_value(
                 .to_upper_camel_case();
             writeln!(
                 result,
-                "{indent}{enum_type_name}::from({from}.enum_value().unwrap().reinterpret_as_int())"
+                "{indent}@types.{enum_type_name}::from({from}.enum_value().unwrap().reinterpret_as_int())"
             )?;
         }
         AnalysedType::Flags(flags) => {
@@ -1293,7 +1379,7 @@ fn extract_wit_value(
                 .ok_or_else(|| anyhow!("Missing type name for record: {typ:?}"))?
                 .to_upper_camel_case();
 
-            writeln!(result, "{indent}{record_name}::{{")?;
+            writeln!(result, "{indent}@types.{record_name}::{{")?;
 
             for (idx, field) in record.fields.iter().enumerate() {
                 let field_name = to_moonbit_ident(&field.name);
@@ -1329,12 +1415,31 @@ fn extract_wit_value(
             writeln!(result, "{indent})")?;
         }
         AnalysedType::List(list) => {
-            writeln!(
-                result,
-                "{indent}{from}.list_elements().unwrap().map(item => {{"
-            )?;
-            extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
-            writeln!(result, "{indent}}})")?;
+            if matches!(
+                &*list.inner,
+                AnalysedType::U8(_)
+                    | AnalysedType::U32(_)
+                    | AnalysedType::U64(_)
+                    | AnalysedType::S32(_)
+                    | AnalysedType::S64(_)
+                    | AnalysedType::F32(_)
+                    | AnalysedType::F64(_)
+            ) {
+                // based on https://github.com/bytecodealliance/wit-bindgen/blob/main/crates/moonbit/src/lib.rs#L998-L1009
+                writeln!(
+                    result,
+                    "{indent}FixedArray::from_array({from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}}))")?;
+            } else {
+                writeln!(
+                    result,
+                    "{indent}{from}.list_elements().unwrap().map(item => {{"
+                )?;
+                extract_wit_value(result, ctx, &list.inner, "item", &format!("{indent}  "))?;
+                writeln!(result, "{indent}}})")?;
+            }
         }
         AnalysedType::Str(_) => {
             writeln!(result, "{indent}{from}.string().unwrap()")?;
@@ -1385,35 +1490,15 @@ fn extract_wit_value(
     Ok(())
 }
 
-fn to_moonbit_ident(name: impl AsRef<str>) -> String {
-    // Escape MoonBit keywords and reserved keywords
-    let name = name.as_ref();
-    match name {
-        // Keywords
-        "as" | "else" | "extern" | "fn" | "fnalias" | "if" | "let" | "const" | "match" | "using"
-        | "mut" | "type" | "typealias" | "struct" | "enum" | "trait" | "traitalias" | "derive"
-        | "while" | "break" | "continue" | "import" | "return" | "throw" | "raise" | "try" | "catch"
-        | "pub" | "priv" | "readonly" | "true" | "false" | "_" | "test" | "loop" | "for" | "in" | "impl"
-        | "with" | "guard" | "async" | "is" | "suberror" | "and" | "letrec" | "enumview" | "noraise"
-        | "defer" | "init" | "main"
-        // Reserved keywords
-        | "module" | "move" | "ref" | "static" | "super" | "unsafe" | "use" | "where" | "await"
-        | "dyn" | "abstract" | "do" | "final" | "macro" | "override" | "typeof" | "virtual" | "yield"
-        | "local" | "method" | "alias" | "assert" | "recur" | "isnot" | "define" | "downcast"
-            | "inherit" | "member" | "namespace" | "upcast" | "void" | "lazy" | "include" | "mixin"
-            | "protected" | "sealed" | "constructor" | "atomic" | "volatile" | "anyframe" | "anytype"
-            | "asm" | "comptime" | "errdefer" | "export" | "opaque" | "orelse" | "resume" | "threadlocal"
-            | "unreachable" | "dynclass" | "dynobj" | "dynrec" | "var" | "finally" | "noasync" => {
-        format ! ("{name}_")
-        }
-        _ => name.to_snake_case(),
-    }
-}
-
 #[cfg(test)]
+#[test_r::sequential]
 mod tests {
     use crate::model::agent::moonbit::generate_moonbit_wrapper;
     use crate::model::agent::test;
+    use crate::model::agent::test::{
+        reproducer_for_issue_with_enums, reproducer_for_issue_with_result_types,
+        reproducer_for_multiple_types_called_element,
+    };
     use crate::model::agent::wit::generate_agent_wrapper_wit;
     use crate::model::app::AppComponentName;
     use tempfile::NamedTempFile;
@@ -1446,6 +1531,56 @@ mod tests {
     fn single_agent_with_wit_keywords(_trace: &Trace) {
         let component_name: AppComponentName = "example:single1".into();
         let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn bug_multiple_types_called_element() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_multiple_types_called_element();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn single_agent_with_test_in_package_name(_trace: &Trace) {
+        let component_name: AppComponentName = "test:agent".into();
+        let agent_types = test::agent_type_with_wit_keywords();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn enum_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_enums();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    fn bug_result_types() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_issue_with_result_types();
+        let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
+
+        let target = NamedTempFile::new().unwrap();
+        generate_moonbit_wrapper(ctx, target.path()).unwrap();
+    }
+
+    #[test]
+    pub fn multimodal_untagged_variant_in_out() {
+        let component_name = "example:bug".into();
+        let agent_types = test::multimodal_untagged_variant_in_out();
         let ctx = generate_agent_wrapper_wit(&component_name, &agent_types).unwrap();
 
         let target = NamedTempFile::new().unwrap();

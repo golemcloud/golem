@@ -1,13 +1,14 @@
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::base_model::OplogIndex;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm_rpc::golem_rpc_0_2_x::types::{
@@ -37,12 +38,13 @@ use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_enumeration::WorkerEnumerationService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{HasAll, HasConfig, HasOplogService};
+use golem_worker_executor::services::HasAll;
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
@@ -71,6 +73,7 @@ impl WorkerCtx for TestWorkerCtx {
     async fn create(
         _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn WorkerEnumerationService>,
@@ -96,9 +99,12 @@ impl WorkerCtx for TestWorkerCtx {
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
         let durable_ctx = DurableWorkerCtx::create(
             owned_worker_id,
+            agent_id,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -121,6 +127,8 @@ impl WorkerCtx for TestWorkerCtx {
             worker_fork,
             project_service,
             agent_types_service,
+            shard_service,
+            pending_update,
         )
         .await?;
         Ok(Self { durable_ctx })
@@ -148,6 +156,10 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn owned_worker_id(&self) -> &OwnedWorkerId {
         self.durable_ctx.owned_worker_id()
+    }
+
+    fn agent_id(&self) -> Option<AgentId> {
+        self.durable_ctx.agent_id()
     }
 
     fn created_by(&self) -> &AccountId {
@@ -196,8 +208,8 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
-            Ok(self.durable_ctx.increase_memory(delta).await?)
+            self.durable_ctx.increase_memory(delta).await?;
+            Ok(true)
         } else {
             Ok(true)
         }
@@ -239,7 +251,7 @@ impl FileSystemReading for TestWorkerCtx {
 impl HostWasmRpc for TestWorkerCtx {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::WorkerId,
+        worker_id: golem_wasm_rpc::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -384,19 +396,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         .await
     }
 
-    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::compute_latest_worker_status(
-            this,
-            owned_worker_id,
-            metadata,
-        )
-        .await
-    }
-
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
         instance: &Instance,
@@ -427,34 +426,10 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         .await
     }
 
-    async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<TestWorkerCtx>::on_shard_assignment_changed(this).await
-    }
-
-    async fn on_worker_update_failed_to_start<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::on_worker_update_failed_to_start(
-            this,
-            account_id,
-            owned_worker_id,
-            target_version,
-            details,
-        )
-        .await
     }
 }
 
@@ -494,28 +469,12 @@ impl StatusManagement for TestWorkerCtx {
         self.durable_ctx.check_interrupt()
     }
 
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_suspended().await
+    fn set_suspended(&self) {
+        self.durable_ctx.set_suspended()
     }
 
     fn set_running(&self) {
         self.durable_ctx.set_running()
-    }
-
-    async fn get_worker_status(&self) -> WorkerStatus {
-        self.durable_ctx.get_worker_status().await
-    }
-
-    async fn store_worker_status(&self, status: WorkerStatus) {
-        self.durable_ctx.store_worker_status(status).await
-    }
-
-    async fn update_pending_invocations(&self) {
-        self.durable_ctx.update_pending_invocations().await
-    }
-
-    async fn update_pending_updates(&self) {
-        self.durable_ctx.update_pending_updates().await
     }
 }
 
@@ -545,6 +504,10 @@ impl InvocationHooks for TestWorkerCtx {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
+    }
+
+    async fn get_current_retry_point(&self) -> OplogIndex {
+        self.durable_ctx.get_current_retry_point().await
     }
 }
 
@@ -604,8 +567,11 @@ impl InvocationContextManagement for TestWorkerCtx {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

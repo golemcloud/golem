@@ -30,12 +30,12 @@ export class AppService {
     return await this.cliService.callCLIWithLogs(appId, "app", subcommands);
   };
 
-  public updateWorkers = async (
+  public updateAgents = async (
     appId: string,
     componentNames?: string[],
     updateMode: string = "auto",
   ) => {
-    const subcommands = ["update-workers"];
+    const subcommands = ["update-agents"];
     if (updateMode) {
       subcommands.push("--update-mode", updateMode);
     }
@@ -45,14 +45,14 @@ export class AppService {
     return await this.cliService.callCLIWithLogs(appId, "app", subcommands);
   };
 
-  public deployWorkers = async (
+  public deployAgents = async (
     appId: string,
     componentNames?: string[],
-    updateWorkers?: boolean,
+    updateAgents?: boolean,
   ) => {
     const subcommands = ["deploy"];
-    if (updateWorkers) {
-      subcommands.push("--update-workers");
+    if (updateAgents) {
+      subcommands.push("--update-agents");
     }
     if (componentNames && componentNames.length > 0) {
       subcommands.push(...componentNames);

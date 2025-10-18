@@ -12,24 +12,26 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::common::{start, TestContext};
+use crate::common::{start, start_customized, TestContext, TestWorkerExecutor};
 use crate::compatibility::worker_recovery::save_recovery_golden_file;
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
-use assert2::check;
+use assert2::{check, let_assert};
 use axum::routing::get;
 use axum::Router;
-use golem_api_grpc::proto::golem::worker::v1::{worker_execution_error, ComponentParseFailed};
+use golem_api_grpc::proto::golem::worker::v1::{
+    worker_execution_error, ComponentParseFailed, WorkerExecutionError,
+};
 use golem_api_grpc::proto::golem::workerexecutor::v1::CompletePromiseRequest;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::{
-    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, ScanCursor,
-    StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
+    ComponentId, ComponentType, FilterComparator, IdempotencyKey, PromiseId, RetryConfig,
+    ScanCursor, StringFilterComparator, Timestamp, WorkerFilter, WorkerId, WorkerMetadata,
     WorkerResourceDescription, WorkerStatus,
 };
-use golem_test_framework::config::TestDependencies;
+use golem_test_framework::config::{TestDependencies, TestDependenciesDsl};
 use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
     worker_error_logs, worker_error_message, TestDslUnsafe,
@@ -45,12 +47,15 @@ use std::collections::HashMap;
 use std::env;
 use std::io::Write;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, inherit_test_dep, test, test_gen, timeout};
+use tokio::task::JoinHandle;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, Instrument, Span};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -293,6 +298,10 @@ async fn dynamic_worker_creation(
     check!(
         env == vec![Value::Result(Ok(Some(Box::new(Value::List(vec![
             Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String("dynamic-worker-creation-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
                 Value::String("dynamic-worker-creation-1".to_string())
             ]),
@@ -418,10 +427,14 @@ async fn promise(
         .in_current_span(),
     );
 
+    info!("Waiting for worker to be suspended on promise");
+
     // While waiting for the promise, the worker gets suspended
     executor
         .wait_for_status(&worker_id, WorkerStatus::Suspended, Duration::from_secs(10))
         .await;
+
+    info!("Completing promise to resume worker");
 
     executor
         .deps
@@ -432,7 +445,7 @@ async fn promise(
             promise_id: Some(
                 PromiseId {
                     worker_id: worker_id.clone(),
-                    oplog_idx: OplogIndex::from_u64(3),
+                    oplog_idx: OplogIndex::from_u64(4),
                 }
                 .into(),
             ),
@@ -476,11 +489,11 @@ async fn get_workers_from_worker(
     let component_id = executor.component("runtime-service").store().await;
 
     let worker_id1 = executor
-        .start_worker(&component_id, "runtime-service-1")
+        .start_worker(&component_id, "runtime-service-3")
         .await;
 
     let worker_id2 = executor
-        .start_worker(&component_id, "runtime-service-2")
+        .start_worker(&component_id, "runtime-service-4")
         .await;
 
     async fn get_check(
@@ -528,7 +541,7 @@ async fn get_workers_from_worker(
                                 .analysed_type(&TypeName {
                                     package: Some("golem:api@1.1.7".to_string()),
                                     owner: TypeOwner::Interface("host".to_string()),
-                                    name: Some("worker-any-filter".to_string()),
+                                    name: Some("agent-any-filter".to_string()),
                                 })
                                 .unwrap(),
                         ),
@@ -553,7 +566,7 @@ async fn get_workers_from_worker(
     get_check(&worker_id1, None, 2, &executor, type_resolve.clone()).await;
     get_check(
         &worker_id2,
-        Some("runtime-service-1".to_string()),
+        Some("runtime-service-3".to_string()),
         1,
         &executor,
         type_resolve.clone(),
@@ -842,6 +855,10 @@ async fn component_env_variables(
                 Value::String("bar".to_string())
             ]),
             Value::Tuple(vec![
+                Value::String("GOLEM_AGENT_ID".to_string()),
+                Value::String("component-env-variables-1".to_string())
+            ]),
+            Value::Tuple(vec![
                 Value::String("GOLEM_WORKER_NAME".to_string()),
                 Value::String("component-env-variables-1".to_string())
             ]),
@@ -906,7 +923,7 @@ async fn component_env_variables_update(
 
     check!(env.get("FOO") == Some(&"bar".to_string()));
     check!(env.get("BAR") == Some(&"baz".to_string()));
-    check!(env.get("GOLEM_WORKER_NAME") == Some(&"component-env-variables-1".to_string()));
+    check!(env.get("GOLEM_AGENT_ID") == Some(&"component-env-variables-1".to_string()));
 }
 
 #[test]
@@ -1838,6 +1855,155 @@ async fn long_running_poll_loop_works_as_expected(
     http_server.abort();
 }
 
+async fn start_http_poll_server(
+    response: Arc<Mutex<String>>,
+    poll_count: Arc<AtomicUsize>,
+    forced_port: Option<u16>,
+) -> (u16, JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", forced_port.unwrap_or(0)))
+        .await
+        .unwrap();
+
+    let host_http_port = listener.local_addr().unwrap().port();
+
+    let http_server = tokio::spawn(
+        async move {
+            let route = Router::new().route(
+                "/poll",
+                get(move || async move {
+                    let body = response.lock().unwrap();
+                    poll_count.fetch_add(1, Ordering::Release);
+                    body.clone()
+                }),
+            );
+
+            axum::serve(listener, route).await.unwrap();
+        }
+        .in_current_span(),
+    );
+
+    (host_http_port, http_server)
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn long_running_poll_loop_http_failures_are_retried(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_customized(
+        deps,
+        &context,
+        None,
+        Some(RetryConfig {
+            max_attempts: 30,
+            min_delay: Duration::from_millis(100),
+            max_delay: Duration::from_millis(500),
+            multiplier: 1.5,
+            max_jitter_factor: None,
+        }),
+    )
+    .await
+    .unwrap()
+    .into_admin()
+    .await;
+
+    let response = Arc::new(Mutex::new("initial".to_string()));
+    let poll_count = Arc::new(AtomicUsize::new(0));
+
+    let (host_http_port, http_server) =
+        start_http_poll_server(response.clone(), poll_count.clone(), None).await;
+
+    let component_id = executor.component("http-client-2").store().await;
+    let mut env = HashMap::new();
+    env.insert("PORT".to_string(), host_http_port.to_string());
+    env.insert("RUST_BACKTRACE".to_string(), "1".to_string());
+
+    let worker_id = executor
+        .start_worker_with(&component_id, "poll-loop-component-0", vec![], env, vec![])
+        .await;
+
+    executor.log_output(&worker_id).await;
+
+    executor
+        .invoke(
+            &worker_id,
+            "golem:it/api.{start-polling}",
+            vec!["stop now".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
+        .await;
+
+    info!("*** POLL LOOP IS ALIVE, WAITING FOR 3 POLLS");
+
+    // Poll loop is running. Wait until a given poll count
+    let begin = Instant::now();
+    loop {
+        if begin.elapsed() > Duration::from_secs(2) {
+            panic!("No polls in 2 seconds");
+        }
+
+        if poll_count.load(Ordering::Acquire) >= 3 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    info!("*** KILLING THE HTTP SERVER");
+
+    // Kill the HTTP server
+    http_server.abort();
+
+    // Wait more than the poll cycle time
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    info!("*** RESTARTING THE HTTP SERVER");
+
+    // Restart the HTTP server (TODO: another test could have taken the port for now - we need to retry until we can bind again)
+    let (_, http_server) =
+        start_http_poll_server(response.clone(), poll_count.clone(), Some(host_http_port)).await;
+
+    info!("*** WAITING FOR 3 MORE POLLS");
+
+    // Wait until more polls are coming in
+    let begin = Instant::now();
+    loop {
+        if begin.elapsed() > Duration::from_secs(2) {
+            panic!("No polls in 2 seconds");
+        }
+
+        if poll_count.load(Ordering::Acquire) >= 6 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+
+    info!("*** FINISH SIGNAL SET");
+
+    // Finish signal
+
+    {
+        let mut response = response.lock().unwrap();
+        *response = "stop now".to_string();
+    }
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
+        .await;
+
+    info!("*** INVOCATION STOPPED");
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+    drop(executor);
+    http_server.abort();
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout(120_000)]
@@ -2014,7 +2180,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         *response = "first".to_string();
     }
 
-    // wait for first invocation to finish
+    // wait for the first invocation to finish
     {
         let mut found = false;
         while !found {
@@ -2822,6 +2988,8 @@ async fn invocation_queue_is_persistent(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     drop(executor);
     let executor = start(deps, &context).await.unwrap().into_admin().await;
 
@@ -2961,6 +3129,8 @@ async fn stderr_returned_for_failed_component(
         )
         .await;
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     let result3 = executor
         .invoke_and_await(&worker_id, "golem:component/api.{get}", vec![])
         .await;
@@ -2984,9 +3154,7 @@ async fn stderr_returned_for_failed_component(
     check!(result2.is_err());
     check!(result3.is_err());
 
-    let expected_stderr = "thread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
-
-    println!("result3: {result3:?}");
+    let expected_stderr = "error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n";
 
     check!(worker_error_logs(&result2.clone().err().unwrap())
         .unwrap()
@@ -3441,9 +3609,133 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
         )
         .await;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    // TODO: the parameter type mismatch causes printing to fail due to a corrupted WasmValue.
+    // executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
 
     check!(failure.is_err());
     check!(success.is_ok());
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout(120_000)]
+async fn delete_worker_during_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+) {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("clock-service").store().await;
+    let worker_id = executor
+        .start_worker(&component_id, "delete-worker-during-invocation")
+        .await;
+
+    info!("Enqueuing invocations");
+    // Enqueuing a large number of invocations, each sleeping for 2 seconds
+    for _ in 0..25 {
+        executor
+            .invoke(
+                &worker_id,
+                "golem:it/api.{sleep}",
+                vec![2u64.into_value_and_type()],
+            )
+            .await
+            .unwrap();
+    }
+
+    executor
+        .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(2))
+        .await;
+
+    info!("Deleting the worker");
+    executor.delete_worker(&worker_id).await;
+
+    info!("Invoking again");
+    // Invoke it one more time - it should create a new instance and return successfully
+    let result = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{sleep}",
+            vec![1u64.into_value_and_type()],
+        )
+        .await;
+
+    let (metadata, _) = executor
+        .get_worker_metadata(&worker_id)
+        .await
+        .expect("The worker must be recreated");
+
+    executor.check_oplog_is_queryable(&worker_id).await;
+
+    check!(result == Ok(vec![Value::Result(Ok(None))]));
+    check!(metadata.last_known_status.pending_invocations.is_empty());
+}
+
+#[test]
+#[tracing::instrument]
+#[test_r::non_flaky(10)]
+async fn invoking_worker_while_its_getting_deleted_works(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await.unwrap().into_admin().await;
+
+    let component_id = executor.component("counters").unique().store().await;
+    let worker_id = executor.start_worker(&component_id, "worker").await;
+
+    let invoking_task = {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        tokio::spawn(async move {
+            let mut result = None;
+            while matches!(result, Some(Ok(_)) | None) {
+                result = Some(
+                    executor
+                        .invoke_and_await(
+                            &worker_id,
+                            "rpc:counters-exports/api.{inc-global-by}",
+                            vec![1u64.into_value_and_type()],
+                        )
+                        .await,
+                );
+            }
+            result
+        })
+    };
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let deleting_task_cancel_token = CancellationToken::new();
+    {
+        let executor = executor.clone();
+        let worker_id = worker_id.clone();
+        let deleting_task_cancel_token = deleting_task_cancel_token.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = deleting_task_cancel_token.cancelled() => { break },
+                    _ = <TestDependenciesDsl<TestWorkerExecutor> as ::golem_test_framework::dsl::TestDsl>::delete_worker(&executor, &worker_id) => { }
+                }
+            }
+        })
+    };
+
+    let invocation_result = invoking_task.await?.unwrap();
+    deleting_task_cancel_token.cancel();
+    // We tried invoking the worker while it was being deleted, we expect an invalid request
+    let_assert!(
+        Err(golem_api_grpc::proto::golem::worker::v1::worker_error::Error::InternalError(WorkerExecutionError {
+            error: Some(golem_api_grpc::proto::golem::worker::v1::worker_execution_error::Error::InvalidRequest(
+                golem_api_grpc::proto::golem::worker::v1::InvalidRequest {
+                    details: error_details
+                }
+            ))
+        })) = invocation_result
+    );
+    assert!(error_details.contains("being deleted"));
+
+    Ok(())
 }

@@ -16,12 +16,11 @@ use crate::app::error::CustomCommandError;
 use crate::command::app::AppSubcommand;
 use crate::command::builtin_app_subcommands;
 use crate::command::shared_args::{
-    AppOptionalComponentNames, BuildArgs, ForceBuildArg, UpdateOrRedeployArgs,
+    AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
-use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
@@ -30,7 +29,8 @@ use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
 use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
-use crate::model::worker::WorkerUpdateMode;
+use crate::model::worker::AgentUpdateMode;
+use crate::model::component::ComponentName;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::ApplicationClient;
@@ -68,10 +68,13 @@ impl AppCommandHandler {
             } => self.cmd_build(component_name, build_args).await,
             AppSubcommand::Deploy {
                 force_build,
-                update_or_redeploy,
-            } => self.cmd_deploy(force_build, update_or_redeploy).await,
+                deploy_args,
+            } => {
+                self.cmd_deploy(component_name, force_build, deploy_args)
+                    .await
+            }
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
-            AppSubcommand::UpdateWorkers {
+            AppSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
@@ -79,7 +82,7 @@ impl AppCommandHandler {
                 self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            AppSubcommand::RedeployWorkers { component_name } => {
+            AppSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
@@ -161,7 +164,7 @@ impl AppCommandHandler {
             let common_templates = languages
                 .iter()
                 .map(|language| {
-                    self.get_template(&language.id())
+                    self.get_template(&language.id(), self.ctx.dev_mode())
                         .map(|(common, _component)| common)
                 })
                 .collect::<Result<Vec<_>, _>>()?;
@@ -203,7 +206,8 @@ impl AppCommandHandler {
                             .log_color_highlight()
                     ),
                 );
-                let (common_template, component_template) = self.get_template(template)?;
+                let (common_template, component_template) =
+                    self.get_template(template, self.ctx.dev_mode())?;
                 match add_component_by_template(
                     common_template,
                     Some(component_template),
@@ -289,9 +293,9 @@ impl AppCommandHandler {
     async fn cmd_deploy(
         &self,
         force_build: ForceBuildArg,
-        update_or_redeploy: UpdateOrRedeployArgs,
+        deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(force_build, update_or_redeploy).await
+        self.deploy(force_build, update_or_redeploy, deploy_args).await
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -306,7 +310,7 @@ impl AppCommandHandler {
 
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
-        if let Err(error) = app_ctx.custom_command(command) {
+        if let Err(error) = app_ctx.custom_command(command).await {
             match error {
                 CustomCommandError::CommandNotFound => {
                     logln("");
@@ -348,13 +352,13 @@ impl AppCommandHandler {
     async fn cmd_update_workers(
         &self,
         component_names: Vec<ComponentName>,
-        update_mode: WorkerUpdateMode,
+        update_mode: AgentUpdateMode,
         await_update: bool,
     ) -> anyhow::Result<()> {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
 
-        let components = self.components_for_update_or_redeploy().await?;
+        let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
             .update_workers_by_components(&components, update_mode, await_update)
@@ -370,7 +374,7 @@ impl AppCommandHandler {
         self.must_select_components(component_names, &ApplicationComponentSelectMode::All)
             .await?;
 
-        let components = self.components_for_update_or_redeploy().await?;
+        let components = self.components_for_deploy_args().await?;
         self.ctx
             .component_handler()
             .redeploy_workers_by_components(&components)
@@ -412,7 +416,7 @@ impl AppCommandHandler {
     async fn deploy(
         &self,
         _force_build: ForceBuildArg,
-        _update_or_redeploy: UpdateOrRedeployArgs,
+        _deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
         let _environment = self
             .ctx
@@ -421,7 +425,7 @@ impl AppCommandHandler {
             .await?;
 
         // TODO: atomic
-        todo!();
+        todo!()
     }
 
     pub async fn get_remote_application(
@@ -499,7 +503,7 @@ impl AppCommandHandler {
         app_ctx.some_or_err()?.clean()
     }
 
-    async fn components_for_update_or_redeploy(&self) -> anyhow::Result<Vec<Component>> {
+    async fn components_for_deploy_args(&self) -> anyhow::Result<Vec<Component>> {
         let app_ctx = self.ctx.app_context_lock().await;
         let app_ctx = app_ctx.some_or_err()?;
 
@@ -642,6 +646,7 @@ impl AppCommandHandler {
     pub fn get_template(
         &self,
         requested_template_name: &str,
+        dev_mode: bool,
     ) -> anyhow::Result<(Option<&Template>, &Template)> {
         let segments = requested_template_name.split("/").collect::<Vec<_>>();
         let (language, template_name): (String, Option<String>) = match segments.len() {
@@ -656,7 +661,7 @@ impl AppCommandHandler {
             }),
             _ => {
                 log_error("Failed to parse template name");
-                self.log_templates_help(None, None);
+                self.log_templates_help(None, None, self.ctx.dev_mode());
                 bail!(NonSuccessfulExit);
             }
         };
@@ -665,7 +670,7 @@ impl AppCommandHandler {
             Some(language) => language,
             None => {
                 log_error("Failed to parse language part of the template!");
-                self.log_templates_help(None, None);
+                self.log_templates_help(None, None, self.ctx.dev_mode());
                 bail!(NonSuccessfulExit);
             }
         };
@@ -673,9 +678,9 @@ impl AppCommandHandler {
             .map(TemplateName::from)
             .unwrap_or_else(|| TemplateName::from("default"));
 
-        let Some(lang_templates) = self.ctx.templates().get(&language) else {
+        let Some(lang_templates) = self.ctx.templates(dev_mode).get(&language) else {
             log_error(format!("No templates found for language: {language}").as_str());
-            self.log_templates_help(None, None);
+            self.log_templates_help(None, None, self.ctx.dev_mode());
             bail!(NonSuccessfulExit);
         };
 
@@ -688,7 +693,7 @@ impl AppCommandHandler {
                 "Template {} not found!",
                 requested_template_name.log_color_highlight()
             ));
-            self.log_templates_help(None, None);
+            self.log_templates_help(None, None, self.ctx.dev_mode());
             bail!(NonSuccessfulExit);
         };
 
@@ -710,6 +715,7 @@ impl AppCommandHandler {
         &self,
         language_filter: Option<GuestLanguage>,
         template_filter: Option<&str>,
+        dev_mode: bool,
     ) {
         if language_filter.is_none() && template_filter.is_none() {
             logln(format!(
@@ -722,7 +728,7 @@ impl AppCommandHandler {
 
         let templates = self
             .ctx
-            .templates()
+            .templates(dev_mode)
             .iter()
             .filter_map(|(language, templates)| {
                 templates

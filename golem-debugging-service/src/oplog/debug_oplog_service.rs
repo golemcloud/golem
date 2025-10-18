@@ -18,13 +18,16 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::base_model::ProjectId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata};
+use golem_common::model::{
+    ComponentId, OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord,
+};
+use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{OpenOplogs, Oplog, OplogService};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 pub struct DebugOplogService {
     pub inner: Arc<dyn OplogService>,
@@ -55,7 +58,8 @@ impl OplogService for DebugOplogService {
         _owned_worker_id: &OwnedWorkerId,
         _initial_entry: OplogEntry,
         _initial_worker_metadata: WorkerMetadata,
-        _execution_status: Arc<RwLock<ExecutionStatus>>,
+        _last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         panic!("Cannot create a new oplog when debugging")
     }
@@ -65,7 +69,8 @@ impl OplogService for DebugOplogService {
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog> {
         self.oplogs
             .get_or_open(
@@ -76,8 +81,9 @@ impl OplogService for DebugOplogService {
                     last_oplog_index,
                     self.inner.clone(),
                     self.debug_session.clone(),
-                    execution_status,
                     initial_worker_metadata,
+                    last_known_status,
+                    execution_status,
                 ),
             )
             .await

@@ -8,6 +8,7 @@ message WorkerError {
     OutOfMemory out_of_memory = 2;
     InvalidRequest invalid_request = 3;
     UnknownError unknown_error = 4;
+    ExceededMemoryLimit exceeded_memory_limit = 5;
   }
 }
 
@@ -22,3 +23,5 @@ message InvalidRequest {
 message UnknownError {
   string details = 1;
 }
+
+message ExceededMemoryLimit {}

@@ -16,10 +16,8 @@ use crate::debug_session::{DebugSessionId, DebugSessions};
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::WorkerMetadata;
-use golem_worker_executor::model::ExecutionStatus;
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
@@ -34,14 +32,10 @@ impl DebugOplog {
         inner: Arc<dyn Oplog>,
         debug_session_id: DebugSessionId,
         debug_session: Arc<dyn DebugSessions>,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-        initial_worker_metadata: WorkerMetadata,
     ) -> Self {
         let oplog_state = DebugOplogState {
             debug_session_id,
             debug_session,
-            _execution_status: execution_status,
-            _initial_worker_metadata: initial_worker_metadata,
         };
 
         Self { inner, oplog_state }
@@ -69,20 +63,22 @@ impl Debug for DebugOplog {
 pub struct DebugOplogState {
     debug_session_id: DebugSessionId,
     debug_session: Arc<dyn DebugSessions + Send + Sync>,
-    _execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
-    _initial_worker_metadata: WorkerMetadata,
 }
 
 #[async_trait]
 impl Oplog for DebugOplog {
     // We don't allow debugging session to add anything into oplog
     // which internally can get committed.
-    async fn add(&self, _entry: OplogEntry) {}
+    async fn add(&self, _entry: OplogEntry) -> OplogIndex {
+        OplogIndex::NONE
+    }
 
     async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {}
 
     // There is no need to commit anything to the indexed storage
-    async fn commit(&self, _level: CommitLevel) {}
+    async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
+        BTreeMap::new()
+    }
 
     // Current Oplog Index acts as the Replay Target
     // In a new worker, ReplayState begins with last_replayed_index
@@ -101,6 +97,10 @@ impl Oplog for DebugOplog {
         } else {
             self.inner.current_oplog_index().await
         }
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        None
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {

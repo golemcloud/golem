@@ -46,6 +46,9 @@ pub mod metrics;
 #[cfg(feature = "model")]
 pub mod model;
 
+#[cfg(feature = "tokio")]
+pub mod one_shot;
+
 #[cfg(feature = "redis")]
 pub mod redis;
 
@@ -57,6 +60,8 @@ pub mod retries;
 
 #[cfg(feature = "serialization")]
 pub mod serialization;
+
+pub mod read_only_lock;
 
 #[cfg(feature = "observability")]
 pub mod tracing;

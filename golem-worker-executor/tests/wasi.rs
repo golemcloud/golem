@@ -877,6 +877,8 @@ async fn file_update_1(
 
         check!(content_after_crash[0] == Value::String("baz\n".to_string()));
     }
+
+    executor.delete_worker(&worker_id).await;
 }
 
 #[test]
@@ -1044,6 +1046,10 @@ async fn environment_service(
                 Value::Tuple(vec![
                     Value::String("TEST_ENV".to_string()),
                     Value::String("test-value".to_string())
+                ]),
+                Value::Tuple(vec![
+                    Value::String("GOLEM_AGENT_ID".to_string()),
+                    Value::String("environment-service-1".to_string())
                 ]),
                 Value::Tuple(vec![
                     Value::String("GOLEM_WORKER_NAME".to_string()),
@@ -1654,8 +1660,9 @@ async fn sleep_and_awaiting_parallel_responses(
 
     executor.check_oplog_is_queryable(&worker_id).await;
 
-    server.abort();
     drop(executor);
+    server.abort();
+
     let duration = start.elapsed();
     debug!("duration: {:?}", duration);
 
@@ -1671,6 +1678,8 @@ async fn sleep_and_awaiting_parallel_responses(
         .invoke_and_await(&worker_id, "golem:it/api.{healthcheck}", vec![])
         .await
         .unwrap();
+
+    // server.abort();
 
     check!(duration.as_secs() >= 10);
     check!(duration.as_secs() < 20);
@@ -1900,7 +1909,7 @@ async fn failing_worker(
     assert!(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
     );
-    assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result2_err), Some("error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
     let result3_err = result3.err().unwrap();
     assert_eq!(
         worker_error_message(&result3_err),
@@ -1909,7 +1918,7 @@ async fn failing_worker(
     assert!(
         matches!(worker_error_underlying_error(&result3_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:") && error.contains("failing_component.wasm!golem:component/api#add"))
     );
-    assert_eq!(worker_error_logs(&result3_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:30:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+    assert_eq!(worker_error_logs(&result3_err), Some("error log message\n\nthread '<unnamed>' panicked at src/lib.rs:31:17:\nvalue is too large\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
 }
 
 #[test]
@@ -2513,10 +2522,26 @@ async fn filesystem_remove_file_replay_restores_file_times(
         )
         .await
         .unwrap();
+    let info1 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{get-info}",
+            vec!["/test/testfile.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
     let _ = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{remove-file}",
+            vec!["/test/testfile.txt".into_value_and_type()],
+        )
+        .await
+        .unwrap();
+    let info2 = executor
+        .invoke_and_await(
+            &worker_id,
+            "golem:it/api.{get-info}",
             vec!["/test/testfile.txt".into_value_and_type()],
         )
         .await
@@ -2544,6 +2569,9 @@ async fn filesystem_remove_file_replay_restores_file_times(
 
     executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
+
+    println!("{:?}", info1);
+    println!("{:?}", info2);
 
     check!(times1 == times2);
 }

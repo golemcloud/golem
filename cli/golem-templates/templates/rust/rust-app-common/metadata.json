@@ -7,5 +7,6 @@
   "witDepsPaths": [
     "wit/deps"
   ],
-  "transform": false
+  "transform": false,
+  "devOnly": true
 }

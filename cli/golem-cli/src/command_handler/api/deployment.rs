@@ -77,29 +77,22 @@ impl ApiDeploymentCommandHandler {
 
         let clients = self.ctx.golem_clients().await?;
 
-        let result: Vec<ApiDeployment> = match id {
-            Some(id) => clients
-                .api_deployment
-                .list_deployments(
-                    &self
-                        .ctx
-                        .cloud_project_handler()
-                        .selected_project_id_or_default(project.as_ref())
-                        .await?
-                        .0,
-                    Some(id),
-                )
-                .await
-                .map_service_error()?
-                .into_iter()
-                .map(ApiDeployment::from)
-                .collect::<Vec<_>>(),
-            None => {
-                // TODO: update in cloud to allow listing without id
-                log_error("API definition ID for Cloud is required");
-                bail!(NonSuccessfulExit);
-            }
-        };
+        let result: Vec<ApiDeployment> = clients
+            .api_deployment
+            .list_deployments(
+                &self
+                    .ctx
+                    .cloud_project_handler()
+                    .selected_project_id_or_default(project.as_ref())
+                    .await?
+                    .0,
+                id,
+            )
+            .await
+            .map_service_error()?
+            .into_iter()
+            .map(ApiDeployment::from)
+            .collect::<Vec<_>>();
 
         self.ctx.log_handler().log_view(&result);
 
@@ -280,7 +273,8 @@ impl ApiDeploymentCommandHandler {
 
     async fn manifest_api_deployments(
         &self,
-    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, WithSource<HttpApiDeployment>>> {
+    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, Vec<WithSource<Vec<HttpApiDefinitionName>>>>>
+    {
         let profile = self.ctx.profile_name().clone();
 
         let app_ctx = self.ctx.app_context_lock().await;
@@ -290,5 +284,28 @@ impl ApiDeploymentCommandHandler {
             .http_api_deployments(&profile)
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn merge_manifest_api_deployments(
+        &self,
+    ) -> anyhow::Result<BTreeMap<HttpApiDeploymentSite, HttpApiDeployment>> {
+        Ok(self
+            .manifest_api_deployments()
+            .await?
+            .into_iter()
+            .map(|(site, definitions)| {
+                (
+                    site.clone(),
+                    HttpApiDeployment {
+                        host: site.host.clone(),
+                        subdomain: site.subdomain.clone(),
+                        definitions: definitions
+                            .into_iter()
+                            .flat_map(|d| d.value.into_iter().map(|d| d.into_string()))
+                            .collect(),
+                    },
+                )
+            })
+            .collect())
     }
 }

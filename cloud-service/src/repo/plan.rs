@@ -30,6 +30,7 @@ pub struct PlanRecord {
     pub storage_limit: i32,
     pub monthly_gas_limit: i64,
     pub monthly_upload_limit: i32,
+    pub max_memory_per_worker: i64,
 }
 
 impl From<PlanRecord> for Plan {
@@ -43,6 +44,7 @@ impl From<PlanRecord> for Plan {
                 storage_limit: value.storage_limit,
                 monthly_gas_limit: value.monthly_gas_limit,
                 monthly_upload_limit: value.monthly_upload_limit,
+                max_memory_per_worker: value.max_memory_per_worker,
             },
         }
     }
@@ -58,6 +60,7 @@ impl From<Plan> for PlanRecord {
             storage_limit: value.plan_data.storage_limit,
             monthly_gas_limit: value.plan_data.monthly_gas_limit,
             monthly_upload_limit: value.plan_data.monthly_upload_limit,
+            max_memory_per_worker: value.plan_data.max_memory_per_worker,
         }
     }
 }
@@ -92,9 +95,9 @@ impl PlanRepo for DbPlanRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn create(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         let query = sqlx::query(r#"
               INSERT INTO plans
-                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
+                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit, max_memory_per_worker)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4, $5, $6, $7, $8)
             "#)
             .bind(plan.plan_id)
             .bind(plan.project_limit)
@@ -102,7 +105,8 @@ impl PlanRepo for DbPlanRepo<golem_service_base::db::postgres::PostgresPool> {
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
-            .bind(plan.monthly_upload_limit);
+            .bind(plan.monthly_upload_limit)
+            .bind(plan.max_memory_per_worker);
 
         self.db_pool
             .with_rw("plan", "create")
@@ -115,16 +119,17 @@ impl PlanRepo for DbPlanRepo<golem_service_base::db::postgres::PostgresPool> {
     async fn update(&self, plan: &PlanRecord) -> Result<(), RepoError> {
         let query = sqlx::query(r#"
               INSERT INTO plans
-                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit)
+                (plan_id, project_limit, component_limit, worker_limit, storage_limit, monthly_gas_limit, monthly_upload_limit, max_memory_per_worker)
               VALUES
-                ($1, $2, $3, $4, $5, $6, $7)
+                ($1, $2, $3, $4, $5, $6, $7, $8)
               ON CONFLICT (plan_id) DO UPDATE
               SET project_limit = $2,
                   component_limit = $3,
                   worker_limit = $4,
                   storage_limit = $5,
                   monthly_gas_limit = $6,
-                  monthly_upload_limit = $7
+                  monthly_upload_limit = $7,
+                  max_memory_per_worker = $8
             "#)
             .bind(plan.plan_id)
             .bind(plan.project_limit)
@@ -132,7 +137,8 @@ impl PlanRepo for DbPlanRepo<golem_service_base::db::postgres::PostgresPool> {
             .bind(plan.worker_limit)
             .bind(plan.storage_limit)
             .bind(plan.monthly_gas_limit)
-            .bind(plan.monthly_upload_limit);
+            .bind(plan.monthly_upload_limit)
+            .bind(plan.max_memory_per_worker);
 
         self.db_pool
             .with_rw("plan", "update")
