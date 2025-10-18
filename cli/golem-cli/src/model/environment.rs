@@ -37,6 +37,22 @@ pub enum EnvironmentReference {
     },
 }
 
+impl TryFrom<&str> for EnvironmentReference {
+    type Error = String;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
+impl TryFrom<String> for EnvironmentReference {
+    type Error = String;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        s.parse()
+    }
+}
+
 impl FromStr for EnvironmentReference {
     type Err = String;
 
@@ -90,6 +106,7 @@ impl Display for EnvironmentReference {
     }
 }
 
+#[derive(Clone, Debug)]
 pub struct ResolvedEnvironmentIdentity {
     pub resolved_from: Option<EnvironmentReference>,
 

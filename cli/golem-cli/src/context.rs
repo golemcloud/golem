@@ -656,7 +656,7 @@ impl GolemClients {
 }
 
 struct ApplicationContextConfig {
-    requested_profile_name: Option<ProfileName>,
+    requested_environment: Option<EnvironmentReference>,
     build_profile: Option<AppBuildProfileName>,
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
@@ -667,15 +667,7 @@ struct ApplicationContextConfig {
 impl ApplicationContextConfig {
     pub fn new(global_flags: GolemCliGlobalFlags) -> Self {
         Self {
-            requested_profile_name: {
-                if global_flags.local {
-                    Some(ProfileName::local())
-                } else if global_flags.cloud {
-                    Some(ProfileName::cloud())
-                } else {
-                    global_flags.profile.clone()
-                }
-            },
+            requested_environment: global_flags.environment,
             build_profile: global_flags.build_profile.map(|bp| bp.0.into()),
             app_manifest_path: global_flags.app_manifest_path,
             disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,

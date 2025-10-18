@@ -22,7 +22,7 @@ use crate::command::profile::ProfileSubcommand;
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::ComponentOptionalComponentName;
 use crate::command::worker::WorkerSubcommand;
-use crate::config::{BuildProfileName, ProfileName};
+use crate::config::BuildProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
 use crate::model::environment::EnvironmentReference;
@@ -97,11 +97,6 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, short = 'F', global = true, display_order = 101)]
     pub format: Option<Format>,
 
-    // TODO: atomic: drop
-    /// Select Golem profile by name
-    #[arg(long, short = 'P', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
-    pub profile: Option<ProfileName>,
-
     /// Select Golem environment by name
     #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
     pub environment: Option<EnvironmentReference>,
@@ -163,10 +158,14 @@ pub struct GolemCliGlobalFlags {
 }
 
 impl GolemCliGlobalFlags {
-    pub fn with_env_overrides(mut self) -> GolemCliGlobalFlags {
-        if self.profile.is_none() {
-            if let Ok(profile) = std::env::var("GOLEM_PROFILE") {
-                self.profile = Some(profile.into());
+    pub fn with_env_overrides(mut self) -> anyhow::Result<GolemCliGlobalFlags> {
+        if self.environment.is_none() {
+            if let Ok(environment) = std::env::var("GOLEM_ENVIRONMENT") {
+                self.environment = Some(
+                    EnvironmentReference::try_from(environment)
+                        .map_err(|err| anyhow!(err))
+                        .context("Failed to parse GOLEM_ENVIRONMENT environment variable")?,
+                );
             }
         }
 
@@ -211,20 +210,17 @@ impl GolemCliGlobalFlags {
         }
 
         if let Ok(batch_size) = std::env::var("GOLEM_HTTP_BATCH_SIZE") {
-            self.http_batch_size = Some(
-                batch_size
-                    .parse()
-                    .with_context(|| format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}"))
-                    .unwrap(),
-            )
+            self.http_batch_size =
+                Some(batch_size.parse().with_context(|| {
+                    format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}")
+                })?)
         }
 
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
                     .parse()
-                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")
-                    .unwrap(),
+                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")?,
             );
         }
 
@@ -235,7 +231,7 @@ impl GolemCliGlobalFlags {
                 .unwrap_or_default()
         }
 
-        self
+        Ok(self)
     }
 
     pub fn config_dir(&self) -> PathBuf {
@@ -262,7 +258,7 @@ pub struct GolemCliFallbackCommand {
 }
 
 impl GolemCliFallbackCommand {
-    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> Self
+    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> anyhow::Result<Self>
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
@@ -281,10 +277,11 @@ impl GolemCliFallbackCommand {
         });
 
         if with_env_overrides {
-            cmd.global_flags = cmd.global_flags.with_env_overrides();
+            // TODO: atomic
+            cmd.global_flags = cmd.global_flags.with_env_overrides()?;
         }
 
-        cmd
+        Ok(cmd)
     }
 }
 
@@ -305,13 +302,31 @@ impl GolemCliCommand {
         match GolemCliCommand::try_parse_from(&args) {
             Ok(mut command) => {
                 if with_env_overrides {
-                    command.global_flags = command.global_flags.with_env_overrides()
+                    match command.global_flags.with_env_overrides() {
+                        Ok(global_flags) => {
+                            command.global_flags = global_flags;
+                        }
+                        Err(err) => {
+                            return GolemCliCommandParseResult::Error {
+                                error: clap::Error::raw(ErrorKind::InvalidValue, err),
+                                fallback_command: Default::default(),
+                            }
+                        }
+                    }
                 }
                 GolemCliCommandParseResult::FullMatch(command)
             }
             Err(error) => {
                 let fallback_command =
-                    GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides);
+                    match GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides) {
+                        Ok(fallback_command) => fallback_command,
+                        Err(err) => {
+                            return GolemCliCommandParseResult::Error {
+                                error: clap::Error::raw(ErrorKind::InvalidValue, err),
+                                fallback_command: Default::default(),
+                            }
+                        }
+                    };
 
                 let partial_match = match error.kind() {
                     ErrorKind::DisplayHelp => {
