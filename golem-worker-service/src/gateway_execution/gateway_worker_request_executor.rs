@@ -16,7 +16,6 @@ use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::agent::AgentId;
 use golem_common::model::auth::{AuthCtx, TokenSecret};
 use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
