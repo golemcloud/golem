@@ -23,6 +23,7 @@ use golem_test_framework::dsl::TestDslUnsafe;
 use golem_wasm_rpc::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::{flaky, inherit_test_dep, test};
