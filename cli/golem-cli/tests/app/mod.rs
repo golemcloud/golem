@@ -1093,6 +1093,16 @@ async fn test_ts_code_first_complex() {
     )
     .await;
 
+    // Functions using the builtin result type
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"some("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-vs", &[r#"none"#]).await;
+
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"none"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sv", &[r#"some("yay")"#]).await;
+
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case1("yay")"#]).await;
+    run_and_assert(&ctx, "fun-builtin-result-sn", &[r#"case2(42)"#]).await;
+
     // TODO: fix root cause for this
     // An arrow function
     // run_and_assert(&ctx, "fun-arrow-sync", &[r#""foo""#]).await;
@@ -1599,6 +1609,69 @@ async fn test_invoke_and_repl_agent_id_casing_and_normalizing() {
     assert!(outputs.stdout_contains(
         r#"{"another-field":100.0,"one-field":"1212"},{"another-field":2.0,"one-field":"1"}"#
     ));
+}
+
+#[test]
+async fn test_naming_extremes() {
+    let mut ctx = TestContext::new();
+    let app_name = "test_naming_extremes";
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "ts"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx.cli([cmd::COMPONENT, cmd::NEW, "ts", "app:agent"]).await;
+    assert!(outputs.success());
+
+    let component_source_code = ctx.cwd_path_join(
+        Path::new("components-ts")
+            .join("app-agent")
+            .join("src")
+            .join("main.ts"),
+    );
+
+    fs::copy(
+        "test-data/ts-code-first-snippets/naming_extremes.ts",
+        &component_source_code,
+    )
+    .unwrap();
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::INVOKE,
+            flag::YES,
+            r#"test-agent("x")"#,
+            "test-all",
+        ])
+        .await;
+    assert!(outputs.success());
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::GET,
+            &format!("string-agent(    \"{}\"    )", " ".repeat(447)), // HTTP API should normalize it
+        ])
+        .await;
+    assert!(outputs.success());
+
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            cmd::GET,
+            &format!(
+                "struct-agent(  {{x:\"{}\"  ,  y    : \"{}\", z: \"{}\" }})", // HTTP API should normalize it
+                " ".repeat(102),
+                " ".repeat(102),
+                "/".repeat(102)
+            ),
+        ])
+        .await;
+    assert!(outputs.success());
 }
 
 enum CommandOutput {

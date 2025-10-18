@@ -1,5 +1,6 @@
 import {
   BaseAgent,
+  Result,
   agent,
   prompt,
   description,
