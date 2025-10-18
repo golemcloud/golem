@@ -28,8 +28,9 @@ use crate::model::oplog::{
 };
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
-use crate::model::{AccountId, Empty, IdempotencyKey, PluginInstallationId, Timestamp,
-    TransactionId, WorkerId};
+use crate::model::{
+    AccountId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId, WorkerId,
+};
 use golem_wasm_ast::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm_ast::analysis::{AnalysedType, NameOptionTypePair};
 use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
