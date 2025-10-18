@@ -1917,8 +1917,18 @@ impl RunningWorker {
         };
 
         let component_env = component_metadata.env.clone();
-        let worker_env =
+        let mut worker_env =
             merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
+
+        // NOTE: calling enrich_env here again to apply changes compared to the initial one, such as the latest
+        // component version. This should not be done like this - changes to the environment should be derived
+        // from the oplog instead.
+        WorkerConfig::enrich_env(
+            &mut worker_env,
+            &parent.owned_worker_id.worker_id,
+            &parent.agent_id,
+            component_metadata.versioned_component_id.version,
+        );
 
         let component_version_for_replay = worker_metadata
             .last_known_status
