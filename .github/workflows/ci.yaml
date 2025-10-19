@@ -19,7 +19,43 @@ env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
 jobs:
-  build:
+  build-and-store:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v3-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: true
+      - uses: davidB/rust-cargo-make@v1
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+      - name: Building all executables
+        env:
+          QUIET: true
+        run: cargo make --profile ci build-all-bins-including-tests
+        timeout-minutes: 45
+      - uses: actions/upload-artifact@v4
+        with:
+          name: all-bins-including-tests
+          path: |
+            target/debug
+            !**/*.o
+          retention-days: 1
+
+    build:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -156,8 +192,14 @@ jobs:
             description: "Sharding tests"
           - name: api-tests
             description: "API tests"
-          - name: cli-integration-tests
-            description: "CLI tests"
+          - name: cli-integration-tests-group1
+            description: "CLI tests #1"
+          - name: cli-integration-tests-group2
+            description: "CLI tests #2"
+          - name: cli-integration-tests-group3
+            description: "CLI tests #3"
+          - name: cli-integration-tests-group4
+            description: "CLI tests #4"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

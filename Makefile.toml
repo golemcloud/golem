@@ -214,6 +214,17 @@ description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
+[tasks.build-all-bins-including-tests]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode, including the single-executable golem and all tests"
+
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build
+exec --fail-on-error cargo test --no-run
+'''
+
+
 [tasks.build-bins]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
@@ -507,13 +518,45 @@ cargo test --package integration-tests --test sharding -- --report-time $JUNIT_O
 '''
 
 [tasks.cli-integration-tests]
+description = "Runs all CLI integration tests"
+dependencies = [
+    "cli-integration-tests-group1",
+    "cli-integration-tests-group2",
+    "cli-integration-tests-group3",
+    "cli-integration-tests-group4",
+]
+
+[tasks.cli-integration-tests-group1]
 dependencies = ["build-bins-all"]
 description = "Run CLI integration tests"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo test --package golem-cli :tag:group1 --test integration -- --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group2]
+dependencies = ["build-bins-all"]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-cli :tag:group2 --test integration -- --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group3]
+dependencies = ["build-bins-all"]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-cli :tag:group3 --test integration -- --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group4]
+dependencies = ["build-bins-all"]
+description = "Run CLI integration tests"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo test --package golem-cli :tag:group4 --test integration -- --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]
