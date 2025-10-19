@@ -40,6 +40,9 @@ jobs:
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
       - name: Building all executables
@@ -47,12 +50,12 @@ jobs:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
         timeout-minutes: 45
+      - name: Packaging all binaries with cargo-nextest
+        run: cargo nextest archive --archive-file target/golem-binaries.tar.zst
       - uses: actions/upload-artifact@v4
         with:
           name: all-bins-including-tests
-          path: |
-            target/debug
-            !**/*.o
+          path: target/golem-binaries.tar.zst
           retention-days: 1
 
   build:
