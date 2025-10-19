@@ -21,6 +21,7 @@ use crate::command::shared_args::{
 use crate::command_handler::Handlers;
 use crate::context::Context;
 use crate::diagnose::diagnose;
+use crate::error::service::AnyhowMapServiceError;
 use crate::error::{HintError, NonSuccessfulExit, ShowClapHelpTarget};
 use crate::fs;
 use crate::fuzzy::{Error, FuzzySearch};
@@ -30,11 +31,10 @@ use crate::model::component::Component;
 use crate::model::text::fmt::{log_error, log_fuzzy_matches, log_text_view, log_warn};
 use crate::model::text::help::AvailableComponentNamesHelp;
 use crate::model::worker::AgentUpdateMode;
-use crate::model::component::ComponentName;
 use anyhow::{anyhow, bail};
 use colored::Colorize;
 use golem_client::api::ApplicationClient;
-use golem_client::model::NewApplicationData;
+use golem_client::model::ApplicationCreation;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::ComponentName;
@@ -69,10 +69,7 @@ impl AppCommandHandler {
             AppSubcommand::Deploy {
                 force_build,
                 deploy_args,
-            } => {
-                self.cmd_deploy(component_name, force_build, deploy_args)
-                    .await
-            }
+            } => self.cmd_deploy(force_build, deploy_args).await,
             AppSubcommand::Clean { component_name } => self.cmd_clean(component_name).await,
             AppSubcommand::UpdateAgents {
                 component_name,
@@ -295,7 +292,7 @@ impl AppCommandHandler {
         force_build: ForceBuildArg,
         deploy_args: DeployArgs,
     ) -> anyhow::Result<()> {
-        self.deploy(force_build, update_or_redeploy, deploy_args).await
+        self.deploy(force_build, deploy_args).await
     }
 
     async fn cmd_custom_command(&self, command: Vec<String>) -> anyhow::Result<()> {
@@ -463,7 +460,7 @@ impl AppCommandHandler {
                     .application
                     .create_application(
                         &account_id.0,
-                        &NewApplicationData {
+                        &ApplicationCreation {
                             name: application_name,
                         },
                     )

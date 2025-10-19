@@ -22,7 +22,7 @@ use crate::command::profile::ProfileSubcommand;
 use crate::command::server::ServerSubcommand;
 use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
 use crate::command::worker::AgentSubcommand;
-use crate::config::{BuildProfileName, ProfileName};
+use crate::config::BuildProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
 use crate::model::environment::EnvironmentReference;
@@ -600,8 +600,7 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::{AccountId, PluginReference};
-    use crate::model::{AgentUpdateMode, ComponentName, ProjectName, ProjectReference, WorkerName};
+    use crate::model::worker::{AgentUpdateMode, WorkerName};
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
@@ -896,7 +895,7 @@ pub mod component {
     use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplateName, DeployArgs, ForceBuildArg,
+        ComponentTemplateName,
     };
     use crate::model::app::DependencyType;
     use crate::model::worker::AgentUpdateMode;

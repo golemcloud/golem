@@ -14,9 +14,8 @@
 
 use crate::command_handler::worker::parse_worker_error;
 use crate::command_handler::worker::stream_output::WorkerStreamOutput;
-use crate::model::{AgentLogStreamOptions, Format};
 use crate::model::format::Format;
-use crate::model::worker::WorkerConnectOptions;
+use crate::model::worker::AgentLogStreamOptions;
 use anyhow::{anyhow, Context};
 use bytes::Bytes;
 use futures_util::future::Either;

@@ -16,7 +16,7 @@ use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -33,22 +33,17 @@ use crate::model::component::{
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::fmt::{log_error, log_warn};
-use crate::model::worker::WorkerUpdateMode;
+use crate::model::worker::AgentUpdateMode;
+use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentType};
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
-use crate::model::deploy_diff::component::{DiffableComponent, DiffableComponentFile};
-use crate::model::text::component::{ComponentCreateView, ComponentGetView, ComponentUpdateView};
-use crate::model::text::fmt::{log_deploy_diff, log_error, log_text_view, log_warn};
-use crate::model::text::help::ComponentNameHelp;
-use crate::model::{
-    AccountDetails, AgentUpdateMode, ComponentName, ComponentNameMatchKind,
-    ComponentVersionSelection, ProjectRefAndId, ProjectReference, SelectedComponents,
 };
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
+use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -473,25 +468,33 @@ impl ComponentCommandHandler {
 
     async fn cmd_update_workers(
         &self,
-        component_name: Option<ComponentName>,
-        update_mode: AgentUpdateMode,
-        await_update: bool,
+        _component_name: Option<ComponentName>,
+        _update_mode: AgentUpdateMode,
+        _await_update: bool,
     ) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_redeploy_workers(
         &self,
-        component_name: Option<ComponentName>,
+        _component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
+        // TODO: atomic
+        /*
         let components = self.components_for_deploy_args(component_name).await?;
         self.redeploy_workers_by_components(&components).await?;
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_diagnose(
@@ -667,7 +670,7 @@ impl ComponentCommandHandler {
                     .worker_handler()
                     .delete_component_workers(
                         &component.component_name,
-                        component.versioned_component_id.component_id,
+                        &component.component_id,
                         first_round,
                     )
                     .await?;
@@ -847,7 +850,7 @@ impl ComponentCommandHandler {
         _component_match_kind: ComponentNameMatchKind,
         _component_name: &ComponentName,
         _component_version_selection: Option<ComponentVersionSelection<'_>>,
-        deploy_args: Option<&DeployArgs>,
+        _deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<Component> {
         // TODO: atomic
         /*

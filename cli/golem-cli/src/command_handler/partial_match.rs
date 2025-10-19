@@ -23,7 +23,7 @@ use crate::error::{ContextInitHintError, HintError, ShowClapHelpTarget};
 use crate::log::Output::Stdout;
 use crate::log::{log_action, logln, set_log_output, LogColorize};
 use crate::model::app::{ApplicationComponentSelectMode, DynamicHelpSections};
-use crate::model::component::{show_exported_functions, ComponentNameMatchKind};
+use crate::model::component::ComponentNameMatchKind;
 use crate::model::format::Format;
 use crate::model::text::fmt::{log_error, log_text_view, NestedTextViewIndent};
 use crate::model::text::help::{AvailableFunctionNamesHelp, WorkerNameHelp};

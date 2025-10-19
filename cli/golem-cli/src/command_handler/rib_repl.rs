@@ -19,20 +19,16 @@ use crate::error::NonSuccessfulExit;
 use crate::fs;
 use crate::log::{logln, set_log_output, Output};
 use crate::model::component::{ComponentNameMatchKind, ComponentVersionSelection, ComponentView};
+use crate::model::format::Format;
 use crate::model::text::component::ComponentReplStartedView;
 use crate::model::text::fmt::log_error;
 use crate::model::worker::WorkerName;
-use anyhow::bail;
-use crate::model::{
-    ComponentName, ComponentNameMatchKind, ComponentVersionSelection, Format, IdempotencyKey,
-    WorkerName,
-};
 use anyhow::{anyhow, bail};
 use async_trait::async_trait;
-use golem_common::model::component::ComponentName;
-use golem_common::model::IdempotencyKey;
 use colored::Colorize;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentName;
+use golem_common::model::IdempotencyKey;
 use golem_rib_repl::{
     Command, CommandRegistry, ReplComponentDependencies, ReplContext, RibDependencyManager,
     RibRepl, RibReplConfig, WorkerFunctionInvoke,
@@ -115,7 +111,7 @@ impl RibReplHandler {
         let component_dependency_key = ComponentDependencyKey {
             component_name: component.component_name.0.clone(),
             component_id: component.component_id.0,
-            component_version: component.versioned_component_id.version,
+            component_version: component.revision.0,
             root_package_name: component.metadata.root_package_name().clone(),
             root_package_version: component.metadata.root_package_version().clone(),
         };

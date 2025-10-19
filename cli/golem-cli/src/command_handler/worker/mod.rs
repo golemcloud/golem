@@ -30,9 +30,7 @@ use crate::log::{log_action, log_error_action, log_warn_action, logln, LogColori
 use crate::model::app::ApplicationComponentSelectMode;
 use crate::model::component::{
     agent_interface_name, function_params_types, show_exported_agent_constructors, Component,
-};
-use crate::model::component::{
-    function_params_types, show_exported_functions, Component, ComponentNameMatchKind,
+    ComponentNameMatchKind,
 };
 use crate::model::deploy::{TryUpdateAllWorkersResult, WorkerUpdateAttempt};
 use crate::model::invoke_result_view::InvokeResultView;
@@ -40,22 +38,17 @@ use crate::model::text::fmt::{
     format_export, format_worker_name_match, log_error, log_fuzzy_match, log_text_view, log_warn,
 };
 use crate::model::text::help::{
-    ArgumentError, AvailableAgentConstructorsHelp,AvailableComponentNamesHelp, AvailableFunctionNamesHelp,
-    ParameterErrorTableView, WorkerNameHelp,
+    ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
+    AvailableFunctionNamesHelp, ParameterErrorTableView, WorkerNameHelp,
 };
 use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
-use crate::model::worker::{
-    fuzzy_match_function_name, WorkerMetadata, WorkerName, WorkerNameMatch, WorkerUpdateMode,
-use crate::model::worker::fuzzy_match_function_name;
-use crate::model::{
-    AgentUpdateMode, ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName,
-    ProjectReference, WorkerMetadata, WorkerMetadataView, WorkerName, WorkerNameMatch,
-    WorkersMetadataResponseView,
-};
 use anyhow::{anyhow, bail};
 use colored::Colorize;
+
+use crate::model::worker::{
+    fuzzy_match_function_name, AgentUpdateMode, WorkerMetadata, WorkerName, WorkerNameMatch,
+};
 use golem_client::api::WorkerClient;
-use golem_client::api::{AgentTypesClient, ComponentClient, WorkerClient};
 use golem_client::model::{
     InvokeParameters as InvokeParametersCloud, RevertLastInvocations as RevertLastInvocationsCloud,
     RevertToOplogIndex as RevertToOplogIndexCloud, RevertWorkerTarget as RevertWorkerTargetCloud,
@@ -63,10 +56,9 @@ use golem_client::model::{
     WorkerCreationRequest as WorkerCreationRequestCloud,
 };
 use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
-use golem_common::model::component::ComponentId;
-use golem_common::model::component::{ComponentName, ComponentType};
-use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateRecord};
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentId;
+use golem_common::model::component::ComponentName;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::IdempotencyKey;
@@ -1324,11 +1316,11 @@ impl WorkerCommandHandler {
     pub async fn delete_component_workers(
         &self,
         component_name: &ComponentName,
-        component_id: Uuid,
+        component_id: &ComponentId,
         show_skip: bool,
     ) -> anyhow::Result<usize> {
         let (workers, _) = self
-            .list_component_workers(component_name, component_id, None, None, None, false)
+            .list_component_workers(component_name, &component_id, None, None, None, false)
             .await?;
 
         if workers.is_empty() {

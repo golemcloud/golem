@@ -24,7 +24,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_common::model::WorkerStatus;
+use golem_common::model::{WorkerId, WorkerStatus};
 use golem_wasm_ast::analysis::AnalysedExport;
 use rib::{ParsedFunctionName, ParsedFunctionReference};
 use serde_derive::{Deserialize, Serialize};
@@ -55,33 +55,33 @@ impl Display for WorkerName {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WorkerUpdateMode {
+pub enum AgentUpdateMode {
     Automatic,
     Manual,
 }
 
-impl Display for WorkerUpdateMode {
+impl Display for AgentUpdateMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            WorkerUpdateMode::Automatic => {
+            AgentUpdateMode::Automatic => {
                 write!(f, "auto")
             }
-            WorkerUpdateMode::Manual => {
+            AgentUpdateMode::Manual => {
                 write!(f, "manual")
             }
         }
     }
 }
 
-impl FromStr for WorkerUpdateMode {
+impl FromStr for AgentUpdateMode {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "auto" => Ok(WorkerUpdateMode::Automatic),
-            "manual" => Ok(WorkerUpdateMode::Manual),
+            "auto" => Ok(AgentUpdateMode::Automatic),
+            "manual" => Ok(AgentUpdateMode::Manual),
             _ => Err(format!(
-                "Unknown worker update mode: {s}. Expected one of \"auto\", \"manual\""
+                "Unknown agent update mode: {s}. Expected one of \"auto\", \"manual\""
             )),
         }
     }
@@ -98,7 +98,7 @@ pub struct WorkerMetadataView {
     pub env: HashMap<String, String>,
     pub status: WorkerStatus,
     pub component_version: u64,
-    pub retry_count: u64,
+    pub retry_count: u32,
 
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
@@ -124,7 +124,7 @@ impl From<WorkerMetadata> for WorkerMetadataView {
             component_name: value.component_name,
             worker_name: value.worker_id.worker_name.into(),
             created_by: value.created_by,
-            environment_id: Uuid::nil().into(), // TODO: atomic value.project_id,
+            environment_id: value.environment_id,
             args: value.args,
             env: value.env,
             status: value.status,
@@ -143,17 +143,17 @@ impl From<WorkerMetadata> for WorkerMetadataView {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerMetadata {
-    pub worker_id: golem_client::model::WorkerId,
+    pub worker_id: WorkerId,
     pub component_name: ComponentName,
     pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
-    pub status: golem_client::model::WorkerStatus,
+    pub status: WorkerStatus,
     pub component_version: u64,
-    pub retry_count: u64,
+    pub retry_count: u32,
     pub pending_invocation_count: u64,
-    pub updates: Vec<golem_client::model::UpdateRecord>,
+    pub updates: Vec<UpdateRecord>,
     pub created_at: DateTime<Utc>,
     pub last_error: Option<String>,
     pub component_size: u64,
@@ -167,7 +167,7 @@ impl WorkerMetadata {
             worker_id: value.worker_id,
             component_name,
             created_by: Uuid::nil().into(), // TODO: atomic: value.created_by
-            environment_id: value.project_id.into(),
+            environment_id: value.project_id.into(), // TODO: atomic: value.environment_id
             args: value.args,
             env: value.env,
             status: value.status,
@@ -179,12 +179,15 @@ impl WorkerMetadata {
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            exported_resource_instances: HashMap::from_iter(
-                value.exported_resource_instances.into_iter().map(|desc| {
-                    let key = desc.key.resource_id.to_string();
-                    (key, desc.description)
-                }),
-            ),
+            exported_resource_instances:  // TODO: atomic
+            /*
+            HashMap::from_iter(
+            value.exported_resource_instances.into_iter().map(|desc| {
+                let key = desc.key.resource_id.to_string();
+                (key, desc.description)
+            }),
+             */
+            todo!(),
         }
     }
 }
@@ -209,18 +212,21 @@ pub trait HasVerbosity {
 }
 
 #[derive(Debug, Clone)]
-pub struct WorkerConnectOptions {
+pub struct AgentLogStreamOptions {
     pub colors: bool,
     pub show_timestamp: bool,
     pub show_level: bool,
+    /// Only show entries coming from the agent, no output about invocation markers and stream status
+    pub logs_only: bool,
 }
 
-impl From<StreamArgs> for WorkerConnectOptions {
+impl From<StreamArgs> for AgentLogStreamOptions {
     fn from(args: StreamArgs) -> Self {
-        WorkerConnectOptions {
+        AgentLogStreamOptions {
             colors: SHOULD_COLORIZE.should_colorize(),
             show_timestamp: !args.stream_no_timestamp,
             show_level: !args.stream_no_log_level,
+            logs_only: args.logs_only,
         }
     }
 }
@@ -229,21 +235,10 @@ pub struct WorkerNameMatch {
     pub environment: Option<ResolvedEnvironmentIdentity>,
     pub component_name_match_kind: ComponentNameMatchKind,
     pub component_name: ComponentName,
-    pub worker_name: Option<WorkerName>,
+    pub worker_name: WorkerName,
 }
 
 impl WorkerNameMatch {
-    /// Gets the matched worker-name, or generates a fresh name if it was `-`
-    pub fn worker_name(&self) -> WorkerName {
-        match &self.worker_name {
-            Some(name) => name.clone(),
-            None => {
-                let name = Uuid::new_v4().to_string();
-                WorkerName(name)
-            }
-        }
-    }
-
     pub fn environment_reference(&self) -> Option<&EnvironmentReference> {
         self.environment
             .as_ref()

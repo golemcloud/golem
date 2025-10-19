@@ -18,7 +18,7 @@ use crate::context::Context;
 use crate::error::service::AnyhowMapServiceError;
 use crate::model::environment::{EnvironmentReference, ResolvedEnvironmentIdentity};
 use golem_client::api::EnvironmentClient;
-use golem_client::model::NewEnvironmentData;
+use golem_client::model::EnvironmentCreation;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::environment::EnvironmentName;
 use std::sync::Arc;
@@ -169,7 +169,7 @@ impl EnvironmentCommandHandler {
                 .environment
                 .create_environment(
                     &application_id.0,
-                    &NewEnvironmentData {
+                    &EnvironmentCreation {
                         name: environment_name.clone(),
                         // TODO: atomic: get props from manifest
                         compatibility_check: false,

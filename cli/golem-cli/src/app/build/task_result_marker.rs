@@ -17,17 +17,13 @@ use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app::{AppComponentName, DependentComponent};
 use crate::model::app_raw;
-use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS};
 use crate::model::app_raw::{
     ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
     InjectToPrebuiltQuickJs,
 };
-use crate::model::ProjectId;
-use crate::model::{app_raw, ComponentName};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentId;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

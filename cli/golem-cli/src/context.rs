@@ -38,10 +38,10 @@ use golem_client::api::{
     WorkerClientLive,
 };
 use golem_client::{Context as ContextCloud, Security};
-use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::auth::TokenSecret;
+use golem_common::model::component_metadata::ComponentMetadata;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
 use golem_templates::ComposableAppTemplate;
@@ -132,7 +132,7 @@ impl Context {
 
         let (available_profile_names, profile, manifest_profile) = load_merged_profiles(
             &config_dir,
-            app_context_config.requested_profile_name.as_ref(),
+            todo!(), // TODO: atomic: app_context_config.requested_profile_name.as_ref(),
             manifest_profiles,
         )?;
 
@@ -305,10 +305,13 @@ impl Context {
         self.app_context_config.build_profile.as_ref()
     }
 
+    // TODO: atomic: env
+    /*
     pub fn profile_project(&self) -> Option<&ProjectReference> {
         self.log_selected_profile_once();
         self.project.as_ref()
     }
+    */
 
     pub fn application_name(&self) -> Option<ApplicationName> {
         // TODO: atomic
@@ -548,6 +551,8 @@ impl Context {
     // TODO: atomic: naming
     fn log_selected_profile_once(&self) {
         self.selected_profile_logging.get_or_init(|| {
+            // TODO: atomic
+            /*
             if !self.help_mode {
                 log_action(
                     "Selected",
@@ -564,6 +569,7 @@ impl Context {
                     ),
                 );
             }
+            */
         });
     }
 
