@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::Error;
-use assert2::check;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_config::meta::region::RegionProviderChain;

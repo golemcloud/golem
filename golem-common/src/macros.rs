@@ -227,8 +227,8 @@ macro_rules! declare_revision {
             ::golem_wasm_derive::IntoValue,
             ::derive_more::Display,
             ::derive_more::FromStr,
+            poem_openapi::NewType,
         )]
-        #[derive(poem_openapi::NewType)]
         #[repr(transparent)]
         pub struct $name(pub u64);
 
