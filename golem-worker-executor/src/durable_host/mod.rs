@@ -103,8 +103,8 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{Uri, Value, ValueAndType};
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -1344,7 +1344,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
                 .iter()
                 .map(|value| value.clone().into())
                 .collect();

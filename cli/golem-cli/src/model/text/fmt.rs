@@ -246,6 +246,7 @@ static BUILTIN_TYPES: phf::Set<&'static str> = phf::phf_set! {
     "record",
 };
 
+// TODO: should handle '->'
 // A very naive highlighter for basic coloring of builtin types and user defined names
 pub fn format_export(export: &str) -> String {
     if !SHOULD_COLORIZE.should_colorize() {

@@ -190,14 +190,23 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             // ("DataSchema", "golem_common::model::agent::DataSchema"),
             // ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
             ("AgentType", "golem_common::model::agent::AgentType"),
-            ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
-            ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
-            // ("PluginScope", "golem_common::model::plugin::PluginScope"),
-
-            // (
-            //    "ComponentFilePathWithPermissionsList",
-            //    "golem_common::model::ComponentFilePathWithPermissionsList",
-            // ),
+            ("DataSchema", "golem_common::model::agent::DataSchema"),
+            ("AgentInstanceKey", "golem_common::model::AgentInstanceKey"),
+            (
+                "AgentInstanceDescription",
+                "golem_common::model::AgentInstanceDescription",
+            ),
+            ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
+            ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
+            ("PluginScope", "golem_common::model::plugin::PluginScope"),
+            (
+                "ComponentMetadata",
+                "golem_common::model::component_metadata::ComponentMetadata",
+            ),
+            (
+                "ComponentFilePathWithPermissionsList",
+                "golem_common::model::ComponentFilePathWithPermissionsList",
+            ),
             ("ComponentType", "golem_common::model::ComponentType"),
             // ("Empty", "golem_common::model::Empty"),
             (
@@ -230,10 +239,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::public_oplog::PublicOplogEntry",
             ),
             ("ShardId", "golem_common::model::ShardId"),
-            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
+            ("ValueAndType", "golem_wasm::ValueAndType"),
             (
                 "ValueAndOptionalType",
-                "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
+                "golem_wasm::json::OptionallyValueAndTypeJson",
             ),
             (
                 "WasiConfigVarsEntry",

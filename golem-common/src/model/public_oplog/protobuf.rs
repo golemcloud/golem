@@ -38,7 +38,7 @@ use golem_api_grpc::proto::golem::worker::{
     invocation_span, oplog_entry, worker_invocation, wrapped_function_type, AttributeValue,
     ExternalParentSpan, InvocationSpan, LocalInvocationSpan,
 };
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU64;
 use std::time::Duration;

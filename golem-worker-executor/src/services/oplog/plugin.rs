@@ -40,7 +40,7 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};

@@ -31,7 +31,7 @@ use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
-use golem_wasm_rpc::{print_value_and_type, ValueAndType};
+use golem_wasm::{print_value_and_type, ValueAndType};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -65,7 +65,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Agent name", &self.worker_name, format_main_id);
+            .fmt_field_option("Agent name", &self.worker_name, format_worker_name);
 
         fields.build()
     }
@@ -157,7 +157,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_version,
                 format_id,
             )
-            .fmt_field("Agent name", &self.metadata.worker_name, format_main_id)
+            .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -220,7 +220,7 @@ struct WorkerMetadataTableView {
     #[table(title = "Component name")]
     pub component_name: ComponentName,
     #[table(title = "Agent name")]
-    pub worker_name: WorkerName,
+    pub worker_name: String,
     #[table(title = "Component\nversion", justify = "Justify::Right")]
     pub component_version: u64,
     #[table(title = "Status", justify = "Justify::Right")]
@@ -233,7 +233,8 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
     fn from(value: &WorkerMetadataView) -> Self {
         Self {
             component_name: value.component_name.clone(),
-            worker_name: value.worker_name.clone(),
+            // TODO: pretty print, once we have "metadata-less" agent-type parsing
+            worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
             status: format_status(&value.status),
             component_version: value.component_version,
             created_at: value.created_at,
@@ -865,6 +866,11 @@ fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).expect("Failed to convert value to string")
 }
 
+// TODO: pretty print
+fn format_worker_name(worker_name: &WorkerName) -> String {
+    textwrap::wrap(&worker_name.to_string(), 80).join("\n")
+}
+
 #[allow(dead_code)]
 fn log_data_value(pad: &str, value: &DataValue) {
     match value {
@@ -918,5 +924,64 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                 ));
             }
         },
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerFilesView {
+    pub nodes: Vec<FileNodeView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileNodeView {
+    pub name: String,
+    pub last_modified: String, // Human-readable timestamp
+    pub kind: String,
+    pub permissions: String,
+    pub size: u64,
+}
+
+#[derive(Table)]
+pub struct WorkerFileNodeTableView {
+    #[table(title = "Name")]
+    pub name: String,
+    #[table(title = "Kind")]
+    pub kind: String,
+    #[table(title = "Permissions")]
+    pub permissions: String,
+    #[table(title = "Size", justify = "Justify::Right")]
+    pub size: u64,
+    #[table(title = "Last Modified", justify = "Justify::Right")]
+    pub last_modified: String,
+}
+
+impl From<&FileNodeView> for WorkerFileNodeTableView {
+    fn from(value: &FileNodeView) -> Self {
+        Self {
+            name: value.name.clone(),
+            kind: value.kind.clone(),
+            permissions: value.permissions.clone(),
+            size: value.size,
+            last_modified: value.last_modified.clone(),
+        }
+    }
+}
+
+impl TextView for WorkerFilesView {
+    fn log(&self) {
+        if self.nodes.is_empty() {
+            logln("No files found.");
+        } else {
+            log_table::<_, WorkerFileNodeTableView>(&self.nodes);
+        }
+    }
+}
+
+// Helper function to convert Unix timestamp to human-readable format
+pub fn format_timestamp(timestamp: u64) -> String {
+    if let Some(datetime) = DateTime::from_timestamp(timestamp as i64, 0) {
+        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }
 }

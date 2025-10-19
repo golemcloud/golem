@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-import "wasm/ast/type.proto";
+import "wasm/rpc/type.proto";
 import "wasm/rpc/value_and_type.proto";
 
 package golem.component;
@@ -65,7 +65,7 @@ message DataSchema {
 
 message ElementSchema {
   oneof schema {
-    wasm.ast.Type component_model = 2;
+    wasm.rpc.Type component_model = 2;
     TextDescriptor unstructured_text = 3;
     BinaryDescriptor unstructured_binary = 4;
   }

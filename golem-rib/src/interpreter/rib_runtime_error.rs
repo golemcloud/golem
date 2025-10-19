@@ -14,7 +14,7 @@
 
 use crate::interpreter::interpreter_stack_value::RibInterpreterStackValue;
 use crate::{InstructionId, TypeHint};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug)]

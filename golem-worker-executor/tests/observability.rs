@@ -25,7 +25,7 @@ use golem_common::model::public_oplog::{ExportedFunctionInvokedParameters, Publi
 use golem_common::model::{ComponentType, IdempotencyKey, WorkerId};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Record, Value};
+use golem_wasm::{IntoValueAndType, Record, Value};
 use http::HeaderMap;
 use log::info;
 use std::collections::HashMap;

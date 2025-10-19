@@ -17,57 +17,25 @@ use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-#[cfg(feature = "model")]
 pub mod api;
-
-#[cfg(feature = "base-model")]
 pub mod base_model;
-
-#[cfg(feature = "tokio")]
 pub mod cache;
-
-#[cfg(feature = "protobuf")]
 pub mod client;
-
-#[cfg(feature = "config")]
 pub mod config;
-
-#[cfg(feature = "protobuf")]
 pub mod grpc;
-
-#[cfg(feature = "poem")]
 pub mod json_yaml;
+pub mod metrics;
+pub mod model;
+pub mod one_shot;
+pub mod read_only_lock;
+pub mod redis;
+pub mod retriable_error;
+pub mod retries;
+pub mod serialization;
+pub mod tracing;
+pub mod virtual_exports;
 
 mod macros;
-
-#[cfg(feature = "observability")]
-pub mod metrics;
-
-#[cfg(feature = "model")]
-pub mod model;
-
-#[cfg(feature = "tokio")]
-pub mod one_shot;
-
-#[cfg(feature = "redis")]
-pub mod redis;
-
-#[cfg(feature = "tokio")]
-pub mod retriable_error;
-
-#[cfg(feature = "tokio")]
-pub mod retries;
-
-#[cfg(feature = "serialization")]
-pub mod serialization;
-
-pub mod read_only_lock;
-
-#[cfg(feature = "observability")]
-pub mod tracing;
-
-#[cfg(feature = "model")]
-pub mod virtual_exports;
 
 #[cfg(test)]
 test_r::enable!();

@@ -36,12 +36,13 @@ use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
     worker_error_logs, worker_error_message, TestDslUnsafe,
 };
-use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
+use golem_wasm::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeStr,
 };
-use golem_wasm_rpc::{IntoValue, Record};
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{IntoValue, Record};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
+use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;
 use std::env;
@@ -898,7 +899,8 @@ async fn component_env_variables_update(
 
     let metadata = executor.get_worker_metadata(&worker_id).await;
 
-    let (WorkerMetadata { env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+    let (WorkerMetadata { mut env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+    env.retain(|(k, _)| k == "FOO");
 
     assert_eq!(env, vec![("FOO".to_string(), "bar".to_string())]);
 
@@ -921,9 +923,12 @@ async fn component_env_variables_update(
 
     let env = get_env_result(env);
 
-    check!(env.get("FOO") == Some(&"bar".to_string()));
-    check!(env.get("BAR") == Some(&"baz".to_string()));
-    check!(env.get("GOLEM_AGENT_ID") == Some(&"component-env-variables-1".to_string()));
+    assert_eq!(env.get("FOO"), Some(&"bar".to_string()));
+    assert_eq!(env.get("BAR"), Some(&"baz".to_string()));
+    assert_eq!(
+        env.get("GOLEM_AGENT_ID"),
+        Some(&"component-env-variables-1".to_string())
+    );
 }
 
 #[test]
@@ -956,9 +961,10 @@ async fn component_env_and_worker_env_priority(
 
     let metadata = executor.get_worker_metadata(&worker_id).await;
 
-    let (WorkerMetadata { env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+    let (WorkerMetadata { mut env, .. }, _) = metadata.expect("WorkerMetadata should be present");
+    env.retain(|(k, _)| k == "FOO");
 
-    check!(env == vec![("FOO".to_string(), "baz".to_string())]);
+    assert_eq!(env, vec![("FOO".to_string(), "baz".to_string())]);
 }
 
 #[test]

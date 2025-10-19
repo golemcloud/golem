@@ -21,23 +21,19 @@ use bincode::de::BorrowDecoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
+use golem_wasm::analysis::{
     AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     AnalysedType, TypeHandle,
 };
-use golem_wasm_ast::core::Mem;
-use golem_wasm_ast::metadata::Producers as WasmAstProducers;
-use golem_wasm_ast::{
-    analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
-    component::Component,
-    IgnoreAllButMetadata,
-};
+use golem_wasm::metadata::Producers as WasmAstProducers;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
+use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
 #[derive(Clone, Default)]
 pub struct ComponentMetadata {
@@ -240,7 +236,6 @@ impl<'de, Context> BorrowDecode<'de, Context> for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::Type for ComponentMetadata {
     const IS_REQUIRED: bool =
         <ComponentMetadataInnerData as poem_openapi::types::Type>::IS_REQUIRED;
@@ -271,10 +266,8 @@ impl poem_openapi::types::Type for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::IsObjectType for ComponentMetadata {}
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
@@ -286,14 +279,12 @@ impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for ComponentMetadata {
     fn to_json(&self) -> Option<serde_json::Value> {
         self.data.to_json()
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromXML for ComponentMetadata {
     fn parse_from_xml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
@@ -305,14 +296,12 @@ impl poem_openapi::types::ParseFromXML for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToXML for ComponentMetadata {
     fn to_xml(&self) -> Option<serde_json::Value> {
         self.data.to_xml()
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
     fn parse_from_yaml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
@@ -324,19 +313,16 @@ impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToYAML for ComponentMetadata {
     fn to_yaml(&self) -> Option<serde_json::Value> {
         self.data.to_yaml()
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(
-    feature = "poem",
-    oai(rename = "ComponentMetadata", rename_all = "camelCase")
+#[derive(
+    Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
 )]
+#[oai(rename = "ComponentMetadata", rename_all = "camelCase")]
 #[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
 pub struct ComponentMetadataInnerData {
     pub exports: Vec<AnalysedExport>,
@@ -739,17 +725,19 @@ pub struct InvokableFunction {
     pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum DynamicLinkedInstance {
     WasmRpc(DynamicLinkedWasmRpc),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicLinkedWasmRpc {
     /// Maps resource names within the dynamic linked interface to target information
@@ -764,9 +752,10 @@ impl DynamicLinkedWasmRpc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WasmRpcTarget {
     pub interface_name: String,
@@ -791,10 +780,20 @@ impl Display for WasmRpcTarget {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerField {
     pub name: String,
@@ -802,10 +801,20 @@ pub struct ProducerField {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct VersionedName {
     pub name: String,
@@ -813,18 +822,29 @@ pub struct VersionedName {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
     /// Initial size of the linear memory in bytes
@@ -837,15 +857,11 @@ impl LinearMemory {
     const PAGE_SIZE: u64 = 65536;
 }
 
-impl From<Mem> for LinearMemory {
-    fn from(value: Mem) -> Self {
+impl From<wasmparser::MemoryType> for LinearMemory {
+    fn from(value: wasmparser::MemoryType) -> Self {
         Self {
-            initial: value.mem_type.limits.min * LinearMemory::PAGE_SIZE,
-            maximum: value
-                .mem_type
-                .limits
-                .max
-                .map(|m| m * LinearMemory::PAGE_SIZE),
+            initial: value.initial * LinearMemory::PAGE_SIZE,
+            maximum: value.maximum.map(|m| m * LinearMemory::PAGE_SIZE),
         }
     }
 }
@@ -855,7 +871,7 @@ impl From<Mem> for LinearMemory {
 pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<WasmAstProducers>,
-    pub memories: Vec<Mem>,
+    pub memories: Vec<LinearMemory>,
     pub binary_wit: Vec<u8>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
@@ -865,16 +881,6 @@ impl RawComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
     ) -> Result<RawComponentMetadata, ComponentProcessingError> {
-        let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
-            .map_err(ComponentProcessingError::Parsing)?;
-
-        let producers = component
-            .get_all_producers()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        let analysis = AnalysisContext::new(component);
-
         let wit_analysis =
             WitAnalysisContext::new(data).map_err(ComponentProcessingError::Analysis)?;
 
@@ -886,7 +892,6 @@ impl RawComponentMetadata {
             .map_err(ComponentProcessingError::Analysis)?;
         let root_package = wit_analysis.root_package_name();
 
-        #[cfg(feature = "observability")]
         for warning in wit_analysis.warnings() {
             tracing::warn!("Wit analysis warning: {}", warning);
         }
@@ -894,13 +899,14 @@ impl RawComponentMetadata {
         add_resource_drops(&mut exports);
         add_virtual_exports(&mut exports);
 
-        let exports = exports.into_iter().collect::<Vec<_>>();
-
-        let memories: Vec<Mem> = analysis
-            .get_all_memories()
-            .map_err(ComponentProcessingError::Analysis)?
-            .into_iter()
+        let memories = wit_analysis
+            .linear_memories()
+            .iter()
+            .cloned()
+            .map(LinearMemory::from)
             .collect();
+
+        let producers = wit_analysis.producers().to_vec();
 
         Ok(RawComponentMetadata {
             exports,
@@ -927,7 +933,7 @@ impl RawComponentMetadata {
 
         let exports = self.exports.into_iter().collect::<Vec<_>>();
 
-        let memories = self.memories.into_iter().map(LinearMemory::from).collect();
+        let memories = self.memories.into_iter().collect();
 
         ComponentMetadataInnerData {
             exports,
@@ -942,8 +948,8 @@ impl RawComponentMetadata {
     }
 }
 
-impl From<golem_wasm_ast::metadata::Producers> for Producers {
-    fn from(value: golem_wasm_ast::metadata::Producers) -> Self {
+impl From<golem_wasm::metadata::Producers> for Producers {
+    fn from(value: golem_wasm::metadata::Producers) -> Self {
         Self {
             fields: value
                 .fields
@@ -954,7 +960,7 @@ impl From<golem_wasm_ast::metadata::Producers> for Producers {
     }
 }
 
-impl From<Producers> for golem_wasm_ast::metadata::Producers {
+impl From<Producers> for golem_wasm::metadata::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value
@@ -966,8 +972,8 @@ impl From<Producers> for golem_wasm_ast::metadata::Producers {
     }
 }
 
-impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
-    fn from(value: golem_wasm_ast::metadata::ProducersField) -> Self {
+impl From<golem_wasm::metadata::ProducersField> for ProducerField {
+    fn from(value: golem_wasm::metadata::ProducersField) -> Self {
         Self {
             name: value.name,
             values: value
@@ -982,14 +988,14 @@ impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
     }
 }
 
-impl From<ProducerField> for golem_wasm_ast::metadata::ProducersField {
+impl From<ProducerField> for golem_wasm::metadata::ProducersField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
             values: value
                 .values
                 .into_iter()
-                .map(|value| golem_wasm_ast::metadata::VersionedName {
+                .map(|value| golem_wasm::metadata::VersionedName {
                     name: value.name,
                     version: value.version,
                 })
@@ -1145,7 +1151,6 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
     };
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component::ComponentType;

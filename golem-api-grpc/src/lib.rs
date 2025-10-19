@@ -23,7 +23,7 @@ pub mod proto {
     use bincode::enc::Encoder;
     use bincode::error::{DecodeError, EncodeError};
     use bincode::{Decode, Encode};
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance,
     };

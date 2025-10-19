@@ -18,9 +18,8 @@ members = [
     # "golem-worker-executor",
     # "golem-worker-service",
     "integration-tests",
-    "wasm-ast",
-    "wasm-rpc",
-    "wasm-rpc-derive",
+    "golem-wasm",
+    "golem-wasm-derive",
     # "cli/golem",
     "cli/golem-cli",
     "cli/golem-templates",
@@ -89,19 +88,18 @@ license-file = "LICENSE"
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
-golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
+golem-common = { version = "=0.0.0", path = "golem-common" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-component-service = { path = "golem-component-service" }
 golem-openapi-client-generator = "=0.0.16"
-golem-rib = { version = "=0.0.0", path = "golem-rib", default-features = false }
+golem-rib = { version = "=0.0.0", path = "golem-rib" }
 golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
-golem-wasm-ast = { version = "=0.0.0", path = "wasm-ast", default-features = false }
-golem-wasm-rpc = { version = "=0.0.0", path = "wasm-rpc", default-features = false }
-golem-wasm-rpc-derive = { version = "=0.0.0", path = "wasm-rpc-derive" }
+golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
+golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-service = { path = "golem-worker-service" }
 
@@ -325,7 +323,7 @@ wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
  wasm-rquickjs = "0.0.20"
 wasm-wave = "0.235"
-wasmparser = "0.235.0"
+wasmparser = "0.229.0"
 wasmprinter = "0.219.1"
 wasmtime = { version = "=33.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=33.0.0" }
@@ -343,7 +341,6 @@ x509-certificate = "0.23.1"
 zstd = "0.13"
 
 [patch.crates-io]
-redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }

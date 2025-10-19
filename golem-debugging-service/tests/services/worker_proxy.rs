@@ -13,7 +13,7 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_test_framework::components::worker_executor::WorkerExecutor;
-use golem_wasm_rpc::{ValueAndType, WitValue};
+use golem_wasm::{ValueAndType, WitValue};
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;

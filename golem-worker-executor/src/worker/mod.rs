@@ -54,8 +54,8 @@ use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
+use golem_wasm::analysis::AnalysedFunctionResult;
+use golem_wasm::{IntoValue, Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -1470,12 +1470,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .get_metadata(&component_id, component_version)
                     .await?;
 
+                let agent_id = if component.metadata.is_agent() {
+                    let agent_id =
+                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
+                            .map_err(|err| {
+                                WorkerExecutorError::invalid_request(format!(
+                                    "Invalid agent id: {}",
+                                    err
+                                ))
+                            })?;
+                    Some(agent_id)
+                } else {
+                    None
+                };
+
                 let execution_status = ExecutionStatus::Suspended {
                     component_type: component.component_type,
                     timestamp: Timestamp::now_utc(),
                 };
 
-                let worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+                let mut worker_env = merge_worker_env_with_component_env(worker_env, component.env);
+                WorkerConfig::enrich_env(
+                    &mut worker_env,
+                    &owned_worker_id.worker_id,
+                    &agent_id,
+                    component.versioned_component_id.version,
+                );
 
                 let created_at = Timestamp::now_utc();
 
@@ -1510,7 +1530,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     last_known_status: initial_status.clone(),
                 };
 
-                // Alternatively we could just write the oplog entry and recompute the initial_worker_metadata from it.
+                // Alternatively, we could just write the oplog entry and recompute the initial_worker_metadata from it.
                 // both options are equivalent here, this is just cheaper.
 
                 let initial_oplog_entry = OplogEntry::create(
@@ -1555,20 +1575,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         component.component_type,
                     )
                     .await;
-
-                let agent_id = if component.metadata.is_agent() {
-                    let agent_id =
-                        AgentId::parse(&owned_worker_id.worker_id.worker_name, &component.metadata)
-                            .map_err(|err| {
-                                WorkerExecutorError::invalid_request(format!(
-                                    "Invalid agent id: {}",
-                                    err
-                                ))
-                            })?;
-                    Some(agent_id)
-                } else {
-                    None
-                };
 
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
@@ -1911,9 +1917,18 @@ impl RunningWorker {
         };
 
         let component_env = component_metadata.env.clone();
-
-        let worker_env =
+        let mut worker_env =
             merge_worker_env_with_component_env(Some(worker_metadata.env), component_env);
+
+        // NOTE: calling enrich_env here again to apply changes compared to the initial one, such as the latest
+        // component version. This should not be done like this - changes to the environment should be derived
+        // from the oplog instead.
+        WorkerConfig::enrich_env(
+            &mut worker_env,
+            &parent.owned_worker_id.worker_id,
+            &parent.agent_id,
+            component_metadata.versioned_component_id.version,
+        );
 
         let component_version_for_replay = worker_metadata
             .last_known_status
@@ -1951,9 +1966,6 @@ impl RunningWorker {
             parent.extra_deps(),
             parent.config(),
             WorkerConfig::new(
-                worker_metadata.worker_id.clone(),
-                &parent.agent_id,
-                component_metadata.versioned_component_id.version,
                 worker_metadata.args.clone(),
                 worker_env,
                 worker_metadata.last_known_status.skipped_regions,
@@ -2085,7 +2097,7 @@ impl InvocationResult {
 
                     Ok(value)
                 }
-                OplogEntry::Error { error,retry_from, .. } => {
+                OplogEntry::Error { error, retry_from, .. } => {
                     let stderr = recover_stderr_logs(services, owned_worker_id, oplog_idx).await;
                     Err(FailedInvocationResult { trap_type: TrapType::Error { error, retry_from }, stderr })
                 }

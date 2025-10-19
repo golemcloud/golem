@@ -16,8 +16,8 @@
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
         #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
-        #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-        #[cfg_attr(feature = "model", serde(transparent))]
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
         pub struct $name(pub uuid::Uuid);
 
         impl $name {
@@ -83,7 +83,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
@@ -110,14 +109,12 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromParameter for $name {
             fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
                 Ok(Self(value.try_into()?))
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromJSON for $name {
             fn parse_from_json(
                 value: Option<serde_json::Value>,
@@ -161,28 +158,27 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "model")]
-        impl golem_wasm_rpc::IntoValue for $name {
-            fn into_value(self) -> golem_wasm_rpc::Value {
+        impl golem_wasm::IntoValue for $name {
+            fn into_value(self) -> golem_wasm::Value {
                 let (hi, lo) = self.0.as_u64_pair();
-                golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::Record(vec![
-                    golem_wasm_rpc::Value::U64(hi),
-                    golem_wasm_rpc::Value::U64(lo),
+                golem_wasm::Value::Record(vec![golem_wasm::Value::Record(vec![
+                    golem_wasm::Value::U64(hi),
+                    golem_wasm::Value::U64(lo),
                 ])])
             }
 
-            fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-                golem_wasm_ast::analysis::analysed_type::record(vec![
-                    golem_wasm_ast::analysis::analysed_type::field(
+            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                golem_wasm::analysis::analysed_type::record(vec![
+                    golem_wasm::analysis::analysed_type::field(
                         "uuid",
-                        golem_wasm_ast::analysis::analysed_type::record(vec![
-                            golem_wasm_ast::analysis::analysed_type::field(
+                        golem_wasm::analysis::analysed_type::record(vec![
+                            golem_wasm::analysis::analysed_type::field(
                                 "high-bits",
-                                golem_wasm_ast::analysis::analysed_type::u64(),
+                                golem_wasm::analysis::analysed_type::u64(),
                             ),
-                            golem_wasm_ast::analysis::analysed_type::field(
+                            golem_wasm::analysis::analysed_type::field(
                                 "low-bits",
-                                golem_wasm_ast::analysis::analysed_type::u64(),
+                                golem_wasm::analysis::analysed_type::u64(),
                             ),
                         ]),
                     ),
@@ -191,7 +187,6 @@ macro_rules! newtype_uuid {
         }
 
         $(
-            #[cfg(feature = "protobuf")]
             impl TryFrom<$proto_type> for $name {
                 type Error = String;
 
@@ -205,7 +200,6 @@ macro_rules! newtype_uuid {
                 }
             }
 
-            #[cfg(feature = "protobuf")]
             impl From<$name> for $proto_type {
                 fn from(value: $name) -> Self {
                     $proto_type {

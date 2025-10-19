@@ -23,7 +23,7 @@ use golem_test_framework::config::{
     CliParams, CliTestDependencies, CliTestService, TestDependencies, TestService,
 };
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
-use golem_wasm_rpc::IntoValueAndType;
+use golem_wasm::IntoValueAndType;
 use std::collections::HashMap;
 use std::time::SystemTime;
 use tokio::task::JoinSet;

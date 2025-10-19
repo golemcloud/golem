@@ -20,7 +20,7 @@ use golem_test_framework::dsl::benchmark::{
     BenchmarkApi, BenchmarkRecorder, BenchmarkResult, ResultKey, RunConfig,
 };
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use reqwest::{Client, Url};
 use std::time::{Duration, SystemTime};
 use tokio::task::JoinSet;

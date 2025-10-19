@@ -39,8 +39,8 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_ast::analysis::AnalysedFunctionResult;
-use golem_wasm_rpc::Value;
+use golem_wasm::analysis::AnalysedFunctionResult;
+use golem_wasm::Value;
 use std::collections::VecDeque;
 use std::ops::DerefMut;
 use std::sync::atomic::{AtomicBool, Ordering};

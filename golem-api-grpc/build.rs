@@ -5,8 +5,8 @@ use std::env;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let wasm_rpc_root = find_package_root("golem-wasm-rpc");
-    let wasm_ast_root = find_package_root("golem-wasm-ast");
+    let golem_wasm_root = find_package_root("golem-wasm");
+    let golem_rib_root = find_package_root("golem-rib");
 
     let file_descriptors = protox::compile(
         [
@@ -54,16 +54,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/golem/project/project_type.proto",
             "proto/golem/project/v1/project_error.proto",
             "proto/golem/project/v1/project_service.proto",
-            "proto/golem/rib/compiler_output.proto",
-            "proto/golem/rib/expr.proto",
-            "proto/golem/rib/function_name.proto",
-            "proto/golem/rib/instance_type.proto",
-            "proto/golem/rib/ir.proto",
-            "proto/golem/rib/rib_byte_code.proto",
-            "proto/golem/rib/rib_input.proto",
-            "proto/golem/rib/rib_output.proto",
-            "proto/golem/rib/type_name.proto",
-            "proto/golem/rib/worker_functions_in_rib.proto",
             "proto/golem/shardmanager/pod.proto",
             "proto/golem/shardmanager/routing_table.proto",
             "proto/golem/shardmanager/routing_table_entry.proto",
@@ -98,8 +88,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "proto/grpc/health/v1/health.proto",
         ],
         [
-            &format!("{wasm_rpc_root}/proto"),
-            &format!("{wasm_ast_root}/proto"),
+            &format!("{golem_wasm_root}/proto"),
+            &format!("{golem_rib_root}/proto"),
             &"proto".to_string(),
         ],
     )?;
@@ -111,8 +101,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     tonic_prost_build::configure()
         .build_server(true)
-        .extern_path(".wasm.rpc", "::golem_wasm_rpc::protobuf")
-        .extern_path(".wasm.ast", "::golem_wasm_ast::analysis::protobuf")
+        .extern_path(".wasm.rpc", "::golem_wasm::protobuf")
+        .extern_path(".golem.rib", "::rib::proto::golem::rib")
         .include_file("mod.rs")
         .compile_fds(file_descriptors)
         .map_err(|e| miette!(e))?;

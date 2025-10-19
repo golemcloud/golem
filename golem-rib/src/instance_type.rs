@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use crate::parser::{PackageName, TypeParameter};
+use crate::proto::golem::rib::{
+    FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor,
+    FunctionType as ProtoFunctionType, InterfaceName as ProtoInterfaceName,
+    PackageName as ProtoPackageName,
+};
 use crate::type_parameter::InterfaceName;
 use crate::FunctionName;
 use crate::{
     ComponentDependencies, ComponentDependencyKey, Expr, FullyQualifiedResourceConstructor,
     FunctionDictionary, FunctionType, InferredType, ResourceMethodDictionary,
 };
-use golem_api_grpc::proto::golem::rib::{
-    FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor,
-    FunctionType as ProtoFunctionType, InterfaceName as ProtoInterfaceName,
-    PackageName as ProtoPackageName,
-};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::Debug;
@@ -698,17 +698,16 @@ fn search_function_in_multiple_packages(
     Err(error_msg)
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName;
+    use crate::proto::golem::rib::FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor;
+    use crate::proto::golem::rib::FullyQualifiedResourceMethod as ProtoFullyQualifiedResourceMethod;
+    use crate::proto::golem::rib::InterfaceName as ProtoInterfaceName;
+    use crate::proto::golem::rib::PackageName as ProtoPackageName;
     use crate::{
         FullyQualifiedFunctionName, FullyQualifiedResourceConstructor,
         FullyQualifiedResourceMethod, InterfaceName, PackageName,
     };
-    use golem_api_grpc::proto::golem::rib::FullyQualifiedFunctionName as ProtoFullyQualifiedFunctionName;
-    use golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor as ProtoFullyQualifiedResourceConstructor;
-    use golem_api_grpc::proto::golem::rib::FullyQualifiedResourceMethod as ProtoFullyQualifiedResourceMethod;
-    use golem_api_grpc::proto::golem::rib::InterfaceName as ProtoInterfaceName;
-    use golem_api_grpc::proto::golem::rib::PackageName as ProtoPackageName;
 
     impl TryFrom<ProtoPackageName> for PackageName {
         type Error = String;

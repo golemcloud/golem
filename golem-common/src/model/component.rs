@@ -318,8 +318,8 @@ impl FromStr for ComponentFilePath {
     }
 }
 
-impl From<golem_wasm_rpc::ComponentId> for ComponentId {
-    fn from(host: golem_wasm_rpc::ComponentId) -> Self {
+impl From<golem_wasm::ComponentId> for ComponentId {
+    fn from(host: golem_wasm::ComponentId) -> Self {
         let high_bits = host.uuid.high_bits;
         let low_bits = host.uuid.low_bits;
 
