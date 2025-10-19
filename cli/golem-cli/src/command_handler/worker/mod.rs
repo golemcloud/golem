@@ -40,7 +40,9 @@ use crate::model::text::help::{
     ArgumentError, AvailableAgentConstructorsHelp, AvailableComponentNamesHelp,
     AvailableFunctionNamesHelp, ComponentNameHelp, ParameterErrorTableView, WorkerNameHelp,
 };
-use crate::model::text::worker::{WorkerCreateView, WorkerGetView};
+use crate::model::text::worker::{
+    format_timestamp, FileNodeView, WorkerCreateView, WorkerFilesView, WorkerGetView,
+};
 use crate::model::worker::fuzzy_match_function_name;
 use crate::model::{
     AgentUpdateMode, ComponentName, ComponentNameMatchKind, IdempotencyKey, ProjectName,
@@ -63,9 +65,13 @@ use golem_common::model::worker::WasiConfigVars;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use golem_wasm::{parse_value_and_type, ValueAndType};
+use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
 use rib::ParsedFunctionSite;
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::timeout;
@@ -181,6 +187,12 @@ impl WorkerCommandHandler {
                 self.cmd_cancel_invocation(worker_name, idempotency_key)
                     .await
             }
+            AgentSubcommand::Files { worker_name, path } => self.cmd_files(worker_name, path).await,
+            AgentSubcommand::FileContents {
+                worker_name,
+                path,
+                output,
+            } => self.cmd_file_contents(worker_name, path, output).await,
         }
     }
 
@@ -903,6 +915,164 @@ impl WorkerCommandHandler {
         );
 
         Ok(())
+    }
+
+    async fn cmd_files(&self, worker_name: AgentIdArgs, path: String) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Listing files",
+            format!(
+                "for worker {} at path {}",
+                format_worker_name_match(&worker_name_match),
+                path.log_color_highlight()
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        let nodes = match clients
+            .worker
+            .get_files(
+                &component.versioned_component_id.component_id,
+                &worker_name.0,
+                &path,
+            )
+            .await
+            .map_service_error()
+        {
+            Ok(nodes) => nodes,
+            Err(e) => {
+                log_warn_action(
+                    "Failed to list files",
+                    format!(
+                        "for worker {} at path {}: {e}",
+                        format_worker_name_match(&worker_name_match),
+                        path.log_color_error_highlight()
+                    ),
+                );
+                return Err(e);
+            }
+        };
+
+        // Convert nodes to WorkerFilesView with human-readable timestamps
+        let view = WorkerFilesView {
+            nodes: nodes
+                .nodes
+                .into_iter()
+                .map(|n| FileNodeView {
+                    name: n.name,
+                    last_modified: format_timestamp(n.last_modified),
+                    kind: n.kind.to_string(),
+                    permissions: n
+                        .permissions
+                        .map(|p| p.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    size: n.size.unwrap_or(0),
+                })
+                .collect(),
+        };
+
+        self.ctx.log_handler().log_view(&view);
+
+        log_action(
+            "Listed files",
+            format!(
+                "for worker {} at path {}",
+                format_worker_name_match(&worker_name_match),
+                path.log_color_highlight()
+            ),
+        );
+
+        Ok(())
+    }
+
+    async fn cmd_file_contents(
+        &self,
+        worker_name: AgentIdArgs,
+        path: String,
+        output: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.ctx.silence_app_context_init().await;
+        let worker_name_match = self.match_worker_name(worker_name.agent_id).await?;
+        let (component, worker_name) = self
+            .component_by_worker_name_match(&worker_name_match)
+            .await?;
+
+        log_action(
+            "Downloading file",
+            format!(
+                "from worker {} at path {}",
+                format_worker_name_match(&worker_name_match),
+                path.log_color_highlight()
+            ),
+        );
+
+        let clients = self.ctx.golem_clients().await?;
+        let file_contents = match clients
+            .worker
+            .get_file_content(
+                &component.versioned_component_id.component_id,
+                &worker_name.0,
+                &path,
+            )
+            .await
+            .map_service_error()
+        {
+            Ok(contents) => contents,
+            Err(e) => {
+                log_warn_action(
+                    "Failed to download file",
+                    format!(
+                        "from worker {} at path {}: {e}",
+                        format_worker_name_match(&worker_name_match),
+                        path.log_color_error_highlight()
+                    ),
+                );
+                return Err(e);
+            }
+        };
+
+        let output_path = if let Some(ref output) = output {
+            output.clone()
+        } else {
+            std::path::Path::new(&path)
+                .file_name()
+                .map(|f| f.to_string_lossy().to_string())
+                .unwrap_or_else(|| "output.bin".to_string())
+        };
+
+        // Check if file exists and ask for confirmation if needed
+        if Path::new(&output_path).exists() {
+            let should_overwrite = self.confirm_file_overwrite(&output_path)?;
+            if !should_overwrite {
+                log_action(
+                    "File download cancelled",
+                    format!("by user for file {}", output_path.log_color_highlight()),
+                );
+                return Ok(());
+            }
+        }
+
+        match File::create(&output_path).and_then(|mut file| file.write_all(&file_contents)) {
+            Ok(_) => {
+                log_action(
+                    "File saved",
+                    format!("to {}", output_path.log_color_highlight()),
+                );
+                Ok(())
+            }
+            Err(e) => {
+                log_warn_action(
+                    "Failed to save file",
+                    format!("to {}: {e}", output_path.log_color_error_highlight()),
+                );
+                Err(e.into())
+            }
+        }
     }
 
     async fn new_worker(
@@ -1852,6 +2022,17 @@ impl WorkerCommandHandler {
                 bail!(NonSuccessfulExit);
             }
         }
+    }
+
+    fn confirm_file_overwrite(&self, output_path: &str) -> anyhow::Result<bool> {
+        let result = Confirm::new(&format!(
+            "File {} already exists. Do you want to overwrite it?",
+            output_path.log_color_highlight()
+        ))
+        .with_default(false)
+        .prompt()?;
+
+        Ok(result)
     }
 }
 

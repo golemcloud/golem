@@ -843,22 +843,14 @@ impl AgentId {
                     agent_type,
                 ))
             } else {
-                Err("Unexpected agent-id format - missing closing )".to_string())
+                Err(format!(
+                    "Unexpected agent-id format - missing closing ')', got: {s}"
+                ))
             }
         } else {
             Err(format!(
-                "Invalid agent-id {}. Unexpected agent-id format - must be agent-type(...)",
-                s
+                "Unexpected agent-id format - must be 'agent-type(...)', got: {s}"
             ))
-        }
-    }
-
-    pub fn parse_agent_type(s: impl AsRef<str>) -> Result<String, String> {
-        let s = s.as_ref();
-        if let Some((agent_type, _)) = s.split_once('(') {
-            Ok(agent_type.to_string())
-        } else {
-            Err("Unexpected agent-id format - must be agent-type(...)".to_string())
         }
     }
 

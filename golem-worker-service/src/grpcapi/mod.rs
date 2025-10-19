@@ -78,18 +78,6 @@ pub async fn start_grpc_server(
     Ok(port)
 }
 
-pub fn validated_worker_id(
-    component_id: golem_common::model::ComponentId,
-    worker_name: String,
-) -> Result<WorkerId, WorkerError> {
-    WorkerId::validate_worker_name(&worker_name)
-        .map_err(|error| bad_request_error(format!("Invalid worker name: {error}")))?;
-    Ok(WorkerId {
-        component_id,
-        worker_name,
-    })
-}
-
 pub fn validate_protobuf_worker_id(
     worker_id: Option<golem_api_grpc::proto::golem::worker::WorkerId>,
 ) -> Result<WorkerId, WorkerError> {
@@ -97,7 +85,10 @@ pub fn validate_protobuf_worker_id(
     let worker_id: WorkerId = worker_id
         .try_into()
         .map_err(|e| bad_request_error(format!("Invalid worker id: {e}")))?;
-    validated_worker_id(worker_id.component_id, worker_id.worker_name)
+    Ok(WorkerId {
+        component_id: worker_id.component_id,
+        worker_name: worker_id.worker_name,
+    })
 }
 
 pub fn validate_protobuf_plugin_installation_id(
