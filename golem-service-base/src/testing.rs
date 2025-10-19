@@ -22,7 +22,7 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 

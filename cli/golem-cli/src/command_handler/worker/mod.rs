@@ -939,7 +939,7 @@ impl WorkerCommandHandler {
         let nodes = match clients
             .worker
             .get_files(
-                &component.versioned_component_id.component_id,
+                &component.component_id.0,
                 &worker_name.0,
                 &path,
             )
@@ -1017,7 +1017,7 @@ impl WorkerCommandHandler {
         let file_contents = match clients
             .worker
             .get_file_content(
-                &component.versioned_component_id.component_id,
+                &component.component_id.0,
                 &worker_name.0,
                 &path,
             )

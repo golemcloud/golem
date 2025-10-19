@@ -1790,9 +1790,8 @@ impl Display for WorkerEvent {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Empty {}
 

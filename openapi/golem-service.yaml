@@ -8531,18 +8531,6 @@ components:
     ActivatePluginResponse:
       title: ActivatePluginResponse
       type: object
-    AgentInstanceDescription:
-      title: AgentInstanceDescription
-      type: object
-      properties:
-        createdAt:
-          type: string
-          format: date-time
-        agentParameters:
-          $ref: '#/components/schemas/DataValue'
-      required:
-      - createdAt
-      - agentParameters
     AgentInstanceKey:
       title: AgentInstanceKey
       type: object
@@ -8554,17 +8542,6 @@ components:
       required:
       - agentType
       - agentId
-    AgentInstanceMetadata:
-      title: AgentInstanceMetadata
-      type: object
-      properties:
-        key:
-          $ref: '#/components/schemas/AgentInstanceKey'
-        description:
-          $ref: '#/components/schemas/AgentInstanceDescription'
-      required:
-      - key
-      - description
     AnalysedResourceMode:
       type: string
       enum:
@@ -11860,10 +11837,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/ExportedResourceMetadata'
-        agentInstances:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentInstanceMetadata'
         activePlugins:
           type: array
           items:

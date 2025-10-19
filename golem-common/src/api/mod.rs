@@ -22,7 +22,6 @@ use crate::model::component::ComponentId;
 use crate::model::component::ComponentRevision;
 use serde::{Deserialize, Serialize};
 
-#[cfg(feature = "poem")]
 #[derive(Debug, Clone, Serialize, Deserialize, poem_openapi::Object)]
 pub struct Page<
     T: poem_openapi::types::Type + poem_openapi::types::ParseFromJSON + poem_openapi::types::ToJSON,

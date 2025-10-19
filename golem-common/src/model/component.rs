@@ -85,19 +85,19 @@ declare_structs! {
         pub component_name: ComponentName,
         pub component_type: Option<ComponentType>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub env: BTreeMap<String, String>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub agent_types: Vec<AgentType>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub plugins: Vec<PluginInstallation>,
     }
 
@@ -105,16 +105,16 @@ declare_structs! {
         pub current_revision: ComponentRevision,
         pub component_type: Option<ComponentType>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub removed_files: Vec<ComponentFilePath>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub new_file_options: BTreeMap<ComponentFilePath, ComponentFileOptions>,
         pub dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         pub env: Option<BTreeMap<String, String>>,
         pub agent_types: Option<Vec<AgentType>>,
         #[serde(default)]
-        #[cfg_attr(feature = "poem", oai(default))]
+        #[oai(default)]
         pub plugin_updates: Vec<PluginInstallationAction>,
     }
 
@@ -327,12 +327,12 @@ impl From<golem_wasm::ComponentId> for ComponentId {
     }
 }
 
-impl From<ComponentId> for golem_wasm_rpc::ComponentId {
+impl From<ComponentId> for golem_wasm::ComponentId {
     fn from(component_id: ComponentId) -> Self {
         let (high_bits, low_bits) = component_id.0.as_u64_pair();
 
-        golem_wasm_rpc::ComponentId {
-            uuid: golem_wasm_rpc::Uuid {
+        golem_wasm::ComponentId {
+            uuid: golem_wasm::Uuid {
                 high_bits,
                 low_bits,
             },

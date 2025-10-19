@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::model::agent::{AgentId, AgentTypeResolver};
-use crate::model::component_metadata::ComponentMetadata;
 use crate::model::component::ComponentId;
+use crate::model::component_metadata::ComponentMetadata;
 use bincode::{Decode, Encode};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
@@ -97,11 +97,20 @@ impl golem_wasm::IntoValue for ShardId {
 
 static WORKER_ID_MAX_LENGTH: usize = 512;
 
-#[derive(Clone, Debug, Eq, PartialEq, Hash, Encode, Decode)]
-#[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
-#[cfg_attr(feature = "model", serde(rename_all = "camelCase"))]
+#[derive(
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    Hash,
+    Encode,
+    Decode,
+    serde::Serialize,
+    serde::Deserialize,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct WorkerId {
     pub component_id: ComponentId,
     pub worker_name: String,
