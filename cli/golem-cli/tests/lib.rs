@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use test_r::{sequential_suite, tag_suite, test_dep};
+use test_r::{tag_suite, test_dep};
 
 test_r::enable!();
 

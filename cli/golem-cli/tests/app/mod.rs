@@ -13,7 +13,10 @@
 // limitations under the License.
 
 mod agents;
+
+#[allow(clippy::module_inception)]
 mod app;
+
 mod build_and_deploy_all;
 mod plugins;
 
@@ -32,28 +35,20 @@ sequential_suite!(agents);
 inherit_test_dep!(Tracing);
 
 use crate::Tracing;
-use assert2::{assert, check, let_assert};
+use assert2::assert;
 use colored::Colorize;
-use golem_cli::fs;
-use golem_cli::model::invoke_result_view::InvokeResultView;
-use golem_templates::model::GuestLanguage;
-use heck::ToKebabCase;
-use indoc::indoc;
 use itertools::Itertools;
-use nanoid::nanoid;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
-use strum::IntoEnumIterator;
 use tempfile::TempDir;
-use test_r::{inherit_test_dep, sequential_suite, tag_suite, test};
+use test_r::{inherit_test_dep, sequential_suite, tag_suite};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 use tracing::info;
-use uuid::Uuid;
 
 mod cmd {
     pub static ADD_DEPENDENCY: &str = "add-dependency";
