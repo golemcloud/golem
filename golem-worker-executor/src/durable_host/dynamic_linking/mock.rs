@@ -14,8 +14,8 @@
 
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use golem_wasm_rpc::golem_rpc_0_2_x::types::HostFutureInvokeResult;
-use golem_wasm_rpc::HostWasmRpc;
+use golem_wasm::golem_rpc_0_2_x::types::HostFutureInvokeResult;
+use golem_wasm::HostWasmRpc;
 use rib::ParsedFunctionName;
 use tracing::error;
 use wasmtime::component::types::{ComponentInstance, ComponentItem};

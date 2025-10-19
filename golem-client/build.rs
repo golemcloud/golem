@@ -43,8 +43,8 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "AgentInstanceDescription",
                 "golem_common::model::AgentInstanceDescription",
             ),
-            ("AnalysedExport", "golem_wasm_ast::analysis::AnalysedExport"),
-            ("AnalysedType", "golem_wasm_ast::analysis::AnalysedType"),
+            ("AnalysedExport", "golem_wasm::analysis::AnalysedExport"),
+            ("AnalysedType", "golem_wasm::analysis::AnalysedType"),
             ("PluginScope", "golem_common::model::plugin::PluginScope"),
             (
                 "ComponentMetadata",
@@ -99,10 +99,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::agent::RegisteredAgentType",
             ),
             ("ShardId", "golem_common::model::ShardId"),
-            ("ValueAndType", "golem_wasm_rpc::ValueAndType"),
+            ("ValueAndType", "golem_wasm::ValueAndType"),
             (
                 "ValueAndOptionalType",
-                "golem_wasm_rpc::json::OptionallyValueAndTypeJson",
+                "golem_wasm::json::OptionallyValueAndTypeJson",
             ),
             (
                 "WasiConfigVarsEntry",

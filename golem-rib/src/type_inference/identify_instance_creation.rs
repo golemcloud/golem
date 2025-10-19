@@ -21,7 +21,7 @@ use crate::{
     CustomError, ExprVisitor, FunctionCallError, InferredType, ParsedFunctionReference,
     TypeInternal, TypeOrigin,
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 
 // Handling the following and making sure the types are inferred fully at this stage.
 // The expr `Call` will still be expr `Call` itself but CallType will be worker instance creation

@@ -16,7 +16,7 @@ use crate::model::agent::{
     AgentConstructor, AgentDependency, AgentMethod, AgentType, ComponentModelElementSchema,
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::{
     AnalysedType, NameOptionTypePair, NameTypePair, TypeEnum, TypeFlags, TypeHandle, TypeList,
     TypeOption, TypeRecord, TypeResult, TypeTuple, TypeVariant,
 };

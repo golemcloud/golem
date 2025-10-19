@@ -34,8 +34,8 @@ use golem_test_framework::config::{
 };
 use golem_test_framework::dsl::TestDslUnsafe;
 use golem_test_framework::model::PluginDefinitionCreation;
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
-use golem_wasm_rpc::{IntoValueAndType, Record, Value};
+use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
+use golem_wasm::{IntoValueAndType, Record, Value};
 use reqwest::StatusCode;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};

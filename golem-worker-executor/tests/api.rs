@@ -36,12 +36,12 @@ use golem_test_framework::dsl::{
     drain_connection, is_worker_execution_error, stdout_event_matching, stdout_events,
     worker_error_logs, worker_error_message, TestDslUnsafe,
 };
-use golem_wasm_ast::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wit_parser::{SharedAnalysedTypeResolve, TypeName, TypeOwner};
+use golem_wasm::analysis::{
     analysed_type, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle, TypeStr,
 };
-use golem_wasm_rpc::{IntoValue, Record};
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::{IntoValue, Record};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use redis::Commands;
 use std::collections::HashMap;

@@ -51,5 +51,32 @@ mod type_parameter_parser;
 mod type_refinement;
 mod variable_id;
 
+#[allow(clippy::large_enum_variant)]
+pub mod proto {
+    use uuid::Uuid;
+
+    tonic::include_proto!("mod");
+
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("services");
+
+    impl From<Uuid> for golem::rib::Uuid {
+        fn from(value: Uuid) -> Self {
+            let (high_bits, low_bits) = value.as_u64_pair();
+            golem::rib::Uuid {
+                high_bits,
+                low_bits,
+            }
+        }
+    }
+
+    impl From<golem::rib::Uuid> for Uuid {
+        fn from(value: golem::rib::Uuid) -> Self {
+            let high_bits = value.high_bits;
+            let low_bits = value.low_bits;
+            Uuid::from_u64_pair(high_bits, low_bits)
+        }
+    }
+}
+
 #[cfg(test)]
 test_r::enable!();

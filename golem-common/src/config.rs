@@ -497,7 +497,6 @@ pub struct DbSqliteConfig {
 }
 
 impl DbSqliteConfig {
-    #[cfg(feature = "sql")]
     pub fn connect_options(&self) -> sqlx::sqlite::SqliteConnectOptions {
         sqlx::sqlite::SqliteConnectOptions::new()
             .filename(&self.database)
@@ -527,7 +526,6 @@ pub struct DbPostgresConfig {
 }
 
 impl DbPostgresConfig {
-    #[cfg(feature = "sql")]
     pub fn connect_options(&self) -> sqlx::postgres::PgConnectOptions {
         sqlx::postgres::PgConnectOptions::new()
             .host(&self.host)

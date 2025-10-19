@@ -16,7 +16,7 @@ use golem_common::model::agent::{
     AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
     DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
 };
-use golem_wasm_ast::analysis::analysed_type::{
+use golem_wasm::analysis::analysed_type::{
     case, field, list, option, r#enum, record, result, s32, str, u32, u8, unit_case, variant,
 };
 

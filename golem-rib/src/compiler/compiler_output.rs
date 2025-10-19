@@ -28,12 +28,11 @@ pub struct CompilerOutput {
     pub rib_output_type_info: Option<RibOutputTypeInfo>,
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
+    use crate::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
     use crate::{
         CompilerOutput, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo, WorkerFunctionsInRib,
     };
-    use golem_api_grpc::proto::golem::rib::CompilerOutput as ProtoCompilerOutput;
 
     impl TryFrom<ProtoCompilerOutput> for CompilerOutput {
         type Error = String;
@@ -68,19 +67,19 @@ mod protobuf {
 
         fn try_from(value: CompilerOutput) -> Result<Self, Self::Error> {
             Ok(ProtoCompilerOutput {
-                byte_code: Some(golem_api_grpc::proto::golem::rib::RibByteCode::try_from(
+                byte_code: Some(crate::proto::golem::rib::RibByteCode::try_from(
                     value.byte_code,
                 )?),
-                rib_input: Some(golem_api_grpc::proto::golem::rib::RibInputType::from(
+                rib_input: Some(crate::proto::golem::rib::RibInputType::from(
                     value.rib_input_type_info,
                 )),
                 worker_invoke_calls: value
                     .worker_invoke_calls
-                    .map(golem_api_grpc::proto::golem::rib::WorkerFunctionsInRib::from),
+                    .map(crate::proto::golem::rib::WorkerFunctionsInRib::from),
 
                 rib_output: value
                     .rib_output_type_info
-                    .map(golem_api_grpc::proto::golem::rib::RibOutputType::from),
+                    .map(crate::proto::golem::rib::RibOutputType::from),
             })
         }
     }

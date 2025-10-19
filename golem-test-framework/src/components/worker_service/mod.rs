@@ -79,7 +79,7 @@ use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::WorkerEvent;
 use golem_common::model::{ProjectId, PromiseId};
 use golem_service_base::clients::authorised_request;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};

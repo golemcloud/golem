@@ -14,13 +14,12 @@ autotests = false
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
-golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true, default-features = true }
+golem-common = { workspace = true }
+golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
 golem-test-framework = { workspace = true }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, features = ["host"] }
-golem-wasm-rpc-derive= { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive= { workspace = true }
 
 anyhow = { workspace = true }
 assert2 = { workspace = true }

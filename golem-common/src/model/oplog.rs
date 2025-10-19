@@ -26,8 +26,8 @@ use bincode::enc::write::Writer;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_rpc::wasmtime::ResourceTypeId;
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::wasmtime::ResourceTypeId;
+use golem_wasm_derive::IntoValue;
 use nonempty_collections::NEVec;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -179,8 +179,8 @@ impl<'de, Context> BorrowDecode<'de, Context> for PayloadId {
     Serialize,
     Deserialize,
     IntoValue,
+    poem_openapi::NewType,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
 pub struct WorkerResourceId(pub u64);
 
 impl WorkerResourceId {
@@ -198,8 +198,18 @@ impl Display for WorkerResourceId {
 }
 
 /// Worker log levels including the special stdout and stderr channels
-#[derive(Copy, Clone, Debug, PartialEq, Encode, Decode, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(
+    Copy,
+    Clone,
+    Debug,
+    PartialEq,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    poem_openapi::Enum,
+)]
 #[repr(u8)]
 pub enum LogLevel {
     Stdout,
@@ -264,9 +274,18 @@ impl SpanData {
 }
 
 #[derive(
-    Copy, Clone, Debug, PartialOrd, PartialEq, Encode, Decode, Serialize, Deserialize, IntoValue,
+    Copy,
+    Clone,
+    Debug,
+    PartialOrd,
+    PartialEq,
+    Encode,
+    Decode,
+    Serialize,
+    Deserialize,
+    IntoValue,
+    poem_openapi::Enum,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 pub enum PersistenceLevel {
     PersistNothing,
     PersistRemoteSideEffects,
@@ -1079,7 +1098,6 @@ impl WorkerError {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use super::WorkerError;
     use crate::model::oplog::PersistenceLevel;

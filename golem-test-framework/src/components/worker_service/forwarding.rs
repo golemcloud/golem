@@ -41,7 +41,7 @@ use golem_api_grpc::proto::golem::worker::{
 };
 use golem_api_grpc::proto::golem::workerexecutor::v1::CreateWorkerRequest;
 use golem_api_grpc::proto::golem::{worker, workerexecutor};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use std::sync::Arc;
 use tonic::transport::Channel;
 use tonic::Streaming;

@@ -168,18 +168,17 @@ impl Display for CallType {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::call_type::{CallType, InstanceCreationType};
+    use crate::proto::golem::rib::WorkerInstance;
     use crate::FullyQualifiedResourceConstructor;
     use crate::{ComponentDependencyKey, DynamicParsedFunctionName, Expr, ParsedFunctionName};
-    use golem_api_grpc::proto::golem::rib::WorkerInstance;
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::ComponentDependencyKey> for ComponentDependencyKey {
+    impl TryFrom<crate::proto::golem::rib::ComponentDependencyKey> for ComponentDependencyKey {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::ComponentDependencyKey,
+            value: crate::proto::golem::rib::ComponentDependencyKey,
         ) -> Result<Self, Self::Error> {
             let component_name = value.component_name;
             let component_id = value.value.ok_or("Missing component id")?;
@@ -199,9 +198,9 @@ mod protobuf {
         }
     }
 
-    impl From<ComponentDependencyKey> for golem_api_grpc::proto::golem::rib::ComponentDependencyKey {
+    impl From<ComponentDependencyKey> for crate::proto::golem::rib::ComponentDependencyKey {
         fn from(value: ComponentDependencyKey) -> Self {
-            golem_api_grpc::proto::golem::rib::ComponentDependencyKey {
+            crate::proto::golem::rib::ComponentDependencyKey {
                 component_name: value.component_name,
                 component_version: value.component_version,
                 value: Some(value.component_id.into()),
@@ -211,15 +210,13 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::InstanceCreationType> for InstanceCreationType {
+    impl TryFrom<crate::proto::golem::rib::InstanceCreationType> for InstanceCreationType {
         type Error = String;
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::InstanceCreationType,
+            value: crate::proto::golem::rib::InstanceCreationType,
         ) -> Result<Self, Self::Error> {
             match value.kind.ok_or("Missing instance creation kind")? {
-                golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(
-                    worker_instance,
-                ) => {
+                crate::proto::golem::rib::instance_creation_type::Kind::Worker(worker_instance) => {
                     let worker_name = worker_instance
                         .worker_name
                         .map(|w| Expr::try_from(*w))
@@ -231,7 +228,7 @@ mod protobuf {
                         worker_name,
                     })
                 }
-                golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(
+                crate::proto::golem::rib::instance_creation_type::Kind::Resource(
                     resource_instance,
                 ) => {
                     let resource_constructor_proto = resource_instance
@@ -255,23 +252,23 @@ mod protobuf {
         }
     }
 
-    impl From<InstanceCreationType> for golem_api_grpc::proto::golem::rib::InstanceCreationType {
+    impl From<InstanceCreationType> for crate::proto::golem::rib::InstanceCreationType {
         fn from(value: InstanceCreationType) -> Self {
             match value {
                 InstanceCreationType::WitWorker { component_info, .. } => {
-                    golem_api_grpc::proto::golem::rib::InstanceCreationType {
-                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
-                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
+                    crate::proto::golem::rib::InstanceCreationType {
+                        kind: Some(crate::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
+                            component: component_info.map(crate::proto::golem::rib::ComponentDependencyKey::from),
                             worker_name: None
                         }))),
                     }
                 }
                 InstanceCreationType::WitResource { component_info, resource_name, .. } => {
-                    golem_api_grpc::proto::golem::rib::InstanceCreationType {
-                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
-                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
+                    crate::proto::golem::rib::InstanceCreationType {
+                        kind: Some(crate::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(crate::proto::golem::rib::ResourceInstanceWithWorkerName {
+                            component: component_info.map(crate::proto::golem::rib::ComponentDependencyKey::from),
                             worker_name: None,
-                            resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
+                            resource_name: Some(crate::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                         }))),
                     }
                 }
@@ -279,30 +276,24 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::CallType> for CallType {
+    impl TryFrom<crate::proto::golem::rib::CallType> for CallType {
         type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::rib::CallType,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(value: crate::proto::golem::rib::CallType) -> Result<Self, Self::Error> {
             let invocation = value.name.ok_or("Missing name of invocation")?;
             match invocation {
-                golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(name) => {
-                    Ok(CallType::Function {
-                        component_info: None,
-                        function_name: DynamicParsedFunctionName::try_from(name)?,
-                        instance_identifier: None,
-                    })
-                }
-                golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(name) => {
+                crate::proto::golem::rib::call_type::Name::Parsed(name) => Ok(CallType::Function {
+                    component_info: None,
+                    function_name: DynamicParsedFunctionName::try_from(name)?,
+                    instance_identifier: None,
+                }),
+                crate::proto::golem::rib::call_type::Name::VariantConstructor(name) => {
                     Ok(CallType::VariantConstructor(name))
                 }
-                golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(name) => {
+                crate::proto::golem::rib::call_type::Name::EnumConstructor(name) => {
                     Ok(CallType::EnumConstructor(name))
                 }
 
-                golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
-                    instance_creation,
-                ) => {
+                crate::proto::golem::rib::call_type::Name::InstanceCreation(instance_creation) => {
                     let instance_creation = InstanceCreationType::try_from(*instance_creation)?;
                     Ok(CallType::InstanceCreation(instance_creation))
                 }
@@ -310,51 +301,51 @@ mod protobuf {
         }
     }
 
-    impl From<CallType> for golem_api_grpc::proto::golem::rib::CallType {
+    impl From<CallType> for crate::proto::golem::rib::CallType {
         fn from(value: CallType) -> Self {
             match value {
                 CallType::Function {
                     function_name,
                     ..
-                } => golem_api_grpc::proto::golem::rib::CallType {
-                    name: Some(golem_api_grpc::proto::golem::rib::call_type::Name::Parsed(
+                } => crate::proto::golem::rib::CallType {
+                    name: Some(crate::proto::golem::rib::call_type::Name::Parsed(
                         function_name.into(),
                     )),
                 },
-                CallType::VariantConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
+                CallType::VariantConstructor(name) => crate::proto::golem::rib::CallType {
                     name: Some(
-                        golem_api_grpc::proto::golem::rib::call_type::Name::VariantConstructor(
+                        crate::proto::golem::rib::call_type::Name::VariantConstructor(
                             name,
                         ),
                     ),
                 },
-                CallType::EnumConstructor(name) => golem_api_grpc::proto::golem::rib::CallType {
+                CallType::EnumConstructor(name) => crate::proto::golem::rib::CallType {
                     name: Some(
-                        golem_api_grpc::proto::golem::rib::call_type::Name::EnumConstructor(name),
+                        crate::proto::golem::rib::call_type::Name::EnumConstructor(name),
                     ),
                 },
                 CallType::InstanceCreation(instance_creation) => {
                     match instance_creation {
                         InstanceCreationType::WitWorker { worker_name , component_info} => {
-                            golem_api_grpc::proto::golem::rib::CallType {
-                                name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
-                                    Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
-                                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
-                                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
-                                            worker_name: worker_name.map(|w| Box::new(golem_api_grpc::proto::golem::rib::Expr::from(*w))),
+                            crate::proto::golem::rib::CallType {
+                                name:  Some(crate::proto::golem::rib::call_type::Name::InstanceCreation(
+                                    Box::new(crate::proto::golem::rib::InstanceCreationType {
+                                        kind: Some(crate::proto::golem::rib::instance_creation_type::Kind::Worker(Box::new(WorkerInstance {
+                                            component: component_info.map(crate::proto::golem::rib::ComponentDependencyKey::from),
+                                            worker_name: worker_name.map(|w| Box::new(crate::proto::golem::rib::Expr::from(*w))),
                                         }))),
                                     })
                                 )),
                             }
                         }
                         InstanceCreationType::WitResource { resource_name, component_info, .. } => {
-                            golem_api_grpc::proto::golem::rib::CallType {
-                                name:  Some(golem_api_grpc::proto::golem::rib::call_type::Name::InstanceCreation(
-                                    Box::new(golem_api_grpc::proto::golem::rib::InstanceCreationType {
-                                        kind: Some(golem_api_grpc::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(golem_api_grpc::proto::golem::rib::ResourceInstanceWithWorkerName {
-                                            component: component_info.map(golem_api_grpc::proto::golem::rib::ComponentDependencyKey::from),
+                            crate::proto::golem::rib::CallType {
+                                name:  Some(crate::proto::golem::rib::call_type::Name::InstanceCreation(
+                                    Box::new(crate::proto::golem::rib::InstanceCreationType {
+                                        kind: Some(crate::proto::golem::rib::instance_creation_type::Kind::Resource(Box::new(crate::proto::golem::rib::ResourceInstanceWithWorkerName {
+                                            component: component_info.map(crate::proto::golem::rib::ComponentDependencyKey::from),
                                             worker_name: None,
-                                            resource_name: Some(golem_api_grpc::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
+                                            resource_name: Some(crate::proto::golem::rib::FullyQualifiedResourceConstructor::from(resource_name)),
                                         }))),
                                     })
                                 )),
@@ -370,14 +361,12 @@ mod protobuf {
     // InvocationName is corresponding to the new CallType and the difference here is,
     // InvocationName::Function will always hold a static function name and not a dynamic one
     // with Expr representing resource construction parameters
-    impl TryFrom<golem_api_grpc::proto::golem::rib::InvocationName> for CallType {
+    impl TryFrom<crate::proto::golem::rib::InvocationName> for CallType {
         type Error = String;
-        fn try_from(
-            value: golem_api_grpc::proto::golem::rib::InvocationName,
-        ) -> Result<Self, Self::Error> {
+        fn try_from(value: crate::proto::golem::rib::InvocationName) -> Result<Self, Self::Error> {
             let invocation = value.name.ok_or("Missing name of invocation")?;
             match invocation {
-                golem_api_grpc::proto::golem::rib::invocation_name::Name::Parsed(name) => {
+                crate::proto::golem::rib::invocation_name::Name::Parsed(name) => {
                     Ok(CallType::Function {
                         component_info: None,
                         instance_identifier: None,
@@ -386,10 +375,10 @@ mod protobuf {
                         )?,
                     })
                 }
-                golem_api_grpc::proto::golem::rib::invocation_name::Name::VariantConstructor(
-                    name,
-                ) => Ok(CallType::VariantConstructor(name)),
-                golem_api_grpc::proto::golem::rib::invocation_name::Name::EnumConstructor(name) => {
+                crate::proto::golem::rib::invocation_name::Name::VariantConstructor(name) => {
+                    Ok(CallType::VariantConstructor(name))
+                }
+                crate::proto::golem::rib::invocation_name::Name::EnumConstructor(name) => {
                     Ok(CallType::EnumConstructor(name))
                 }
             }

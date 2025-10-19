@@ -24,9 +24,17 @@ use strum_macros::{EnumIter, FromRepr};
 use uuid::Uuid;
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, serde::Serialize, serde::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    serde::Serialize,
+    serde::Deserialize,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
 pub struct TokenSecret {
     pub value: Uuid,
 }
@@ -60,7 +68,7 @@ impl std::str::FromStr for TokenSecret {
     FromRepr,
 )]
 #[repr(i32)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
+#[derive(poem_openapi::Enum)]
 pub enum Role {
     Admin = 0,
     MarketingAdmin = 1,
@@ -328,8 +336,8 @@ impl Display for ProjectAction {
     serde::Serialize,
     serde::Deserialize,
     EnumIter,
+    poem_openapi::Enum,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
 pub enum ProjectPermission {
     ViewComponent,
     CreateComponent,
@@ -492,8 +500,9 @@ impl FromStr for ProjectPermission {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, poem_openapi::Object,
+)]
 pub struct ProjectActions {
     pub actions: HashSet<ProjectPermission>,
 }
@@ -512,16 +521,16 @@ impl ProjectActions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 pub struct ProjectAuthorisedActions {
     pub project_id: ProjectId,
     pub owner_account_id: AccountId,
     pub actions: ProjectActions,
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use super::AccountAction;
 

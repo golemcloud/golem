@@ -606,7 +606,7 @@ x-golem-api-definition-version: 0.1.0
 async fn test_multi_component_binding() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
+    use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
     use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
     use std::collections::HashMap;
@@ -818,7 +818,7 @@ async fn test_multi_component_binding() {
 async fn test_basic_types_and_record_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameTypePair, TypeBool, TypeEnum, TypeRecord, TypeStr, TypeU32, TypeU64,
     };
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
@@ -1104,7 +1104,7 @@ async fn test_basic_types_and_record_conversion() {
 async fn test_complete_todo_structure_with_optional_and_oneof() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameTypePair, TypeEnum, TypeOption, TypeRecord, TypeResult, TypeS64, TypeStr,
         TypeU64,
     };
@@ -1351,7 +1351,7 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
 async fn test_variant_output_structure() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameOptionTypePair, NameTypePair, TypeRecord, TypeStr, TypeU64, TypeVariant,
     };
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
@@ -1516,7 +1516,7 @@ async fn test_variant_output_structure() {
 async fn test_oas_conversion_full_structure_shopping_cart() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameTypePair, TypeF32, TypeList, TypeRecord, TypeStr, TypeU32, TypeU64,
     };
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled}; //WorkerNameCompiled
@@ -1790,9 +1790,7 @@ x-golem-api-definition-version: 0.0.1
 async fn test_path_query_header_parameter_combinations() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
-        AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64,
-    };
+    use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64};
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
     use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
     use std::collections::HashMap;
@@ -2117,7 +2115,7 @@ async fn test_path_query_header_parameter_combinations() {
 async fn test_comprehensive_analysed_type_coverage() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
         TypeF64, TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS32, TypeS64,
         TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,

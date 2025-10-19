@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::Value;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::Value;
 
 pub fn generate_value(analysed_tpe: &AnalysedType) -> Value {
     match analysed_tpe {
