@@ -132,6 +132,7 @@ jobs:
         run: |
           mkdir -pv target/nextest-archive
           mv target/golem-binaries target/nextest-archive
+          find target/nextest-archive
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
