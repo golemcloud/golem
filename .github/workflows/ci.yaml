@@ -116,7 +116,7 @@ jobs:
           path: target/golem-binaries.tar.zst
           key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
-        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: cp -v target/nextest-archive/target/debug/* target/debug/
 
@@ -156,7 +156,7 @@ jobs:
           path: target/golem-binaries.tar.zst
           key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
-        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -213,7 +213,7 @@ jobs:
           path: target/golem-binaries.tar.zst
           key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
-        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -298,7 +298,7 @@ jobs:
           path: target/golem-binaries.tar.zst
           key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
-        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
