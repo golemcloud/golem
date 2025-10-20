@@ -59,7 +59,7 @@ jobs:
 
       - name: Dump archive
         run: tar --zstd  -tvf target/golem-binaries.tar.zst
-        
+
 #      - name: Move archive to sticky disk
 #        run: mv target/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
 
@@ -130,7 +130,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          cp -v target/nextest-archive/target/debug/* target/debug/ || true
+          mv -v target/nextest-archive/target/debug/* target/debug/ || true
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -329,7 +329,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          cp -v target/nextest-archive/target/debug/* target/debug/ || true
+          mv -v target/nextest-archive/target/debug/* target/debug/ || true
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
