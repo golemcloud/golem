@@ -130,7 +130,9 @@ jobs:
       - name: Apply binary archive
         run: cargo-test-r reuse-nextest-archive --archive-file ~/golem-binaries-cache/golem-binaries.tar.zst
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
-        run: cp -v target/nextest-archive/target/debug/* target/debug/
+        run: |
+          mkdir -pv target/debug
+          cp -v target/nextest-archive/target/debug/* target/debug/
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
