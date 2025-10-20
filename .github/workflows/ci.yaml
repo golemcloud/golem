@@ -131,7 +131,7 @@ jobs:
 #        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
         run: |
           mkdir -pv target/nextest-archive
-          mv target/golem-binaries/golem-binaries target/nextest-archive
+          mv target/golem-binaries/* target/nextest-archive
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
@@ -181,7 +181,7 @@ jobs:
 #        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
         run: |
           mkdir -pv target/nextest-archive
-          mv target/golem-binaries/golem-binaries target/nextest-archive      
+          mv target/golem-binaries/* target/nextest-archive      
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -246,7 +246,7 @@ jobs:
 #        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
         run: |
           mkdir -pv target/nextest-archive
-          mv target/golem-binaries/golem-binaries target/nextest-archive
+          mv target/golem-binaries/* target/nextest-archive
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -339,7 +339,7 @@ jobs:
 #        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
         run: |
           mkdir -pv target/nextest-archive
-          mv target/golem-binaries/golem-binaries target/nextest-archive
+          mv target/golem-binaries/* target/nextest-archive
 
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
