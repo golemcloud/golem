@@ -43,13 +43,11 @@ use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::wasmtime::ResourceStore;

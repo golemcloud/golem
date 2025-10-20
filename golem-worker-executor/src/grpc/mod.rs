@@ -203,7 +203,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::CreateWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
@@ -213,7 +213,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await?;
         }
 
-        let component_version = request.component_version;
+        let component_version: ComponentRevision = ComponentRevision(request.component_version);
 
         let existing_worker = self.worker_service().get(&owned_worker_id).await;
         if existing_worker.is_some() && !request.ignore_already_existing {
@@ -289,7 +289,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let owned_worker_id = extract_owned_worker_id(
             &(&request, promise_id.clone()),
             |(_, r)| &r.worker_id,
-            |(r, _)| &r.project_id,
+            |(r, _)| &r.environment_id,
         )?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
@@ -313,7 +313,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: DeleteWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -357,10 +357,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .clone()
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
 
-        let account_id: AccountId = account_id_proto.into();
+        let account_id: AccountId = account_id_proto.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))?;
 
         let environment_id_proto = request
-            .environment
+            .environment_id
             .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?;
         let environment_id: EnvironmentId = environment_id_proto
             .try_into()
@@ -412,7 +412,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: RevertWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -453,7 +453,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: CancelInvocationRequest,
     ) -> Result<bool, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -506,7 +506,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::InterruptWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -602,7 +602,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::ResumeWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -830,7 +830,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: golem::workerexecutor::v1::GetWorkerMetadataRequest,
     ) -> Result<golem::worker::WorkerMetadata, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
@@ -1088,7 +1088,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: ConnectWorkerRequest,
     ) -> ResponseResult<<Self as WorkerExecutor>::ConnectWorkerStream> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -1135,7 +1135,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: GetOplogRequest,
     ) -> Result<GetOplogResponse, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
@@ -1209,7 +1209,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: SearchOplogRequest,
     ) -> Result<SearchOplogResponse, WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         let chunk = match request.cursor {
@@ -1217,7 +1217,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.component_service(),
                 self.oplog_service(),
                 self.plugins(),
-                self.project_service(),
                 &owned_worker_id,
                 ComponentRevision(cursor.current_component_version),
                 OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1238,7 +1237,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     self.plugins(),
-                    self.project_service(),
                     &owned_worker_id,
                     initial_component_version,
                     start,
@@ -1483,7 +1481,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: DeactivatePluginRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -2709,5 +2707,5 @@ fn extract_account_id<T>(
     let account_id = get_account_id(request)
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
-    Ok(account_id.clone().into())
+    account_id.clone().try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))
 }

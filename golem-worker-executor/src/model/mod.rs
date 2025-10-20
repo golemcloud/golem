@@ -21,7 +21,11 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{ OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId };
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentRevision, ComponentType};
+use golem_common::model::{
+    OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
+};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -32,8 +36,6 @@ use std::fmt::{Debug, Display, Formatter};
 use std::pin::Pin;
 use std::sync::Arc;
 use wasmtime::Trap;
-use golem_common::model::component::{ComponentRevision, ComponentType};
-use golem_common::model::account::AccountId;
 
 pub mod event;
 pub mod public_oplog;
@@ -71,8 +73,6 @@ pub struct WorkerConfig {
 
 impl WorkerConfig {
     pub fn new(
-        worker_id: WorkerId,
-        target_component_version: ComponentRevision,
         worker_args: Vec<String>,
         worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,

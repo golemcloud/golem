@@ -774,7 +774,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let plugins = self.state.plugins();
-        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
@@ -782,7 +781,6 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             plugins,
-            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,
@@ -963,7 +961,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         let component_service = self.state.component_service.clone();
         let oplog_service = self.state.oplog_service();
         let plugins = self.state.plugins();
-        let project_service = self.state.project_service();
 
         let entry = self.as_wasi_view().table().get(&self_)?.clone();
 
@@ -971,7 +968,6 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             component_service,
             oplog_service,
             plugins,
-            project_service,
             &entry.owned_worker_id,
             entry.current_component_version,
             entry.next_oplog_index,

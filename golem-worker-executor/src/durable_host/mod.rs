@@ -91,13 +91,16 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{RetryConfig, TransactionId};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{ComponentFileSystemNode,
+use golem_common::model::RetryConfig;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, ComponentRevision, InitialComponentFile};
+use golem_common::model::{TransactionId};
+use golem_common::model::{
+    ComponentFileSystemNode,
     ComponentFileSystemNodeDetails,
-    FailedUpdateRecord, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, ScanCursor, ScheduledAction, SuccessfulUpdateRecord, Timestamp, WorkerFilter,
-    WorkerId, WorkerMetadata, WorkerResourceDescription, WorkerStatus, WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, ScanCursor,
+    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
+    WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -126,9 +129,7 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-use golem_common::model::component::{ComponentDto, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType, InitialComponentFile};
-use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentFilePath;
+use golem_common::model::environment::EnvironmentId;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -199,7 +200,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.project_id,
+            &owned_worker_id.environment_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -339,7 +340,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &self.state.created_by
     }
 
-    pub fn component_metadata(&self) -> &ComponentDto {
+    pub fn agent_id(&self) -> Option<AgentId> {
+        self.state.agent_id.clone()
+    }
+
+    pub fn component_metadata(&self) -> &golem_common::model::component::ComponentDto {
         &self.state.component_metadata
     }
 
@@ -1170,7 +1175,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     component_metadata
                                         .installed_plugins
                                         .into_iter()
-                                        .map(|installation| installation.priority),
+                                        .map(|installation| installation.id),
                                 ),
                             )
                             .await;
@@ -2617,7 +2622,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: ComponentDto,
+    component_metadata: golem_common::model::component::ComponentDto,
 
     total_linear_memory_size: u64,
 
@@ -2676,14 +2681,14 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        plugins: Arc<dyn PluginsService>,
+        plugin_service: Arc<dyn PluginsService>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: ComponentDto,
+        component_metadata: golem_common::model::component::ComponentDto,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
@@ -2718,7 +2723,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             component_service,
             agent_types_service,
-            plugins,
+            plugins: plugin_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,
@@ -2821,7 +2826,7 @@ impl PrivateDurableWorkerState {
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.project_id,
+                &self.owned_worker_id.environment_id,
                 component_id,
                 filter,
                 cursor,

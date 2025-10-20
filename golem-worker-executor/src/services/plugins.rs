@@ -256,6 +256,7 @@ mod grpc {
     use uuid::Uuid;
     use golem_common::model::plugin_registration::PluginRegistrationDto;
     use golem_common::model::plugin_registration::PluginRegistrationId;
+    use golem_service_base::model::plugin_registration::PluginRegistration;
 
     #[derive(Clone)]
     pub struct PluginsGrpc {
@@ -320,7 +321,7 @@ mod grpc {
             component_id: &ComponentId,
             component_version: ComponentRevision,
             plugin_priority: i32
-        ) -> Result<PluginRegistrationDto, WorkerExecutorError> {
+        ) -> Result<PluginRegistration, WorkerExecutorError> {
             let response = self
                 .components_client
                 .call("get_installed_plugins", move |client| {
@@ -375,7 +376,7 @@ mod grpc {
         async fn get_plugin_definition(
             &self,
             plugin_id: &PluginRegistrationId
-        ) -> Result<PluginRegistrationDto, WorkerExecutorError> {
+        ) -> Result<PluginRegistration, WorkerExecutorError> {
             let response = self
                 .plugins_client
                 .call("get_plugin_by_id", move |client| {

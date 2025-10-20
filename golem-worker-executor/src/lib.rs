@@ -546,7 +546,6 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             file_loader,
             plugins,
             oplog_processor_plugin,
-            project_service,
             agent_type_service,
         )
         .await?;
