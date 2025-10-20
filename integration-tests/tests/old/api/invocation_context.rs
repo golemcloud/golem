@@ -202,6 +202,9 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
         .await
         .unwrap();
 
+    let status = response.status();
+    info!("Response: {status} - {}", response.text().await.unwrap());
+
     let start = std::time::Instant::now();
     loop {
         let contexts = contexts.lock().unwrap();
@@ -223,8 +226,6 @@ async fn invocation_context_test(deps: &EnvBasedTestDependencies) {
 
     let traceparents = traceparents.lock().unwrap();
     let tracestates = tracestates.lock().unwrap();
-
-    let status = response.status();
 
     check!(status.is_success());
     check!(traceparents.len() == 3);

@@ -22,7 +22,7 @@ use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
@@ -44,6 +44,9 @@ pub struct LocalFileSystemComponentMetadata {
     pub env: BTreeMap<String, String>,
     pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentType>,
+
+    pub root_package_name: Option<String>,
+    pub root_package_version: Option<String>,
 }
 
 impl From<LocalFileSystemComponentMetadata> for ComponentDto {
@@ -58,8 +61,8 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
                 value.exports,
                 value.memories,
                 value.dynamic_linking,
-                None,
-                None,
+                value.root_package_name,
+                value.root_package_version,
                 value.agent_types,
             ),
             created_at: Default::default(),

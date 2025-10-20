@@ -19,34 +19,53 @@ use crate::model::agent::{
     NamedElementValues, TextDescriptor, TextReference, TextSource, TextType, Url,
 };
 use async_trait::async_trait;
-use golem_wasm_ast::analysis::analysed_type::{field, flags, record, u32};
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::analysis::analysed_type::{field, flags, list, record, u32};
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use test_r::test;
 
 #[test]
-async fn roundtrip_test_1() {
+fn agent_id_wave_normalization() {
+    {
+        let agent_id =
+            AgentId::parse("agent-7(  [  12,     13 , 14 ]   )", TestAgentTypes::new()).unwrap();
+        assert_eq!(agent_id.to_string(), "agent-7([12,13,14])");
+    }
+
+    {
+        let agent_id = AgentId::parse(
+            r#"agent-3(  32 ,{ x  : 12, y: 32, properties: {a,    b  , c   } })"#,
+            TestAgentTypes::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            agent_id.to_string(),
+            "agent-3(32,{x:12,y:32,properties:{a,b,c}})"
+        );
+    }
+}
+
+#[test]
+fn roundtrip_test_1() {
     roundtrip_test(
         "agent-1",
         DataValue::Tuple(ElementValues { elements: vec![] }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_2() {
+fn roundtrip_test_2() {
     roundtrip_test(
         "agent-2",
         DataValue::Tuple(ElementValues {
             elements: vec![ElementValue::ComponentModel(12u32.into_value_and_type())],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_3() {
+fn roundtrip_test_3() {
     roundtrip_test(
         "agent-3",
         DataValue::Tuple(ElementValues {
@@ -67,11 +86,10 @@ async fn roundtrip_test_3() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_4() {
+fn roundtrip_test_4_1() {
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -85,11 +103,10 @@ async fn roundtrip_test_4() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_5() {
+fn roundtrip_test_4_2() {
     roundtrip_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -107,11 +124,10 @@ async fn roundtrip_test_5() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_6() {
+fn roundtrip_test_5_1() {
     roundtrip_test(
         "agent-5",
         DataValue::Tuple(ElementValues {
@@ -125,11 +141,10 @@ async fn roundtrip_test_6() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_7() {
+fn roundtrip_test_5_2() {
     roundtrip_test(
         "agent-5",
         DataValue::Tuple(ElementValues {
@@ -149,11 +164,10 @@ async fn roundtrip_test_7() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn roundtrip_test_8() {
+fn roundtrip_test_6() {
     roundtrip_test(
         "agent-6",
         DataValue::Multimodal(NamedElementValues {
@@ -176,21 +190,19 @@ async fn roundtrip_test_8() {
             ],
         }),
     )
-    .await
 }
 
 #[test]
-async fn invalid_agent_type() {
+fn invalid_agent_type() {
     failure_test(
         "unknown-agent",
         DataValue::Tuple(ElementValues { elements: vec![] }),
         "Unknown agent type: unknown-agent",
     )
-    .await
 }
 
 #[test]
-async fn invalid_agent_param_count() {
+fn invalid_agent_param_count() {
     failure_test(
         "agent-1",
         DataValue::Tuple(ElementValues {
@@ -198,11 +210,10 @@ async fn invalid_agent_param_count() {
         }),
         "Unexpected number of parameters: got 1, expected 0",
     )
-    .await
 }
 
 #[test]
-async fn invalid_agent_param_type() {
+fn invalid_agent_param_type() {
     failure_test(
         "agent-2",
         DataValue::Tuple(ElementValues {
@@ -210,11 +221,10 @@ async fn invalid_agent_param_type() {
         }),
         "Failed to parse parameter value \"hello\": invalid value type at 0..7",
     )
-    .await
 }
 
 #[test]
-async fn invalid_text_url() {
+fn invalid_text_url() {
     failure_test(
         "agent-4",
         DataValue::Tuple(ElementValues {
@@ -229,30 +239,20 @@ async fn invalid_text_url() {
         }),
         "Failed to parse parameter value not?a/valid!url as URL: relative URL without a base",
     )
-    .await
 }
 
-async fn roundtrip_test(agent_type: &str, parameters: DataValue) {
-    let id = AgentId {
-        agent_type: agent_type.to_string(),
-        parameters,
-    };
+fn roundtrip_test(agent_type: &str, parameters: DataValue) {
+    let id = AgentId::new(agent_type.to_string(), parameters);
     let s = id.to_string();
     println!("{s}");
-    let id2 = AgentId::parse(s, TestAgentTypes::new()).await.unwrap();
+    let id2 = AgentId::parse(s, TestAgentTypes::new()).unwrap();
     assert_eq!(id, id2);
 }
 
-async fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
-    let id = AgentId {
-        agent_type: agent_type.to_string(),
-        parameters,
-    };
+fn failure_test(agent_type: &str, parameters: DataValue, expected_failure: &str) {
+    let id = AgentId::new(agent_type.to_string(), parameters);
     let s = id.to_string();
-    let id2 = AgentId::parse(s, TestAgentTypes::new())
-        .await
-        .err()
-        .unwrap();
+    let id2 = AgentId::parse(s, TestAgentTypes::new()).err().unwrap();
     assert_eq!(id2, expected_failure.to_string());
 }
 
@@ -270,7 +270,7 @@ impl TestAgentTypes {
 
 #[async_trait]
 impl AgentTypeResolver for TestAgentTypes {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
         self.types
             .get(agent_type)
             .cloned()
@@ -424,6 +424,25 @@ fn test_agent_types() -> HashMap<String, AgentType> {
                             }),
                         },
                     ],
+                }),
+            },
+            methods: vec![],
+            dependencies: vec![],
+        },
+        AgentType {
+            type_name: "agent-7".to_string(),
+            description: "".to_string(),
+            constructor: AgentConstructor {
+                name: None,
+                description: "".to_string(),
+                prompt_hint: None,
+                input_schema: DataSchema::Tuple(NamedElementSchemas {
+                    elements: vec![NamedElementSchema {
+                        name: "args".to_string(),
+                        schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
+                            element_type: list(u32()),
+                        }),
+                    }],
                 }),
             },
             methods: vec![],

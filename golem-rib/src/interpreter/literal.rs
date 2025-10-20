@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use std::cmp::Ordering;
 use std::fmt::Display;
 
@@ -388,7 +388,7 @@ impl Display for LiteralValue {
 
 mod internal {
     use crate::interpreter::literal::CoercedNumericValue;
-    use golem_wasm_rpc::{Value, ValueAndType};
+    use golem_wasm::{Value, ValueAndType};
 
     pub(crate) fn get_numeric_value(value_and_type: &ValueAndType) -> Option<CoercedNumericValue> {
         match &value_and_type.value {

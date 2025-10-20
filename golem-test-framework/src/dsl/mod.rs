@@ -50,6 +50,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
+use golem_common::model::plugin_registration::PluginPriority;
 
 #[derive(Clone)]
 pub struct TestDependenciesDsl<Deps> {
@@ -445,7 +446,7 @@ impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
     ) -> Self {
         self.plugins.push(PluginInstallation {
             environment_plugin_grant_id: environment_plugin_id.clone(),
-            priority,
+            priority: PluginPriority(priority),
             parameters,
         });
         self
@@ -2507,6 +2508,7 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
 //                         .map(|id| id.try_into().expect("invalid plugin installation id")),
 //                 ),
 //                 deleted_regions: DeletedRegions::new(),
+//                 current_retry_count: HashMap::new(),
 //                 component_version_for_replay: metadata.component_version,
 //             },
 //             parent: None,

@@ -31,13 +31,14 @@ wasmtime::component::bindgen!({
         "wasi:keyvalue/types/outgoing-value": super::durable_host::keyvalue::types::OutgoingValueEntry,
         "golem:api/context/span": super::durable_host::golem::invocation_context_api::SpanEntry,
         "golem:api/context/invocation-context": super::durable_host::golem::invocation_context_api::InvocationContextEntry,
-        "golem:api/host/get-workers": super::durable_host::golem::v1x::GetWorkersEntry,
+        "golem:api/host/get-agents": super::durable_host::golem::v1x::GetAgentsEntry,
+        "golem:api/host/get-promise-result": super::durable_host::golem::v1x::GetPromiseResultEntry,
         "golem:api/oplog/get-oplog": super::durable_host::golem::v1x::GetOplogEntry,
         "golem:api/oplog/search-oplog": super::durable_host::golem::v1x::SearchOplogEntry,
         "golem:durability/durability/lazy-initialized-pollable": super::durable_host::durability::LazyInitializedPollableEntry,
-        "golem:rpc": golem_wasm_rpc::golem_rpc_0_2_x,
+        "golem:rpc": golem_wasm::golem_rpc_0_2_x,
         // shared wasi dependencies of golem:rpc/wasm-rpc and golem:api/golem
-        "wasi:io/poll/pollable": golem_wasm_rpc::wasi::io::poll::Pollable,
+        "wasi:io/poll/pollable": golem_wasm::wasi::io::poll::Pollable,
         "golem:rdbms/mysql/db-connection": super::durable_host::rdbms::mysql::MysqlDbConnection,
         "golem:rdbms/mysql/db-result-stream": super::durable_host::rdbms::mysql::DbResultStreamEntry,
         "golem:rdbms/mysql/db-transaction": super::durable_host::rdbms::mysql::DbTransactionEntry,
@@ -52,9 +53,25 @@ wasmtime::component::bindgen!({
 pub type InputStream = wasmtime_wasi::DynInputStream;
 pub type OutputStream = wasmtime_wasi::DynOutputStream;
 
-pub type Pollable = golem_wasm_rpc::wasi::io::poll::Pollable;
+pub type Pollable = golem_wasm::wasi::io::poll::Pollable;
 
 // reexports so that we don't have to change version numbers everywhere
 pub use self::golem::api1_1_7 as golem_api_1_x;
 pub use self::golem::durability as golem_durability;
 pub use golem_common::model::agent::bindings::golem::agent as golem_agent;
+use golem_wasm::analysis::analysed_type::r#enum;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{IntoValue, Value};
+
+impl IntoValue for golem_api_1_x::host::ForkResult {
+    fn into_value(self) -> Value {
+        match self {
+            Self::Original => Value::Enum(0),
+            Self::Forked => Value::Enum(1),
+        }
+    }
+
+    fn get_type() -> AnalysedType {
+        r#enum(&["original", "forked"])
+    }
+}

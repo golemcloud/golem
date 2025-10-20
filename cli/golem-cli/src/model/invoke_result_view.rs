@@ -18,7 +18,7 @@ use crate::model::wave::type_wave_compatible;
 use anyhow::{anyhow, bail};
 use golem_client::model::InvokeResult;
 use golem_common::model::IdempotencyKey;
-use golem_wasm_rpc::{print_value_and_type, ValueAndType};
+use golem_wasm::{print_value_and_type, ValueAndType};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -52,7 +52,7 @@ impl InvokeResultView {
         }
     }
 
-    pub fn new_enqueue(idempotency_key: IdempotencyKey) -> Self {
+    pub fn new_trigger(idempotency_key: IdempotencyKey) -> Self {
         Self {
             idempotency_key: idempotency_key.value,
             result_json: None,

@@ -21,7 +21,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};

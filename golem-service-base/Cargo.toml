@@ -20,10 +20,9 @@ worker-executor = [ "dep:wasmtime", "dep:wasmtime-wasi" ]
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true, default-features = true}
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, features = ["host"] }
-golem-wasm-rpc-derive = { workspace = true }
+golem-common = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -56,6 +55,7 @@ poem-openapi-derive = { workspace = true }
 prometheus = { workspace = true }
 prost-types = { workspace = true }
 reqwest = { workspace = true }
+scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true, features = [
@@ -81,7 +81,7 @@ wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 
 [dev-dependencies]
-assert2 = { workspace = true }
+pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 testcontainers = { workspace = true }

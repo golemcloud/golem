@@ -29,7 +29,7 @@ use golem_common::model::{
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::testing::LocalFileSystemComponentMetadata;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -128,7 +128,11 @@ impl FileSystemComponentService {
         let agent_types = if skip_analysis {
             vec![]
         } else {
-            extract_agent_types(&target_path).await.unwrap_or_default()
+            extract_agent_types(&target_path, false)
+                .await
+                .map_err(|err| {
+                    AddComponentError::Other(format!("Failed analyzing component: {err}"))
+                })?
         };
 
         let size = tokio::fs::metadata(&target_path)
@@ -153,6 +157,8 @@ impl FileSystemComponentService {
             wasm_filename,
             env: env.clone(),
             agent_types,
+            root_package_name: raw_component_metadata.root_package_name.clone(),
+            root_package_version: raw_component_metadata.root_package_version.clone(),
         };
         write_metadata_to_file(
             metadata,
@@ -200,16 +206,7 @@ impl FileSystemComponentService {
 
         let exports = raw_component_metadata.exports.to_vec();
 
-        let linear_memories: Vec<LinearMemory> = raw_component_metadata
-            .memories
-            .iter()
-            .cloned()
-            .map(|mem| LinearMemory {
-                initial: mem.mem_type.limits.min * 65536,
-                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
-            })
-            .collect::<Vec<_>>();
-
+        let linear_memories: Vec<LinearMemory> = raw_component_metadata.memories.clone();
         Ok((raw_component_metadata, linear_memories, exports))
     }
 

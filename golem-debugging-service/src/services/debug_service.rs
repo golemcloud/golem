@@ -220,31 +220,22 @@ impl DebugServiceDefault {
             &shard_assignment.shard_ids,
         );
 
-        if let Some(existing_metadata) = existing_metadata {
-            let worker_args = existing_metadata.args;
-            let worker_env = existing_metadata.env;
-            let worker_wasi_config_vars = existing_metadata.wasi_config_vars;
-            let component_version = existing_metadata.last_known_status.component_version;
-
-            let parent = existing_metadata.parent;
-
+        if existing_metadata.is_some() {
             let worker = Worker::get_or_create_suspended(
                 &self.all,
                 account_id,
                 &owned_worker_id,
-                Some(worker_args),
-                Some(worker_env),
-                Some(worker_wasi_config_vars),
-                Some(component_version),
-                parent,
+                None,
+                None,
+                None,
+                None,
+                None,
                 &InvocationContextStack::fresh(),
             )
             .await
             .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
 
-            let metadata = worker
-                .get_metadata()
-                .map_err(|e| DebugServiceError::internal(e.to_string(), Some(worker_id.clone())))?;
+            let metadata = worker.get_latest_worker_metadata().await;
 
             let receiver = worker.event_service().receiver();
 
@@ -704,6 +695,7 @@ mod tests {
     use golem_common::model::oplog::{OplogEntry, OplogPayload};
     use golem_common::model::Timestamp;
     use golem_worker_executor::services::oplog::CommitLevel;
+    use std::collections::BTreeMap;
     use std::fmt::{Debug, Formatter};
     use std::time::Duration;
     use test_r::test;
@@ -758,7 +750,7 @@ mod tests {
 
     #[async_trait]
     impl Oplog for TestOplog {
-        async fn add(&self, _entry: OplogEntry) {
+        async fn add(&self, _entry: OplogEntry) -> OplogIndex {
             unimplemented!()
         }
 
@@ -766,11 +758,15 @@ mod tests {
             unimplemented!()
         }
 
-        async fn commit(&self, _level: CommitLevel) {
+        async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
             unimplemented!()
         }
 
         async fn current_oplog_index(&self) -> OplogIndex {
+            unimplemented!()
+        }
+
+        async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
             unimplemented!()
         }
 

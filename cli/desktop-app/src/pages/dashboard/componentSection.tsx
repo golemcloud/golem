@@ -7,11 +7,12 @@ import {
   CardTitle,
 } from "@/components/ui/card.tsx";
 import { API } from "@/service";
-import { ComponentList } from "@/types/component.ts";
+import { ComponentList, UnbuiltComponent } from "@/types/component.ts";
 import { ArrowRight, LayoutGrid, PlusCircle } from "lucide-react";
 import { useEffect, useState, useImperativeHandle, forwardRef } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { ComponentCard } from "../components";
+import { UnbuiltComponentCard } from "../components/unbuilt-component-card";
 
 export interface ComponentsSectionRef {
   refreshComponents: () => Promise<void>;
@@ -23,11 +24,20 @@ export const ComponentsSection = forwardRef<ComponentsSectionRef>((_, ref) => {
   const [components, setComponents] = useState<{
     [key: string]: ComponentList;
   }>({});
+  const [unbuiltComponents, setUnbuiltComponents] = useState<
+    UnbuiltComponent[]
+  >([]);
 
   const fetchComponents = async () => {
     if (appId) {
+      // Fetch built components
       let response = await API.componentService.getComponentByIdAsKey(appId);
       setComponents(response);
+
+      // Fetch all unbuilt components from folders
+      let actuallyUnbuilt =
+        await API.componentService.getUnbuiltComponents(appId);
+      setUnbuiltComponents(actuallyUnbuilt);
     }
   };
 
@@ -56,8 +66,20 @@ export const ComponentsSection = forwardRef<ComponentsSectionRef>((_, ref) => {
           </div>
         </CardHeader>
         <CardContent>
-          {Object.keys(components).length > 0 ? (
+          {Object.keys(components).length > 0 ||
+          unbuiltComponents.length > 0 ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6 overflow-scroll max-h-[70vh] px-4">
+              {/* Unbuilt components first */}
+              {unbuiltComponents.map(unbuilt => (
+                <UnbuiltComponentCard
+                  key={unbuilt.name}
+                  name={unbuilt.name}
+                  appId={appId!}
+                  onBuildComplete={fetchComponents}
+                />
+              ))}
+
+              {/* Built components */}
               {Object.values(components).map((data: ComponentList) => (
                 <ComponentCard
                   key={data.componentId}

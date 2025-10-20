@@ -45,7 +45,7 @@ pub trait RibDependencyManager {
     ) -> anyhow::Result<ComponentDependency>;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ReplComponentDependencies {
     pub component_dependencies: Vec<ComponentDependency>,
     pub custom_instance_spec: Vec<CustomInstanceSpec>,

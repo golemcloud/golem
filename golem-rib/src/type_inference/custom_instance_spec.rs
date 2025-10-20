@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::{InferredType, InterfaceName};
+use crate::InterfaceName;
+use golem_wasm::analysis::AnalysedType;
 
 #[derive(Clone, Debug)]
 pub struct CustomInstanceSpec {
     pub instance_name: String,
-    pub parameter_types: Vec<InferredType>,
+    pub parameter_types: Vec<AnalysedType>,
     pub interface_name: Option<InterfaceName>,
 }
 
@@ -32,7 +33,7 @@ impl CustomInstanceSpec {
     //                    and has to be part of the ComponentDependencies
     pub fn new(
         instance_name: String,
-        parameter_types: Vec<InferredType>,
+        parameter_types: Vec<AnalysedType>,
         interface_name: Option<InterfaceName>,
     ) -> Self {
         CustomInstanceSpec {

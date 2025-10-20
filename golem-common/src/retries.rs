@@ -26,16 +26,16 @@ use tracing::{error, info, warn, Level};
 /// Returns the delay to be waited before the next retry attempt.
 /// To be called after a failed attempt, with the number of attempts so far.
 /// Returns None if the maximum number of attempts has been reached.
-pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
+pub fn get_delay(config: &RetryConfig, attempts: u32) -> Option<Duration> {
     // Exponential backoff algorithm inspired by fred::pool::ReconnectPolicy::Exponential
     // Unlike fred, max jitter is not a static value, rather proportional to the current calculated delay
-    if attempts >= (config.max_attempts as u64) {
+    if attempts >= config.max_attempts {
         return None;
     }
 
     let delay_with_opt_jitter = {
         let base_delay = (config.multiplier as u64)
-            .saturating_pow(attempts.saturating_sub(1).try_into().unwrap_or(0))
+            .saturating_pow(attempts.saturating_sub(1))
             .saturating_mul(config.min_delay.as_millis() as u64);
 
         match config.max_jitter_factor {
@@ -61,7 +61,7 @@ pub fn get_delay(config: &RetryConfig, attempts: u64) -> Option<Duration> {
 /// Before attempting to perform the retriable action, call `start_attempt`. If it fails,
 /// call `failed_attempt` and if that returns true, start a new attempt immediately.
 pub struct RetryState<'a> {
-    attempts: u64,
+    attempts: u32,
     retry_config: &'a RetryConfig,
 }
 
@@ -309,7 +309,7 @@ mod tests {
         }
     }
 
-    fn capture_delays(config: &RetryConfig, attempts: &mut u64, delays: &mut Vec<Duration>) {
+    fn capture_delays(config: &RetryConfig, attempts: &mut u32, delays: &mut Vec<Duration>) {
         loop {
             *attempts += 1;
             let delay = super::get_delay(config, *attempts);

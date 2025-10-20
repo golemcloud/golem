@@ -17,7 +17,7 @@ use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicOplogEntry, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
-use golem_wasm_rpc::{print_value_and_type, ValueAndType};
+use golem_wasm::{print_value_and_type, ValueAndType};
 use std::fmt::Write;
 
 // backported from golem-cli to help debugging worker executor issues
@@ -106,6 +106,7 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "ERROR");
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(result, "{pad}error:             {}", &params.error);
+            let _ = writeln!(result, "{pad}retry from:        {}", &params.retry_from);
         }
         PublicOplogEntry::NoOp(params) => {
             let _ = writeln!(result, "NOP");
@@ -353,6 +354,31 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
                 "{pad}level:             {:?}",
                 &params.persistence_level,
             );
+        }
+        PublicOplogEntry::BeginRemoteTransaction(params) => {
+            let _ = writeln!(result, "BEGIN REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}transaction id:    {}", &params.transaction_id);
+        }
+        PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+            let _ = writeln!(result, "PRE COMMIT REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+            let _ = writeln!(result, "PRE ROLLBACK REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::CommittedRemoteTransaction(params) => {
+            let _ = writeln!(result, "COMMITED REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
+        }
+        PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+            let _ = writeln!(result, "ROLLED BACK REMOTE TRANSACTION");
+            let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
+            let _ = writeln!(result, "{pad}begin index:       {}", &params.begin_index);
         }
     }
 

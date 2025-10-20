@@ -20,11 +20,12 @@ use crate::command::environment::EnvironmentSubcommand;
 use crate::command::profile::ProfileSubcommand;
 #[cfg(feature = "server-commands")]
 use crate::command::server::ServerSubcommand;
-use crate::command::shared_args::ComponentOptionalComponentName;
-use crate::command::worker::WorkerSubcommand;
-use crate::config::{BuildProfileName, ProfileName};
+use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
+use crate::command::worker::AgentSubcommand;
+use crate::config::BuildProfileName;
 use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
+use crate::model::environment::EnvironmentReference;
 use crate::model::format::Format;
 use crate::model::worker::WorkerName;
 use crate::{command_name, version};
@@ -93,33 +94,31 @@ impl Verbosity {
 #[derive(Debug, Clone, Default, Args)]
 pub struct GolemCliGlobalFlags {
     /// Output format, defaults to text, unless specified by the selected profile
-    #[arg(long, short, global = true, display_order = 101)]
+    #[arg(long, short = 'F', global = true, display_order = 101)]
     pub format: Option<Format>,
 
-    /// Select Golem profile by name
-    #[arg(long, short, global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
-    pub profile: Option<ProfileName>,
+    /// Select Golem environment by name
+    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
+    pub environment: Option<EnvironmentReference>,
 
-    /// Select builtin "local" profile, to use services provided by the "golem server" command
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"], display_order = 103
-    )]
+    /// Select the builtin "local" server
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103)]
     pub local: bool,
 
-    /// Select builtin "cloud" profile to use Golem Cloud
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"], display_order = 104
-    )]
+    /// Select the builtin "cloud" server
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104)]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
-    #[arg(long, short, global = true, display_order = 105)]
+    #[arg(long, short = 'A', global = true, display_order = 105)]
     pub app_manifest_path: Option<PathBuf>,
 
     /// Disable automatic searching for application manifests
-    #[arg(long, short = 'A', global = true, display_order = 106)]
+    #[arg(long, short = 'X', global = true, display_order = 106)]
     pub disable_app_manifest_discovery: bool,
 
     /// Select build profile
-    #[arg(long, short, global = true, display_order = 107)]
+    #[arg(long, short = 'B', global = true, display_order = 107)]
     pub build_profile: Option<BuildProfileName>,
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
@@ -127,12 +126,16 @@ pub struct GolemCliGlobalFlags {
     pub config_dir: Option<PathBuf>,
 
     /// Automatically answer "yes" to any interactive confirm questions
-    #[arg(long, short, global = true, display_order = 109)]
+    #[arg(long, short = 'Y', global = true, display_order = 109)]
     pub yes: bool,
 
     /// Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
     #[arg(long, global = true, display_order = 110)]
     pub show_sensitive: bool,
+
+    /// Enable experimental, development-only features
+    #[arg(long, global = true, display_order = 111)]
+    pub dev_mode: bool,
 
     #[command(flatten)]
     pub verbosity: Verbosity,
@@ -156,13 +159,20 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub local_server_auto_start: bool,
+
+    #[arg(skip)]
+    pub server_no_limit_change: bool,
 }
 
 impl GolemCliGlobalFlags {
-    pub fn with_env_overrides(mut self) -> GolemCliGlobalFlags {
-        if self.profile.is_none() {
-            if let Ok(profile) = std::env::var("GOLEM_PROFILE") {
-                self.profile = Some(profile.into());
+    pub fn with_env_overrides(mut self) -> anyhow::Result<GolemCliGlobalFlags> {
+        if self.environment.is_none() {
+            if let Ok(environment) = std::env::var("GOLEM_ENVIRONMENT") {
+                self.environment = Some(
+                    EnvironmentReference::try_from(environment)
+                        .map_err(|err| anyhow!(err))
+                        .context("Failed to parse GOLEM_ENVIRONMENT environment variable")?,
+                );
             }
         }
 
@@ -207,20 +217,17 @@ impl GolemCliGlobalFlags {
         }
 
         if let Ok(batch_size) = std::env::var("GOLEM_HTTP_BATCH_SIZE") {
-            self.http_batch_size = Some(
-                batch_size
-                    .parse()
-                    .with_context(|| format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}"))
-                    .unwrap(),
-            )
+            self.http_batch_size =
+                Some(batch_size.parse().with_context(|| {
+                    format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}")
+                })?)
         }
 
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
                     .parse()
-                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")
-                    .unwrap(),
+                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")?,
             );
         }
 
@@ -231,7 +238,14 @@ impl GolemCliGlobalFlags {
                 .unwrap_or_default()
         }
 
-        self
+        if let Ok(server_no_limit_change) = std::env::var("GOLEM_SERVER_NO_LIMIT_CHANGE") {
+            self.server_no_limit_change = server_no_limit_change
+                .parse::<LenientBool>()
+                .map(|b| b.into())
+                .unwrap_or_default()
+        }
+
+        Ok(self)
     }
 
     pub fn config_dir(&self) -> PathBuf {
@@ -258,7 +272,7 @@ pub struct GolemCliFallbackCommand {
 }
 
 impl GolemCliFallbackCommand {
-    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> Self
+    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> anyhow::Result<Self>
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
@@ -277,10 +291,11 @@ impl GolemCliFallbackCommand {
         });
 
         if with_env_overrides {
-            cmd.global_flags = cmd.global_flags.with_env_overrides();
+            // TODO: atomic
+            cmd.global_flags = cmd.global_flags.with_env_overrides()?;
         }
 
-        cmd
+        Ok(cmd)
     }
 }
 
@@ -301,13 +316,31 @@ impl GolemCliCommand {
         match GolemCliCommand::try_parse_from(&args) {
             Ok(mut command) => {
                 if with_env_overrides {
-                    command.global_flags = command.global_flags.with_env_overrides()
+                    match command.global_flags.with_env_overrides() {
+                        Ok(global_flags) => {
+                            command.global_flags = global_flags;
+                        }
+                        Err(err) => {
+                            return GolemCliCommandParseResult::Error {
+                                error: clap::Error::raw(ErrorKind::InvalidValue, err),
+                                fallback_command: Default::default(),
+                            }
+                        }
+                    }
                 }
                 GolemCliCommandParseResult::FullMatch(command)
             }
             Err(error) => {
                 let fallback_command =
-                    GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides);
+                    match GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides) {
+                        Ok(fallback_command) => fallback_command,
+                        Err(err) => {
+                            return GolemCliCommandParseResult::Error {
+                                error: clap::Error::raw(ErrorKind::InvalidValue, err),
+                                fallback_command: Default::default(),
+                            }
+                        }
+                    };
 
                 let partial_match = match error.kind() {
                     ErrorKind::DisplayHelp => {
@@ -319,7 +352,7 @@ impl GolemCliCommand {
                         match positional_args.as_slice() {
                             ["app"] => Some(GolemCliCommandPartialMatch::AppHelp),
                             ["component"] => Some(GolemCliCommandPartialMatch::ComponentHelp),
-                            ["worker"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
+                            ["agent"] => Some(GolemCliCommandPartialMatch::WorkerHelp),
                             _ => None,
                         }
                     }
@@ -371,14 +404,14 @@ impl GolemCliCommand {
     fn invalid_arg_matchers() -> Vec<InvalidArgMatcher> {
         vec![
             InvalidArgMatcher {
-                subcommands: vec!["worker", "invoke"],
+                subcommands: vec!["agent", "invoke"],
                 found_positional_args: vec![],
-                missing_positional_arg: "worker_name",
+                missing_positional_arg: "agent_id",
                 to_partial_match: |_| GolemCliCommandPartialMatch::WorkerInvokeMissingWorkerName,
             },
             InvalidArgMatcher {
-                subcommands: vec!["worker", "invoke"],
-                found_positional_args: vec!["worker_name"],
+                subcommands: vec!["agent", "invoke"],
+                found_positional_args: vec!["agent_id"],
                 missing_positional_arg: "function_name",
                 to_partial_match: |args| {
                     GolemCliCommandPartialMatch::WorkerInvokeMissingFunctionName {
@@ -507,10 +540,10 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ComponentSubcommand,
     },
-    /// Invoke and manage workers
-    Worker {
+    /// Invoke and manage agents
+    Agent {
         #[clap(subcommand)]
-        subcommand: WorkerSubcommand,
+        subcommand: AgentSubcommand,
     },
     /// Manage API gateway objects
     Api {
@@ -546,6 +579,17 @@ pub enum GolemCliSubcommand {
         component_name: ComponentOptionalComponentName,
         /// Optional component version to use, defaults to latest component version
         version: Option<u64>,
+        #[command(flatten)]
+        deploy_args: Option<DeployArgs>,
+        /// Optional script to run, when defined the repl will execute the script and exit
+        #[clap(long, short, conflicts_with_all = ["script_file"])]
+        script: Option<String>,
+        /// Optional script_file to run, when defined the repl will execute the script and exit
+        #[clap(long, conflicts_with_all = ["script"])]
+        script_file: Option<PathBuf>,
+        /// Do not stream logs from the invoked agents. Can be also controlled with the :logs command in the REPL.
+        #[clap(long)]
+        disable_stream: bool,
     },
     /// Generate shell completion
     Completion {
@@ -556,7 +600,7 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::worker::{WorkerName, WorkerUpdateMode};
+    use crate::model::worker::{AgentUpdateMode, WorkerName};
     use clap::Args;
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentName;
@@ -628,7 +672,7 @@ pub mod shared_args {
         pub language: GuestLanguage,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Clone)]
     pub struct ForceBuildArg {
         /// When set to true will skip modification time based up-to-date checks, defaults to false
         #[clap(long, default_value = "false")]
@@ -645,67 +689,91 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct WorkerNameArg {
+    pub struct AgentIdArgs {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Worker name, accepted formats:
-        ///   - <WORKER>
-        ///   - <COMPONENT>/<WORKER>
-        ///   - <PROJECT>/<COMPONENT>/<WORKER>
-        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<WORKER>
+        /// Agent ID, accepted formats:
+        ///   - <AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
+        ///   - <ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT_TYPE>(<AGENT_PARAMETERS>)
         #[arg(verbatim_doc_comment)]
-        pub worker_name: WorkerName,
+        pub agent_id: WorkerName,
     }
 
     #[derive(Debug, Args)]
     pub struct StreamArgs {
         /// Hide log levels in stream output
-        #[clap(long, short = 'L')]
+        #[clap(long)]
         pub stream_no_log_level: bool,
         /// Hide timestamp in stream output
-        #[clap(long, short = 'T')]
+        #[clap(long)]
         pub stream_no_timestamp: bool,
+        /// Only show entries coming from the agent, no output about invocation markers and stream status
+        #[clap(long)]
+        pub logs_only: bool,
     }
 
-    #[derive(Debug, Args)]
-    pub struct UpdateOrRedeployArgs {
-        /// Update existing workers with auto or manual update mode
-        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_workers", "redeploy_all"], num_args = 0..=1
-        )]
-        pub update_workers: Option<WorkerUpdateMode>,
-        /// Delete and recreate existing workers
-        #[clap(long, conflicts_with_all = ["update_workers"])]
-        pub redeploy_workers: bool,
+    #[derive(Debug, Args, Clone)]
+    pub struct DeployArgs {
+        /// Update existing agents with auto or manual update mode
+        #[clap(long, value_name = "UPDATE_MODE", short, conflicts_with_all = ["redeploy_agents", "redeploy_all"], num_args = 0..=1)]
+        pub update_agents: Option<AgentUpdateMode>,
+        /// Delete and recreate existing agents
+        #[clap(long, conflicts_with_all = ["update_agents"])]
+        pub redeploy_agents: bool,
         /// Delete and recreate HTTP API definitions and deployment
         #[clap(long, conflicts_with_all = ["redeploy_all"])]
         pub redeploy_http_api: bool,
-        /// Delete and recreate components and HTTP APIs
-        #[clap(long, short, conflicts_with_all = ["update_workers", "redeploy_workers", "redeploy_http_api"]
-        )]
+        /// Delete and recreate agents and HTTP APIs
+        #[clap(long, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api"])]
         pub redeploy_all: bool,
+        /// Delete agents, HTTP APIs and sites, then redeploy HTTP APIs and sites
+        #[clap(long, short, conflicts_with_all = ["update_agents", "redeploy_agents", "redeploy_http_api", "redeploy_all"])]
+        pub reset: bool,
     }
 
-    impl UpdateOrRedeployArgs {
+    impl DeployArgs {
+        pub fn is_any_set(&self) -> bool {
+            self.update_agents.is_some()
+                || self.redeploy_agents
+                || self.redeploy_http_api
+                || self.redeploy_all
+                || self.reset
+        }
+
         pub fn none() -> Self {
-            UpdateOrRedeployArgs {
-                update_workers: None,
-                redeploy_workers: false,
+            DeployArgs {
+                update_agents: None,
+                redeploy_agents: false,
                 redeploy_http_api: false,
                 redeploy_all: false,
+                reset: false,
             }
         }
 
-        pub fn redeploy_workers(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
-            profile_args.redeploy_all
-                || profile_args.redeploy_workers
-                || self.redeploy_all
-                || self.redeploy_workers
+        pub fn delete_agents(&self, profile_args: &DeployArgs) -> bool {
+            (profile_args.reset || self.reset)
+                && !self.redeploy_agents
+                && !self.redeploy_all
+                && self.update_agents.is_none()
         }
 
-        pub fn redeploy_http_api(&self, profile_args: &UpdateOrRedeployArgs) -> bool {
+        pub fn redeploy_agents(&self, profile_args: &DeployArgs) -> bool {
+            (profile_args.redeploy_all
+                || profile_args.redeploy_agents
+                || self.redeploy_all
+                || self.redeploy_agents)
+                && !self.reset
+                && self.update_agents.is_none()
+        }
+
+        pub fn redeploy_http_api(&self, profile_args: &DeployArgs) -> bool {
             profile_args.redeploy_all
                 || profile_args.redeploy_http_api
+                || profile_args.reset
                 || self.redeploy_all
                 || self.redeploy_http_api
+                || self.reset
         }
     }
 
@@ -753,9 +821,9 @@ pub mod shared_args {
 
 pub mod app {
     use crate::command::shared_args::{
-        AppOptionalComponentNames, BuildArgs, ForceBuildArg, UpdateOrRedeployArgs,
+        AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
     };
-    use crate::model::worker::WorkerUpdateMode;
+    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_templates::model::GuestLanguage;
 
@@ -780,26 +848,26 @@ pub mod app {
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
-            update_or_redeploy: UpdateOrRedeployArgs,
+            deploy_args: DeployArgs,
         },
         /// Clean all components in the application or by selection
         Clean {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
-        /// Try to automatically update all existing workers of the application to the latest version
-        UpdateWorkers {
+        /// Try to automatically update all existing agents of the application to the latest version
+        UpdateAgents {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
             /// Update mode - auto or manual, defaults to "auto"
             #[arg(long, short, default_value = "auto")]
-            update_mode: WorkerUpdateMode,
+            update_mode: AgentUpdateMode,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
         },
-        /// Redeploy all workers of the application using the latest version
-        RedeployWorkers {
+        /// Redeploy all agents of the application using the latest version
+        RedeployAgents {
             #[command(flatten)]
             component_name: AppOptionalComponentNames,
         },
@@ -830,7 +898,7 @@ pub mod component {
         ComponentTemplateName,
     };
     use crate::model::app::DependencyType;
-    use crate::model::worker::WorkerUpdateMode;
+    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_common::model::component::ComponentName;
     use golem_templates::model::PackageName;
@@ -893,19 +961,19 @@ pub mod component {
             /// Optional component version to get
             version: Option<u64>,
         },
-        /// Try to automatically update all existing workers of the selected component to the latest version
-        UpdateWorkers {
+        /// Try to automatically update all existing agents of the selected component to the latest version
+        UpdateAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
-            /// Update mode - auto or manual, defaults to "auto"
-            #[arg(long, short, default_value_t = WorkerUpdateMode::Automatic)]
-            update_mode: WorkerUpdateMode,
+            /// Agent update mode - auto or manual, defaults to "auto"
+            #[arg(long, short, default_value_t = AgentUpdateMode::Automatic)]
+            update_mode: AgentUpdateMode,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
         },
-        /// Redeploy all workers of the selected component using the latest version
-        RedeployWorkers {
+        /// Redeploy all agents of the selected component using the latest version
+        RedeployAgents {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
         },
@@ -984,59 +1052,60 @@ pub mod worker {
     use crate::command::parse_cursor;
     use crate::command::parse_key_val;
     use crate::command::shared_args::{
-        ComponentOptionalComponentName, NewWorkerArgument, OptionalAgentTypeName, StreamArgs,
-        WorkerFunctionArgument, WorkerFunctionName, WorkerNameArg,
+        AgentIdArgs, ComponentOptionalComponentName, DeployArgs, NewWorkerArgument,
+        OptionalAgentTypeName, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
-    use crate::model::worker::WorkerUpdateMode;
+    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
     use golem_common::model::IdempotencyKey;
 
     #[derive(Debug, Subcommand)]
-    pub enum WorkerSubcommand {
-        /// Create new worker
+    pub enum AgentSubcommand {
+        /// Create new agent
         New {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
-            /// Worker arguments
+            agent_id: AgentIdArgs,
+            /// Command-line arguments visible for the agent
             arguments: Vec<NewWorkerArgument>,
-            /// Worker environment variables
+            /// Environment variables visible for the agent
             #[arg(short, long, value_parser = parse_key_val, value_name = "ENV=VAL")]
             env: Vec<(String, String)>,
         },
         // TODO: json args
-        /// Invoke (or enqueue invocation for) worker
+        /// Invoke (or enqueue invocation for) agent
         Invoke {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
-            /// Worker function name to invoke
+            agent_id: AgentIdArgs,
+            /// Agent function name to invoke
             function_name: WorkerFunctionName,
-            /// Worker function arguments in WAVE format
+            /// Agent function arguments in WAVE format
             arguments: Vec<WorkerFunctionArgument>,
-            /// Enqueue invocation, and do not wait for it
+            /// Only trigger invocation and do not wait for it
             #[clap(long, short)]
-            enqueue: bool,
-            /// Set idempotency key for the call, use "-" for auto generated key
+            trigger: bool,
+            /// Set idempotency key for the call, use "-" for an auto-generated key
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
-            /// Connect to the worker before invoke (the worker must already exist)
-            /// and live stream its standard output, error and log channels
+            /// Connect to the agent before the invocation and live stream its standard output, error and log channels
             stream: bool,
             #[command(flatten)]
             stream_args: StreamArgs,
+            #[command(flatten)]
+            deploy_args: Option<DeployArgs>,
         },
-        /// Get worker metadata
+        /// Get agent metadata
         Get {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Deletes a worker
+        /// Delete an agent
         Delete {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// List worker metadata
+        /// List agents
         List {
             #[command(flatten)]
             component_name: ComponentOptionalComponentName,
@@ -1044,9 +1113,9 @@ pub mod worker {
             #[command(flatten)]
             agent_type_name: OptionalAgentTypeName,
 
-            /// Filter for worker metadata in form of `property op value`.
+            /// Filter for agent metadata in form of `property op value`.
             ///
-            /// Filter examples: `name = worker-name`, `version >= 0`, `status = Running`, `env.var1 = value`.
+            /// Filter examples: `name = my-agent(1, 2, 3)`, `version >= 0`, `status = Running`, `env.var1 = value`.
             /// Can be used multiple times (AND condition is applied between them)
             #[arg(long)]
             filter: Vec<String>,
@@ -1057,54 +1126,54 @@ pub mod worker {
             /// The cursor has the format 'layer/position' where both layer and position are numbers.
             #[arg(long, short, value_parser = parse_cursor)]
             scan_cursor: Option<ScanCursor>,
-            /// The maximum the number of returned workers, returns all values is not specified.
+            /// The maximum the number of returned agents, returns all values is not specified.
             /// When multiple component is selected, then the limit it is applied separately
             #[arg(long, short)]
             max_count: Option<u64>,
-            /// When set to true it queries for most up-to-date status for each worker, default is false
+            /// When set to true it queries for most up-to-date status for each agent, default is false
             #[arg(long, default_value_t = false)]
             precise: bool,
         },
-        /// Connect to a worker and live stream its standard output, error and log channels
+        /// Connect to an agent and live stream its standard output, error and log channels
         Stream {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             #[command(flatten)]
             stream_args: StreamArgs,
         },
-        /// Updates a worker
+        /// Updates an agent
         Update {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Update mode - auto or manual (default is auto)
-            mode: Option<WorkerUpdateMode>,
-            /// The new version of the updated worker (default is the latest version)
+            mode: Option<AgentUpdateMode>,
+            /// The new version of the updated agent (default is the latest version)
             target_version: Option<u64>,
             /// Await the update to be completed
             #[arg(long, default_value_t = false)]
             r#await: bool,
         },
-        /// Interrupts a running worker
+        /// Interrupts a running agent
         Interrupt {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Resume an interrupted worker
+        /// Resume an interrupted agent
         Resume {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Simulates a crash on a worker for testing purposes.
+        /// Simulates a crash on an agent for testing purposes.
         ///
-        /// The worker starts recovering and resuming immediately.
+        /// The agent starts recovering and resuming immediately.
         SimulateCrash {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
         },
-        /// Queries and dumps a worker's full oplog
+        /// Queries and dumps an agent's full oplog
         Oplog {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Index of the first oplog entry to get. If missing, the whole oplog is returned
             #[arg(long, conflicts_with = "query")]
             from: Option<u64>,
@@ -1112,10 +1181,10 @@ pub mod worker {
             #[arg(long, conflicts_with = "from")]
             query: Option<String>,
         },
-        /// Reverts a worker by undoing its last recorded operations
+        /// Reverts an agent by undoing its last recorded operations
         Revert {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Revert by oplog index
             #[arg(long, conflicts_with = "number_of_invocations")]
             last_oplog_index: Option<u64>,
@@ -1126,9 +1195,27 @@ pub mod worker {
         /// Cancels an enqueued invocation if it has not started yet
         CancelInvocation {
             #[command(flatten)]
-            worker_name: WorkerNameArg,
+            agent_id: AgentIdArgs,
             /// Idempotency key of the invocation to be cancelled
             idempotency_key: IdempotencyKey,
+        },
+        /// List files in a worker's directory
+        Files {
+            #[command(flatten)]
+            worker_name: AgentIdArgs,
+            /// Path to the directory to list files from
+            #[arg(default_value = "/")]
+            path: String,
+        },
+        /// Get contents of a file in a worker
+        FileContents {
+            #[command(flatten)]
+            worker_name: AgentIdArgs,
+            /// Path to the file to get contents from
+            path: String,
+            /// Local path (including filename) to save the file contents. Optional.
+            #[arg(long)]
+            output: Option<String>,
         },
     }
 }
@@ -1188,11 +1275,13 @@ pub mod api {
             },
             /// Exports an api definition in OpenAPI format
             Export {
+                // TODO: atomic: should be name based, with app context
                 /// Api definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
+                // TODO: atomic: why this version is needed?
                 /// Version of the api definition
-                #[arg(short = 'V', long)]
+                #[arg(long)]
                 version: ApiDefinitionVersion,
                 /// Output format (json or yaml)
                 #[arg(long = "def-format", default_value = "yaml", name = "def-format")]
@@ -1203,14 +1292,16 @@ pub mod api {
             },
             /// Opens Swagger UI for an API definition
             Swagger {
+                // TODO: atomic: should be name based, with app context
                 /// Api definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
+                // TODO: atomic: why this version is needed?
                 /// Version of the api definition
-                #[arg(short = 'V', long)]
+                #[arg(long)]
                 version: ApiDefinitionVersion,
                 /// Port to open Swagger UI on (defaults to 9007)
-                #[arg(short = 'P', long, default_value_t = 9007)]
+                #[arg(long, short, default_value_t = 9007)]
                 port: u16,
             },
         }
@@ -1391,7 +1482,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
         New {
             /// Name of the newly created profile
             name: Option<ProfileName>,

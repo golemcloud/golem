@@ -15,22 +15,23 @@
 use crate::additional_deps::AdditionalDeps;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::base_model::OplogIndex;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
-use golem_common::model::oplog::UpdateDescription;
+use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
     AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::golem_rpc_0_2_x::types::{
+use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{CancellationTokenEntry, Value, ValueAndType};
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{CancellationTokenEntry, Value, ValueAndType};
+use golem_wasm::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -52,11 +53,12 @@ use golem_worker_executor::services::rdbms::RdbmsService;
 use golem_worker_executor::services::resource_limits::ResourceLimits;
 use golem_worker_executor::services::rpc::Rpc;
 use golem_worker_executor::services::scheduler::SchedulerService;
+use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker::WorkerService;
 use golem_worker_executor::services::worker_event::WorkerEventService;
 use golem_worker_executor::services::worker_fork::WorkerForkService;
 use golem_worker_executor::services::worker_proxy::WorkerProxy;
-use golem_worker_executor::services::{worker_enumeration, HasAll, HasConfig, HasOplogService};
+use golem_worker_executor::services::{worker_enumeration, HasAll};
 use golem_worker_executor::worker::{RetryDecision, Worker};
 use golem_worker_executor::workerctx::{
     DynamicLinking, ExternalOperations, FileSystemReading, FuelManagement, HasWasiConfigVars,
@@ -119,14 +121,6 @@ impl ExternalOperations<Self> for DebugContext {
         .await
     }
 
-    async fn compute_latest_worker_status<This: HasOplogService + HasConfig + Send + Sync>(
-        this: &This,
-        worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::compute_latest_worker_status(this, worker_id, metadata).await
-    }
-
     async fn resume_replay(
         store: &mut (impl AsContextMut<Data = Self> + Send),
         instance: &Instance,
@@ -152,34 +146,10 @@ impl ExternalOperations<Self> for DebugContext {
             .await
     }
 
-    async fn on_worker_deleted<This: HasAll<Self> + Send + Sync>(
-        this: &This,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::on_worker_deleted(this, worker_id).await
-    }
-
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
         this: &This,
     ) -> Result<(), Error> {
         DurableWorkerCtx::<Self>::on_shard_assignment_changed(this).await
-    }
-
-    async fn on_worker_update_failed_to_start<T: HasAll<Self> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::on_worker_update_failed_to_start(
-            this,
-            account_id,
-            owned_worker_id,
-            target_version,
-            details,
-        )
-        .await
     }
 }
 
@@ -225,28 +195,12 @@ impl StatusManagement for DebugContext {
         }
     }
 
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
-        self.durable_ctx.set_suspended().await
+    fn set_suspended(&self) {
+        self.durable_ctx.set_suspended()
     }
 
     fn set_running(&self) {
         self.durable_ctx.set_running()
-    }
-
-    async fn get_worker_status(&self) -> WorkerStatus {
-        self.durable_ctx.get_worker_status().await
-    }
-
-    async fn store_worker_status(&self, status: WorkerStatus) {
-        self.durable_ctx.store_worker_status(status).await
-    }
-
-    async fn update_pending_invocations(&self) {
-        self.durable_ctx.update_pending_invocations().await
-    }
-
-    async fn update_pending_updates(&self) {
-        self.durable_ctx.update_pending_updates().await
     }
 }
 
@@ -276,6 +230,10 @@ impl InvocationHooks for DebugContext {
         self.durable_ctx
             .on_invocation_success(full_function_name, function_input, consumed_fuel, output)
             .await
+    }
+
+    async fn get_current_retry_point(&self) -> OplogIndex {
+        self.durable_ctx.get_current_retry_point().await
     }
 }
 
@@ -358,7 +316,8 @@ impl ResourceLimiterAsync for DebugContext {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            Ok(self.durable_ctx.increase_memory(delta).await?)
+            self.durable_ctx.increase_memory(delta).await?;
+            Ok(true)
         } else {
             Ok(true)
         }
@@ -377,7 +336,7 @@ impl ResourceLimiterAsync for DebugContext {
 impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::WorkerId,
+        worker_id: golem_wasm::golem_rpc_0_2_x::types::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -499,8 +458,11 @@ impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(
@@ -558,6 +520,7 @@ impl WorkerCtx for DebugContext {
     async fn create(
         _account_id: AccountId,
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -583,9 +546,12 @@ impl WorkerCtx for DebugContext {
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
         let golem_ctx = DurableWorkerCtx::create(
             owned_worker_id,
+            agent_id,
             promise_service,
             worker_service,
             worker_enumeration_service,
@@ -608,6 +574,8 @@ impl WorkerCtx for DebugContext {
             worker_fork,
             project_service,
             agent_types_service,
+            shard_service,
+            pending_update,
         )
         .await?;
         Ok(Self {
@@ -639,6 +607,14 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.owned_worker_id()
     }
 
+    fn agent_id(&self) -> Option<AgentId> {
+        self.durable_ctx.agent_id()
+    }
+
+    fn created_by(&self) -> &AccountId {
+        self.durable_ctx.created_by()
+    }
+
     fn component_metadata(&self) -> &golem_service_base::model::Component {
         self.durable_ctx.component_metadata()
     }
@@ -655,15 +631,11 @@ impl WorkerCtx for DebugContext {
         self.durable_ctx.worker_proxy()
     }
 
-    fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
-        self.durable_ctx.worker_fork()
-    }
-
     fn component_service(&self) -> Arc<dyn ComponentService> {
         self.durable_ctx().component_service()
     }
 
-    fn created_by(&self) -> &AccountId {
-        self.durable_ctx.created_by()
+    fn worker_fork(&self) -> Arc<dyn WorkerForkService> {
+        self.durable_ctx.worker_fork()
     }
 }

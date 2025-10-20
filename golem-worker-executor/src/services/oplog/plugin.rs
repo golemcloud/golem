@@ -38,8 +38,9 @@ use golem_common::model::{
     IdempotencyKey, OwnedWorkerId, PluginInstallationId,
     ProjectId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
 };
+use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{IntoValue, Value};
+use golem_wasm::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::fmt::{Debug, Formatter};
@@ -371,6 +372,7 @@ impl<Ctx: WorkerCtx> HasOplogProcessorPlugin for PerExecutorOplogProcessorPlugin
     }
 }
 
+#[derive(Clone)]
 struct CreateOplogConstructor {
     owned_worker_id: OwnedWorkerId,
     initial_entry: Option<OplogEntry>,
@@ -378,29 +380,11 @@ struct CreateOplogConstructor {
     last_oplog_index: OplogIndex,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn PluginsService>,
-    execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+    plugins: Arc<dyn Plugins>,
     initial_worker_metadata: WorkerMetadata,
+    last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+    execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     project_service: Arc<dyn ProjectService>,
-}
-
-// We can have clone here independently of whether T is clone due to the Arcs, so deriving
-// does the wrong thing here
-impl Clone for CreateOplogConstructor {
-    fn clone(&self) -> Self {
-        Self {
-            owned_worker_id: self.owned_worker_id.clone(),
-            initial_entry: self.initial_entry.clone(),
-            inner: self.inner.clone(),
-            last_oplog_index: self.last_oplog_index,
-            oplog_plugins: self.oplog_plugins.clone(),
-            components: self.components.clone(),
-            plugins: self.plugins.clone(),
-            execution_status: self.execution_status.clone(),
-            initial_worker_metadata: self.initial_worker_metadata.clone(),
-            project_service: self.project_service.clone(),
-        }
-    }
 }
 
 impl CreateOplogConstructor {
@@ -411,9 +395,10 @@ impl CreateOplogConstructor {
         last_oplog_index: OplogIndex,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn PluginsService>,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        plugins: Arc<dyn Plugins>,
         initial_worker_metadata: WorkerMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
         project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
@@ -424,8 +409,9 @@ impl CreateOplogConstructor {
             oplog_plugins,
             components,
             plugins,
-            execution_status,
             initial_worker_metadata,
+            last_known_status,
+            execution_status,
             project_service,
         }
     }
@@ -440,6 +426,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     &self.owned_worker_id,
                     initial_entry,
                     self.initial_worker_metadata.clone(),
+                    self.last_known_status.clone(),
                     self.execution_status.clone(),
                 )
                 .await
@@ -449,6 +436,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     &self.owned_worker_id,
                     self.last_oplog_index,
                     self.initial_worker_metadata.clone(),
+                    self.last_known_status.clone(),
                     self.execution_status.clone(),
                 )
                 .await
@@ -461,8 +449,8 @@ impl OplogConstructor for CreateOplogConstructor {
             self.components,
             self.plugins,
             self.project_service,
-            self.execution_status,
             self.initial_worker_metadata,
+            self.last_known_status,
             self.last_oplog_index,
             close,
         ))
@@ -511,7 +499,8 @@ impl OplogService for ForwardingOplogService {
         owned_worker_id: &OwnedWorkerId,
         initial_entry: OplogEntry,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -524,8 +513,9 @@ impl OplogService for ForwardingOplogService {
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     self.plugins.clone(),
-                    execution_status,
                     initial_worker_metadata,
+                    last_known_status,
+                    execution_status,
                     self.project_service.clone(),
                 ),
             )
@@ -537,7 +527,8 @@ impl OplogService for ForwardingOplogService {
         owned_worker_id: &OwnedWorkerId,
         last_oplog_index: OplogIndex,
         initial_worker_metadata: WorkerMetadata,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
+        execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
     ) -> Arc<dyn Oplog + 'static> {
         self.oplogs
             .get_or_open(
@@ -550,8 +541,9 @@ impl OplogService for ForwardingOplogService {
                     self.oplog_plugins.clone(),
                     self.components.clone(),
                     self.plugins.clone(),
-                    execution_status,
                     initial_worker_metadata,
+                    last_known_status,
+                    execution_status,
                     self.project_service.clone(),
                 ),
             )
@@ -626,8 +618,8 @@ impl ForwardingOplog {
         components: Arc<dyn ComponentService>,
         plugins: Arc<dyn PluginsService>,
         project_service: Arc<dyn ProjectService>,
-        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         initial_worker_metadata: WorkerMetadata,
+        last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         last_oplog_idx: OplogIndex,
         close_fn: Box<dyn FnOnce() + Send + Sync>,
     ) -> Self {
@@ -636,8 +628,8 @@ impl ForwardingOplog {
             commit_count: 0,
             last_send: Instant::now(),
             oplog_plugins,
-            execution_status,
             initial_worker_metadata,
+            last_known_status,
             last_oplog_idx,
             oplog_service,
             components,
@@ -687,7 +679,7 @@ impl Drop for ForwardingOplog {
 
 #[async_trait]
 impl Oplog for ForwardingOplog {
-    async fn add(&self, entry: OplogEntry) {
+    async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let mut state = self.state.lock().await;
         state.buffer.push_back(entry.clone());
         state.last_oplog_idx = state.last_oplog_idx.next();
@@ -698,17 +690,22 @@ impl Oplog for ForwardingOplog {
         self.inner.drop_prefix(last_dropped_id).await
     }
 
-    async fn commit(&self, level: CommitLevel) {
+    async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let mut state = self.state.lock().await;
-        self.inner.commit(level).await;
+        let result = self.inner.commit(level).await;
         state.commit_count += 1;
         if state.commit_count > Self::MAX_COMMIT_COUNT {
             state.send_buffer().await;
         }
+        result
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
         self.inner.current_oplog_index().await
+    }
+
+    async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
+        self.inner.last_added_non_hint_entry().await
     }
 
     async fn wait_for_replicas(&self, replicas: u8, timeout: Duration) -> bool {
@@ -737,8 +734,8 @@ struct ForwardingOplogState {
     commit_count: usize,
     last_send: Instant,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
-    execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
     initial_worker_metadata: WorkerMetadata,
+    last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
     last_oplog_idx: OplogIndex,
     oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
@@ -749,8 +746,7 @@ struct ForwardingOplogState {
 impl ForwardingOplogState {
     pub async fn send_buffer(&mut self) {
         let metadata = {
-            let execution_status = self.execution_status.read().unwrap();
-            let status = execution_status.last_known_status().clone();
+            let status = self.last_known_status.read().await.clone();
             WorkerMetadata {
                 last_known_status: status,
                 ..self.initial_worker_metadata.clone()
@@ -792,8 +788,10 @@ impl ForwardingOplogState {
     ) -> Result<(), WorkerExecutorError> {
         let mut public_entries = Vec::new();
 
-        for entry in entries {
+        for (delta, entry) in entries.iter().enumerate() {
+            let idx = initial_oplog_index.range_end(delta as u64 + 1);
             let public_entry = PublicOplogEntry::from_oplog_entry(
+                idx,
                 entry.clone(),
                 self.oplog_service.clone(),
                 self.components.clone(),

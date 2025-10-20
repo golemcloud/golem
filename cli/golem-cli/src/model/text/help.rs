@@ -14,14 +14,17 @@
 
 use crate::log::{logln, LogColorize};
 use crate::model::app::AppComponentName;
-use crate::model::component::render_type;
+use crate::model::component::{
+    agent_interface_name, render_type, show_exported_functions, Component,
+};
 use crate::model::text::fmt::{
     format_export, log_table, FieldsBuilder, MessageWithFields, MessageWithFieldsIndentMode,
     TextView,
 };
 use cli_table::Table;
 use colored::Colorize;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_common::model::agent::AgentId;
+use golem_wasm::analysis::AnalysedType;
 use indoc::indoc;
 use textwrap::WordSplitter;
 
@@ -29,7 +32,7 @@ pub struct WorkerNameHelp;
 
 impl MessageWithFields for WorkerNameHelp {
     fn message(&self) -> String {
-        "Accepted worker name formats:"
+        "Accepted agent name formats:"
             .log_color_help_group()
             .to_string()
     }
@@ -39,52 +42,49 @@ impl MessageWithFields for WorkerNameHelp {
 
         // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
         fields.field(
-            "<WORKER>",
+            "<AGENT>",
             &indoc!(
                 "
-                    Standalone worker name, usable when only one component is selected based on the
+                    Standalone agent name, usable when only one component is selected based on the
                     current application directory.
-
-                    For ephemeral workers or for random worker name generation \"-\" can be used.
-
                     "
             ),
         );
         fields.field(
-                "<COMPONENT>/<WORKER>",
-                &indoc!(
+            "<COMPONENT>/<AGENT>",
+            &indoc!(
                     "
-                    Component specific worker name.
+                        Component specific agent name.
 
-                    When used in an application (sub)directory then the given component name is fuzzy
-                    matched against the application component names. If no matches are found, then
-                    a the component name is used as is.
+                        When used in an application (sub)directory then the given component name is fuzzy
+                        matched against the application component names. If no matches are found, then
+                        a the component name is used as is.
 
-                    When used in a directory without application manifest(s), then the full component
-                    name is expected.
+                        When used in a directory without application manifest(s), then the full component
+                        name is expected.
 
                     "
                 ),
-            );
+        );
         fields.field(
-            "<PROJECT>/<COMPONENT>/<WORKER>",
+            "<PROJECT>/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Project and component specific worker name.
+                    Project and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<WORKER>, except it can refer to components in a
+                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
                     specific project.
 
                     "
             ),
         );
         fields.field(
-            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<WORKER>",
+            "<ACCOUNT>/<PROJECT>/<COMPONENT>/<AGENT>",
             &indoc!(
                 "
-                    Account, project and component specific worker name.
+                    Account, project and component specific agent name.
 
-                    Behaves the same as <COMPONENT>/<WORKER>, except it can refer to components in a
+                    Behaves the same as <COMPONENT>/<AGENT>, except it can refer to components in a
                     specific project owned by another account
                     "
             ),
@@ -116,8 +116,8 @@ impl MessageWithFields for ComponentNameHelp {
 
         // NOTE: field descriptions - except for the last - are intentionally ending with and empty line
         fields.field(
-                "<COMPONENT>",
-                &indoc!(
+            "<COMPONENT>",
+            &indoc!(
                     "
                     Standalone component name.
 
@@ -130,7 +130,7 @@ impl MessageWithFields for ComponentNameHelp {
 
                     "
                 ),
-            );
+        );
         fields.field(
             "<PROJECT>/<COMPONENT>",
             &indoc!(
@@ -195,15 +195,97 @@ impl TextView for AvailableComponentNamesHelp {
 
 pub struct AvailableFunctionNamesHelp {
     pub component_name: String,
+    pub agent_name: Option<String>,
     pub function_names: Vec<String>,
+}
+
+impl AvailableFunctionNamesHelp {
+    pub fn new(component: &Component, agent_id: Option<&AgentId>) -> Self {
+        AvailableFunctionNamesHelp {
+            component_name: component.component_name.0.clone(),
+            agent_name: agent_id
+                .as_ref()
+                .map(|a| a.wrapper_agent_type().to_string()),
+            function_names: show_exported_functions(
+                component.metadata.exports(),
+                false,
+                agent_id
+                    .and_then(|agent_id| {
+                        agent_interface_name(component, agent_id.wrapper_agent_type())
+                    })
+                    .as_deref(),
+            ),
+        }
+    }
 }
 
 impl TextView for AvailableFunctionNamesHelp {
     fn log(&self) {
         if self.function_names.is_empty() {
+            match &self.agent_name {
+                Some(agent_name) => {
+                    logln(
+                        format!(
+                            "No methods are available for agent {}.",
+                            agent_name.underline()
+                        )
+                        .log_color_warn()
+                        .to_string(),
+                    );
+                }
+                None => {
+                    logln(
+                        format!(
+                            "No functions are available for component {}.",
+                            self.component_name.underline()
+                        )
+                        .log_color_warn()
+                        .to_string(),
+                    );
+                }
+            }
+            return;
+        }
+
+        match &self.agent_name {
+            Some(agent_name) => {
+                logln(
+                    format!("Available method names for agent {}:", agent_name)
+                        .bold()
+                        .underline()
+                        .to_string(),
+                );
+            }
+            None => {
+                logln(
+                    format!(
+                        "Available function names for component {}:",
+                        self.component_name
+                    )
+                    .bold()
+                    .underline()
+                    .to_string(),
+                );
+            }
+        }
+        for function_name in &self.function_names {
+            logln(format!("  - {}", format_export(function_name)));
+        }
+        logln("");
+    }
+}
+
+pub struct AvailableAgentConstructorsHelp {
+    pub component_name: String,
+    pub constructors: Vec<String>,
+}
+
+impl TextView for AvailableAgentConstructorsHelp {
+    fn log(&self) {
+        if self.constructors.is_empty() {
             logln(
                 format!(
-                    "No functions are available for component {}.",
+                    "No agent constructors are available for component {}.",
                     self.component_name.log_color_highlight()
                 )
                 .log_color_warn()
@@ -214,15 +296,15 @@ impl TextView for AvailableFunctionNamesHelp {
 
         logln(
             format!(
-                "Available function names for component {}:",
+                "Available agent constructors for component {}:",
                 self.component_name
             )
             .bold()
             .underline()
             .to_string(),
         );
-        for function_name in &self.function_names {
-            logln(format!("  - {}", format_export(function_name)));
+        for constructor in &self.constructors {
+            logln(format!("  - {}", format_export(constructor)));
         }
         logln("");
     }

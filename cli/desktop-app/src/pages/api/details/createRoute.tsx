@@ -39,7 +39,6 @@ import {
   type Component,
   type ComponentList,
 } from "@/types/component";
-import type { Worker } from "@/types/worker";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import * as z from "zod";
@@ -141,7 +140,7 @@ const CreateRoute = () => {
   const [variableSuggestions, setVariableSuggestions] = useState(
     {} as Record<string, unknown>,
   );
-  const [workerSuggestions, setWorkerSuggestions] = useState([] as string[]);
+  const [agentSuggestions, setAgentSuggestions] = useState([] as string[]);
   const [contextVariables, setContextVariables] = useState(
     {} as Record<string, unknown>,
   );
@@ -190,9 +189,9 @@ const CreateRoute = () => {
         body: { name: "body", type: "any" },
         headers: { name: "headers", type: "Record" },
       },
-      // Add worker names and function exports as top-level suggestions
-      ...workerSuggestions.reduce(
-        (acc, worker) => ({ ...acc, [worker]: worker }),
+      // Add agent names and function exports as top-level suggestions
+      ...agentSuggestions.reduce(
+        (acc, agent) => ({ ...acc, [agent]: agent }),
         {},
       ),
       ...responseSuggestions.reduce((acc, fn) => ({ ...acc, [fn]: fn }), {}),
@@ -200,10 +199,10 @@ const CreateRoute = () => {
     setContextVariables(newContextVariables);
   };
 
-  // Update context variables whenever worker or response suggestions change
+  // Update context variables whenever agent or response suggestions change
   useEffect(() => {
     updateContextVariables();
-  }, [workerSuggestions, responseSuggestions, variableSuggestions]);
+  }, [agentSuggestions, responseSuggestions, variableSuggestions]);
 
   const form = useForm<RouteFormValues>({
     resolver: zodResolver(RouteRequestData),
@@ -244,10 +243,6 @@ const CreateRoute = () => {
               extractDynamicParams(path);
             }
             form.setValue("method", route.method);
-            // form.setValue(
-            //   "binding.bindingType",
-            //   route.binding.bindingType || "default",
-            // );
             const componentName = route.binding.componentName;
             const versionId = route.binding.componentVersion;
             if (componentName && versionId) {
@@ -257,7 +252,7 @@ const CreateRoute = () => {
               );
               if (componentId) {
                 Promise.all([
-                  loadWorkerSuggestions(appId!, componentId),
+                  loadAgentSuggestions(appId!, componentId),
                   loadResponseSuggestions(
                     componentId,
                     String(versionId),
@@ -329,7 +324,7 @@ const CreateRoute = () => {
         .putApi(appId!, activeApiDetails.version, selectedApi)
         .then(() => {
           navigate(
-            `/app/${appId}/apis/${apiName}/version/${version}/routes?path=${values.path == "/" ? "" : values.path}&method=${values.method}&reload=${!reload}`,
+            `/app/${appId}/apis/${apiName}/version/${version}/routes?path=${values.path == "/" ? "" : encodeURIComponent(values.path)}&method=${values.method}&reload=${!reload}`,
           );
         });
     } catch (error) {
@@ -360,18 +355,16 @@ const CreateRoute = () => {
     );
   };
 
-  const loadWorkerSuggestions = async (appId: string, componentId: string) => {
+  const loadAgentSuggestions = async (appId: string, componentId: string) => {
     try {
-      const workersData = (
-        await API.workerService.findWorker(appId, componentId)
-      ).workers as Worker[];
-      const workerNames =
-        (workersData || []).map(w => `"${w.workerName}"`) || [];
-      setWorkerSuggestions(workerNames);
-      return workerNames;
+      const agentsData = (await API.agentService.findAgent(appId, componentId))
+        .workers;
+      const agentNames = (agentsData || []).map(w => `"${w.workerName}"`) || [];
+      setAgentSuggestions(agentNames);
+      return agentNames;
     } catch (error) {
-      console.error("Failed to load worker suggestions:", error);
-      setWorkerSuggestions([]);
+      console.error("Failed to load agent suggestions:", error);
+      setAgentSuggestions([]);
       return [];
     }
   };
@@ -413,8 +406,8 @@ const CreateRoute = () => {
       componentList,
     );
     if (componentId) {
-      const [_workers, _exports] = await Promise.all([
-        loadWorkerSuggestions(appId!, componentId),
+      const [_agents, _exports] = await Promise.all([
+        loadAgentSuggestions(appId!, componentId),
         loadResponseSuggestions(componentId, version, componentList),
       ]);
 
@@ -495,9 +488,9 @@ const CreateRoute = () => {
                       )}
                     />
                   </div>
-                  <h3 className="text-lg font-medium pt-10">Worker Binding</h3>
+                  <h3 className="text-lg font-medium pt-10">Agent Binding</h3>
                   <FormDescription>
-                    Bind this endpoint to a specific worker function.
+                    Bind this endpoint to a specific agent function.
                   </FormDescription>
                   <div className="grid grid-cols-2 gap-4 mt-4">
                     <FormField
@@ -514,8 +507,8 @@ const CreateRoute = () => {
                                 componentList,
                               );
                               if (componentId) {
-                                const [_workers, _exports] = await Promise.all([
-                                  loadWorkerSuggestions(appId!, componentId),
+                                const [_agents, _exports] = await Promise.all([
+                                  loadAgentSuggestions(appId!, componentId),
                                   loadResponseSuggestions(
                                     componentId,
                                     "0",
@@ -668,12 +661,12 @@ const CreateRoute = () => {
                       name="binding.invocationContext"
                       render={({ field }) => (
                         <FormItem className="mt-4">
-                          <FormLabel required>Worker Name</FormLabel>
+                          <FormLabel required>Agent Name</FormLabel>
                           <FormControl>
                             <RibEditor
                               {...field}
                               suggestVariable={contextVariables}
-                              scriptKeys={workerSuggestions}
+                              scriptKeys={agentSuggestions}
                             />
                           </FormControl>
                           <div>
@@ -713,7 +706,7 @@ const CreateRoute = () => {
                                 </PopoverContent>
                               </Popover>
                               <span>
-                                Interpolate variables into your Worker ID
+                                Interpolate variables into your Agent ID
                               </span>
                             </div>
                           </div>

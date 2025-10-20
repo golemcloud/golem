@@ -245,7 +245,7 @@ async fn dynamic_function_call<
                 .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
-            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
@@ -328,7 +328,7 @@ async fn dynamic_function_call<
                 .get_metadata(&remote_worker_id.worker_id.component_id, None)
                 .await?
                 .metadata;
-            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name).await
+            let constructor = remote_component_metadata.find_parsed_function(target_constructor_name)
                 .map_err(|e| anyhow!("Failed to get target constructor metadata: {e}"))?
                 .ok_or_else(|| anyhow!("Target constructor {target_constructor_name} not found in component metadata"))?;
 
@@ -368,6 +368,7 @@ async fn dynamic_function_call<
 
             let span =
                 create_rpc_connection_span(store.data_mut(), &remote_worker_id.worker_id).await?;
+
             let demand = create_demand(&mut store, &remote_worker_id, span.span_id()).await?;
 
             let handle = {
@@ -417,7 +418,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -468,7 +468,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -516,7 +515,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -575,7 +573,6 @@ async fn dynamic_function_call<
             };
             let target_function_metadata = target_component_metadata
                 .find_parsed_function(target_function_name)
-                .await
                 .map_err(|e| anyhow!("Failed to get target function metadata: {e}"))?
                 .ok_or_else(|| {
                     anyhow!(
@@ -850,7 +847,7 @@ async fn remote_invoke<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
 }
 
 async fn schedule_remote_invocation<Ctx: WorkerCtx + HostWasmRpc + HostFutureInvokeResult>(
-    scheduled_for: golem_wasm_rpc::wasi::clocks::wall_clock::Datetime,
+    scheduled_for: golem_wasm::wasi::clocks::wall_clock::Datetime,
     target_function_name: &ParsedFunctionName,
     params: &[Val],
     param_types: &[Type],
@@ -900,7 +897,7 @@ async fn value_result_to_wasmtime_vals<Ctx: ResourceStore + Send>(
     Ok(())
 }
 
-fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wall_clock::Datetime> {
+fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm::wasi::clocks::wall_clock::Datetime> {
     let fields = match val {
         Val::Record(inner) => inner.into_iter().collect::<HashMap<String, _>>(),
         _ => Err(anyhow!("did not find a record value"))?,
@@ -922,7 +919,7 @@ fn val_to_datetime(val: Val) -> anyhow::Result<golem_wasm_rpc::wasi::clocks::wal
         _ => Err(anyhow!("nanoseconds field has invalid type"))?,
     };
 
-    Ok(golem_wasm_rpc::wasi::clocks::wall_clock::Datetime {
+    Ok(golem_wasm::wasi::clocks::wall_clock::Datetime {
         seconds,
         nanoseconds,
     })

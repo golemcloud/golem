@@ -257,7 +257,7 @@ mod internal {
         ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, InferredType,
         InvalidPatternMatchError, Path, TypeInternal, TypeMismatchError, VariableId,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use std::collections::VecDeque;
     use std::ops::Deref;
 
@@ -548,6 +548,7 @@ mod internal {
                 let identified_variant = variant
                     .iter()
                     .find(|(variant_name, _)| variant_name == name);
+
                 if let Some((_name, Some(inner_type))) = identified_variant {
                     for expr in expressions {
                         expr.add_infer_type_mut(inner_type.clone());

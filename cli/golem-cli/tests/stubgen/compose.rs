@@ -19,14 +19,12 @@
 use crate::stubgen::{cargo_component_build, golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;
-use golem_cli::wasm_rpc_stubgen::commands::composition::compose;
+use golem_cli::wasm_rpc_stubgen::commands::composition::{compose, Plug};
 use golem_cli::wasm_rpc_stubgen::commands::dependencies::add_stub_dependency;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
 use golem_cli::wasm_rpc_stubgen::wit_generate::UpdateCargoToml;
-use golem_wasm_ast::component::Component;
-use golem_wasm_ast::DefaultAst;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use tempfile::TempDir;
 use test_r::test;
 
@@ -51,13 +49,17 @@ async fn compose_with_single_stub() {
         .join("debug")
         .join("caller_no_dep.wasm");
 
-    assert_is_component(&stub_wasm);
-    assert_is_component(&component_wasm);
-
     let dest_wasm = caller_dir.path().join("target/result.wasm");
-    compose(&component_wasm, &[stub_wasm], &dest_wasm)
-        .await
-        .unwrap();
+    compose(
+        &component_wasm,
+        vec![Plug {
+            name: "stub wasm".to_string(),
+            wasm: stub_wasm,
+        }],
+        &dest_wasm,
+    )
+    .await
+    .unwrap();
 }
 
 async fn init_stub(name: &str) -> (TempDir, TempDir, PathBuf) {
@@ -102,9 +104,4 @@ fn init_caller(name: &str) -> TempDir {
     .unwrap();
 
     temp_dir
-}
-
-fn assert_is_component(wasm_path: &Path) {
-    let _component: Component<DefaultAst> =
-        Component::from_bytes(&std::fs::read(wasm_path).unwrap()).unwrap();
 }

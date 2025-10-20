@@ -1,0 +1,2 @@
+ALTER TABLE plans
+ADD COLUMN max_memory_per_worker INTEGER NOT NULL DEFAULT (1024 * 1024 * 1024);

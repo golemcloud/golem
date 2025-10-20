@@ -213,7 +213,7 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
         golem_api_1_x::oplog::add_to_linker_get_host(&mut linker, get_test_durable_ctx)?;
         golem_api_1_x::context::add_to_linker_get_host(&mut linker, get_test_durable_ctx)?;
         golem_durability::durability::add_to_linker_get_host(&mut linker, get_test_durable_ctx)?;
-        golem_wasm_rpc::golem_rpc_0_2_x::types::add_to_linker_get_host(
+        golem_wasm::golem_rpc_0_2_x::types::add_to_linker_get_host(
             &mut linker,
             get_test_durable_ctx,
         )?;

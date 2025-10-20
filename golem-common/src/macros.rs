@@ -16,8 +16,8 @@
 macro_rules! newtype_uuid {
     ($name:ident $(, $proto_type:path)?) => {
         #[derive(Clone, Debug, PartialOrd, Ord, derive_more::FromStr, Eq, Hash, PartialEq)]
-        #[cfg_attr(feature = "model", derive(serde::Serialize, serde::Deserialize))]
-        #[cfg_attr(feature = "model", serde(transparent))]
+        #[derive(serde::Serialize, serde::Deserialize)]
+        #[serde(transparent)]
         pub struct $name(pub uuid::Uuid);
 
         impl $name {
@@ -83,7 +83,6 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::Type for $name {
             const IS_REQUIRED: bool = true;
             type RawValueType = Self;
@@ -110,14 +109,12 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromParameter for $name {
             fn parse_from_parameter(value: &str) -> poem_openapi::types::ParseResult<Self> {
                 Ok(Self(value.try_into()?))
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ParseFromJSON for $name {
             fn parse_from_json(
                 value: Option<serde_json::Value>,
@@ -132,8 +129,7 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
-        impl ::poem_openapi::types::ParseFromMultipartField for $name {
+         impl ::poem_openapi::types::ParseFromMultipartField for $name {
             async fn parse_from_multipart(
                 field: Option<::poem::web::Field>,
             ) -> ::poem_openapi::types::ParseResult<Self> {
@@ -141,14 +137,12 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "poem")]
         impl poem_openapi::types::ToJSON for $name {
             fn to_json(&self) -> Option<serde_json::Value> {
                 Some(serde_json::Value::String(self.0.to_string()))
             }
         }
 
-        #[cfg(feature = "poem")]
         impl ::poem_openapi::types::ToHeader for $name {
             fn to_header(&self) -> Option<::http::HeaderValue> {
                 <::uuid::Uuid as ::poem_openapi::types::ToHeader>::to_header(&self.0)
@@ -161,28 +155,27 @@ macro_rules! newtype_uuid {
             }
         }
 
-        #[cfg(feature = "model")]
-        impl golem_wasm_rpc::IntoValue for $name {
-            fn into_value(self) -> golem_wasm_rpc::Value {
+        impl golem_wasm::IntoValue for $name {
+            fn into_value(self) -> golem_wasm::Value {
                 let (hi, lo) = self.0.as_u64_pair();
-                golem_wasm_rpc::Value::Record(vec![golem_wasm_rpc::Value::Record(vec![
-                    golem_wasm_rpc::Value::U64(hi),
-                    golem_wasm_rpc::Value::U64(lo),
+                golem_wasm::Value::Record(vec![golem_wasm::Value::Record(vec![
+                    golem_wasm::Value::U64(hi),
+                    golem_wasm::Value::U64(lo),
                 ])])
             }
 
-            fn get_type() -> golem_wasm_ast::analysis::AnalysedType {
-                golem_wasm_ast::analysis::analysed_type::record(vec![
-                    golem_wasm_ast::analysis::analysed_type::field(
+            fn get_type() -> golem_wasm::analysis::AnalysedType {
+                golem_wasm::analysis::analysed_type::record(vec![
+                    golem_wasm::analysis::analysed_type::field(
                         "uuid",
-                        golem_wasm_ast::analysis::analysed_type::record(vec![
-                            golem_wasm_ast::analysis::analysed_type::field(
+                        golem_wasm::analysis::analysed_type::record(vec![
+                            golem_wasm::analysis::analysed_type::field(
                                 "high-bits",
-                                golem_wasm_ast::analysis::analysed_type::u64(),
+                                golem_wasm::analysis::analysed_type::u64(),
                             ),
-                            golem_wasm_ast::analysis::analysed_type::field(
+                            golem_wasm::analysis::analysed_type::field(
                                 "low-bits",
-                                golem_wasm_ast::analysis::analysed_type::u64(),
+                                golem_wasm::analysis::analysed_type::u64(),
                             ),
                         ]),
                     ),
@@ -191,7 +184,6 @@ macro_rules! newtype_uuid {
         }
 
         $(
-            #[cfg(feature = "protobuf")]
             impl TryFrom<$proto_type> for $name {
                 type Error = String;
 
@@ -205,7 +197,6 @@ macro_rules! newtype_uuid {
                 }
             }
 
-            #[cfg(feature = "protobuf")]
             impl From<$name> for $proto_type {
                 fn from(value: $name) -> Self {
                     $proto_type {
@@ -233,11 +224,11 @@ macro_rules! declare_revision {
             ::serde::Serialize,
             ::bincode::Encode,
             ::bincode::Decode,
-            ::golem_wasm_rpc_derive::IntoValue,
+            ::golem_wasm_derive::IntoValue,
             ::derive_more::Display,
             ::derive_more::FromStr,
+            poem_openapi::NewType,
         )]
-        #[cfg_attr(feature = "poem", derive(poem_openapi::NewType))]
         #[repr(transparent)]
         pub struct $name(pub u64);
 
@@ -270,8 +261,8 @@ macro_rules! declare_revision {
 macro_rules! declare_structs {
     ($($i:item)*) => { $(
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-        #[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-        #[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+        #[derive(poem_openapi::Object)]
+        #[oai(rename_all = "camelCase")]
         #[serde(rename_all = "camelCase")]
         $i
     )* }
@@ -281,8 +272,8 @@ macro_rules! declare_structs {
 macro_rules! declare_unions {
     ($($i:item)*) => { $(
         #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-        #[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-        #[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+        #[derive(poem_openapi::Union)]
+        #[oai(discriminator_name = "type", one_of = true)]
         #[serde(tag = "type")]
         $i
     )* }
@@ -292,8 +283,8 @@ macro_rules! declare_unions {
 macro_rules! declare_enums {
     ($($i:item)*) => { $(
         #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-        #[cfg_attr(feature = "poem", derive(poem_openapi::Enum))]
-        #[cfg_attr(feature = "poem", oai(rename_all = "kebab-case"))]
+        #[derive(poem_openapi::Enum)]
+        #[oai(rename_all = "kebab-case")]
         #[serde(rename_all = "kebab-case")]
         $i
     )* }
@@ -303,7 +294,7 @@ macro_rules! declare_enums {
 macro_rules! declare_transparent_newtypes {
     ($($i:item)*) => { $(
     #[derive(Debug, Clone, PartialEq, ::serde::Deserialize, ::serde::Serialize)]
-    #[cfg_attr(feature = "poem", derive(::poem_openapi::NewType))]
+    #[derive(::poem_openapi::NewType)]
     #[repr(transparent)]
         $i
     )* }

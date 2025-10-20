@@ -13,7 +13,8 @@
 // limitations under the License.
 
 use crate::model::format::Format;
-use crate::model::worker::WorkerConnectOptions;
+use crate::model::text::fmt::{to_colored_json, to_colored_yaml};
+use crate::model::worker::AgentLogStreamOptions;
 use colored::Colorize;
 use golem_common::model::{IdempotencyKey, LogLevel, Timestamp};
 use std::cmp::Ordering;
@@ -28,7 +29,7 @@ use tokio_tungstenite::tungstenite;
 #[derive(Clone)]
 pub struct WorkerStreamOutput {
     state: Arc<Mutex<WorkerStreamOutputState>>,
-    options: WorkerConnectOptions,
+    options: AgentLogStreamOptions,
     format: Format,
 }
 
@@ -42,7 +43,7 @@ struct WorkerStreamOutputState {
 }
 
 impl WorkerStreamOutput {
-    pub fn new(options: WorkerConnectOptions, format: Format) -> Self {
+    pub fn new(options: AgentLogStreamOptions, format: Format) -> Self {
         WorkerStreamOutput {
             state: Arc::new(Mutex::new(WorkerStreamOutputState {
                 last_stdout_timestamp: Timestamp::now_utc(),
@@ -141,7 +142,9 @@ impl WorkerStreamOutput {
 
             match self.format {
                 Format::Json => self.json(level_str, &context, &message),
+                Format::PrettyJson => self.pretty_json(level_str, &context, &message),
                 Format::Yaml => self.yaml(level_str, &context, &message),
+                Format::PrettyYaml => self.pretty_yaml(level_str, &context, &message),
                 Format::Text => {
                     let prefix = self.prefix(timestamp, level_str);
                     self.colored(level, &format!("{prefix}[{context}] {message}"));
@@ -156,6 +159,7 @@ impl WorkerStreamOutput {
         if !self
             .check_already_seen(&mut state, timestamp, "Stream closed")
             .await
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "STREAM");
             self.colored(LogLevel::Debug, &format!("{prefix}Stream closed"));
@@ -168,6 +172,7 @@ impl WorkerStreamOutput {
         if !self
             .check_already_seen(&mut state, timestamp, "Stream error")
             .await
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "STREAM");
             self.colored(
@@ -192,6 +197,7 @@ impl WorkerStreamOutput {
                 &format!("{function_name} {idempotency_key} started"),
             )
             .await
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "INVOKE");
             self.colored(
@@ -216,6 +222,7 @@ impl WorkerStreamOutput {
                 &format!("{function_name} {idempotency_key} finished"),
             )
             .await
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "INVOKE");
             self.colored(
@@ -235,12 +242,13 @@ impl WorkerStreamOutput {
                 &format!("{number_of_missed_messages} messages missed"),
             )
             .await
+            && !self.options.logs_only
         {
             let prefix = self.prefix(timestamp, "STREAM");
             self.colored(
-                LogLevel::Warn,
-                &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed",),
-            );
+                    LogLevel::Warn,
+                    &format!("{prefix}Stream output fell behind the server and {number_of_missed_messages} messages were missed", ),
+                );
         }
     }
 
@@ -293,8 +301,9 @@ impl WorkerStreamOutput {
 
     fn print_stdout(&self, timestamp: Timestamp, message: &str) {
         match self.format {
-            Format::Json => self.json("STDOUT", "", message),
-            Format::Yaml => self.yaml("STDOUT", "", message),
+            Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
+                self.json("STDOUT", "", message)
+            }
             Format::Text => {
                 let prefix = self.prefix(timestamp, "STDOUT");
                 self.colored(LogLevel::Info, &format!("{prefix}{message}"));
@@ -304,8 +313,9 @@ impl WorkerStreamOutput {
 
     fn print_stderr(&self, timestamp: Timestamp, message: &str) {
         match self.format {
-            Format::Json => self.json("STDERR", "", message),
-            Format::Yaml => self.yaml("STDERR", "", message),
+            Format::Json | Format::PrettyJson | Format::Yaml | Format::PrettyYaml => {
+                self.json("STDERR", "", message)
+            }
             Format::Text => {
                 let prefix = self.prefix(timestamp, "STDERR");
                 self.colored(LogLevel::Error, &format!("{prefix}{message}"));
@@ -318,9 +328,27 @@ impl WorkerStreamOutput {
         println!("{json}");
     }
 
+    fn pretty_json(&self, level_or_source: &str, context: &str, message: &str) {
+        if self.options.colors {
+            let json = self.json_value(level_or_source, context, message);
+            println!("{}", to_colored_json(&json).unwrap());
+        } else {
+            self.json(level_or_source, context, message);
+        }
+    }
+
     fn yaml(&self, level_or_source: &str, context: &str, message: &str) {
         let json = self.json_value(level_or_source, context, message);
         println!("{}", serde_yaml::to_string(&json).unwrap());
+    }
+
+    fn pretty_yaml(&self, level_or_source: &str, context: &str, message: &str) {
+        if self.options.colors {
+            let json = self.json_value(level_or_source, context, message);
+            println!("{}", to_colored_yaml(&json).unwrap());
+        } else {
+            self.yaml(level_or_source, context, message);
+        }
     }
 
     fn json_value(&self, level_or_source: &str, context: &str, message: &str) -> serde_json::Value {

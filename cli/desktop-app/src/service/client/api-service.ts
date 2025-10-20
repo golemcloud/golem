@@ -71,6 +71,23 @@ export class APIService {
     return result;
   };
 
+  public getUploadedDefinitions = async (
+    appId: string,
+  ): Promise<Array<{ id: string; version: string }>> => {
+    return (await this.cliService.callCLI(appId, "api", [
+      "definition",
+      "list",
+    ])) as Promise<Array<{ id: string; version: string }>>;
+  };
+
+  public deployDefinition = async (appId: string, definitionId: string) => {
+    return await this.cliService.callCLI(appId, "api", [
+      "definition",
+      "deploy",
+      definitionId,
+    ]);
+  };
+
   public getApi = async (
     appId: string,
     name: string,
@@ -114,12 +131,169 @@ export class APIService {
   };
 
   public deleteApi = async (appId: string, id: string, version: string) => {
-    return await this.cliService.callCLI(appId, "api", [
-      "definition",
-      "delete",
-      `--id=${id}`,
-      `--version=${version}`,
-    ]);
+    // Step 1: Find the API definition to determine where it's stored (app or component)
+    const apiList = await this.getApiList(appId);
+    const apiToDelete = apiList.find(
+      api => api.id === id && api.version === version,
+    );
+
+    if (!apiToDelete) {
+      throw new Error(`API definition ${id}@${version} not found`);
+    }
+
+    const apiDefList = await this.getUploadedDefinitions(appId);
+
+    // Step 2: Call CLI to delete from server FIRST
+    if (apiDefList.find(def => def.id === id && def.version === version)) {
+      await this.cliService.callCLI(appId, "api", [
+        "definition",
+        "delete",
+        `--id=${id}`,
+        `--version=${version}`,
+      ]);
+    }
+
+    // Step 3: Only if CLI succeeds, remove from YAML file (both definition and deployments)
+    await this.deleteApiFromYaml(appId, id, version, apiToDelete.componentId);
+  };
+
+  private deleteApiFromYaml = async (
+    appId: string,
+    apiId: string,
+    version: string,
+    componentId?: string,
+  ) => {
+    // Step 1: Delete the definition from its source (component or app YAML)
+    let definitionYamlPath = "";
+
+    if (componentId) {
+      const component = await this.componentService.getComponentById(
+        appId,
+        componentId,
+      );
+      definitionYamlPath = await this.manifestService.getComponentYamlPath(
+        appId,
+        component.componentName!,
+      );
+    } else {
+      definitionYamlPath = (await this.manifestService.getAppYamlPath(
+        appId,
+      )) as string;
+      if (!definitionYamlPath) {
+        throw new Error("App manifest file not found");
+      }
+    }
+
+    // Delete the definition from source YAML
+    await this.deleteDefinitionFromYaml(
+      definitionYamlPath,
+      apiId,
+      appId,
+      componentId,
+    );
+
+    // Step 2: Remove from deployments in app-level YAML (if it's referenced)
+    const appYamlPath = await this.manifestService.getAppYamlPath(appId);
+    if (appYamlPath) {
+      await this.removeApiFromDeployments(appYamlPath, apiId, version, appId);
+    }
+  };
+
+  private deleteDefinitionFromYaml = async (
+    yamlPath: string,
+    apiId: string,
+    appId: string,
+    componentId?: string,
+  ) => {
+    const rawYaml = await readTextFile(yamlPath);
+    const manifest: Document = parseDocument(rawYaml);
+
+    const httpApi = manifest.get("httpApi") as YAMLMap | undefined;
+    if (!httpApi) {
+      return;
+    }
+
+    const definitions = httpApi.get("definitions") as YAMLMap | undefined;
+    if (!definitions) {
+      return;
+    }
+
+    // Delete the definition by ID
+    definitions.delete(apiId);
+
+    // Save back to file
+    if (componentId) {
+      await this.manifestService.saveComponentManifest(
+        appId,
+        componentId,
+        manifest.toString(),
+      );
+    } else {
+      await this.manifestService.saveAppManifest(appId, manifest.toString());
+    }
+  };
+
+  private removeApiFromDeployments = async (
+    yamlPath: string,
+    apiId: string,
+    version: string,
+    appId: string,
+  ) => {
+    const rawYaml = await readTextFile(yamlPath);
+    const manifest: Document = parseDocument(rawYaml);
+
+    const httpApi = manifest.get("httpApi") as YAMLMap | undefined;
+    if (!httpApi) {
+      return;
+    }
+
+    const deployments = httpApi.get("deployments") as YAMLMap | undefined;
+    if (!deployments || (deployments.items?.length || 0) === 0) {
+      return;
+    }
+
+    let modified = false;
+    const targetDefinition = `${apiId}@${version}`;
+
+    // Iterate through all profiles (e.g., "local", "production", etc.)
+    for (const pair of deployments.items) {
+      const profileDeployments = pair.value as YAMLMap;
+
+      if (!profileDeployments || !profileDeployments.items) continue;
+
+      // For each deployment in the profile
+      for (let i = profileDeployments.items.length - 1; i >= 0; i--) {
+        const deployment = profileDeployments.items[i] as unknown as YAMLMap;
+        const definitionsSeq = deployment.get("definitions") as
+          | YAMLMap
+          | undefined;
+
+        if (definitionsSeq && definitionsSeq.items) {
+          const originalLength = definitionsSeq.items.length;
+
+          // Remove the specific API definition (apiId@version)
+          definitionsSeq.items = definitionsSeq.items.filter(item => {
+            const defString = String(item).trim();
+            return defString !== targetDefinition;
+          });
+
+          if (definitionsSeq.items.length !== originalLength) {
+            modified = true;
+          }
+
+          // If deployment has no more definitions, remove the entire deployment
+          if (definitionsSeq.items.length === 0) {
+            profileDeployments.items.splice(i, 1);
+            modified = true;
+          }
+        }
+      }
+    }
+
+    // Save if we made any changes
+    if (modified) {
+      await this.manifestService.saveAppManifest(appId, manifest.toString());
+    }
   };
 
   public putApi = async (

@@ -30,10 +30,10 @@ pub use gateway_worker_request_executor::*;
 
 use golem_common::model::auth::Namespace;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{ComponentId, IdempotencyKey};
+use golem_common::model::{ComponentId, ComponentVersion, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::ValueAndType;
 use rib::{RibInput, RibInputTypeInfo};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -42,6 +42,7 @@ use std::fmt::Display;
 #[derive(PartialEq, Debug, Clone)]
 pub struct GatewayResolvedWorkerRequest {
     pub component_id: ComponentId,
+    pub component_version: ComponentVersion,
     pub worker_name: String,
     pub function_name: String,
     pub function_params: Vec<ValueAndType>,
@@ -53,6 +54,7 @@ pub struct GatewayResolvedWorkerRequest {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorkerDetails {
     pub component_id: ComponentId,
+    pub component_version: ComponentVersion,
     pub worker_name: Option<String>,
     pub idempotency_key: Option<IdempotencyKey>,
     pub invocation_context: InvocationContextStack,

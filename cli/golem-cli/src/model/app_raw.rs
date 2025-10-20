@@ -229,11 +229,67 @@ pub struct Profile {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub auto_confirm: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub redeploy_workers: Option<bool>,
+    pub redeploy_agents: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_http_api: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub redeploy_all: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reset: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Environment {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub default: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub server: Option<Server>,
+    #[serde(skip_serializing_if = "Presets::is_empty", default)]
+    pub component_presets: Presets,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub cli: Option<CliOptions>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub deployment: Option<DeploymentOptions>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum Server {
+    Builtin(BuiltinServer),
+    Custom(),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum BuiltinServer {
+    Local,
+    Cloud,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CustomServer {
+    account: Option<String>,
+    url: Url,
+    http_api_gateway_proxy_url: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct CliOptions {
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub format: Option<Format>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auto_confirm: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub auto_redeploy: Option<bool>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeploymentOptions {
+    // TODO: atomic
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -242,6 +298,45 @@ pub struct InitialComponentFile {
     pub source_path: String,
     pub target_path: ComponentFilePath,
     pub permissions: Option<ComponentFilePermissions>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(untagged, rename_all = "camelCase", deny_unknown_fields)]
+pub enum Presets {
+    None,
+    String(String),
+    List(Vec<String>),
+}
+
+impl Presets {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Presets::None => true,
+            Presets::String(s) => Self::parse(s).next().is_none(),
+            Presets::List(l) => l.is_empty(),
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<String> {
+        match self {
+            Self::None => vec![],
+            Self::String(s) => Self::parse(&s).collect(),
+            Self::List(l) => l,
+        }
+    }
+
+    fn parse(s: &str) -> impl Iterator<Item = String> + use<'_> {
+        s.split(|c: char| matches!(c, ',' | '\n' | '\r'))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    }
+}
+
+impl Default for Presets {
+    fn default() -> Self {
+        Self::None
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -263,12 +358,12 @@ pub struct ComponentProperties {
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub component_type: Option<AppComponentType>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub files: Vec<InitialComponentFile>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub plugins: Vec<PluginInstallation>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub env: HashMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<Vec<InitialComponentFile>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugins: Option<Vec<PluginInstallation>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<HashMap<String, String>>,
 }
 
 impl ComponentProperties {
@@ -301,16 +396,19 @@ impl ComponentProperties {
             self.component_type = overrides.component_type;
         }
 
-        if !overrides.files.is_empty() {
-            self.files.extend(overrides.files);
+        let files = overrides.files.unwrap_or_default();
+        if !files.is_empty() {
+            self.files.get_or_insert_with(Vec::new).extend(files);
         }
 
-        if !overrides.plugins.is_empty() {
-            self.plugins.extend(overrides.plugins);
+        let plugins = overrides.plugins.unwrap_or_default();
+        if !plugins.is_empty() {
+            self.plugins.get_or_insert_with(Vec::new).extend(plugins);
         }
 
-        if !overrides.env.is_empty() {
-            self.env.extend(overrides.env);
+        let env = overrides.env.unwrap_or_default();
+        if !env.is_empty() {
+            self.env.get_or_insert_with(HashMap::new).extend(env);
         }
 
         self

@@ -23,9 +23,9 @@ use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_rib_repl::{RibReplConfig, WorkerFunctionInvoke};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::analysed_type::{f32, field, list, record, str, u32};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::analysis::analysed_type::{f32, field, list, record, str, u32};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{Value, ValueAndType};
 use rib::{ComponentDependency, ComponentDependencyKey, RibResult};
 use std::path::Path;
 use std::sync::Arc;
@@ -334,6 +334,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
+            component_version: 0,
             root_package_name: metadata.root_package_name().clone(),
             root_package_version: metadata.root_package_version().clone(),
         };

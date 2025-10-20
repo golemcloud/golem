@@ -26,8 +26,8 @@ use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{Migrations, MigrationsDir};
 use golem_service_base::model::{Component, ComponentName};
-use golem_wasm_ast::analysis::analysed_type::str;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::str;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
     AnalysedInstance,
 };
@@ -452,7 +452,7 @@ impl ComponentService for TestComponentService {
         Ok(Self::test_component())
     }
 
-    async fn get_latest(
+    async fn get_latest_by_id(
         &self,
         _component_id: &ComponentId,
         _auth_ctx: &AuthCtx,
@@ -460,7 +460,7 @@ impl ComponentService for TestComponentService {
         Ok(Self::test_component())
     }
 
-    async fn get_by_name(
+    async fn get_latest_by_name(
         &self,
         name: &ComponentName,
         _namespace: &Namespace,
@@ -474,6 +474,15 @@ impl ComponentService for TestComponentService {
                 "component not found for name: {name}"
             )))
         }
+    }
+
+    async fn get_all_by_name(
+        &self,
+        _component_id: &ComponentName,
+        _namespace: &Namespace,
+        _auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Vec<Component>> {
+        Ok(vec![Self::test_component()])
     }
 
     async fn create_or_update_constraints(

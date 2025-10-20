@@ -49,10 +49,10 @@ use golem_common::model::invocation_context::{
 use golem_common::model::IdempotencyKey;
 use golem_common::SafeDisplay;
 use golem_service_base::headers::TraceContextHeaders;
-use golem_wasm_ast::analysis::analysed_type::record;
-use golem_wasm_ast::analysis::{AnalysedType, NameTypePair};
-use golem_wasm_rpc::json::ValueAndTypeJsonExtensions;
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm::analysis::analysed_type::record;
+use golem_wasm::analysis::{AnalysedType, NameTypePair};
+use golem_wasm::json::ValueAndTypeJsonExtensions;
+use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use http::StatusCode;
 use poem::Body;
 use rib::{RibInput, RibInputTypeInfo, RibResult, TypeName};
@@ -60,6 +60,7 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 use tracing::error;
+use uuid::Uuid;
 
 #[async_trait]
 pub trait GatewayHttpInputExecutor: Send + Sync {
@@ -370,9 +371,9 @@ impl DefaultGatewayInputExecutor {
             None
         };
 
-        // We prefer to take idempotency key from the rib script,
-        // if that is not available we fall back to our custom header.
-        // If neither are available, the worker-executor will later generate an idempotency key.
+        // We prefer to take the idempotency key from the rib script,
+        // if that is not available, we fall back to our custom header.
+        // If neither is available, the worker-executor will later generate an idempotency key.
         let idempotency_key = if let Some(idempotency_key_compiled) = idempotency_key_compiled {
             let result = self
                 .evaluate_idempotency_key_rib_script(idempotency_key_compiled, request)
@@ -443,6 +444,7 @@ impl DefaultGatewayInputExecutor {
 
         Ok(WorkerDetails {
             component_id: component_id.component_id,
+            component_version: component_id.version,
             worker_name,
             idempotency_key,
             invocation_context,
@@ -525,6 +527,7 @@ impl DefaultGatewayInputExecutor {
                 Ok(MiddlewareSuccess::Redirect(response)) => Err(response)?,
                 Ok(MiddlewareSuccess::PassThrough { .. }) => Ok(request),
                 Err(err) => {
+                    error!("Middleware error: {}", err.to_safe_string());
                     let response = err.to_response_from_safe_display(|error| match error {
                         MiddlewareError::InternalError(_) => StatusCode::INTERNAL_SERVER_ERROR,
                         MiddlewareError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
@@ -683,7 +686,7 @@ async fn resolve_rib_input(
     rich_request: &mut RichRequest,
     required_types: &RibInputTypeInfo,
 ) -> Result<RibInput, GatewayHttpError> {
-    let mut values: Vec<golem_wasm_rpc::Value> = vec![];
+    let mut values: Vec<golem_wasm::Value> = vec![];
     let mut types: Vec<NameTypePair> = vec![];
 
     let request_analysed_type = required_types.types.get("request");
@@ -801,6 +804,27 @@ async fn resolve_rib_input(
 
                         values.push(auth_value.value);
                     }
+
+                    "request_id" => {
+                        // Limitation of the current GlobalVariableTypeSpec. We cannot tell rib to directly the type of this field, only of all children.
+                        // Add a dummy value field that needs to be used so inference works.
+                        let value_and_type = RequestIdContainer {
+                            value: rich_request.request_id,
+                        }
+                        .into_value_and_type();
+                        let expected_type = value_and_type.typ.with_optional_name(None);
+
+                        if record.typ != expected_type {
+                            return Err(GatewayHttpError::InternalError(format!(
+                                "invalid expected rib script input type for request.request_id: {:?}; Should be: {:?}",
+                                record.typ,
+                                expected_type
+                            )));
+                        }
+
+                        values.push(value_and_type.value);
+                    }
+
                     field_name => {
                         // This is already type checked during API registration,
                         // however we still fail if we happen to have other inputs
@@ -816,7 +840,7 @@ async fn resolve_rib_input(
 
             result_map.insert(
                 "request".to_string(),
-                ValueAndType::new(golem_wasm_rpc::Value::Record(values), record(types)),
+                ValueAndType::new(golem_wasm::Value::Record(values), record(types)),
             );
 
             Ok(RibInput { input: result_map })
@@ -838,7 +862,10 @@ async fn maybe_apply_middlewares_out(
         let result = middlewares.process_middleware_out(&mut response).await;
         match result {
             Ok(_) => response,
-            Err(err) => err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR),
+            Err(err) => {
+                error!("Middleware error: {}", err.to_safe_string());
+                err.to_response_from_safe_display(|_| StatusCode::INTERNAL_SERVER_ERROR)
+            }
         }
     } else {
         response
@@ -847,7 +874,7 @@ async fn maybe_apply_middlewares_out(
 
 fn to_attribute_value(value: &ValueAndType) -> GatewayHttpResult<AttributeValue> {
     match &value.value {
-        golem_wasm_rpc::Value::String(value) => Ok(AttributeValue::String(value.clone())),
+        golem_wasm::Value::String(value) => Ok(AttributeValue::String(value.clone())),
         _ => Err(GatewayHttpError::BadRequest(
             "Invocation context values must be string".to_string(),
         )),
@@ -897,11 +924,11 @@ fn get_wasm_rpc_value_for_primitives<F>(
     required_type: &AnalysedType,
     request: &RichRequest,
     fetch_key_value: &F,
-) -> Result<golem_wasm_rpc::Value, String>
+) -> Result<golem_wasm::Value, String>
 where
     F: Fn(&RichRequest, &String) -> Result<String, String>,
 {
-    let mut header_values: Vec<golem_wasm_rpc::Value> = vec![];
+    let mut header_values: Vec<golem_wasm::Value> = vec![];
 
     if let AnalysedType::Record(record_type) = required_type {
         for field in record_type.fields.iter() {
@@ -955,16 +982,21 @@ where
         }
     }
 
-    Ok(golem_wasm_rpc::Value::Record(header_values))
+    Ok(golem_wasm::Value::Record(header_values))
 }
 
 fn parse_to_value<T: FromStr + IntoValue + Sized>(
     field_name: String,
     field_value: String,
     type_name: &str,
-) -> Result<golem_wasm_rpc::Value, String> {
+) -> Result<golem_wasm::Value, String> {
     let value = field_value.parse::<T>().map_err(|_| {
         format!("Invalid value for key {field_name}. Expected {type_name}, Found {field_value}")
     })?;
     Ok(value.into_value_and_type().value)
+}
+
+#[derive(golem_wasm_derive::IntoValue)]
+struct RequestIdContainer {
+    value: Uuid,
 }

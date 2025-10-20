@@ -39,12 +39,12 @@ impl SqlitePool {
 
     pub async fn configured(config: &DbSqliteConfig) -> Result<Self, anyhow::Error> {
         let read_pool = SqlitePoolOptions::new()
-            .min_connections(config.max_connections)
+            .min_connections(0)
             .max_connections(config.max_connections)
             .connect_with(config.connect_options())
             .await?;
         let write_pool = SqlitePoolOptions::new()
-            .min_connections(1)
+            .min_connections(0)
             .max_connections(1)
             .connect_with(config.connect_options())
             .await?;

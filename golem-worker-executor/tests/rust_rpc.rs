@@ -17,8 +17,8 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::analysed_type;
-use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+use golem_wasm::analysis::analysed_type;
+use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 use std::collections::HashMap;
 use std::time::SystemTime;
 use test_r::{inherit_test_dep, test};
@@ -499,6 +499,7 @@ async fn context_inheritance(
                 "COUNTERS_COMPONENT_ID".to_string(),
                 counters_component_id.to_string()
             ),
+            ("GOLEM_AGENT_ID".to_string(), "counters_test4".to_string()),
             (
                 "GOLEM_COMPONENT_ID".to_string(),
                 counters_component_id.to_string()

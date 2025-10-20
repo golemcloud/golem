@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::Error;
-use assert2::check;
 use async_trait::async_trait;
 use aws_config::BehaviorVersion;
 use aws_config::meta::region::RegionProviderChain;
@@ -32,6 +31,7 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, memory, s3};
+use pretty_assertions::assert_eq;
 use sqlx::sqlite::SqlitePoolOptions;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -459,8 +459,8 @@ async fn get_put_get_root(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some(data));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some(data));
 }
 
 #[test]
@@ -495,8 +495,8 @@ async fn get_put_get_new_dir(
         .await
         .unwrap();
 
-    check!(result1 == None);
-    check!(result2 == Some(data));
+    assert_eq!(result1, None);
+    assert_eq!(result2, Some(data));
 }
 
 #[test]
@@ -546,8 +546,8 @@ async fn get_put_get_new_dir_streaming(
         .unwrap()
         .concat();
 
-    check!(result1.is_none());
-    check!(result2 == data.to_vec());
+    assert!(result1.is_none());
+    assert_eq!(result2, data.to_vec());
 }
 
 #[test]
@@ -615,11 +615,11 @@ async fn create_delete_exists_dir(
         .await
         .unwrap();
 
-    check!(result1 == ExistsResult::DoesNotExist);
-    check!(result2 == ExistsResult::Directory);
-    check!(result3 == ExistsResult::DoesNotExist);
-    check!(delete_result1 == true);
-    check!(delete_result2 == false);
+    assert_eq!(result1, ExistsResult::DoesNotExist);
+    assert_eq!(result2, ExistsResult::Directory);
+    assert_eq!(result3, ExistsResult::DoesNotExist);
+    assert_eq!(delete_result1, true);
+    assert_eq!(delete_result2, false);
 }
 
 #[test]
@@ -697,10 +697,10 @@ async fn create_delete_exists_dir_and_file(
         .await
         .unwrap();
 
-    check!(result1 == ExistsResult::DoesNotExist);
-    check!(result2 == ExistsResult::Directory);
-    check!(result3 == ExistsResult::File);
-    check!(result4 == ExistsResult::DoesNotExist);
+    assert_eq!(result1, ExistsResult::DoesNotExist);
+    assert_eq!(result2, ExistsResult::Directory);
+    assert_eq!(result3, ExistsResult::File);
+    assert_eq!(result4, ExistsResult::DoesNotExist);
 }
 
 #[test]
@@ -752,13 +752,13 @@ async fn list_dir(
 
     entries.sort();
 
-    check!(
-        entries
-            == vec![
-                Path::new("test-dir/inner-dir").to_path_buf(),
-                Path::new("test-dir/test-file1").to_path_buf(),
-                Path::new("test-dir/test-file2").to_path_buf(),
-            ]
+    assert_eq!(
+        entries,
+        vec![
+            Path::new("test-dir/inner-dir").to_path_buf(),
+            Path::new("test-dir/test-file1").to_path_buf(),
+            Path::new("test-dir/test-file2").to_path_buf(),
+        ]
     );
 }
 
@@ -831,12 +831,12 @@ async fn delete_many(
 
     entries.sort();
 
-    check!(
-        entries
-            == vec![
-                Path::new("test-dir/inner-dir").to_path_buf(),
-                Path::new("test-dir/test-file2").to_path_buf(),
-            ]
+    assert_eq!(
+        entries,
+        vec![
+            Path::new("test-dir/inner-dir").to_path_buf(),
+            Path::new("test-dir/test-file2").to_path_buf(),
+        ]
     );
 }
 
@@ -889,13 +889,13 @@ async fn list_dir_root(
 
     entries.sort();
 
-    check!(
-        entries
-            == vec![
-                Path::new("inner-dir").to_path_buf(),
-                Path::new("test-file1").to_path_buf(),
-                Path::new("test-file2").to_path_buf(),
-            ]
+    assert_eq!(
+        entries,
+        vec![
+            Path::new("inner-dir").to_path_buf(),
+            Path::new("test-file1").to_path_buf(),
+            Path::new("test-file2").to_path_buf(),
+        ]
     );
 }
 
@@ -958,12 +958,12 @@ async fn list_dir_root_only_subdirs(
 
     entries.sort();
 
-    check!(
-        entries
-            == vec![
-                Path::new("inner-dir1").to_path_buf(),
-                Path::new("inner-dir2").to_path_buf(),
-            ]
+    assert_eq!(
+        entries,
+        vec![
+            Path::new("inner-dir1").to_path_buf(),
+            Path::new("inner-dir2").to_path_buf(),
+        ]
     );
 }
 
@@ -1026,12 +1026,12 @@ async fn list_dir_same_prefix(
 
     entries.sort();
 
-    check!(
-        entries
-            == vec![
-                Path::new("test-dir/inner-dir").to_path_buf(),
-                Path::new("test-dir/test-file1").to_path_buf(),
-                Path::new("test-dir/test-file2").to_path_buf(),
-            ]
+    assert_eq!(
+        entries,
+        vec![
+            Path::new("test-dir/inner-dir").to_path_buf(),
+            Path::new("test-dir/test-file1").to_path_buf(),
+            Path::new("test-dir/test-file2").to_path_buf(),
+        ]
     );
 }

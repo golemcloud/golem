@@ -24,7 +24,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::cmp::min;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -36,6 +35,7 @@ pub struct CompressedOplogArchiveService {
 }
 
 impl CompressedOplogArchiveService {
+    const MAX_CHUNK_SIZE: usize = 4096;
     const CACHE_SIZE: usize = 4096;
     const ZSTD_LEVEL: i32 = 0;
 
@@ -174,30 +174,53 @@ impl CompressedOplogArchive {
         }
     }
 
-    async fn read_and_cache_chunk(&self, idx: OplogIndex) -> Result<Option<OplogIndex>, String> {
-        if let Some((last_idx, chunk)) = self
+    // Fetch a range of entries from the storage. At most one chunk of data will be returned,
+    // but it will always begin with the end of the range. So a given prefix of the of the oplog might be missing,
+    // but the suffix will always be correct if it is returned. Returns None if there is no chunk containing any matching data.
+    async fn fetch_and_cache_range(
+        &self,
+        beginning_of_range: OplogIndex,
+        end_of_range: OplogIndex,
+    ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, String> {
+        let (last_idx_in_chunk, chunk) = if let Some((last_idx_in_chunk, chunk)) = self
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
             .closest::<CompressedOplogChunk>(
                 IndexedStorageNamespace::CompressedOpLog { level: self.level },
                 &self.key,
-                idx.into(),
+                end_of_range.into(),
             )
             .await?
         {
-            let entries = chunk.decompress()?;
-            let mut cache = self.cache.write().await;
+            (last_idx_in_chunk, chunk)
+        } else {
+            return Ok(None);
+        };
 
-            let mut idx = last_idx - chunk.count + 1;
-            for entry in entries {
-                cache.insert(OplogIndex::from_u64(idx), entry);
-                idx += 1;
+        let entries = chunk.decompress()?;
+        let mut cache = self.cache.write().await;
+
+        let mut current_idx = last_idx_in_chunk - chunk.count + 1;
+        let mut collected = Vec::new();
+
+        for entry in entries {
+            let oplog_index = OplogIndex::from_u64(current_idx);
+
+            cache.insert(oplog_index, entry.clone());
+
+            if oplog_index >= beginning_of_range && oplog_index <= end_of_range {
+                collected.push((oplog_index, entry));
             }
 
-            Ok(Some(OplogIndex::from_u64(last_idx)))
-        } else {
-            Ok(None)
+            current_idx += 1;
         }
+
+        if collected.is_empty() {
+            // The closest chunk did not include any of the data were looking for
+            return Ok(None);
+        }
+
+        Ok(Some(collected))
     }
 }
 
@@ -215,7 +238,6 @@ impl OplogArchive for CompressedOplogArchive {
 
         let mut result = BTreeMap::new();
         let mut last_idx = idx.range_end(n);
-        let mut before = OplogIndex::from_u64(u64::MAX);
 
         while last_idx >= idx {
             {
@@ -232,34 +254,19 @@ impl OplogArchive for CompressedOplogArchive {
                 drop(cache);
             }
 
-            if before == last_idx {
-                // No entries found in cache, even though fetch returned true. This means we reached the beginning of the stream
-                break;
-            }
-
-            if result.len() == (n as usize) {
+            if result.len() as u64 == n {
                 // We are done fetching all the results
                 break;
             }
 
-            let fetched_last_idx = self.read_and_cache_chunk(last_idx).await.unwrap_or_else(|err| {
+            // we encountered an entry that is not in our cache. fetch the chunk that contains the entry and use as much as we can from it.
+            // after the end of the chunk
+            if let Some(chunk) = self.fetch_and_cache_range(idx, last_idx).await.unwrap_or_else(|err| {
                 panic!("failed to read compressed oplog for worker {worker_id} in indexed storage: {err}")
-            });
-            if fetched_last_idx.is_some() {
-                before = last_idx;
-            } else if result.is_empty() {
-                // We allow to have a gap on the right side of the query - as we cannot guarantee
-                // that the 'n' parameter is exactly matches the available number of elements. However,
-                // there must not be any gaps in the middle.
-                if let Some(idx) = self.indexed_storage.with_entity("compressed_oplog", "read", "compressed_entry")
-                    .last_id(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key)
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!("failed to get first entry from compressed oplog for worker {worker_id} in indexed storage: {err}")
-                    }) {
-                    last_idx = min(last_idx, OplogIndex::from_u64(idx));
-                } else {
-                    break;
+            }) {
+                last_idx = last_idx.subtract(chunk.len() as u64);
+                for (index, entry) in chunk {
+                    result.insert(index, entry);
                 }
             } else {
                 // We never go towards older entries so if we didn't fetch the chunk we reached the
@@ -272,17 +279,24 @@ impl OplogArchive for CompressedOplogArchive {
     }
 
     async fn append(&self, chunk: Vec<(OplogIndex, OplogEntry)>) {
-        if !chunk.is_empty() {
-            let worker_id = &self.worker_id;
+        if chunk.is_empty() {
+            return;
+        }
 
-            let mut cache = self.cache.write().await;
-            for (idx, entry) in &chunk {
-                cache.insert(*idx, entry.clone());
-            }
+        let worker_id = &self.worker_id;
+        let mut cache = self.cache.write().await;
 
-            let last_id = chunk.last().unwrap().0;
-            let chunk = chunk.into_iter().map(|(_, entry)| entry).collect();
-            let compressed_chunk = CompressedOplogChunk::compress(chunk)
+        for (idx, entry) in &chunk {
+            cache.insert(*idx, entry.clone());
+        }
+
+        for sub_chunk in chunk.chunks(CompressedOplogArchiveService::MAX_CHUNK_SIZE) {
+            let last_id = sub_chunk.last().unwrap().0;
+
+            let entries: Vec<OplogEntry> =
+                sub_chunk.iter().map(|(_, entry)| entry.clone()).collect();
+
+            let compressed_chunk = CompressedOplogChunk::compress(entries)
                 .unwrap_or_else(|err| panic!("failed to compress oplog chunk: {err}"));
 
             self.indexed_storage
@@ -295,7 +309,9 @@ impl OplogArchive for CompressedOplogArchive {
                 )
                 .await
                 .unwrap_or_else(|err| {
-                    panic!("failed to append compressed oplog chunk for worker {worker_id} in indexed storage: {err}")
+                    panic!(
+                        "failed to append compressed oplog chunk for worker {worker_id} in indexed storage: {err}"
+                    )
                 });
         }
     }
@@ -314,18 +330,6 @@ impl OplogArchive for CompressedOplogArchive {
     }
 
     async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
-        let mut cache = self.cache.write().await;
-
-        let idx_to_evict = cache
-            .iter()
-            .filter(|(idx, _)| **idx <= last_dropped_id)
-            .map(|(idx, _)| *idx)
-            .collect::<Vec<_>>();
-
-        for idx in idx_to_evict {
-            cache.remove(&idx);
-        }
-
         let worker_id = &self.worker_id;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
             .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key, last_dropped_id.into())

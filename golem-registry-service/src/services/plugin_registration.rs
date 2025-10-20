@@ -30,7 +30,7 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 

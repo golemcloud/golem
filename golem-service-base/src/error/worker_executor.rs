@@ -19,8 +19,8 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{PromiseId, ShardId, WorkerId};
-use golem_wasm_rpc::wasmtime::EncodingError;
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::wasmtime::EncodingError;
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -455,6 +455,9 @@ impl From<WorkerExecutorError> for Status {
                 Self::invalid_argument(format!("Value mismatch: {details}"))
             }
             WorkerExecutorError::Unknown { details } => Self::unknown(details),
+            WorkerExecutorError::PreviousInvocationFailed { .. } => {
+                Self::failed_precondition(format!("{value}"))
+            }
             _ => Self::internal(format!("{value}")),
         }
     }
@@ -891,15 +894,21 @@ impl From<EncodingError> for WorkerExecutorError {
 }
 
 #[derive(Debug, Clone, PartialOrd, PartialEq, Eq, Hash)]
-pub struct WorkerOutOfMemory;
+pub enum GolemSpecificWasmTrap {
+    WorkerOutOfMemory,
+    WorkerExceededMemoryLimit,
+}
 
-impl Display for WorkerOutOfMemory {
+impl Display for GolemSpecificWasmTrap {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Worker cannot acquire more memory")
+        match self {
+            Self::WorkerOutOfMemory => write!(f, "Worker cannot acquire more memory"),
+            Self::WorkerExceededMemoryLimit => write!(f, "Worker exceeded plan memory limits"),
+        }
     }
 }
 
-impl Error for WorkerOutOfMemory {}
+impl Error for GolemSpecificWasmTrap {}
 
 #[derive(
     Debug, Clone, PartialOrd, PartialEq, Eq, Hash, Serialize, Deserialize, Encode, Decode, IntoValue,

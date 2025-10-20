@@ -18,8 +18,8 @@ use golem_common::model::auth::Namespace;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{ComponentId, IdempotencyKey};
 use golem_common::SafeDisplay;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::ValueAndType;
 use rib::{
     ComponentDependencyKey, EvaluatedFnArgs, EvaluatedFqFn, EvaluatedWorkerName, InstructionId,
     RibByteCode, RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInput, RibResult,
@@ -35,7 +35,7 @@ use std::sync::Arc;
 // rib that's devoid of any instantiation of worker or worker function invocation
 #[async_trait]
 pub trait WorkerServiceRibInterpreter: Send + Sync {
-    // Evaluate a Rib byte against a specific worker.
+    // Evaluate a Rib byte code against a specific worker.
     // RibByteCode may have actual function calls.
     async fn evaluate(
         &self,
@@ -134,7 +134,8 @@ impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
         parameters: EvaluatedFnArgs,
         _return_type: Option<AnalysedType>,
     ) -> RibFunctionInvokeResult {
-        let worker_name: String = worker_name.0;
+        let worker_name = worker_name.0;
+
         let idempotency_key = self.idempotency_key.clone();
         let invocation_context = self.invocation_context.clone();
         let executor = self.executor.clone();
@@ -145,6 +146,7 @@ impl RibComponentFunctionInvoke for WorkerServiceRibInvoke {
 
         let worker_request = GatewayResolvedWorkerRequest {
             component_id: ComponentId(component_dependency_key.component_id),
+            component_version: component_dependency_key.component_version,
             worker_name,
             function_name,
             function_params,

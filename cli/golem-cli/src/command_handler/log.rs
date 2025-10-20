@@ -14,7 +14,7 @@
 
 use crate::context::Context;
 use crate::model::format::Format;
-use crate::model::text::fmt::{NestedTextViewIndent, TextView};
+use crate::model::text::fmt::{to_colored_json, to_colored_yaml, NestedTextViewIndent, TextView};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::sync::Arc;
@@ -28,14 +28,43 @@ impl LogHandler {
         Self { ctx }
     }
 
+    pub fn log_serializable<S: Serialize>(&self, value: &S) {
+        match self.ctx.format() {
+            Format::Json => {
+                println!("{}", serde_json::to_string(value).unwrap());
+            }
+            Format::PrettyJson => {}
+            Format::Yaml => {
+                println!("---\n{}", serde_yaml::to_string(value).unwrap());
+            }
+            Format::PrettyYaml => {}
+            Format::Text => {
+                println!("{}", serde_json::to_string_pretty(value).unwrap());
+            }
+        }
+    }
+
     pub fn log_view<View: TextView + Serialize + DeserializeOwned>(&self, view: &View) {
         match self.ctx.format() {
             Format::Json => {
                 println!("{}", serde_json::to_string(view).unwrap());
             }
+            Format::PrettyJson => {
+                if self.ctx.should_colorize() {
+                    println!("{}", to_colored_json(view).unwrap());
+                } else {
+                    println!("{}", serde_json::to_string(view).unwrap());
+                }
+            }
             Format::Yaml => {
-                // TODO: handle "streaming" optionally
                 println!("---\n{}", serde_yaml::to_string(view).unwrap());
+            }
+            Format::PrettyYaml => {
+                if self.ctx.should_colorize() {
+                    println!("---\n{}", to_colored_yaml(view).unwrap());
+                } else {
+                    println!("---\n{}", serde_yaml::to_string(view).unwrap());
+                }
             }
             Format::Text => {
                 view.log();

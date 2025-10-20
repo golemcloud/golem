@@ -248,7 +248,6 @@ pub fn hash_from_serialized_value<T: Serialize>(value: &T) -> Hash {
     .into()
 }
 
-#[cfg(feature = "poem")]
 mod poem {
     use super::Hash;
     use http::HeaderValue;

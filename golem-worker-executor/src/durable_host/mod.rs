@@ -34,9 +34,10 @@ pub mod serialized;
 mod sockets;
 pub mod wasm_rpc;
 
+use self::golem::v1x::GetPromiseResultEntry;
 use crate::durable_host::http::serialized::SerializableHttpRequest;
 use crate::durable_host::io::{ManagedStdErr, ManagedStdIn, ManagedStdOut};
-use crate::durable_host::replay_state::ReplayState;
+use crate::durable_host::replay_state::{OplogEntryLookupResult, ReplayState};
 use crate::metrics::wasm::{record_number_of_replayed_functions, record_resume_worker};
 use crate::model::event::InternalWorkerEvent;
 use crate::model::{
@@ -55,6 +56,7 @@ use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
 use crate::services::scheduler::SchedulerService;
+use crate::services::shard::ShardService;
 use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
@@ -65,8 +67,8 @@ use crate::services::{
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
-use crate::worker::status::calculate_last_known_status;
-use crate::worker::{interpret_function_result, is_worker_error_retriable, RetryDecision, Worker};
+use crate::worker::status::calculate_last_known_status_for_existing_worker;
+use crate::worker::{interpret_function_result, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, HasWasiConfigVars, InvocationContextManagement,
     InvocationHooks, InvocationManagement, LogEventEmitBehaviour, PublicWorkerIo, StatusManagement,
@@ -80,6 +82,7 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -89,7 +92,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{ProjectId};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentFileSystemNode,
     ComponentFileSystemNodeDetails,
     FailedUpdateRecord, GetFileSystemNodeResult, IdempotencyKey,
@@ -98,13 +101,12 @@ use golem_common::model::{ComponentFileSystemNode,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{Uri, Value, ValueAndType};
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
 use std::fmt::{Debug, Display, Formatter};
-use std::ops::Add;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, Instant, SystemTime};
@@ -113,6 +115,7 @@ use tempfile::TempDir;
 use tokio::sync::RwLock as TRwLock;
 use tokio_util::codec::{BytesCodec, FramedRead};
 use tracing::{debug, info, span, warn, Instrument, Level};
+use try_match::try_match;
 use wasmtime::component::{Instance, Resource, ResourceAny};
 use wasmtime::{AsContext, AsContextMut};
 use wasmtime_wasi::p2::bindings::filesystem::preopens::Descriptor;
@@ -126,7 +129,6 @@ use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
 use golem_common::model::component::{ComponentDto, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType, InitialComponentFile};
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentFilePath;
-use golem_common::model::environment::EnvironmentId;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {
@@ -145,6 +147,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     #[allow(clippy::too_many_arguments)]
     pub async fn create(
         owned_worker_id: OwnedWorkerId,
+        agent_id: Option<AgentId>,
         promise_service: Arc<dyn PromiseService>,
         worker_service: Arc<dyn WorkerService>,
         worker_enumeration_service: Arc<dyn worker_enumeration::WorkerEnumerationService>,
@@ -161,11 +164,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         component_service: Arc<dyn ComponentService>,
         config: Arc<GolemConfig>,
         worker_config: WorkerConfig,
-        execution_status: Arc<RwLock<ExecutionStatus>>,
+        execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         agent_types_service: Arc<dyn AgentTypesService>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Result<Self, WorkerExecutorError> {
         let temp_dir = Arc::new(tempfile::Builder::new().prefix("golem").tempdir().map_err(
             |e| WorkerExecutorError::runtime(format!("Failed to create temporary directory: {e}")),
@@ -237,6 +242,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 oplog: oplog.clone(),
             },
             state: PrivateDurableWorkerState::new(
+                agent_id,
                 oplog_service,
                 oplog,
                 promise_service,
@@ -265,6 +271,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 worker_config.created_by.clone(),
                 worker_config.initial_wasi_config_vars,
                 wasi_config_vars,
+                shard_service,
+                pending_update,
             )
             .await,
             temp_dir,
@@ -351,38 +359,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         WasiHttpImpl(IoImpl(DurableWorkerCtxWasiHttpView(self)))
     }
 
-    pub fn get_worker_status_record(&self) -> WorkerStatusRecord {
-        self.execution_status
-            .read()
-            .unwrap()
-            .last_known_status()
-            .clone()
-    }
-
-    pub async fn update_worker_status(&self, f: impl FnOnce(&mut WorkerStatusRecord)) {
-        let mut status = self.get_worker_status_record();
-
-        let mut skipped_regions = self.state.replay_state.skipped_regions().await;
-        let (pending_updates, extra_skipped_regions) =
-            self.public_state.worker().pending_updates().await;
-        skipped_regions.set_override(extra_skipped_regions);
-
-        status.skipped_regions = skipped_regions;
-        status
-            .overridden_retry_config
-            .clone_from(&self.state.overridden_retry_policy);
-        status.pending_invocations = self.public_state.worker().pending_invocations().await;
-        status.invocation_results = self.public_state.worker().invocation_results().await;
-        status.pending_updates = pending_updates;
-        status
-            .current_idempotency_key
-            .clone_from(&self.state.current_idempotency_key);
-        status.total_linear_memory_size = self.state.total_linear_memory_size;
-        status.oplog_idx = self.state.oplog.current_oplog_index().await;
-        f(&mut status);
-        self.public_state.worker().update_status(status).await;
-    }
-
     pub fn rpc(&self) -> Arc<dyn Rpc> {
         self.state.rpc.clone()
     }
@@ -411,30 +387,29 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.total_linear_memory_size
     }
 
-    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<bool> {
+    pub async fn increase_memory(&mut self, delta: u64) -> anyhow::Result<()> {
         if self.state.is_replay() {
             // The increased amount was already recorded in live mode, so our worker
             // was initialized with the correct amount of memory.
-            Ok(true)
+            Ok(())
         } else {
             // In live mode we need to try to get more memory permits and if we can't,
             // we fail the worker, unload it from memory and schedule a retry.
             // let current_size = self.update_worker_status();
-            self.state
-                .oplog
-                .add_and_commit(OplogEntry::grow_memory(delta))
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::grow_memory(delta))
                 .await;
-            self.update_worker_status(|_| {}).await;
 
             self.public_state.worker().increase_memory(delta).await?;
             self.state.total_linear_memory_size += delta;
-            Ok(true)
+            Ok(())
         }
     }
 
     fn get_recovery_decision_on_trap(
         retry_config: &RetryConfig,
-        previous_tries: u64,
+        previous_tries: &HashMap<OplogIndex, u32>,
         trap_type: &TrapType,
     ) -> RetryDecision {
         match trap_type {
@@ -443,11 +418,28 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             TrapType::Interrupt(InterruptKind::Restart) => RetryDecision::Immediate,
             TrapType::Interrupt(InterruptKind::Jump) => RetryDecision::Immediate,
             TrapType::Exit => RetryDecision::None,
-            TrapType::Error(WorkerError::OutOfMemory) => RetryDecision::ReacquirePermits,
-            TrapType::Error(WorkerError::InvalidRequest(_)) => RetryDecision::None,
-            TrapType::Error(WorkerError::StackOverflow) => RetryDecision::None,
-            TrapType::Error(WorkerError::Unknown(_)) => {
-                let retryable = previous_tries < (retry_config.max_attempts as u64);
+            TrapType::Error {
+                error: WorkerError::OutOfMemory,
+                ..
+            } => RetryDecision::ReacquirePermits,
+            TrapType::Error {
+                error: WorkerError::InvalidRequest(_),
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: WorkerError::StackOverflow,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: WorkerError::ExceededMemoryLimit,
+                ..
+            } => RetryDecision::None,
+            TrapType::Error {
+                error: WorkerError::Unknown(_),
+                retry_from,
+            } => {
+                let previous_tries = previous_tries.get(retry_from).copied().unwrap_or_default();
+                let retryable = previous_tries < retry_config.max_attempts;
                 if retryable {
                     match get_delay(retry_config, previous_tries) {
                         Some(delay) => RetryDecision::Delayed(delay),
@@ -457,26 +449,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     RetryDecision::None
                 }
             }
-        }
-    }
-
-    fn get_recovery_decision_on_startup(
-        retry_config: &RetryConfig,
-        last_error: &Option<LastError>,
-    ) -> RetryDecision {
-        match last_error {
-            Some(last_error) => {
-                if is_worker_error_retriable(
-                    retry_config,
-                    &last_error.error,
-                    last_error.retry_count,
-                ) {
-                    RetryDecision::Immediate
-                } else {
-                    RetryDecision::None
-                }
-            }
-            None => RetryDecision::Immediate,
         }
     }
 
@@ -507,7 +479,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                 self.public_state
                                     .event_service
                                     .emit_event(event.clone(), true);
-                                self.state.oplog.add(entry).await;
+                                self.public_state.worker().add_to_oplog(entry).await;
                             } else {
                                 // we have persisted emitting this log before, so we mark it as non-live and
                                 // remove the entry from the seen log set.
@@ -529,7 +501,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .emit_event(event.clone(), true);
 
                         if self.state.is_live()
-                            && !self
+                            & !self
                                 .state
                                 .replay_state
                                 .seen_log(*level, context, message)
@@ -543,14 +515,431 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
-    /// Counts the number of Error entries that are at the end of the oplog. This equals to the number of retries that have been attempted.
-    /// It also returns the last error stored in these entries.
-    pub async fn trailing_error_count(&self) -> u64 {
-        let status = self.get_worker_status_record();
-        last_error_and_retry_count(&self.state, &self.owned_worker_id, &status)
-            .await
-            .map(|last_error| last_error.retry_count)
-            .unwrap_or_default()
+    pub async fn begin_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+    ) -> Result<OplogIndex, WorkerExecutorError> {
+        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
+            || matches!(
+                *function_type,
+                DurableFunctionType::WriteRemoteBatched(None)
+            )
+        {
+            let result = if self.is_live() {
+                let begin_index = self
+                    .public_state
+                    .worker()
+                    .add_and_commit_oplog(OplogEntry::begin_remote_write())
+                    .await;
+                Ok(begin_index)
+            } else {
+                let (begin_index, _) =
+                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::BeginRemoteWrite)?;
+                if !self.state.assume_idempotence {
+                    let end_index = self
+                        .state
+                        .replay_state
+                        .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
+                        .await;
+                    if end_index.is_none() {
+                        // Must switch to live mode before failing to be able to commit an Error entry
+                        self.state.replay_state.switch_to_live().await;
+                        Err(WorkerExecutorError::runtime(
+                            "Non-idempotent remote write operation was not completed, cannot retry",
+                        ))
+                    } else {
+                        Ok(begin_index)
+                    }
+                } else if matches!(
+                    *function_type,
+                    DurableFunctionType::WriteRemoteBatched(None)
+                ) {
+                    let lookup_result = self
+                        .state
+                        .replay_state
+                        .lookup_oplog_entry_with_condition_and_state(
+                            begin_index,
+                            OplogEntry::is_end_remote_write_s::<PersistenceLevel>,
+                            OplogEntry::no_concurrent_side_effect,
+                            self.state.persistence_level,
+                            OplogEntry::track_persistence_level,
+                        )
+                        .await;
+                    match lookup_result {
+                        OplogEntryLookupResult::Found { index, .. } => {
+                            debug!("Remote write operation {begin_index} already completed at {index}, continue replaying");
+                            Ok(begin_index)
+                        }
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: true,
+                        } => {
+                            // Must switch to live mode before failing to be able to commit an Error entry
+                            self.state.replay_state.switch_to_live().await;
+                            Err(WorkerExecutorError::runtime(
+                                    "Non-idempotent remote write operation was not completed, cannot retry",
+                                ))
+                        }
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: false,
+                        } => {
+                            // We need to jump to the end of the oplog
+                            self.state.replay_state.switch_to_live().await;
+
+                            // But this is not enough, because if the retried batched write operation succeeds,
+                            // and later we replay it, we need to skip the first attempt and only replay the second.
+                            // Se we add a Jump entry to the oplog that registers a deleted region.
+                            let deleted_region = OplogRegion {
+                                start: begin_index.next(), // need to keep the BeginAtomicRegion entry
+                                end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                            };
+
+                            self.public_state
+                                .worker()
+                                .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                                .await;
+
+                            // TODO: this recomputation should not be necessary.
+                            self.public_state.worker().reattach_worker_status().await;
+                            Ok(begin_index)
+                        }
+                    }
+                } else {
+                    Ok(begin_index)
+                }
+            }?;
+
+            // The current retry point will point to the BeginRemoteWrite entry
+            self.state.current_retry_point = result;
+            Ok(result)
+        } else {
+            // When there is no BeginRemoteWrite entry, the current retry point can only
+            // point to the last written non-hint entry. Hint entries must be ignored
+            // because they are nondeterministic.
+            // If the entry belongs to an open batched write or transaction, we need to
+            // set the current retry point to the index of the begin entry.
+            // The returned index, however, is going to be the current / last replayed index.
+
+            let begin_index = if self.state.replay_state.is_live() {
+                self.state.oplog.current_oplog_index().await
+            } else {
+                self.state.replay_state.last_replayed_non_hint_index()
+            };
+
+            let new_retry_point = match function_type {
+                DurableFunctionType::WriteRemoteBatched(Some(idx)) => *idx,
+                DurableFunctionType::WriteRemoteTransaction(Some(idx)) => *idx,
+                _ => self
+                    .state
+                    .oplog
+                    .last_added_non_hint_entry()
+                    .await
+                    .unwrap_or(self.state.replay_state.last_replayed_non_hint_index()),
+            };
+            self.state.current_retry_point = new_retry_point;
+
+            Ok(begin_index)
+        }
+    }
+
+    pub async fn end_function(
+        &mut self,
+        function_type: &DurableFunctionType,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if (*function_type == DurableFunctionType::WriteRemote && !self.state.assume_idempotence)
+            || matches!(
+                *function_type,
+                DurableFunctionType::WriteRemoteBatched(None)
+            )
+        {
+            if self.is_live() {
+                self.state
+                    .oplog
+                    .add(OplogEntry::end_remote_write(begin_index))
+                    .await;
+                Ok(())
+            } else {
+                let (_, _) =
+                    crate::get_oplog_entry!(self.state.replay_state, OplogEntry::EndRemoteWrite)?;
+                Ok(())
+            }
+        } else {
+            Ok(())
+        }
+    }
+
+    pub async fn begin_transaction_function<Tx, Err>(
+        &mut self,
+        handler: impl RemoteTransactionHandler<Tx, Err>,
+    ) -> Result<(OplogIndex, Tx), Err>
+    where
+        Err: From<WorkerExecutorError>,
+    {
+        if self.is_live() {
+            let (tx_id, tx) = handler.create_new().await?;
+            let begin_index = self
+                .public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::begin_remote_transaction(tx_id, None))
+                .await;
+
+            self.state.current_retry_point = begin_index;
+
+            Ok((begin_index, tx))
+        } else {
+            let (begin_index, begin_entry) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::BeginRemoteTransaction
+            )?;
+            let original_begin_index = if let OplogEntry::BeginRemoteTransaction {
+                original_begin_index: Some(idx),
+                ..
+            } = &begin_entry
+            {
+                *idx
+            } else {
+                begin_index
+            };
+
+            let assume_idempotence = self.state.assume_idempotence;
+
+            let pre_entry = self
+                .state
+                .replay_state
+                .lookup_oplog_entry_with_condition_and_state(
+                    original_begin_index,
+                    OplogEntry::is_pre_remote_transaction_s,
+                    OplogEntry::no_concurrent_side_effect,
+                    self.state.persistence_level,
+                    OplogEntry::track_persistence_level,
+                )
+                .await;
+
+            let tx_id = try_match!(
+                begin_entry,
+                OplogEntry::BeginRemoteTransaction {
+                    timestamp: _,
+                    transaction_id,
+                    original_begin_index: _,
+                }
+            )
+            .map_err(|_| WorkerExecutorError::runtime("Unexpected oplog entry"))?;
+
+            let (tx_id, tx) = handler.create_replay(&tx_id).await?;
+
+            let mut should_restart = false;
+
+            match pre_entry {
+                OplogEntryLookupResult::Found {
+                    entry: pre_entry, ..
+                } => {
+                    let end_entry = self
+                        .state
+                        .replay_state
+                        .lookup_oplog_entry_with_condition_and_state(
+                            original_begin_index,
+                            OplogEntry::is_end_remote_transaction_s,
+                            OplogEntry::no_concurrent_side_effect,
+                            self.state.persistence_level,
+                            OplogEntry::track_persistence_level,
+                        )
+                        .await;
+
+                    match end_entry {
+                        OplogEntryLookupResult::Found { .. } => {}
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: false,
+                        } => {
+                            if pre_entry.is_pre_commit_remote_transaction(original_begin_index) {
+                                // if we can not confirm the transaction was committed, we need to restart
+                                should_restart = !handler.is_committed(&tx_id).await?;
+                            } else if pre_entry
+                                .is_pre_commit_remote_transaction(original_begin_index)
+                            {
+                                // if we can not confirm the transaction was rolled back, we need to restart
+                                should_restart = !handler.is_rolled_back(&tx_id).await?;
+                            }
+                        }
+                        OplogEntryLookupResult::NotFound {
+                            violates_for_all: true,
+                        } => {
+                            // Must switch to live mode before failing to be able to commit an Error entry
+                            self.state.replay_state.switch_to_live().await;
+                            return Err(WorkerExecutorError::runtime(
+                                "Transaction overlapped with other side effects was not completed, cannot retry",
+                            ).into());
+                        }
+                    }
+                }
+                OplogEntryLookupResult::NotFound {
+                    violates_for_all: false,
+                } => {
+                    should_restart = true;
+                }
+                OplogEntryLookupResult::NotFound {
+                    violates_for_all: true,
+                } => {
+                    // Must switch to live mode before failing to be able to commit an Error entry
+                    self.state.replay_state.switch_to_live().await;
+                    return Err(WorkerExecutorError::runtime(
+                        "Transaction overlapped with other side effects was not completed, cannot retry",
+                    ).into());
+                }
+            };
+
+            let (result, tx) = if should_restart {
+                // We need to jump to the end of the oplog
+                self.state.replay_state.switch_to_live().await;
+
+                if !assume_idempotence {
+                    Err(WorkerExecutorError::runtime(
+                        "Non-idempotent remote write operation was not completed, cannot retry",
+                    ))
+                } else {
+                    // But this is not enough, because if the retried batched write operation succeeds,
+                    // and later we replay it, we need to skip the first attempt and only replay the second.
+                    // Se we add a Jump entry to the oplog that registers a deleted region.
+                    let deleted_region = OplogRegion {
+                        start: begin_index, // need to delete the previous BeginRemoteTransaction entry, because we'll get a new TX id
+                        end: self.state.replay_state.replay_target().next(), // skipping the Jump entry too
+                    };
+
+                    self.public_state
+                        .worker()
+                        .add_and_commit_oplog(OplogEntry::jump(deleted_region))
+                        .await;
+
+                    // TODO: this recomputation should not be necessary.
+                    self.public_state.worker().reattach_worker_status().await;
+
+                    let (tx_id, tx) = handler.create_new().await?;
+                    let _ = self
+                        .public_state
+                        .worker()
+                        .add_and_commit_oplog(OplogEntry::begin_remote_transaction(
+                            tx_id,
+                            Some(original_begin_index),
+                        ))
+                        .await;
+
+                    Ok((original_begin_index, tx))
+                }
+            } else {
+                Ok((original_begin_index, tx))
+            }?;
+
+            self.state.current_retry_point = original_begin_index;
+
+            Ok((result, tx))
+        }
+    }
+
+    pub async fn pre_commit_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::pre_commit_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::PreCommitRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
+    pub async fn pre_rollback_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::pre_rollback_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::PreRollbackRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
+    pub async fn committed_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::committed_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::CommittedRemoteTransaction
+            )?;
+            Ok(())
+        }
+    }
+
+    pub async fn rolled_back_transaction_function(
+        &mut self,
+        begin_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        if self.is_live() {
+            // There is some logic in the test code that intercepts oplogs adds for _just_ the oplog the is provided to the worker.
+            // make sure to write to the local oplog handle, but still commit to the parent for status consistency.
+            self.state
+                .oplog
+                .add_safe(OplogEntry::rolled_back_remote_transaction(begin_index))
+                .await
+                .map_err(WorkerExecutorError::runtime)?;
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
+            Ok(())
+        } else {
+            let (_, _) = crate::get_oplog_entry!(
+                self.state.replay_state,
+                OplogEntry::RolledBackRemoteTransaction
+            )?;
+            Ok(())
+        }
     }
 }
 
@@ -566,19 +955,22 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
     ) -> RetryDecision {
         let pending_update = store
-            .as_context()
-            .data()
-            .durable_ctx()
-            .public_state
-            .worker()
-            .pop_pending_update()
-            .await;
+            .as_context_mut()
+            .data_mut()
+            .durable_ctx_mut()
+            .state
+            .pending_update
+            .lock()
+            .await
+            .take();
         match pending_update {
             Some(TimestampedUpdateDescription {
                 description: description @ UpdateDescription::SnapshotBased { .. },
                 ..
             }) => {
                 let target_version = *description.target_version();
+
+                debug!("Finalizing snapshot update to version {target_version}");
 
                 match store
                     .as_context_mut()
@@ -596,7 +988,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .metadata
                             .clone();
 
-                        let failed = match component_metadata.load_snapshot().await {
+                        let failed = match component_metadata.load_snapshot() {
                             Ok(Some(load_snapshot)) => {
                                 let idempotency_key = IdempotencyKey::fresh();
                                 store
@@ -610,14 +1002,17 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     .as_context_mut()
                                     .data_mut()
                                     .begin_call_snapshotting_function();
+
                                 let load_result = invoke_observed_and_traced(
                                     load_snapshot.name.to_string(),
                                     vec![Value::List(data.iter().map(|b| Value::U8(*b)).collect())],
                                     store,
                                     instance,
                                     &component_metadata,
+                                    true,
                                 )
                                 .await;
+
                                 store
                                     .as_context_mut()
                                     .data_mut()
@@ -677,6 +1072,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
+
                             store
                                 .as_context_mut()
                                 .data_mut()
@@ -724,9 +1120,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     pub async fn process_pending_replay_events(&mut self) -> Result<(), WorkerExecutorError> {
-        debug!("Applying pending side effects accumulated during replay");
-
         let replay_events = self.state.replay_state.take_new_replay_events().await;
+        if !replay_events.is_empty() {
+            debug!("Applying pending side effects accumulated during replay");
+        }
         for event in replay_events {
             match event {
                 ReplayEvent::UpdateReplayed { new_version } => {
@@ -737,7 +1134,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 ReplayEvent::ReplayFinished => {
                     debug!("Replaying oplog finished");
 
-                    let pending_update = self.public_state.worker().peek_pending_update().await;
+                    let pending_update = self.state.pending_update.lock().await.take();
 
                     let pending_update = if let Some(pending_update) = pending_update {
                         pending_update
@@ -748,7 +1145,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     match pending_update.description {
                         UpdateDescription::Automatic { target_version } => {
                             debug!("Finalizing pending automatic update");
-                            self.public_state.worker().pop_pending_update().await;
 
                             if let Err(error) = self
                                 .update_state_to_new_component_version(target_version)
@@ -885,44 +1281,33 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         }
     }
 
-    async fn set_suspended(&self) -> Result<(), WorkerExecutorError> {
+    fn set_suspended(&self) {
         let mut execution_status = self.execution_status.write().unwrap();
         let current_execution_status = execution_status.clone();
         match current_execution_status {
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => {
+            ExecutionStatus::Running { .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
                     component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Suspended { .. } => {}
             ExecutionStatus::Interrupting {
-                await_interruption,
-                last_known_status,
-                ..
+                await_interruption, ..
             } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
                     component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
                 await_interruption.send(()).ok();
             }
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => {
+            ExecutionStatus::Loading { .. } => {
                 *execution_status = ExecutionStatus::Suspended {
-                    last_known_status,
                     component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
         };
-
-        Ok(())
     }
 
     fn set_running(&self) {
@@ -930,74 +1315,20 @@ impl<Ctx: WorkerCtx> StatusManagement for DurableWorkerCtx<Ctx> {
         let current_execution_status = execution_status.clone();
         match current_execution_status {
             ExecutionStatus::Running { .. } => {}
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => {
+            ExecutionStatus::Suspended { .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    last_known_status,
                     component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
             ExecutionStatus::Interrupting { .. } => {}
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => {
+            ExecutionStatus::Loading { .. } => {
                 *execution_status = ExecutionStatus::Running {
-                    last_known_status,
                     component_type: self.component_metadata().component_type,
                     timestamp: Timestamp::now_utc(),
                 };
             }
         }
-    }
-
-    async fn get_worker_status(&self) -> WorkerStatus {
-        match self.state.worker_service.get(&self.owned_worker_id).await {
-            Some(metadata) => {
-                if metadata.last_known_status.oplog_idx
-                    == self.state.oplog.current_oplog_index().await
-                {
-                    metadata.last_known_status.status
-                } else {
-                    WorkerStatus::Running
-                }
-            }
-            None => WorkerStatus::Idle,
-        }
-    }
-
-    async fn store_worker_status(&self, status: WorkerStatus) {
-        self.update_worker_status(|s| s.status = status.clone())
-            .await;
-        if (status == WorkerStatus::Idle
-            || status == WorkerStatus::Failed
-            || status == WorkerStatus::Exited)
-            && self.component_metadata().component_type == ComponentType::Durable
-        {
-            debug!("Scheduling oplog archive");
-            let at = Utc::now().add(self.state.config.oplog.archive_interval);
-            self.state
-                .scheduler_service
-                .schedule(
-                    at,
-                    ScheduledAction::ArchiveOplog {
-                        account_id: self.state.created_by.clone(),
-                        owned_worker_id: self.owned_worker_id.clone(),
-                        last_oplog_index: self.public_state.oplog.current_oplog_index().await,
-                        next_after: self.state.config.oplog.archive_interval,
-                    },
-                )
-                .await;
-        }
-    }
-
-    async fn update_pending_invocations(&self) {
-        self.update_worker_status(|_| {}).await;
-    }
-
-    async fn update_pending_updates(&self) {
-        self.update_worker_status(|_| {}).await;
     }
 }
 
@@ -1009,15 +1340,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
                 .iter()
                 .map(|value| value.clone().into())
                 .collect();
 
             let stack = self.get_current_invocation_context().await;
 
-            self.state
-                .oplog
+            self.public_state
+                .worker()
+                .oplog()
                 .add_exported_function_invoked(
                     full_function_name.to_string(),
                     &proto_function_input,
@@ -1033,13 +1365,69 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                         self.worker_id()
                     )
                 });
-            self.state.oplog.commit(CommitLevel::Always).await;
+
+            self.public_state
+                .worker()
+                .commit_oplog_and_update_state(CommitLevel::Always)
+                .await;
         }
         Ok(())
     }
 
     async fn on_invocation_failure(&mut self, trap_type: &TrapType) -> RetryDecision {
-        let previous_tries = self.trailing_error_count().await;
+        {
+            let oplog_entry = match trap_type {
+                TrapType::Interrupt(InterruptKind::Interrupt) => Some(OplogEntry::interrupted()),
+                TrapType::Interrupt(InterruptKind::Suspend) => Some(OplogEntry::suspend()),
+                TrapType::Interrupt(InterruptKind::Jump) => None,
+                TrapType::Interrupt(InterruptKind::Restart) => None,
+                TrapType::Exit => Some(OplogEntry::exited()),
+                TrapType::Error {
+                    error: WorkerError::InvalidRequest(_),
+                    ..
+                } => None,
+                TrapType::Error { error, retry_from } => {
+                    Some(OplogEntry::error(error.clone(), *retry_from))
+                }
+            };
+
+            if let Some(entry) = oplog_entry {
+                self.public_state.worker().add_and_commit_oplog(entry).await;
+            };
+        }
+
+        // special case. We are jumping, so we will always have a detached status here.
+        if matches!(trap_type, TrapType::Interrupt(InterruptKind::Jump)) {
+            return RetryDecision::Immediate;
+        }
+
+        let latest_status = self
+            .public_state
+            .worker()
+            .get_non_detached_last_known_status()
+            .await;
+
+        let giving_up = matches!(
+            trap_type,
+            TrapType::Error {
+                error: WorkerError::InvalidRequest(_),
+                ..
+            }
+        ) || matches!(
+            latest_status.status,
+            WorkerStatus::Failed | WorkerStatus::Interrupted | WorkerStatus::Exited
+        );
+
+        if giving_up {
+            // Giving up, associating the stored result with the current and upcoming invocations
+            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
+                self.public_state
+                    .worker()
+                    .store_invocation_failure(&idempotency_key, trap_type)
+                    .await;
+            }
+        }
+
         let default_retry_config = &self.state.config.retry;
         let retry_config = self
             .state
@@ -1047,60 +1435,14 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .as_ref()
             .unwrap_or(default_retry_config)
             .clone();
-        let decision =
-            Self::get_recovery_decision_on_trap(&retry_config, previous_tries, trap_type);
 
-        debug!(
-            "Recovery decision after {} tries: {:?}",
-            previous_tries, decision
+        let decision = Self::get_recovery_decision_on_trap(
+            &retry_config,
+            &latest_status.current_retry_count,
+            trap_type,
         );
-        let (updated_worker_status, oplog_entry, store_result) = match trap_type {
-            TrapType::Interrupt(InterruptKind::Interrupt) => (
-                WorkerStatus::Interrupted,
-                Some(OplogEntry::interrupted()),
-                true,
-            ),
-            TrapType::Interrupt(InterruptKind::Suspend) => {
-                (WorkerStatus::Suspended, Some(OplogEntry::suspend()), false)
-            }
-            TrapType::Interrupt(InterruptKind::Jump) => (WorkerStatus::Running, None, false),
-            TrapType::Interrupt(InterruptKind::Restart) => (WorkerStatus::Running, None, false),
-            TrapType::Exit => (WorkerStatus::Exited, Some(OplogEntry::exited()), true),
-            TrapType::Error(WorkerError::InvalidRequest(_)) => (WorkerStatus::Running, None, true),
-            TrapType::Error(error) => {
-                let status = if is_worker_error_retriable(&retry_config, error, previous_tries) {
-                    WorkerStatus::Retrying
-                } else {
-                    WorkerStatus::Failed
-                };
-                let store_error = status == WorkerStatus::Failed;
-                (status, Some(OplogEntry::error(error.clone())), store_error)
-            }
-        };
 
-        let oplog_idx = if let Some(entry) = oplog_entry {
-            let oplog_idx = self.state.oplog.add_and_commit(entry).await;
-            Some(oplog_idx)
-        } else {
-            None
-        };
-
-        self.store_worker_status(updated_worker_status.clone())
-            .await;
-
-        if store_result {
-            // Giving up, associating the stored result with the current and upcoming invocations
-            if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
-                self.public_state
-                    .worker()
-                    .store_invocation_failure(
-                        &idempotency_key,
-                        trap_type,
-                        oplog_idx.unwrap_or(OplogIndex::NONE),
-                    )
-                    .await;
-            }
-        }
+        debug!("Recovery decision: {:?}", decision);
 
         decision
     }
@@ -1112,24 +1454,28 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         consumed_fuel: i64,
         output: Option<ValueAndType>,
     ) -> Result<(), WorkerExecutorError> {
-        let is_live_after = self.state.is_live();
+        let is_live = self.state.is_live();
 
-        if is_live_after {
+        if is_live {
             if self.state.snapshotting_mode.is_none() {
-                self.state
-                    .oplog
+                self.public_state
+                    .worker()
+                    .oplog()
                     .add_exported_function_completed(&output, consumed_fuel)
                     .await
                     .unwrap_or_else(|err| {
                         panic!("could not encode function result for {full_function_name}: {err}")
                     });
-                self.state.oplog.commit(CommitLevel::Always).await;
-                let oplog_idx = self.state.oplog.current_oplog_index().await;
+
+                self.public_state
+                    .worker()
+                    .commit_oplog_and_update_state(CommitLevel::Always)
+                    .await;
 
                 if let Some(idempotency_key) = self.state.get_current_idempotency_key() {
                     self.public_state
                         .worker()
-                        .store_invocation_success(&idempotency_key, output.clone(), oplog_idx)
+                        .store_invocation_success(&idempotency_key, output.clone())
                         .await;
                 }
             }
@@ -1150,13 +1496,16 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 }
             }
         }
-
-        self.store_worker_status(WorkerStatus::Idle).await;
-
         debug!("Function {full_function_name} finished with {output:?}");
-
-        // Return indicating that it is done
         Ok(())
+    }
+
+    async fn get_current_retry_point(&self) -> OplogIndex {
+        if let Some(idx) = self.state.active_atomic_regions.last() {
+            *idx
+        } else {
+            self.state.current_retry_point
+        }
     }
 }
 
@@ -1171,18 +1520,7 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         let resource_id = WorkerResourceId(id);
         if self.state.is_live() {
             let entry = OplogEntry::create_resource(resource_id, name.clone());
-            self.state.oplog.add(entry.clone()).await;
-            self.update_worker_status(move |status| {
-                status.owned_resources.insert(
-                    resource_id,
-                    WorkerResourceDescription {
-                        created_at: entry.timestamp(),
-                        resource_owner: name.owner,
-                        resource_name: name.name,
-                    },
-                );
-            })
-            .await;
+            self.public_state.worker().add_to_oplog(entry).await;
         }
         id
     }
@@ -1192,14 +1530,8 @@ impl<Ctx: WorkerCtx> ResourceStore for DurableWorkerCtx<Ctx> {
         if let Some((resource_type_id, _)) = &result {
             let id = WorkerResourceId(resource_id);
             if self.state.is_live() {
-                self.state
-                    .oplog
-                    .add(OplogEntry::drop_resource(id, resource_type_id.clone()))
-                    .await;
-                self.update_worker_status(move |status| {
-                    status.owned_resources.remove(&id);
-                })
-                .await;
+                let entry = OplogEntry::drop_resource(id, resource_type_id.clone());
+                self.public_state.worker().add_to_oplog(entry).await;
             }
         }
         result
@@ -1236,28 +1568,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         details: Option<String>,
     ) {
         let entry = OplogEntry::failed_update(target_version, details.clone());
-        let timestamp = entry.timestamp();
-        self.public_state.oplog.add_and_commit(entry).await;
-        self.update_worker_status(|status| {
-            status.failed_updates.push(FailedUpdateRecord {
-                timestamp,
-                target_version,
-                details: details.clone(),
-            });
-
-            // As part of performing a manual update, after the executor called the save-snapshot function
-            // it marks the whole history of the worker as "skipped" and reloads the worker with the new
-            // version. As the history is skipped it immediately can start with calling load-snapshot on the
-            // saved binary. However, if this fails, we have to revert the worker to the original version. As part
-            // of this we restore the original set of skipped regions by dropping the override.
-            //
-            // Note that we can always recalculate the old set of skipped regions from the oplog - the "override layer"
-            // is just an optimization so we don't have to.
-            if status.skipped_regions.is_overridden() {
-                status.skipped_regions.drop_override()
-            }
-        })
-        .await;
+        self.public_state.worker().add_and_commit_oplog(entry).await;
 
         warn!(
             "Worker failed to update to {}: {}, update attempt aborted",
@@ -1274,38 +1585,12 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
     ) {
         let target_version = *update.target_version();
         info!("Worker update to {} finished successfully", target_version);
-
         let entry = OplogEntry::successful_update(
             target_version,
             new_component_size,
             new_active_plugins.clone(),
         );
-        let timestamp = entry.timestamp();
-        self.public_state.oplog.add_and_commit(entry).await;
-        self.update_worker_status(|status| {
-            status.component_version = target_version;
-            status.successful_updates.push(SuccessfulUpdateRecord {
-                timestamp,
-                target_version,
-            });
-            status.active_plugins = new_active_plugins;
-
-            // As part of performing a manual update, after the executor called the save-snapshot function
-            // it marks the whole history of the worker as "skipped" and reloads the worker with the new
-            // version. As the history is skipped it immediately can start with calling load-snapshot on the
-            // saved binary. Once that succeeds, the update is considered done and we make this skipped region
-            // "final" by merging it into the set of skipped regions.
-            if status.skipped_regions.is_overridden() {
-                status.skipped_regions.merge_override()
-            }
-
-            // After a manual update we need to start replays with the new version
-            // (as the previous updates that would go from 0 -> target_version are now in deleted regions)
-            if let UpdateDescription::SnapshotBased { .. } = update {
-                status.component_version_for_replay = target_version
-            }
-        })
-        .await;
+        self.public_state.worker().add_and_commit_oplog(entry).await;
     }
 }
 
@@ -1314,10 +1599,13 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
         let span_id = self.state.current_span_id.clone();
         let span = self.start_child_span(&span_id, initial_attributes).await?;
-        self.state.current_span_id = span.span_id().clone();
+        if activate {
+            self.state.current_span_id = span.span_id().clone();
+        }
         Ok(span)
     }
 
@@ -1336,7 +1624,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         let span = if is_live {
             self.state
                 .invocation_context
-                .start_span(current_span_id, None)
+                .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else if let Some((_, entry)) = self
             .state
@@ -1354,14 +1642,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             let span = InvocationContextSpan::local()
                 .with_span_id(span_id)
                 .with_start(timestamp)
-                .with_parent(self.state.invocation_context.get(current_span_id).unwrap())
+                .with_parent(self.state.invocation_context.get(parent).unwrap())
                 .build();
             self.state.invocation_context.add_span(span.clone());
             span
         } else {
             self.state
                 .invocation_context
-                .start_span(current_span_id, None)
+                .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         };
 
@@ -1387,12 +1675,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         }
 
         if is_live {
-            self.state
-                .oplog
-                .add(OplogEntry::start_span(
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::start_span(
                     span.start().unwrap_or(Timestamp::now_utc()),
                     span.span_id().clone(),
-                    Some(current_span_id.clone()),
+                    Some(parent.clone()),
                     span.linked_context().map(|link| link.span_id().clone()),
                     HashMap::from_iter(initial_attributes.iter().cloned()),
                 ))
@@ -1423,19 +1711,12 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
 
     async fn finish_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         if self.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::finish_span(span_id.clone()))
+            self.public_state
+                .worker()
+                .add_and_commit_oplog(OplogEntry::finish_span(span_id.clone()))
                 .await;
         } else {
-            // Using try_get_oplog_entry here to preserve backward compatibility - starting and finishing
-            // spans has been added to existing operations (such as wasi-http and rpc) and old oplogs
-            // does not have the StartSpan/FinishSpan paris persisted.
-            let _ = self
-                .state
-                .replay_state
-                .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::FinishSpan { .. }))
-                .await;
+            crate::get_oplog_entry!(self.state.replay_state, OplogEntry::FinishSpan)?;
         }
 
         if &self.state.current_span_id == span_id {
@@ -1467,9 +1748,9 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             .set_attribute(span_id, key.to_string(), value.clone())
             .map_err(WorkerExecutorError::runtime)?;
         if self.is_live() {
-            self.state
-                .oplog
-                .add(OplogEntry::set_span_attribute(
+            self.public_state
+                .worker()
+                .add_to_oplog(OplogEntry::set_span_attribute(
                     span_id.clone(),
                     key.to_string(),
                     value,
@@ -1502,15 +1783,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         owned_worker_id: &OwnedWorkerId,
         latest_worker_status: &WorkerStatusRecord,
     ) -> Option<LastError> {
-        last_error_and_retry_count(this, owned_worker_id, latest_worker_status).await
-    }
-
-    async fn compute_latest_worker_status<T: HasOplogService + HasConfig + Send + Sync>(
-        this: &T,
-        owned_worker_id: &OwnedWorkerId,
-        metadata: &Option<WorkerMetadata>,
-    ) -> Result<WorkerStatusRecord, WorkerExecutorError> {
-        calculate_last_known_status(this, owned_worker_id, metadata).await
+        last_error(this, owned_worker_id, latest_worker_status).await
     }
 
     async fn resume_replay(
@@ -1525,10 +1798,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .as_context()
                 .data()
                 .durable_ctx()
-                .state
-                .oplog
+                .public_state
+                .worker()
+                .oplog()
                 .current_oplog_index()
                 .await;
+
             store
                 .as_context_mut()
                 .data_mut()
@@ -1550,6 +1825,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .replay_state
                     .get_oplog_entry_exported_function_invoked()
                     .await;
+
                 match oplog_entry {
                     Err(error) => break Err(error),
                     Ok(None) => {
@@ -1575,6 +1851,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .await?;
 
                         debug!("Replaying function {function_name}");
+                        debug!(
+                            "Replay state: {:?}",
+                            store.as_context().data().durable_ctx().state.replay_state
+                        );
                         let span = span!(Level::INFO, "replaying", function = function_name);
                         store
                             .as_context_mut()
@@ -1603,6 +1883,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             store,
                             instance,
                             &component_metadata,
+                            false,
                         )
                         .instrument(span)
                         .await;
@@ -1629,7 +1910,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                 match component_metadata
                                     .metadata
                                     .find_function(&full_function_name)
-                                    .await
                                 {
                                     Ok(value) => {
                                         if let Some(value) = value {
@@ -1654,11 +1934,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                 break Err(err);
                                             }
                                         } else {
-                                            let trap_type = TrapType::Error(
-                                                WorkerError::InvalidRequest(format!(
+                                            let trap_type = TrapType::Error {
+                                                error: WorkerError::InvalidRequest(format!(
                                                     "Function {full_function_name} not found"
                                                 )),
-                                            );
+                                                retry_from: OplogIndex::INITIAL,
+                                            };
 
                                             let _ = store
                                                 .as_context_mut()
@@ -1672,10 +1953,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         }
                                     }
                                     Err(err) => {
-                                        let trap_type =
-                                            TrapType::Error(WorkerError::InvalidRequest(format!(
+                                        let trap_type = TrapType::Error {
+                                            error: WorkerError::InvalidRequest(format!(
                                                 "Function {full_function_name} not found: {err}"
-                                            )));
+                                            )),
+                                            retry_from: OplogIndex::INITIAL,
+                                        };
 
                                         let _ = store
                                             .as_context_mut()
@@ -1694,9 +1977,10 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             _ => {
                                 let trap_type = match invoke_result {
                                     Ok(invoke_result) => invoke_result.as_trap_type::<Ctx>(),
-                                    Err(error) => {
-                                        Some(TrapType::from_error::<Ctx>(&anyhow!(error)))
-                                    }
+                                    Err(error) => Some(TrapType::from_error::<Ctx>(
+                                        &anyhow!(error),
+                                        OplogIndex::INITIAL,
+                                    )),
                                 };
                                 let decision = match trap_type {
                                     Some(trap_type) => {
@@ -1723,7 +2007,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                                         "Process exited",
                                                     ))
                                                 }
-                                                TrapType::Error(error) => {
+                                                TrapType::Error { error, .. } => {
                                                     let stderr = store
                                                         .as_context()
                                                         .data()
@@ -1806,13 +2090,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             Ok(RetryDecision::None)
         } else {
             let pending_update = store
-                .as_context()
-                .data()
-                .durable_ctx()
-                .public_state
-                .worker()
-                .peek_pending_update()
-                .await;
+                .as_context_mut()
+                .data_mut()
+                .durable_ctx_mut()
+                .state
+                .pending_update
+                .lock()
+                .await
+                .clone();
+
             let prepare_result = match pending_update {
                 Some(timestamped_update) => {
                     match &timestamped_update.description {
@@ -1833,27 +2119,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                     // 1. We failed before the update has succeeded. In this case we fail the update and retry the replay.
                                     // 2. We failed after the update has succeeded. In this case we can the original failure.
                                     let final_pending_update = store
-                                        .as_context()
-                                        .data()
-                                        .durable_ctx()
-                                        .public_state
-                                        .worker()
-                                        .peek_pending_update()
-                                        .await;
-                                    match final_pending_update {
-                                        Some(final_pending_update)
-                                            if final_pending_update == timestamped_update =>
-                                        {
-                                            // We failed before the update has succeeded. Mark the update as failed and retry
-                                            store
-                                                .as_context()
-                                                .data()
-                                                .durable_ctx()
-                                                .public_state
-                                                .worker()
-                                                .pop_pending_update()
-                                                .await;
+                                        .as_context_mut()
+                                        .data_mut()
+                                        .durable_ctx_mut()
+                                        .state
+                                        .pending_update
+                                        .lock()
+                                        .await
+                                        .take();
 
+                                    match final_pending_update {
+                                        Some(_) => {
+                                            // We failed before the update has succeeded. Mark the update as failed and retry
                                             store
                                                 .as_context_mut()
                                                 .data_mut()
@@ -1867,11 +2144,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                                             debug!("Retrying prepare_instance after failed update attempt");
 
-                                            Ok(RetryDecision::Immediate)
-                                        }
-                                        Some(_) => {
-                                            // There is another pending update. Maybe that one can fix the worker.
-                                            debug!("Immediately retrying failed worker with next pending update");
                                             Ok(RetryDecision::Immediate)
                                         }
                                         _ => Err(error),
@@ -1891,7 +2163,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
             };
             match prepare_result {
                 Ok(RetryDecision::None) => {
-                    store.as_context_mut().data_mut().set_suspended().await?;
+                    store.as_context_mut().data_mut().set_suspended();
                     Ok(RetryDecision::None)
                 }
                 Ok(other) => Ok(other),
@@ -1911,13 +2183,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         Ok(())
     }
 
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
         this: &T,
     ) -> Result<(), anyhow::Error> {
@@ -1931,29 +2196,22 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
         debug!("Recovering running workers: {:?}", workers);
 
-        let default_retry_config = &this.config().retry;
         for worker in workers {
-            let owned_worker_id = worker.owned_worker_id();
-            let created_by = worker.created_by.clone();
-            let latest_worker_status =
-                calculate_last_known_status(this, &owned_worker_id, &Some(worker)).await?;
-            let last_error =
-                Self::get_last_error_and_retry_count(this, &owned_worker_id, &latest_worker_status)
-                    .await;
-            let decision = Self::get_recovery_decision_on_startup(
-                latest_worker_status
-                    .overridden_retry_config
-                    .as_ref()
-                    .unwrap_or(default_retry_config),
-                &last_error,
-            );
+            let owned_worker_id = worker.initial_worker_metadata.owned_worker_id();
+            let created_by = worker.initial_worker_metadata.created_by.clone();
+            let latest_worker_status = calculate_last_known_status_for_existing_worker(
+                this,
+                &owned_worker_id,
+                worker.last_known_status,
+            )
+            .await;
 
-            if let Some(last_error) = last_error {
-                debug!("Recovery decision after {last_error}: {decision:?}");
-            }
-
-            match decision {
-                RetryDecision::Immediate | RetryDecision::ReacquirePermits => {
+            // TODO: there is probably a race here between assignment changing and a suspended worker getting woken up.
+            match latest_worker_status.status {
+                WorkerStatus::Running
+                | WorkerStatus::Idle
+                | WorkerStatus::Retrying
+                | WorkerStatus::Interrupted => {
                     let _ = Worker::get_or_create_running(
                         this,
                         &created_by,
@@ -1967,57 +2225,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     )
                     .await?;
                 }
-                RetryDecision::Delayed(_) => {
-                    panic!("Delayed recovery on startup is not supported currently")
-                }
-                RetryDecision::None => {}
+                _ => {}
             }
         }
 
         info!("Finished recovering workers");
-        Ok(())
-    }
-
-    async fn on_worker_update_failed_to_start<T: HasAll<Ctx> + Send + Sync>(
-        this: &T,
-        account_id: &AccountId,
-        owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentRevision,
-        details: Option<String>,
-    ) -> Result<(), WorkerExecutorError> {
-        let worker = this
-            .worker_activator()
-            .get_or_create_suspended(
-                account_id,
-                owned_worker_id,
-                None,
-                None,
-                None,
-                None,
-                None,
-                &InvocationContextStack::fresh(),
-            )
-            .await?;
-
-        let entry = OplogEntry::failed_update(target_version, details.clone());
-        let timestamp = entry.timestamp();
-        let failed_update_oplog_idx = worker.oplog().add_and_commit(entry).await;
-        let metadata = worker.get_metadata()?;
-        let mut status = metadata.last_known_status;
-        status.failed_updates.push(FailedUpdateRecord {
-            timestamp,
-            target_version,
-            details: details.clone(),
-        });
-
-        // ensure our status is in sync with the oplog idx
-        status.oplog_idx = failed_update_oplog_idx;
-
-        if status.skipped_regions.is_overridden() {
-            status.skipped_regions.drop_override()
-        }
-
-        worker.update_status(status).await;
         Ok(())
     }
 }
@@ -2180,17 +2392,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> FileSystemReading for DurableWo
     }
 }
 
-async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
+// TODO: optimize this and keep the relevant indices for recovering logs in the WorkerStatusRecord
+async fn last_error<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     latest_worker_status: &WorkerStatusRecord,
 ) -> Option<LastError> {
     let mut idx = this.oplog_service().get_last_index(owned_worker_id).await;
-    let mut retry_count = 0;
     if idx == OplogIndex::NONE {
         None
     } else {
         let mut first_error = None;
+        let mut first_retry_from = OplogIndex::NONE;
         let mut last_error_index = idx;
         loop {
             if latest_worker_status
@@ -2206,16 +2419,26 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
             } else {
                 let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
                 match oplog_entry.first_key_value() {
-                    Some((_, OplogEntry::Error { error, .. })) => {
-                        retry_count += 1;
-                        last_error_index = idx;
-                        if first_error.is_none() {
-                            first_error = Some(error.clone());
-                        }
-                        if idx > OplogIndex::INITIAL {
-                            idx = idx.previous();
-                            continue;
+                    Some((
+                        _,
+                        OplogEntry::Error {
+                            error, retry_from, ..
+                        },
+                    )) => {
+                        if first_retry_from == OplogIndex::NONE || first_retry_from == *retry_from {
+                            last_error_index = idx;
+                            if first_error.is_none() {
+                                first_error = Some(error.clone());
+                                first_retry_from = *retry_from;
+                            }
+                            if idx > OplogIndex::INITIAL {
+                                idx = idx.previous();
+                                continue;
+                            } else {
+                                break;
+                            }
                         } else {
+                            // Found an error entry belonging to another retry point
                             break;
                         }
                     }
@@ -2228,7 +2451,24 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
                             break;
                         }
                     }
-                    Some((_, _)) => break,
+                    Some((
+                        _,
+                        OplogEntry::ExportedFunctionInvoked { .. }
+                        | OplogEntry::ExportedFunctionCompleted { .. },
+                    )) => {
+                        // Retry counting never gets across invocation boundaries
+                        break;
+                    }
+                    Some((_, _)) => {
+                        // Skipping non-hint entries as well, but only up to the first error entry that's different, or the beginning
+                        // of the last invocation
+                        if idx > OplogIndex::INITIAL {
+                            idx = idx.previous();
+                            continue;
+                        } else {
+                            break;
+                        }
+                    }
                     None => {
                         // This is possible if the oplog has been deleted between the get_last_index and the read call
                         break;
@@ -2239,8 +2479,8 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
         match first_error {
             Some(error) => Some(LastError {
                 error,
-                retry_count,
                 stderr: recover_stderr_logs(this, owned_worker_id, last_error_index).await,
+                retry_from: first_retry_from,
             }),
             None => None,
         }
@@ -2248,18 +2488,28 @@ async fn last_error_and_retry_count<T: HasOplogService + HasConfig>(
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum
-/// number of entries, and at most until the first invocation start entry.
+/// number of entries, and at most until the beginning of the last invocation.
 pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     this: &T,
     owned_worker_id: &OwnedWorkerId,
     last_oplog_idx: OplogIndex,
 ) -> String {
     let max_count = this.config().limits.event_history_size;
+
+    // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
+    // have at most one pending batch we discard.
+    let mut collected_count = 0;
     let mut idx = last_oplog_idx;
     let mut stderr_entries = Vec::new();
+    let mut current_stderr_entries_batch = Vec::new();
+    let mut first_seen_invocation = None;
+
     loop {
         // TODO: this could be read in batches to speed up the process
         let oplog_entry = this.oplog_service().read(owned_worker_id, idx, 1).await;
+
+        // Because of retries we might have multiple invocation start entries.
+        // Read until the first invocation start entry which does not belong to the same invocation (using the trace id)
         match oplog_entry.first_key_value() {
             Some((
                 _,
@@ -2269,12 +2519,37 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
                     ..
                 },
             )) => {
-                stderr_entries.push(message.clone());
-                if stderr_entries.len() >= max_count {
-                    break;
+                if collected_count < max_count {
+                    current_stderr_entries_batch.push(message.clone());
+                    collected_count += 1;
                 }
             }
-            Some((_, OplogEntry::ExportedFunctionInvoked { .. })) => break,
+            Some((
+                _,
+                OplogEntry::ExportedFunctionInvoked {
+                    function_name,
+                    idempotency_key,
+                    ..
+                },
+            )) => match &first_seen_invocation {
+                None => {
+                    first_seen_invocation = Some((function_name.clone(), idempotency_key.clone()));
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some((expected_function, expected_idempotency_key))
+                    if function_name == expected_function
+                        && idempotency_key == expected_idempotency_key =>
+                {
+                    stderr_entries.extend(std::mem::take(&mut current_stderr_entries_batch));
+                    if stderr_entries.len() >= max_count {
+                        break;
+                    };
+                }
+                Some(_) => break,
+            },
             _ => {}
         }
         if idx > OplogIndex::INITIAL {
@@ -2311,6 +2586,7 @@ struct HttpRequestState {
 }
 
 struct PrivateDurableWorkerState {
+    // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog_service: Arc<dyn OplogService>,
     oplog: Arc<dyn Oplog>,
     promise_service: Arc<dyn PromiseService>,
@@ -2326,6 +2602,7 @@ struct PrivateDurableWorkerState {
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
+    agent_id: Option<AgentId>,
     current_idempotency_key: Option<IdempotencyKey>,
     rpc: Arc<dyn Rpc>,
     worker_proxy: Arc<dyn WorkerProxy>,
@@ -2356,15 +2633,40 @@ struct PrivateDurableWorkerState {
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
+    project_service: Arc<dyn ProjectService>,
+    shard_service: Arc<dyn ShardService>,
+
     /// The initial config vars that the worker was configured with
     initial_wasi_config_vars: BTreeMap<String, String>,
     /// The current config vars of the worker, taking into account component version, etc.
     wasi_config_vars: RwLock<BTreeMap<String, String>>,
+
+    // ResourceIds of all DynPollables that are backed by GetPromiseResultEntries
+    promise_backed_pollables: TRwLock<HashMap<u32, GetPromiseResultEntry>>,
+    // Map from resource_id to the dyn_pollables that wrap it
+    promise_dyn_pollables: TRwLock<HashMap<u32, HashSet<u32>>>,
+
+    /// Marks a retry point in the oplog to be attached to an Error entry in case a failure happens.
+    /// As the error can happen both in the host or in the user code, we attach the last known value every time,
+    /// which normally points to the last persisted side effect or the beginning of a region.
+    current_retry_point: OplogIndex,
+
+    /// Tracks the active atomic regions by their begin index. This is used together with `current_retry_point` to
+    /// determine the effective retry point associated with an error; while `current_retry_point` is changed for each
+    /// persisted host call, if there is an active atomic region, the error is associated with that. Otherwise retried
+    /// failures within atomic regions would not be grouped by the same retry point as the whole atomic region gets retried
+    /// from scratch.
+    active_atomic_regions: Vec<OplogIndex>,
+
+    // Update that is pending and should be applied at the end of replay.
+    // Other parts of the worker configuration already reflect the worker state implied by the update (component version, env vars, ifs, etc.)
+    pending_update: tokio::sync::Mutex<Option<TimestampedUpdateDescription>>,
 }
 
 impl PrivateDurableWorkerState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
+        agent_id: Option<AgentId>,
         oplog_service: Arc<dyn OplogService>,
         oplog: Arc<dyn Oplog>,
         promise_service: Arc<dyn PromiseService>,
@@ -2392,6 +2694,8 @@ impl PrivateDurableWorkerState {
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
+        shard_service: Arc<dyn ShardService>,
+        pending_update: Option<TimestampedUpdateDescription>,
     ) -> Self {
         let replay_state = ReplayState::new(
             owned_worker_id.clone(),
@@ -2405,7 +2709,8 @@ impl PrivateDurableWorkerState {
         let current_span_id = invocation_context.root.span_id().clone();
         Self {
             oplog_service,
-            oplog: oplog.clone(),
+            oplog,
+            agent_id,
             promise_service,
             scheduler_service,
             worker_service,
@@ -2442,107 +2747,12 @@ impl PrivateDurableWorkerState {
             created_by,
             initial_wasi_config_vars,
             wasi_config_vars: RwLock::new(wasi_config_vars),
-        }
-    }
-
-    pub async fn begin_function(
-        &mut self,
-        function_type: &DurableFunctionType,
-    ) -> Result<OplogIndex, WorkerExecutorError> {
-        if (*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
-            || matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-        {
-            if self.is_live() {
-                self.oplog
-                    .add_and_commit(OplogEntry::begin_remote_write())
-                    .await;
-                let begin_index = self.oplog.current_oplog_index().await;
-                Ok(begin_index)
-            } else {
-                let (begin_index, _) =
-                    crate::get_oplog_entry!(self.replay_state, OplogEntry::BeginRemoteWrite)?;
-                if !self.assume_idempotence {
-                    let end_index = self
-                        .replay_state
-                        .lookup_oplog_entry(begin_index, OplogEntry::is_end_remote_write)
-                        .await;
-                    if end_index.is_none() {
-                        // Must switch to live mode before failing to be able to commit an Error entry
-                        self.replay_state.switch_to_live().await;
-                        Err(WorkerExecutorError::runtime(
-                            "Non-idempotent remote write operation was not completed, cannot retry",
-                        ))
-                    } else {
-                        Ok(begin_index)
-                    }
-                } else if matches!(
-                    *function_type,
-                    DurableFunctionType::WriteRemoteBatched(None)
-                ) {
-                    let end_index = self
-                        .replay_state
-                        .lookup_oplog_entry_with_condition(
-                            begin_index,
-                            OplogEntry::is_end_remote_write,
-                            OplogEntry::no_concurrent_side_effect,
-                        )
-                        .await;
-                    if end_index.is_none() {
-                        // We need to jump to the end of the oplog
-                        self.replay_state.switch_to_live().await;
-
-                        // But this is not enough, because if the retried batched write operation succeeds,
-                        // and later we replay it, we need to skip the first attempt and only replay the second.
-                        // Se we add a Jump entry to the oplog that registers a deleted region.
-                        let deleted_region = OplogRegion {
-                            start: begin_index.next(), // need to keep the BeginAtomicRegion entry
-                            end: self.replay_state.replay_target().next(), // skipping the Jump entry too
-                        };
-                        self.replay_state
-                            .add_skipped_region(deleted_region.clone())
-                            .await;
-                        self.oplog
-                            .add_and_commit(OplogEntry::jump(deleted_region))
-                            .await;
-                    }
-
-                    Ok(begin_index)
-                } else {
-                    Ok(begin_index)
-                }
-            }
-        } else {
-            let begin_index = self.oplog.current_oplog_index().await;
-            Ok(begin_index)
-        }
-    }
-
-    pub async fn end_function(
-        &mut self,
-        function_type: &DurableFunctionType,
-        begin_index: OplogIndex,
-    ) -> Result<(), WorkerExecutorError> {
-        if (*function_type == DurableFunctionType::WriteRemote && !self.assume_idempotence)
-            || matches!(
-                *function_type,
-                DurableFunctionType::WriteRemoteBatched(None)
-            )
-        {
-            if self.is_live() {
-                self.oplog
-                    .add(OplogEntry::end_remote_write(begin_index))
-                    .await;
-                Ok(())
-            } else {
-                let (_, _) =
-                    crate::get_oplog_entry!(self.replay_state, OplogEntry::EndRemoteWrite)?;
-                Ok(())
-            }
-        } else {
-            Ok(())
+            shard_service,
+            promise_backed_pollables: TRwLock::new(HashMap::new()),
+            promise_dyn_pollables: TRwLock::new(HashMap::new()),
+            pending_update: tokio::sync::Mutex::new(pending_update),
+            current_retry_point: OplogIndex::INITIAL,
+            active_atomic_regions: Vec::new(),
         }
     }
 
@@ -2675,8 +2885,9 @@ impl HasPlugins for PrivateDurableWorkerState {
 
 pub struct PublicDurableWorkerState<Ctx: WorkerCtx> {
     promise_service: Arc<dyn PromiseService>,
-    event_service: Arc<dyn WorkerEventService + Send + Sync>,
+    event_service: Arc<dyn WorkerEventService>,
     invocation_queue: Weak<Worker<Ctx>>,
+    // IMPORTANT: commits to the oplog must go via self.public_state.worker().commit_oplog_and_update_state
     oplog: Arc<dyn Oplog>,
 }
 
@@ -3030,7 +3241,7 @@ fn effective_wasi_config_vars(
 
 /// Helper macro for expecting a given type of OplogEntry as the next entry in the oplog during
 /// replay, while skipping hint entries.
-/// The macro expression's type is `Result<OplogEntry, GolemError>` and it fails if the next non-hint
+/// The macro expression's type is `Result<OplogEntry, WorkerExecutorError>` and it fails if the next non-hint
 /// entry was not the expected one.
 #[macro_export]
 macro_rules! get_oplog_entry {
@@ -3051,4 +3262,21 @@ macro_rules! get_oplog_entry {
             }
         }
     };
+}
+
+#[async_trait]
+pub trait RemoteTransactionHandler<Tx, Err>
+where
+    Err: From<WorkerExecutorError>,
+{
+    async fn create_new(&self) -> Result<(TransactionId, Tx), Err>;
+
+    async fn create_replay(
+        &self,
+        transaction_id: &TransactionId,
+    ) -> Result<(TransactionId, Tx), Err>;
+
+    async fn is_committed(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
+
+    async fn is_rolled_back(&self, transaction_id: &TransactionId) -> Result<bool, Err>;
 }

@@ -85,6 +85,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .get_data(environment_id, container_name.clone(), name.clone(), start, end)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (container_name, name, start, end), result)
                 .await
@@ -136,6 +137,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .write_data(environment_id, container_name.clone(), name.clone(), data)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (container_name, name, len), result)
                 .await
@@ -174,6 +176,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .list_objects(environment_id, container_name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, container_name, result).await
         } else {
             durability.replay(self).await
@@ -217,6 +220,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .delete_object(environment_id, container_name.clone(), name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (container_name, name), result)
                 .await
@@ -256,6 +260,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .delete_objects(environment_id, container_name.clone(), names.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (container_name, names), result)
                 .await
@@ -295,6 +300,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .has_object(environment_id, container_name.clone(), name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (container_name, name), result)
                 .await
@@ -335,6 +341,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .object_info(environment_id, container_name.clone(), name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability
                 .persist(self, (container_name, name), result)
                 .await
@@ -378,6 +385,7 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
                 .blob_store_service
                 .clear(environment_id, container_name.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, container_name, result).await
         } else {
             durability.replay(self).await

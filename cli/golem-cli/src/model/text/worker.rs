@@ -31,7 +31,7 @@ use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,
 };
-use golem_wasm_rpc::{print_value_and_type, ValueAndType};
+use golem_wasm::{print_value_and_type, ValueAndType};
 use indoc::indoc;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
@@ -47,14 +47,14 @@ impl MessageWithFields for WorkerCreateView {
     fn message(&self) -> String {
         if let Some(worker_name) = &self.worker_name {
             format!(
-                "Created new worker {}",
+                "Created new agent {}",
                 format_message_highlight(&worker_name)
             )
         } else {
             // TODO: review: do we really want to hide the worker name? it is provided now
             //       in "worker new"
             format!(
-                "Created new worker with a {}",
+                "Created new agent with a {}",
                 format_message_highlight("random generated name")
             )
         }
@@ -65,7 +65,7 @@ impl MessageWithFields for WorkerCreateView {
 
         fields
             .fmt_field("Component name", &self.component_name, format_id)
-            .fmt_field_option("Worker name", &self.worker_name, format_main_id);
+            .fmt_field_option("Agent name", &self.worker_name, format_worker_name);
 
         fields.build()
     }
@@ -96,7 +96,7 @@ impl WorkerGetView {
 impl MessageWithFields for WorkerGetView {
     fn message(&self) -> String {
         format!(
-            "Got metadata for worker {}",
+            "Got metadata for agent {}",
             format_message_highlight(&self.metadata.worker_name)
         )
     }
@@ -157,7 +157,7 @@ impl MessageWithFields for WorkerGetView {
                 &self.metadata.component_version,
                 format_id,
             )
-            .fmt_field("Worker name", &self.metadata.worker_name, format_main_id)
+            .fmt_field("Agent name", &self.metadata.worker_name, format_worker_name)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
                 "Component size",
@@ -206,7 +206,7 @@ impl MessageWithFields for WorkerGetView {
             )
             .fmt_field_optional(
                 "WARNING",
-                "The presented worker metadata may not be up-to-date",
+                "The presented agent metadata may not be up-to-date",
                 !self.precise,
                 format_warn,
             );
@@ -219,8 +219,8 @@ impl MessageWithFields for WorkerGetView {
 struct WorkerMetadataTableView {
     #[table(title = "Component name")]
     pub component_name: ComponentName,
-    #[table(title = "Worker name")]
-    pub worker_name: WorkerName,
+    #[table(title = "Agent name")]
+    pub worker_name: String,
     #[table(title = "Component\nversion", justify = "Justify::Right")]
     pub component_version: u64,
     #[table(title = "Status", justify = "Justify::Right")]
@@ -233,7 +233,8 @@ impl From<&WorkerMetadataView> for WorkerMetadataTableView {
     fn from(value: &WorkerMetadataView) -> Self {
         Self {
             component_name: value.component_name.clone(),
-            worker_name: value.worker_name.clone(),
+            // TODO: pretty print, once we have "metadata-less" agent-type parsing
+            worker_name: textwrap::wrap(&value.worker_name.0, 30).join("\n"),
             status: format_status(&value.status),
             component_version: value.component_version,
             created_at: value.created_at,
@@ -784,6 +785,61 @@ impl TextView for PublicOplogEntry {
                     format_id(&format!("{:?}", &params.persistence_level))
                 ));
             }
+            PublicOplogEntry::BeginRemoteTransaction(params) => {
+                logln(format_message_highlight("BEGIN REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}transaction id:          {}",
+                    format_id(&params.transaction_id)
+                ));
+            }
+            PublicOplogEntry::PreCommitRemoteTransaction(params) => {
+                logln(format_message_highlight("PRE COMMIT REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::PreRollbackRemoteTransaction(params) => {
+                logln(format_message_highlight("PRE ROLLBACK REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::CommittedRemoteTransaction(params) => {
+                logln(format_message_highlight("COMMITTED REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
+            PublicOplogEntry::RolledBackRemoteTransaction(params) => {
+                logln(format_message_highlight("ROLLED BACK REMOTE TRANSACTION"));
+                logln(format!(
+                    "{pad}at:                {}",
+                    format_id(&params.timestamp)
+                ));
+                logln(format!(
+                    "{pad}begin index:       {}",
+                    format_id(&params.begin_index)
+                ));
+            }
         }
     }
 }
@@ -808,6 +864,11 @@ fn log_plugin_description(pad: &str, value: &PluginInstallationDescription) {
 
 fn value_to_string(value: &ValueAndType) -> String {
     print_value_and_type(value).expect("Failed to convert value to string")
+}
+
+// TODO: pretty print
+fn format_worker_name(worker_name: &WorkerName) -> String {
+    textwrap::wrap(&worker_name.to_string(), 80).join("\n")
 }
 
 #[allow(dead_code)]
@@ -863,5 +924,64 @@ fn log_element_value(pad: &str, value: &ElementValue) {
                 ));
             }
         },
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerFilesView {
+    pub nodes: Vec<FileNodeView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileNodeView {
+    pub name: String,
+    pub last_modified: String, // Human-readable timestamp
+    pub kind: String,
+    pub permissions: String,
+    pub size: u64,
+}
+
+#[derive(Table)]
+pub struct WorkerFileNodeTableView {
+    #[table(title = "Name")]
+    pub name: String,
+    #[table(title = "Kind")]
+    pub kind: String,
+    #[table(title = "Permissions")]
+    pub permissions: String,
+    #[table(title = "Size", justify = "Justify::Right")]
+    pub size: u64,
+    #[table(title = "Last Modified", justify = "Justify::Right")]
+    pub last_modified: String,
+}
+
+impl From<&FileNodeView> for WorkerFileNodeTableView {
+    fn from(value: &FileNodeView) -> Self {
+        Self {
+            name: value.name.clone(),
+            kind: value.kind.clone(),
+            permissions: value.permissions.clone(),
+            size: value.size,
+            last_modified: value.last_modified.clone(),
+        }
+    }
+}
+
+impl TextView for WorkerFilesView {
+    fn log(&self) {
+        if self.nodes.is_empty() {
+            logln("No files found.");
+        } else {
+            log_table::<_, WorkerFileNodeTableView>(&self.nodes);
+        }
+    }
+}
+
+// Helper function to convert Unix timestamp to human-readable format
+pub fn format_timestamp(timestamp: u64) -> String {
+    if let Some(datetime) = DateTime::from_timestamp(timestamp as i64, 0) {
+        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    } else {
+        format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }
 }

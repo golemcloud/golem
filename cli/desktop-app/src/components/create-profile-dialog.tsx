@@ -35,7 +35,7 @@ export const CreateProfileDialog = ({
     kind: "oss" as "oss" | "cloud",
     setActive: false,
     componentUrl: "",
-    workerUrl: "",
+    agentUrl: "",
     cloudUrl: "",
     defaultFormat: "text",
   });
@@ -58,7 +58,7 @@ export const CreateProfileDialog = ({
       const options: {
         setActive?: boolean;
         componentUrl?: string;
-        workerUrl?: string;
+        agentUrl?: string;
         cloudUrl?: string;
         defaultFormat?: string;
       } = {
@@ -69,8 +69,8 @@ export const CreateProfileDialog = ({
       if (formData.componentUrl) {
         options.componentUrl = formData.componentUrl;
       }
-      if (formData.workerUrl) {
-        options.workerUrl = formData.workerUrl;
+      if (formData.agentUrl) {
+        options.agentUrl = formData.agentUrl;
       }
       if (formData.cloudUrl) {
         options.cloudUrl = formData.cloudUrl;
@@ -93,7 +93,7 @@ export const CreateProfileDialog = ({
         kind: "oss",
         setActive: false,
         componentUrl: "",
-        workerUrl: "",
+        agentUrl: "",
         cloudUrl: "",
         defaultFormat: "text",
       });
@@ -117,7 +117,7 @@ export const CreateProfileDialog = ({
       kind: "oss",
       setActive: false,
       componentUrl: "",
-      workerUrl: "",
+      agentUrl: "",
       cloudUrl: "",
       defaultFormat: "text",
     });
@@ -216,14 +216,14 @@ export const CreateProfileDialog = ({
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="workerUrl">Worker Service URL (optional)</Label>
+                <Label htmlFor="agentUrl">Agent Service URL (optional)</Label>
                 <Input
-                  id="workerUrl"
-                  value={formData.workerUrl}
+                  id="agentUrl"
+                  value={formData.agentUrl}
                   onChange={e =>
                     setFormData(prev => ({
                       ...prev,
-                      workerUrl: e.target.value,
+                      agentUrl: e.target.value,
                     }))
                   }
                   placeholder="Defaults to component URL"

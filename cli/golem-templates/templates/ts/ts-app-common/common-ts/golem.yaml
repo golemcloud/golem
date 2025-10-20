@@ -3,23 +3,30 @@
 templates:
   ts:
     build:
-    - command: npx --no golem-typegen components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files components-ts/{{ component_name | to_kebab_case }}/**/src/**/*.ts
+    - command: npx tsc --noEmit false --emitDeclarationOnly --declaration --outFile ../../golem-temp/ts-check/{{ component_name | to_kebab_case }}/main.d.ts
       sources:
-        - src
-        - ../../common-ts
+      - src
+      - ../../common-ts
+      - tsconfig.js
       targets:
-        - .metadata
-      dir: ../..
+      - ../../golem-temp/ts-check/{{ component_name | to_kebab_case }}/main.d.ts
+    - command: npx --no golem-typegen ../../../components-ts/{{ component_name | to_kebab_case }}/tsconfig.json --files ../../../components-ts/{{ component_name | to_kebab_case }}/src/**/*.ts
+      dir: ../../golem-temp/ts-metadata/{{ component_name | to_kebab_case }}
+      sources:
+      - ../../../components-ts/{{ component_name | to_kebab_case }}/src
+      targets:
+      - .metadata
     - command: npx --no rollup -- -c
       sources:
       - src
       - ../../common-ts
       - rollup.config.mjs
       - tsconfig.js
+      - ../../golem-temp/ts-metadata/{{ component_name | to_kebab_case }}
       targets:
-      - dist/main.js
-    - injectToPrebuiltQuickjs: ../../wasm/golem_agent.wasm
-      module: dist/main.js
+      - ../../golem-temp/ts-dist/{{ component_name | to_kebab_case }}/main.js
+    - injectToPrebuiltQuickjs: ../../node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
+      module: ../../golem-temp/ts-dist/{{ component_name | to_kebab_case }}/main.js
       moduleWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.module.wasm
       into: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
     - generateAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
@@ -27,14 +34,10 @@ templates:
     - composeAgentWrapper: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wrapper.wasm
       withAgent: ../../golem-temp/agents/{{ component_name | to_snake_case }}.dynamic.wasm
       to: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
-
-    sourceWit: ../../wasm/golem_agent.wasm
+    sourceWit: ../../node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm
     generatedWit: ../../golem-temp/agents/{{ component_name | to_snake_case }}/wit-generated
     componentWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.static.wasm
     linkedWasm: ../../golem-temp/agents/{{ component_name | to_snake_case }}.wasm
-    clean:
-    - dist
-    - .metadata
 customCommands:
   ts-npm-install:
   - command: npm install

@@ -10,7 +10,7 @@ components:
 dependencies:
   componentname:
     - type: wasm
-      url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0-dev.2/golem_llm_openai-dev.wasm
+      url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_llm_openai.wasm
 
 httpApi:
   definitions:

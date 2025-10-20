@@ -22,20 +22,24 @@ use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::PostgresType;
 use async_trait::async_trait;
 use bincode::{BorrowDecode, Decode, Encode};
+use golem_common::model::TransactionId;
 use golem_common::model::WorkerId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_ast::analysis::{analysed_type, AnalysedType};
-use golem_wasm_rpc::{IntoValue, Value, ValueAndType};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::analysis::{analysed_type, AnalysedType};
+use golem_wasm::{IntoValue, Value, ValueAndType};
+use golem_wasm_derive::IntoValue;
 use itertools::Itertools;
 use mac_address::MacAddress;
 use std::collections::{Bound, HashMap, HashSet};
-use std::fmt::{Debug, Display};
+use std::fmt::{Debug, Display, Formatter};
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use url::Url;
 
-pub trait RdbmsType: Debug + Display + Default + Send {
+pub trait RdbmsType:
+    Debug + Display + Default + PartialEq + Encode + Decode<()> + Clone + Send
+{
     type DbColumn: Clone
         + Send
         + Sync
@@ -75,6 +79,8 @@ impl Display for RdbmsStatus {
 
 #[async_trait]
 pub trait DbTransaction<T: RdbmsType> {
+    fn transaction_id(&self) -> TransactionId;
+
     async fn execute(&self, statement: &str, params: Vec<T::DbValue>) -> Result<u64, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
@@ -90,6 +96,10 @@ pub trait DbTransaction<T: RdbmsType> {
     ) -> Result<Arc<dyn DbResultStream<T> + Send + Sync>, Error>
     where
         <T as RdbmsType>::DbValue: 'async_trait;
+
+    async fn pre_commit(&self) -> Result<(), Error>;
+
+    async fn pre_rollback(&self) -> Result<(), Error>;
 
     async fn commit(&self) -> Result<(), Error>;
 
@@ -141,6 +151,20 @@ pub trait Rdbms<T: RdbmsType> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, Error>;
+
+    async fn get_transaction_status(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &TransactionId,
+    ) -> Result<RdbmsTransactionStatus, Error>;
+
+    async fn cleanup_transaction(
+        &self,
+        key: &RdbmsPoolKey,
+        worker_id: &WorkerId,
+        transaction_id: &TransactionId,
+    ) -> Result<(), Error>;
 
     fn status(&self) -> RdbmsStatus;
 }
@@ -646,4 +670,37 @@ fn get_bound_analysed_type(base_type: AnalysedType) -> AnalysedType {
         analysed_type::case("excluded", base_type.clone()),
         analysed_type::unit_case("unbounded"),
     ])
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RdbmsTransactionStatus {
+    InProgress,
+    Committed,
+    RolledBack,
+    NotFound,
+}
+
+impl Display for RdbmsTransactionStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RdbmsTransactionStatus::InProgress => write!(f, "InProgress"),
+            RdbmsTransactionStatus::Committed => write!(f, "Committed"),
+            RdbmsTransactionStatus::RolledBack => write!(f, "RolledBack"),
+            RdbmsTransactionStatus::NotFound => write!(f, "NotFound"),
+        }
+    }
+}
+
+impl FromStr for RdbmsTransactionStatus {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "InProgress" => Ok(RdbmsTransactionStatus::InProgress),
+            "Committed" => Ok(RdbmsTransactionStatus::Committed),
+            "RolledBack" => Ok(RdbmsTransactionStatus::RolledBack),
+            "NotFound" => Ok(RdbmsTransactionStatus::NotFound),
+            _ => Err(format!("Unknown transaction status: {s}")),
+        }
+    }
 }

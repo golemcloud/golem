@@ -14,9 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct ErrorsBody {
     pub errors: Vec<String>,
 
@@ -25,9 +24,8 @@ pub struct ErrorsBody {
     pub cause: Option<anyhow::Error>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Serialize, Deserialize, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 pub struct ErrorBody {
     pub error: String,
 
@@ -36,7 +34,6 @@ pub struct ErrorBody {
     pub cause: Option<anyhow::Error>,
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
 
     use crate::model::error::{ErrorBody, ErrorsBody};

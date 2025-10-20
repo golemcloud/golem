@@ -24,7 +24,7 @@ use golem_common::model::{RoutingTable, WorkerId};
 use golem_test_framework::config::{CliParams, TestDependencies};
 use golem_test_framework::dsl::benchmark::{Benchmark, BenchmarkRecorder, RunConfig};
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm_rpc::{IntoValueAndType, ValueAndType};
+use golem_wasm::{IntoValueAndType, ValueAndType};
 use tokio::task::JoinSet;
 
 struct RpcLargeInput {

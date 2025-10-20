@@ -19,7 +19,7 @@ mod tests {
     use test_r::{flaky, test, test_dep, timeout};
 
     use async_trait::async_trait;
-    use golem_wasm_rpc::IntoValueAndType;
+    use golem_wasm::IntoValueAndType;
     use rand::prelude::*;
     use rand::rng;
     use std::env;

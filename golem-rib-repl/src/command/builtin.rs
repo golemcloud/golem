@@ -5,7 +5,7 @@ use crossterm::{
     execute,
     terminal::{Clear as TermClear, ClearType},
 };
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use rib::{CompilerOutput, ComponentDependencies, Expr, RibCompilationError};
 use std::io::stdout;
 

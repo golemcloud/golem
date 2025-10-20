@@ -20,9 +20,9 @@ use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;
 use golem_cli::wasm_rpc_stubgen::commands::generate::generate_and_build_client;
 use golem_cli::wasm_rpc_stubgen::stub::{StubConfig, StubDefinition};
-use golem_wasm_ast::analysis::analysed_type::*;
-use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::analysed_type::*;
+use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId,
     AnalysedResourceMode, AnalysedType, TypeHandle,
 };
@@ -536,7 +536,7 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
     assert_eq!(
         fun.parameters,
         vec![AnalysedFunctionParameter {
-            name: "worker-name".to_string(),
+            name: "agent-id".to_string(),
             typ: str()
         }]
     );
@@ -558,7 +558,7 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
     assert_eq!(
         custom_fun.parameters,
         vec![AnalysedFunctionParameter {
-            name: "worker-id".to_string(),
+            name: "agent-id".to_string(),
             typ: record(vec![
                 field(
                     "component-id",
@@ -571,9 +571,9 @@ fn assert_has_rpc_resource_constructor(exported_interface: &AnalysedInstance, na
                     .named("component-id")
                     .owned("golem:rpc@0.2.2/types")
                 ),
-                field("worker-name", str()),
+                field("agent-id", str()),
             ])
-            .named("worker-id")
+            .named("agent-id")
             .owned("golem:rpc@0.2.2/types")
         }]
     );
@@ -602,7 +602,7 @@ fn assert_has_resource(
         fun.parameters,
         [
             vec![AnalysedFunctionParameter {
-                name: "worker-name".to_string(),
+                name: "agent-id".to_string(),
                 typ: str()
             }],
             constructor_parameters.to_vec()
@@ -628,7 +628,7 @@ fn assert_has_resource(
         custom_fun.parameters,
         [
             vec![AnalysedFunctionParameter {
-                name: "worker-id".to_string(),
+                name: "agent-id".to_string(),
                 typ: record(vec![
                     field(
                         "component-id",
@@ -641,9 +641,9 @@ fn assert_has_resource(
                         .named("component-id")
                         .owned("golem:rpc@0.2.2/types")
                     ),
-                    field("worker-name", str()),
+                    field("agent-id", str()),
                 ])
-                .named("worker-id")
+                .named("agent-id")
                 .owned("golem:rpc@0.2.2/types")
             }],
             constructor_parameters.to_vec()

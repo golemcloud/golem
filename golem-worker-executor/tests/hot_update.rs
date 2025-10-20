@@ -20,9 +20,10 @@ use axum::Router;
 use bytes::Bytes;
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::Arc;
 use test_r::{flaky, inherit_test_dep, test};
@@ -627,7 +628,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     // Explanation: We are trying to update v1 to v3 using snapshots, but v1 does not
     // export a save function, so the update attempt fails and the worker continues running
     // the original version which we can invoke.
-    check!(result == vec![Value::U64(4)]);
+    check!(result == vec![Value::U64(5)]);
     check!(metadata.last_known_status.component_version == 0);
     check!(metadata.last_known_status.pending_updates.is_empty());
     check!(metadata.last_known_status.failed_updates.len() == 1);
@@ -797,7 +798,7 @@ async fn manual_update_on_idle_with_failing_load(
 
     // Explanation: We try to update v2 to v4, but v4's load function always fails. So
     // the component must stay on v2, on which we can invoke f3.
-    check!(result == vec![Value::U64(4)]);
+    check!(result == vec![Value::U64(5)]);
     check!(metadata.last_known_status.component_version == 0);
     check!(metadata.last_known_status.pending_updates.is_empty());
     check!(metadata.last_known_status.failed_updates.len() == 1);

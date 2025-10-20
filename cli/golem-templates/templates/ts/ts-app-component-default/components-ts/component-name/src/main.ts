@@ -1,48 +1,25 @@
 import {
     BaseAgent,
+    Result,
     agent,
     prompt,
     description,
 } from '@golemcloud/golem-ts-sdk';
 
-interface CustomData {
-    data: string;
-    value: number;
-}
-
 @agent()
-class AssistantAgent extends BaseAgent {
-    @prompt("Ask your question")
-    @description("This method allows the agent to answer your question")
-    async ask(name: string): Promise<string> {
-        const customData = { data: "Sample data", value: 42 };
+class CounterAgent extends BaseAgent {
+    private readonly name: string;
+    private value: number = 0;
 
-        const remoteWeatherClient = WeatherAgent.get("my-user");
-        const remoteWeather = await remoteWeatherClient.getWeather(name, customData);
-
-        return (
-            `Hello! I'm the assistant agent (${this.getId()}) reporting on the weather in ${name}. ` +
-            `Here’s what the weather agent says: "\n${remoteWeather}\n". `
-        );
-    }
-}
-
-@agent()
-class WeatherAgent extends BaseAgent {
-    private readonly userName: string;
-
-    constructor(username: string) {
+    constructor(name: string) {
         super()
-        this.userName = username;
+        this.name = name;
     }
 
-    @prompt("Get weather")
-    @description("Weather forecast weather for you")
-    async getWeather(name: string, param2: CustomData): Promise<string> {
-        return Promise.resolve(
-            `Hi ${this.userName} Weather in ${name} is sunny. Params passed: ${name} ${JSON.stringify(param2)}. ` +
-            `Computed by weather-agent ${this.getId()}. `
-        );
+    @prompt("Increase the count by one")
+    @description("Increases the count by one and returns the new value")
+    async increment(): Promise<number> {
+        this.value += 1;
+        return this.value;
     }
 }
-

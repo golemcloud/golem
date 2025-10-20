@@ -16,14 +16,20 @@ use crate::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
 use crate::services::rdbms::mysql::types::{DbColumn, DbColumnType, DbValue};
 use crate::services::rdbms::mysql::{MysqlType, MYSQL};
 use crate::services::rdbms::sqlx_common::{
-    create_db_result, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream, SqlxRdbms,
+    create_db_result, GolemTransactionRepo, PoolCreator, QueryExecutor, QueryParamsBinder,
+    SqlxDbResultStream, SqlxRdbms,
 };
-use crate::services::rdbms::{DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey};
+use crate::services::rdbms::{
+    DbResult, DbResultStream, DbRow, Error, Rdbms, RdbmsPoolKey, RdbmsTransactionStatus,
+};
 use async_trait::async_trait;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
 use futures::stream::BoxStream;
+use golem_common::model::TransactionId;
+use sqlx::mysql::MySqlDatabaseError;
 use sqlx::{Column, ConnectOptions, Pool, Row, TypeInfo};
+use std::str::FromStr;
 use std::sync::Arc;
 
 pub(crate) fn new(config: RdbmsConfig) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
@@ -42,11 +48,113 @@ impl PoolCreator<sqlx::MySql> for RdbmsPoolKey {
         }
         let options = sqlx::mysql::MySqlConnectOptions::from_url(&self.address)
             .map_err(Error::connection_failure)?;
-        sqlx::mysql::MySqlPoolOptions::new()
+
+        let pool = sqlx::mysql::MySqlPoolOptions::new()
             .max_connections(config.max_connections)
+            .acquire_timeout(config.acquire_timeout)
             .connect_with(options)
             .await
-            .map_err(Error::connection_failure)
+            .map_err(Error::connection_failure)?;
+
+        MysqlType::create_transaction_table(&pool).await?;
+
+        Ok(pool)
+    }
+}
+
+#[async_trait]
+impl GolemTransactionRepo<sqlx::MySql> for MysqlType {
+    async fn create_transaction_table<'c, E>(executor: E) -> Result<(), Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::MySql>,
+    {
+        let query = sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS golem_transactions
+            (
+                id             varchar(50)    NOT NULL,
+                status         varchar(25)    NOT NULL,
+                created_on     timestamp NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (id)
+            );
+            "#,
+        );
+        let _ = query.execute(executor).await.map_err(|e| {
+            match e {
+                sqlx::Error::Database(e) if e.downcast_ref::<MySqlDatabaseError>().number() == 1142 => {
+                    Error::other_response_failure(format!(
+                        "There was a problem to create 'golem_transactions' table, see: https://learn.golem.cloud/common-language-guide/rdbms for more details (error: {e})"
+                    ))
+                }
+                _ => Error::other_response_failure(e)
+            }
+        })?;
+        Ok(())
+    }
+
+    async fn create_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<(), Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::MySql>,
+    {
+        let query = sqlx::query("INSERT INTO golem_transactions(id, status) VALUES (?, ?)")
+            .bind(id.to_string())
+            .bind(RdbmsTransactionStatus::InProgress.to_string());
+        let _res = query
+            .execute(executor)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        Ok(())
+    }
+
+    async fn delete_transaction<'c, E>(id: &TransactionId, executor: E) -> Result<bool, Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::MySql>,
+    {
+        let query = sqlx::query("DELETE FROM golem_transactions WHERE id = ?").bind(id.to_string());
+        let res = query
+            .execute(executor)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn update_transaction_status<'c, E>(
+        id: &TransactionId,
+        status: RdbmsTransactionStatus,
+        executor: E,
+    ) -> Result<bool, Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::MySql>,
+    {
+        let query = sqlx::query("UPDATE golem_transactions SET status = ? WHERE id = ?")
+            .bind(status.to_string())
+            .bind(id.to_string());
+        let res = query
+            .execute(executor)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    async fn get_transaction_status<'c, E>(
+        id: &TransactionId,
+        executor: E,
+    ) -> Result<RdbmsTransactionStatus, Error>
+    where
+        E: sqlx::Executor<'c, Database = sqlx::MySql>,
+    {
+        let query =
+            sqlx::query("SELECT status FROM golem_transactions WHERE id = ?").bind(id.to_string());
+        let row = query
+            .fetch_optional(executor)
+            .await
+            .map_err(Error::query_execution_failure)?;
+        if let Some(row) = row {
+            let status: &str = row.try_get(0).map_err(Error::query_response_failure)?;
+            RdbmsTransactionStatus::from_str(status).map_err(Error::query_response_failure)
+        } else {
+            Ok(RdbmsTransactionStatus::NotFound)
+        }
     }
 }
 

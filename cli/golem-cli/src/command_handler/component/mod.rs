@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::ApplicationContext;
+use crate::app::context::{to_anyhow, ApplicationContext};
 use crate::app::yaml_edit::AppYamlEditor;
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{
-    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName,
+    BuildArgs, ComponentOptionalComponentNames, ComponentTemplateName, DeployArgs,
 };
 use crate::command_handler::Handlers;
 use crate::context::Context;
@@ -33,7 +33,8 @@ use crate::model::component::{
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::text::fmt::{log_error, log_warn};
-use crate::model::worker::WorkerUpdateMode;
+use crate::model::worker::AgentUpdateMode;
+use crate::validation::ValidationBuilder;
 use anyhow::{anyhow, bail};
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentType};
@@ -42,6 +43,7 @@ use golem_common::model::component_metadata::{
 };
 use golem_templates::add_component_by_template;
 use golem_templates::model::{GuestLanguage, PackageName};
+use itertools::Itertools;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -99,7 +101,7 @@ impl ComponentCommandHandler {
                 version,
             } => self.cmd_get(component_name.component_name, version).await,
 
-            ComponentSubcommand::UpdateWorkers {
+            ComponentSubcommand::UpdateAgents {
                 component_name,
                 update_mode,
                 r#await,
@@ -107,7 +109,7 @@ impl ComponentCommandHandler {
                 self.cmd_update_workers(component_name.component_name, update_mode, r#await)
                     .await
             }
-            ComponentSubcommand::RedeployWorkers { component_name } => {
+            ComponentSubcommand::RedeployAgents { component_name } => {
                 self.cmd_redeploy_workers(component_name.component_name)
                     .await
             }
@@ -165,7 +167,9 @@ impl ComponentCommandHandler {
                 "Both TEMPLATE and COMPONENT_PACKAGE_NAME are required in non-interactive mode",
             );
             logln("");
-            self.ctx.app_handler().log_templates_help(None, None);
+            self.ctx
+                .app_handler()
+                .log_templates_help(None, None, self.ctx.dev_mode());
             logln("");
             bail!(HintError::ShowClapHelp(ShowClapHelpTarget::ComponentNew));
         };
@@ -183,7 +187,8 @@ impl ComponentCommandHandler {
         }
 
         let app_handler = self.ctx.app_handler();
-        let (common_template, component_template) = app_handler.get_template(&template)?;
+        let (common_template, component_template) =
+            app_handler.get_template(&template, self.ctx.dev_mode())?;
 
         // Unloading app context, so we can reload after the new component is created
         self.ctx.unload_app_context().await;
@@ -251,16 +256,23 @@ impl ComponentCommandHandler {
         match filter {
             Some(filter) => {
                 if let Some(language) = GuestLanguage::from_string(filter.clone()) {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(Some(language), None);
+                    self.ctx.app_handler().log_templates_help(
+                        Some(language),
+                        None,
+                        self.ctx.dev_mode(),
+                    );
                 } else {
-                    self.ctx
-                        .app_handler()
-                        .log_templates_help(None, Some(&filter));
+                    self.ctx.app_handler().log_templates_help(
+                        None,
+                        Some(&filter),
+                        self.ctx.dev_mode(),
+                    );
                 }
             }
-            None => self.ctx.app_handler().log_templates_help(None, None),
+            None => self
+                .ctx
+                .app_handler()
+                .log_templates_help(None, None, self.ctx.dev_mode()),
         }
     }
 
@@ -290,9 +302,9 @@ impl ComponentCommandHandler {
                 .map_service_error()?;
 
             component_views.extend(
-                results
-                    .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta))),
+                results.into_iter().map(|meta| {
+                    ComponentView::new_wit_style(show_sensitive, Component::from(meta))
+                }),
             );
         } else {
             for component_name in selected_component_names.component_names.iter() {
@@ -308,7 +320,7 @@ impl ComponentCommandHandler {
                     .await
                     .map_service_error()?
                     .into_iter()
-                    .map(|meta| ComponentView::new(show_sensitive, Component::from(meta)))
+                    .map(|meta| ComponentView::new_wit_style(show_sensitive, Component::from(meta)))
                     .collect::<Vec<_>>();
 
                 if results.is_empty() {
@@ -334,11 +346,7 @@ impl ComponentCommandHandler {
                 .await?;
         }
 
-        if component_views.is_empty() {
-            bail!(NonSuccessfulExit)
-        } else {
-            self.ctx.log_handler().log_view(&component_views);
-        }
+        self.ctx.log_handler().log_view(&component_views);
 
         Ok(())
         */
@@ -385,7 +393,10 @@ impl ComponentCommandHandler {
                 .await?;
 
             if let Some(component) = component {
-                component_views.push(ComponentView::new(self.ctx.show_sensitive(), component));
+                component_views.push(ComponentView::new_wit_style(
+                    self.ctx.show_sensitive(),
+                    component,
+                ));
             }
         }
 
@@ -457,29 +468,33 @@ impl ComponentCommandHandler {
 
     async fn cmd_update_workers(
         &self,
-        component_name: Option<ComponentName>,
-        update_mode: WorkerUpdateMode,
-        await_update: bool,
+        _component_name: Option<ComponentName>,
+        _update_mode: AgentUpdateMode,
+        _await_update: bool,
     ) -> anyhow::Result<()> {
-        let components = self
-            .components_for_update_or_redeploy(component_name)
-            .await?;
+        // TODO: atomic
+        /*
+        let components = self.components_for_deploy_args(component_name).await?;
         self.update_workers_by_components(&components, update_mode, await_update)
             .await?;
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_redeploy_workers(
         &self,
-        component_name: Option<ComponentName>,
+        _component_name: Option<ComponentName>,
     ) -> anyhow::Result<()> {
-        let components = self
-            .components_for_update_or_redeploy(component_name)
-            .await?;
+        // TODO: atomic
+        /*
+        let components = self.components_for_deploy_args(component_name).await?;
         self.redeploy_workers_by_components(&components).await?;
 
         Ok(())
+        */
+        todo!()
     }
 
     async fn cmd_diagnose(
@@ -581,7 +596,7 @@ impl ComponentCommandHandler {
     pub async fn update_workers_by_components(
         &self,
         components: &[Component],
-        update: WorkerUpdateMode,
+        update: AgentUpdateMode,
         await_updates: bool,
     ) -> anyhow::Result<()> {
         if components.is_empty() {
@@ -631,7 +646,42 @@ impl ComponentCommandHandler {
 
         // TODO: json / yaml output?
         // TODO: unlike updating, redeploy is short-circuiting, should we normalize?
-        // TODO: should we expose "delete-workers" too for development?
+        Ok(())
+    }
+
+    pub async fn delete_workers(&self, components: &[Component]) -> anyhow::Result<()> {
+        if components.is_empty() {
+            return Ok(());
+        }
+
+        log_action("Deleting", "existing workers");
+        let _indent = LogIndent::new();
+
+        // NOTE: for now we naively keep deleting in a loop until we do not find any more agents,
+        //       we do so to help a bit with pending invocations or currently running worker creations,
+        //       but this is not a 100% guarantee.
+        let mut found_any = true;
+        let mut first_round = true;
+        while found_any {
+            found_any = false;
+            for component in components {
+                let deleted_count = self
+                    .ctx
+                    .worker_handler()
+                    .delete_component_workers(
+                        &component.component_name,
+                        &component.component_id,
+                        first_round,
+                    )
+                    .await?;
+                if deleted_count > 0 {
+                    found_any = true;
+                }
+            }
+            first_round = false;
+        }
+
+        // TODO: json / yaml output?
         Ok(())
     }
 
@@ -800,6 +850,7 @@ impl ComponentCommandHandler {
         _component_match_kind: ComponentNameMatchKind,
         _component_name: &ComponentName,
         _component_version_selection: Option<ComponentVersionSelection<'_>>,
+        _deploy_args: Option<&DeployArgs>,
     ) -> anyhow::Result<Component> {
         // TODO: atomic
         /*
@@ -853,9 +904,10 @@ impl ComponentCommandHandler {
                         .deploy(
                             project,
                             vec![component_name.clone()],
+                            false,
                             None,
                             &ApplicationComponentSelectMode::CurrentDir,
-                            &UpdateOrRedeployArgs::none(),
+                            &deploy_args.cloned().unwrap_or_else(DeployArgs::none),
                         )
                         .await?;
                     self.ctx
@@ -1331,7 +1383,9 @@ fn component_deploy_properties(
         .as_deployable_component_type()
         .ok_or_else(|| anyhow!("Component {component_name} is not deployable"))?;
     let files = component_properties.files.clone();
-    let env = (!component_properties.env.is_empty()).then(|| component_properties.env.clone());
+    let env = (!component_properties.env.is_empty())
+        .then(|| resolve_env_vars(component_name, &component_properties.env))
+        .transpose()?;
     let dynamic_linking = app_component_dynamic_linking(app_ctx, component_name)?;
 
     Ok(ComponentDeployProperties {
@@ -1398,4 +1452,59 @@ fn app_component_dynamic_linking(
             },
         ))))
     }
+}
+
+fn resolve_env_vars(
+    component_name: &AppComponentName,
+    env: &HashMap<String, String>,
+) -> anyhow::Result<HashMap<String, String>> {
+    let proc_env_vars = minijinja::value::Value::from(std::env::vars().collect::<HashMap<_, _>>());
+
+    let minijinja_env = {
+        let mut env = minijinja::Environment::new();
+        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        env
+    };
+
+    let mut resolved_env = HashMap::with_capacity(env.len());
+    let mut validation = ValidationBuilder::new();
+    validation.with_context(
+        vec![("component", component_name.to_string())],
+        |validation| {
+            for key in env.keys().sorted() {
+                let value = env.get(key).unwrap();
+                match minijinja_env.render_str(value, &proc_env_vars) {
+                    Ok(resolved_value) => {
+                        resolved_env.insert(key.clone(), resolved_value);
+                    }
+                    Err(err) => {
+                        validation.with_context(
+                            vec![
+                                ("key", key.to_string()),
+                                ("template", value.to_string()),
+                                (
+                                    "error",
+                                    err.to_string().log_color_error_highlight().to_string(),
+                                ),
+                            ],
+                            |validation| {
+                                validation.add_error(
+                                    "Failed to substitute environment variable".to_string(),
+                                )
+                            },
+                        );
+                    }
+                };
+            }
+        },
+    );
+
+    to_anyhow(
+        &format!(
+            "Failed to prepare environment variables for component: {}",
+            component_name.as_str().log_color_highlight()
+        ),
+        validation.build(resolved_env),
+        None,
+    )
 }

@@ -284,7 +284,7 @@ impl ConversionContext for DefaultConversionContext<'_> {
             .get_or_insert_simple(&name, async || {
                 let result = self
                     .component_service
-                    .get_by_name(&name, self.namespace, self.auth_ctx)
+                    .get_latest_by_name(&name, self.namespace, self.auth_ctx)
                     .await;
 
                 match result {
@@ -313,7 +313,7 @@ impl ConversionContext for DefaultConversionContext<'_> {
             .get_or_insert_simple(component_id, async || {
                 let result = self
                     .component_service
-                    .get_latest(component_id, self.auth_ctx)
+                    .get_latest_by_id(component_id, self.auth_ctx)
                     .await;
 
                 match result {

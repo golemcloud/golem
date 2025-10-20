@@ -18,17 +18,15 @@ members = [
     "golem-worker-executor",
     # "golem-worker-service",
     "integration-tests",
-    "wasm-ast",
-    "wasm-rpc",
-    "wasm-rpc-derive",
+    "golem-wasm",
+    "golem-wasm-derive",
     # "cli/golem",
-    "cli/golem-cli",
+    #"cli/golem-cli",
     "cli/golem-templates",
 ]
 
 exclude = [
     "cli/desktop-app/src-tauri",
-    "cli/template-golem-agent-ts",
     "test-components/app-and-library",
     "test-components/shopping-cart",
     "test-components/write-stdout",
@@ -90,19 +88,18 @@ license-file = "LICENSE"
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
-golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
+golem-common = { version = "=0.0.0", path = "golem-common" }
 golem-component-compilation-service = { path = "golem-component-compilation-service" }
 golem-component-service = { path = "golem-component-service" }
 golem-openapi-client-generator = "=0.0.16"
-golem-rib = { version = "=0.0.0", path = "golem-rib", default-features = false }
+golem-rib = { version = "=0.0.0", path = "golem-rib" }
 golem-rib-repl = { version = "=0.0.0", path = "golem-rib-repl" }
 golem-service-base = { version = "=0.0.0", path = "golem-service-base" }
 golem-shard-manager = { path = "golem-shard-manager" }
 golem-templates = { version = "=0.0.0", path = "cli/golem-templates" }
 golem-test-framework = { version = "=0.0.0", path = "golem-test-framework" }
-golem-wasm-ast = { version = "=0.0.0", path = "wasm-ast", default-features = false }
-golem-wasm-rpc = { version = "=0.0.0", path = "wasm-rpc", default-features = false }
-golem-wasm-rpc-derive = { version = "=0.0.0", path = "wasm-rpc-derive" }
+golem-wasm = { version = "=0.0.0", path = "golem-wasm" }
+golem-wasm-derive = { version = "=0.0.0", path = "golem-wasm-derive" }
 golem-worker-executor = { version = "=0.0.0", path = "golem-worker-executor" }
 golem-worker-service = { path = "golem-worker-service" }
 
@@ -162,7 +159,6 @@ derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dir-diff = "0.3.3"
 dirs = "4.0.0"
 drop-stream = "0.3.2"
-envsubst = "0.2.1"
 evicting_cache_map = "0.4.0"
 fancy-regex = "0.14.0"
 fastrand = "2.3.0"
@@ -175,6 +171,7 @@ futures = "0.3.31"
 futures-concurrency = "7.6.3"
 futures-util = "0.3.31"
 fuzzy-matcher = "0.3.7"
+gag = "1.0.0"
 gethostname = "1.0.0"
 git-version = "0.3.9"
 goldenfile = "1.8.0"
@@ -211,7 +208,7 @@ miette = { version = "7.6.0", features = ["fancy"] }
 mime = "0.3.17"
 mime_guess = "2.0.5"
 minijinja = "2.7.0"
-moonbit-component-generator = { version = "0.0.4", features = ["get-script"] }
+moonbit-component-generator = { version = "0.0.6", features = ["get-script"] }
 nanoid = "0.4.0"
 native-tls = "0.2.13"
 nom = "7.1.3"
@@ -250,6 +247,7 @@ redis = { version = "0.29.1", features = ["default", "tokio-comp"] }
 regex = "1.11.1"
 reqwest = { version = "0.12.13", features = ["gzip", "json", "multipart", "stream", ] }
 ringbuf = "0.4.7"
+rlimit = "0.10.2"
 rsa = "0.9.7"
 rusoto_acm = "0.48.0"
 rusoto_core = "0.48.0"
@@ -261,6 +259,7 @@ rustc-hash = "2.1.1"
 rustls = { version = "0.23.23" }
 rustyline = "15.0.0"
 sanitize-filename = "0.6.0"
+scc = "3.3.2"
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_derive = "1.0.219"
@@ -280,6 +279,7 @@ strip-ansi-escapes = "0.2.0"
 strum = "0.27.1"
 strum_macros = "0.27.1"
 syn = "2.0.90"
+synoptic = "2.2.9"
 sysinfo = "0.33.1"
 system-interface = "0.27.3"
 tap = "1.0.1"
@@ -321,9 +321,9 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
-wasm-rquickjs = "0.0.5"
+ wasm-rquickjs = "0.0.20"
 wasm-wave = "0.235"
-wasmparser = "0.235.0"
+wasmparser = "0.229.0"
 wasmprinter = "0.219.1"
 wasmtime = { version = "=33.0.0", features = ["component-model"] }
 wasmtime-wasi = { version = "=33.0.0" }
@@ -341,7 +341,6 @@ x509-certificate = "0.23.1"
 zstd = "0.13"
 
 [patch.crates-io]
-redis-protocol = { git = "https://github.com/golemcloud/redis-protocol.rs.git", branch = "unpin-cookie-factory" }
 wasmtime = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }
 wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branch = "golem-wasmtime-v33.0.0" }

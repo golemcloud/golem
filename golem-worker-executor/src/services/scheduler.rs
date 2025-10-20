@@ -31,7 +31,7 @@ use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
 use golem_common::model::account::AccountId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::Value;
+use golem_wasm::Value;
 use std::ops::{Add, Deref};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -472,7 +472,7 @@ mod tests {
     use golem_common::model::component::ComponentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use golem_wasm_rpc::Value;
+    use golem_wasm::Value;
     use std::collections::{HashMap, HashSet};
     use std::str::FromStr;
     use std::sync::Arc;

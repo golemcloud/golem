@@ -26,7 +26,7 @@ use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
     worker_error_message, worker_error_underlying_error, TestDslUnsafe,
 };
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -345,16 +345,17 @@ async fn idempotence_on(
         .start_worker_with(&component_id, "idempotence-flag", vec![], env, vec![])
         .await;
 
-    let _ = executor
+    let result = executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
             vec![true.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await;
 
     executor.check_oplog_is_queryable(&worker_id).await;
+
+    let _ = result.unwrap();
 
     drop(executor);
     http_server.abort();

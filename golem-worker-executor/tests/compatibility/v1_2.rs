@@ -20,7 +20,7 @@ use golem_common::model::invocation_context::{
 use golem_common::model::{
     IdempotencyKey, Timestamp, TimestampedWorkerInvocation, WorkerInvocation,
 };
-use golem_wasm_rpc::Value;
+use golem_wasm::Value;
 use std::num::{NonZeroU128, NonZeroU64};
 use test_r::test;
 

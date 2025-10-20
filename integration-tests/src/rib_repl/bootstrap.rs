@@ -6,8 +6,8 @@ use golem_rib_repl::WorkerFunctionInvoke;
 use golem_rib_repl::{ReplComponentDependencies, RibDependencyManager};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::ValueAndType;
 use rib::{ComponentDependency, ComponentDependencyKey};
 use std::path::Path;
 use uuid::Uuid;
@@ -51,6 +51,7 @@ impl RibDependencyManager for TestRibReplDependencyManager {
         let component_dependency_key = ComponentDependencyKey {
             component_name,
             component_id: component_id.0,
+            component_version: 0,
             root_package_name: metadata.root_package_name().clone(),
             root_package_version: metadata.root_package_version().clone(),
         };

@@ -25,12 +25,11 @@ test = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true, default-features = true }
-golem-rib = { workspace = true, default-features = true }
+golem-common = { workspace = true }
+golem-rib = { workspace = true }
 golem-service-base = { workspace = true, features = ["worker-executor"] }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, features = ["host", "extra-bindings"] }
-golem-wasm-rpc-derive = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 anyhow = { workspace = true }
 applying = { workspace = true }
@@ -55,6 +54,7 @@ fred = { workspace = true }
 fs-set-times = { workspace = true }
 futures = { workspace = true }
 gethostname = { workspace = true }
+heck = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
 http-body = { workspace = true }
@@ -72,6 +72,7 @@ nonempty-collections = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
+regex = { workspace = true }
 ringbuf = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -100,6 +101,7 @@ golem-test-framework = { workspace = true }
 assert2 = { workspace = true }
 axum = { workspace = true }
 goldenfile = { workspace = true }
+pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 rand = { workspace = true }
 redis = { workspace = true }

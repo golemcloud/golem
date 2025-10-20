@@ -14,12 +14,12 @@
 
 use crate::model::app::AppComponentName;
 use anyhow::{anyhow, bail, Context};
+use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
-use golem_wasm_ast::analysis::analysed_type::{case, variant};
-use golem_wasm_ast::analysis::AnalysedType;
-use heck::ToKebabCase;
+use golem_wasm::analysis::analysed_type::{case, variant};
+use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -124,7 +124,12 @@ impl AgentWrapperGeneratorContextState {
         writeln!(result)?;
         writeln!(result, "world agent-wrapper {{")?;
         writeln!(result, "  import golem:agent/guest;")?;
+        writeln!(result, "  import golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  import golem:api/load-snapshot@1.1.7;")?;
+        writeln!(result, "  import wasi:logging/logging;")?;
         writeln!(result, "  export golem:agent/guest;")?;
+        writeln!(result, "  export golem:api/save-snapshot@1.1.7;")?;
+        writeln!(result, "  export golem:api/load-snapshot@1.1.7;")?;
         for interface_name in &interface_names {
             writeln!(result, "  export {interface_name};")?;
         }
@@ -176,35 +181,36 @@ impl AgentWrapperGeneratorContextState {
         result: &mut String,
         agent: &AgentType,
     ) -> anyhow::Result<String> {
-        let interface_name = escape_wit_keyword(&agent.type_name.to_kebab_case());
-        let previous_used_names = self.used_names.clone();
-        self.used_names.clear();
+        let interface_name = escape_wit_keyword(&agent.type_name.to_wit_naming());
 
         writeln!(result, "/// {}", agent.description)?;
         writeln!(result, "interface {interface_name} {{")?;
         writeln!(
             result,
-            "  use golem:agent/common.{{agent-error, agent-type, binary-reference, text-reference}};"
+            "  use golem:agent/common.{{agent-type, binary-reference, text-reference}};"
         )?;
         writeln!(result)?;
 
         writeln!(result, "  /// {}", agent.constructor.description)?;
         write!(result, "  initialize: func(")?;
         self.write_parameter_list(result, &agent.constructor.input_schema, "constructor")?;
-        writeln!(result, ") -> result<_, agent-error>;")?;
+        writeln!(result, ");")?;
 
         writeln!(result)?;
         writeln!(result, "  get-definition: func() -> agent-type;")?;
         writeln!(result)?;
 
         for method in &agent.methods {
-            let name = escape_wit_keyword(&method.name.to_kebab_case());
+            let name = escape_wit_keyword(&method.name.to_wit_naming());
             writeln!(result, "  /// {}", method.description)?;
             write!(result, "  {name}: func(")?;
             self.write_parameter_list(result, &method.input_schema, &name)?;
-            write!(result, ") -> result<")?;
-            self.write_return_type(result, &method.output_schema, &name)?;
-            writeln!(result, ", agent-error>;")?;
+            writeln!(result, ")")?;
+            if !method.output_schema.is_unit() {
+                write!(result, " -> ")?;
+                self.write_return_type(result, &method.output_schema, &name)?;
+            }
+            writeln!(result, ";")?;
         }
 
         let mut used_names = self.used_names.iter().cloned().collect::<Vec<_>>();
@@ -215,10 +221,6 @@ impl AgentWrapperGeneratorContextState {
             writeln!(result, "  use types.{{{used_names_list}}};")?;
         }
 
-        self.used_names = previous_used_names
-            .union(&self.used_names)
-            .cloned()
-            .collect();
         writeln!(result, "}}")?;
 
         Ok(interface_name)
@@ -299,7 +301,7 @@ impl AgentWrapperGeneratorContextState {
                     write!(
                         result,
                         "      {}",
-                        escape_wit_keyword(&case.name.to_kebab_case())
+                        escape_wit_keyword(&case.name.to_wit_naming())
                     )?;
                     if let Some(typ) = &case.typ {
                         write!(result, "({})", self.wit_type_reference(typ)?)?;
@@ -311,7 +313,7 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Enum(enum_) => {
                 writeln!(result, "    enum {name} {{")?;
                 for case in &enum_.cases {
-                    let case = escape_wit_keyword(&case.to_kebab_case());
+                    let case = escape_wit_keyword(&case.to_wit_naming());
                     writeln!(result, "      {case},")?;
                 }
                 writeln!(result, "    }}")?;
@@ -319,7 +321,7 @@ impl AgentWrapperGeneratorContextState {
             AnalysedType::Flags(flags) => {
                 writeln!(result, "    flags {name} {{")?;
                 for case in &flags.names {
-                    let case = escape_wit_keyword(&case.to_kebab_case());
+                    let case = escape_wit_keyword(&case.to_wit_naming());
                     writeln!(result, "      {case},")?;
                 }
                 writeln!(result, "    }}")?;
@@ -330,7 +332,7 @@ impl AgentWrapperGeneratorContextState {
                     writeln!(
                         result,
                         "      {}: {},",
-                        escape_wit_keyword(&field.name.to_kebab_case()),
+                        escape_wit_keyword(&field.name.to_wit_naming()),
                         self.wit_type_reference(&field.typ)?
                     )?;
                 }
@@ -360,7 +362,7 @@ impl AgentWrapperGeneratorContextState {
                         write!(result, ", ")?;
                     }
 
-                    let param_name = &escape_wit_keyword(&element.name.to_kebab_case());
+                    let param_name = &escape_wit_keyword(&element.name.to_wit_naming());
                     write!(result, "{param_name}: ")?;
                     self.write_element_schema_type_ref(result, &element.schema)?;
                 }
@@ -512,7 +514,7 @@ impl AgentWrapperGeneratorContextState {
                 .name()
                 .map(|n| n.to_string())
                 .unwrap_or("element".to_string())
-                .to_kebab_case();
+                .to_wit_naming();
             let name = self.find_unused_name(proposed_name);
             self.type_names.insert(typ.clone(), name.clone());
             self.used_names.insert(name.clone());
@@ -533,7 +535,7 @@ impl AgentWrapperGeneratorContextState {
     fn multimodal_variant(cases: &[NamedElementSchema]) -> AnalysedType {
         let mut variant_cases = Vec::new();
         for named_element_schema in cases {
-            let case_name = escape_wit_keyword(&named_element_schema.name.to_kebab_case());
+            let case_name = escape_wit_keyword(&named_element_schema.name.to_wit_naming());
             let case_type = match &named_element_schema.schema {
                 ElementSchema::ComponentModel(schema) => schema.element_type.clone(),
                 ElementSchema::UnstructuredText(_) => variant(vec![]).named("text-reference"),
@@ -595,6 +597,7 @@ struct ResolvedWrapper {
     golem_host_package_id: PackageId,
     wasi_clocks_package_id: PackageId,
     wasi_io_package_id: PackageId,
+    wasi_logging_package_id: PackageId,
 }
 
 impl ResolvedWrapper {
@@ -607,6 +610,7 @@ impl ResolvedWrapper {
         let golem_rpc_package_id = add_golem_rpc(&mut resolve)?;
         let golem_host_package_id = add_golem_host(&mut resolve)?;
         let golem_agent_package_id = add_golem_agent(&mut resolve)?;
+        let wasi_logging_package_id = add_wasi_logging(&mut resolve)?;
 
         let package_id = resolve
             .push_str("wrapper.wit", &package_source)
@@ -620,6 +624,7 @@ impl ResolvedWrapper {
             golem_rpc_package_id,
             wasi_clocks_package_id,
             wasi_io_package_id,
+            wasi_logging_package_id,
         })
     }
 
@@ -635,10 +640,20 @@ impl ResolvedWrapper {
                 self.wasi_clocks_package_id,
                 self.wasi_io_package_id,
                 self.golem_host_package_id,
+                self.wasi_logging_package_id,
             ],
         )?;
         Ok(wit_printer.output.to_string())
     }
+}
+
+fn add_wasi_logging(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
+    const WASI_LOGGING_WIT: &str = include_str!("../../../wit/deps/logging/logging.wit");
+    let mut source_map = SourceMap::default();
+
+    source_map.push(Path::new("wit/deps/logging/logging.wit"), WASI_LOGGING_WIT);
+    let package_group = source_map.parse()?;
+    resolve.push_group(package_group)
 }
 
 fn add_wasi_io(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
@@ -741,13 +756,17 @@ fn add_golem_agent(resolve: &mut Resolve) -> anyhow::Result<PackageId> {
 #[cfg(test)]
 mod tests {
     use crate::model::agent::test;
-    use crate::model::agent::test::agent_type_with_wit_keywords;
+    use crate::model::agent::test::{
+        agent_type_with_wit_keywords, reproducer_for_issue_with_enums,
+        reproducer_for_issue_with_result_types, reproducer_for_multiple_types_called_element,
+        single_agent_wrapper_types,
+    };
 
     use golem_common::model::agent::{
         AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
         DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
     };
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
     use indoc::indoc;
@@ -760,9 +779,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:empty;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:empty;
 
             world agent-wrapper {
               import wasi:clocks/wall-clock@0.2.3;
@@ -770,112 +791,46 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
     fn single_agent_wrapper_1() {
         let component_name = "example:single1".into();
-        let agent_types = vec![AgentType {
-            type_name: "agent1".to_string(),
-            description: "An example agent".to_string(),
-            constructor: AgentConstructor {
-                name: None,
-                description: "Creates an example agent instance".into(),
-                prompt_hint: None,
-                input_schema: DataSchema::Tuple(NamedElementSchemas {
-                    elements: vec![
-                        NamedElementSchema {
-                            name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        },
-                        NamedElementSchema {
-                            name: "b".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: option(str()),
-                            }),
-                        },
-                    ],
-                }),
-            },
-            methods: vec![
-                AgentMethod {
-                    name: "f1".to_string(),
-                    description: "returns a random string".to_string(),
-                    prompt_hint: None,
-                    input_schema: DataSchema::Tuple(NamedElementSchemas { elements: vec![] }),
-                    output_schema: DataSchema::Tuple(NamedElementSchemas {
-                        elements: vec![NamedElementSchema {
-                            name: "a".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: str(),
-                            }),
-                        }],
-                    }),
-                },
-                AgentMethod {
-                    name: "f2".to_string(),
-                    description: "adds two numbers".to_string(),
-                    prompt_hint: None,
-                    input_schema: DataSchema::Tuple(NamedElementSchemas {
-                        elements: vec![
-                            NamedElementSchema {
-                                name: "x".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: u32(),
-                                    },
-                                ),
-                            },
-                            NamedElementSchema {
-                                name: "y".to_string(),
-                                schema: ElementSchema::ComponentModel(
-                                    ComponentModelElementSchema {
-                                        element_type: u32(),
-                                    },
-                                ),
-                            },
-                        ],
-                    }),
-                    output_schema: DataSchema::Tuple(NamedElementSchemas {
-                        elements: vec![NamedElementSchema {
-                            name: "return".to_string(),
-                            schema: ElementSchema::ComponentModel(ComponentModelElementSchema {
-                                element_type: u32(),
-                            }),
-                        }],
-                    }),
-                },
-            ],
-            dependencies: vec![],
-        }];
+        let agent_types = single_agent_wrapper_types();
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:single1;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:single1;
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
 
               /// Creates an example agent instance
-              initialize: func(a: u32, b: option<string>) -> result<_, agent-error>;
+              initialize: func(a: u32, b: option<string>);
 
               get-definition: func() -> agent-type;
 
               /// returns a random string
-              f1: func() -> result<string, agent-error>;
+              f1: func() -> string;
 
               /// adds two numbers
-              f2: func(x: u32, y: u32) -> result<u32, agent-error>;
+              f2: func(x: u32, y: u32) -> u32;
             }
 
             world agent-wrapper {
@@ -884,12 +839,18 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -985,9 +946,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:single2;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:single2;
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
@@ -1014,19 +977,19 @@ mod tests {
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{color, location, person};
 
               /// Creates an example agent instance
-              initialize: func(person: person, description: text-reference, photo: binary-reference) -> result<_, agent-error>;
+              initialize: func(person: person, description: text-reference, photo: binary-reference);
 
               get-definition: func() -> agent-type;
 
               /// returns a location
-              f1: func() -> result<location, agent-error>;
+              f1: func() -> location;
 
               /// takes a location and returns a color
-              f2: func(location: location) -> result<color, agent-error>;
+              f2: func(location: location) -> color;
             }
 
             world agent-wrapper {
@@ -1035,13 +998,19 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -1052,9 +1021,11 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:multi1;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:multi1;
 
             interface types {
               use golem:agent/common.{text-reference, binary-reference};
@@ -1091,30 +1062,30 @@ mod tests {
 
             /// An example agent
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
               use types.{location, person};
 
               /// Creates an example agent instance
-              initialize: func(person: person, description: text-reference, photo: binary-reference) -> result<_, agent-error>;
+              initialize: func(person: person, description: text-reference, photo: binary-reference);
 
               get-definition: func() -> agent-type;
 
               /// returns a location
-              f1: func() -> result<location, agent-error>;
+              f1: func() -> location;
             }
 
             /// Another example agent
             interface agent2 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
-              use types.{f2-input, f2-output, person};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
+              use types.{f2-input, f2-output, location, person};
 
               /// Creates another example agent instance
-              initialize: func(person-group: list<person>) -> result<_, agent-error>;
+              initialize: func(person-group: list<person>);
 
               get-definition: func() -> agent-type;
 
               /// takes a location or a color and returns a text or an image
-              f2: func(input: list<f2-input>) -> result<list<f2-output>, agent-error>;
+              f2: func(input: list<f2-input>) -> list<f2-output>;
             }
 
             world agent-wrapper {
@@ -1123,14 +1094,20 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export types;
               export agent1;
               export agent2;
             }
             "#
-        )));
+            ),
+        );
     }
 
     #[test]
@@ -1140,24 +1117,26 @@ mod tests {
         let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
             .unwrap()
             .single_file_wrapper_wit_source;
-        println!("{wit}");
-        assert!(wit.contains(indoc!(
-            r#"package example:single1;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:single1;
 
             /// An example agent using WIT keywords as names
             interface agent1 {
-              use golem:agent/common.{agent-error, agent-type, binary-reference, text-reference};
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
 
               /// Creates an example agent instance
-              initialize: func(%export: u32, %func: option<string>) -> result<_, agent-error>;
+              initialize: func(%export: u32, %func: option<string>);
 
               get-definition: func() -> agent-type;
 
               /// returns a random string
-              %import: func() -> result<string, agent-error>;
+              %import: func() -> string;
 
               /// adds two numbers
-              %package: func(%bool: u32, %char: u32, %enum: u32, %export: u32, %f32: u32, %f64: u32, %flags: u32, %func: u32, %import: u32, %interface: u32, %list: u32, %option: u32, %package: u32, %record: u32, %resource: u32, %result: u32, %s16: u32, %s32: u32, %s64: u32, %s8: u32, %static: u32, %string: u32, %tuple: u32, %type: u32, %u16: u32, %u32: u32, %u64: u32, %u8: u32, %use: u32, %variant: u32, %world: u32) -> result<_, agent-error>;
+              %package: func(%bool: u32, %char: u32, %enum: u32, %export: u32, %f32: u32, %f64: u32, %flags: u32, %func: u32, %import: u32, %interface: u32, %list: u32, %option: u32, %package: u32, %record: u32, %resource: u32, %result: u32, %s16: u32, %s32: u32, %s64: u32, %s8: u32, %static: u32, %string: u32, %tuple: u32, %type: u32, %u16: u32, %u32: u32, %u64: u32, %u8: u32, %use: u32, %variant: u32, %world: u32);
             }
 
             world agent-wrapper {
@@ -1166,11 +1145,272 @@ mod tests {
               import golem:rpc/types@0.2.2;
               import golem:agent/common;
               import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
 
               export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
               export agent1;
             }
             "#
-        )));
+            ),
+        );
+    }
+
+    #[test]
+    fn bug_multiple_types_called_element() {
+        let component_name = "example:bug".into();
+        let agent_types = reproducer_for_multiple_types_called_element();
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package example:bug;
+
+            interface types {
+              use golem:agent/common.{text-reference, binary-reference};
+            
+              record element {
+                x: string,
+              }
+            
+              record element1 {
+                data: string,
+                value: s32,
+              }
+            }
+            
+            /// AssistantAgent
+            interface assistant-agent {
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
+              use types.{element};
+            
+              /// Constructs [object Object]
+              initialize: func();
+            
+              get-definition: func() -> agent-type;
+            
+              ask-more: func(name: string) -> element;
+            }
+            
+            /// WeatherAgent
+            interface weather-agent {
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
+              use types.{element, element1};
+            
+              /// Constructs [object Object]
+              initialize: func(username: string);
+            
+              get-definition: func() -> agent-type;
+            
+              /// Weather forecast weather for you
+              get-weather: func(name: string, param2: element1) -> string;
+            }
+            
+            world agent-wrapper {
+              import wasi:clocks/wall-clock@0.2.3;
+              import wasi:io/poll@0.2.3;
+              import golem:rpc/types@0.2.2;
+              import golem:agent/common;
+              import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
+            
+              export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
+              export types;
+              export assistant-agent;
+              export weather-agent;
+            }
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    fn single_agent_wrapper_1_test_in_package_name() {
+        let component_name = "test:agent".into();
+        let agent_types = single_agent_wrapper_types();
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        //println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc!(
+                r#"package test:agent;
+
+            /// An example agent
+            interface agent1 {
+              use golem:agent/common.{agent-type, binary-reference, text-reference};
+
+              /// Creates an example agent instance
+              initialize: func(a: u32, b: option<string>);
+
+              get-definition: func() -> agent-type;
+
+              /// returns a random string
+              f1: func() -> string;
+
+              /// adds two numbers
+              f2: func(x: u32, y: u32) -> u32;
+            }
+
+            world agent-wrapper {
+              import wasi:clocks/wall-clock@0.2.3;
+              import wasi:io/poll@0.2.3;
+              import golem:rpc/types@0.2.2;
+              import golem:agent/common;
+              import golem:agent/guest;
+              import golem:api/save-snapshot@1.1.7;
+              import golem:api/load-snapshot@1.1.7;
+              import wasi:logging/logging;
+
+              export golem:agent/guest;
+              export golem:api/save-snapshot@1.1.7;
+              export golem:api/load-snapshot@1.1.7;
+              export agent1;
+            }
+            "#
+            ),
+        );
+    }
+
+    #[test]
+    pub fn enum_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_enums();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        // println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! {
+                r#"package test:agent;
+
+                   interface types {
+                     use golem:agent/common.{text-reference, binary-reference};
+
+                     enum union-with-only-literals {
+                       foo,
+                       bar,
+                       baz,
+                     }
+                   }
+
+                   /// FooAgent
+                   interface foo-agent {
+                     use golem:agent/common.{agent-type, binary-reference, text-reference};
+                     use types.{union-with-only-literals};
+
+                     initialize: func(input: string);
+
+                     get-definition: func() -> agent-type;
+
+                     my-fun: func(param: union-with-only-literals) -> union-with-only-literals;
+                   }
+                "#
+            },
+        )
+    }
+
+    #[test]
+    pub fn result_type() {
+        let component_name = "test:agent".into();
+        let agent_types = reproducer_for_issue_with_result_types();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                /// Constructs the agent bar-agent
+                interface bar-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                
+                  /// Constructs the agent bar-agent
+                  initialize: func();
+                
+                  get-definition: func() -> agent-type;
+                
+                  fun-either: func(either: result<string, string>) -> result<string, string>;
+                }
+            "#},
+        )
+    }
+
+    #[test]
+    pub fn multimodal_untagged_variant_in_out() {
+        let component_name = "test:agent".into();
+        let agent_types = test::multimodal_untagged_variant_in_out();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                interface types {
+                  use golem:agent/common.{text-reference, binary-reference};
+
+                  record image {
+                    val: list<u8>,
+                  }
+
+                  record text {
+                    val: string,
+                  }
+
+                  variant foo-input {
+                    text(text),
+                    image(image),
+                  }
+
+                  variant foo-output {
+                    text(text),
+                    image(image),
+                  }
+                }
+
+                /// Test
+                interface test-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                  use types.{foo-input, foo-output};
+
+                  /// Constructor
+                  initialize: func();
+
+                  get-definition: func() -> agent-type;
+
+                  foo: func(input: list<foo-input>) -> list<foo-output>;
+                }
+            "#},
+        )
+    }
+
+    fn assert_wit(actual: &str, expected: &str) {
+        let line_count = expected.lines().count();
+        let actual_prefix = actual
+            .lines()
+            .take(line_count)
+            .collect::<Vec<_>>()
+            .join("\n");
+        pretty_assertions::assert_eq!(actual_prefix, expected.trim_end())
     }
 }

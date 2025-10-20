@@ -76,10 +76,10 @@ use golem_client::model::{
 };
 use golem_client::{Context, Security};
 use golem_common::model::worker::WasiConfigVars;
-use golem_common::model::ProjectId;
 use golem_common::model::WorkerEvent;
+use golem_common::model::{ProjectId, PromiseId};
 use golem_service_base::clients::authorised_request;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -145,6 +145,50 @@ pub trait WorkerService: Send + Sync {
                 base_url: Url::parse(&url).expect("Failed to parse url"),
                 security_token: Security::Bearer(token.to_string()),
             },
+        }
+    }
+
+    async fn complete_promise(
+        &self,
+        token: &Uuid,
+        promise_id: PromiseId,
+        data: Vec<u8>,
+    ) -> crate::Result<()> {
+        match self.client_protocol() {
+            GolemClientProtocol::Grpc => {
+                use golem_api_grpc::proto::golem::worker::v1::CompletePromiseRequest;
+                use golem_api_grpc::proto::golem::worker::CompleteParameters;
+
+                let mut client = self.worker_grpc_client().await;
+                let request = CompletePromiseRequest {
+                    worker_id: Some(promise_id.worker_id.into()),
+                    complete_parameters: Some(CompleteParameters {
+                        oplog_idx: promise_id.oplog_idx.into(),
+                        data,
+                    }),
+                };
+                let request = authorised_request(request, token);
+
+                client.complete_promise(request).await?;
+                Ok(())
+            }
+            GolemClientProtocol::Http => {
+                use golem_client::model::CompleteParameters;
+
+                let client = self.worker_http_client(token).await;
+                client
+                    .complete_promise(
+                        &promise_id.worker_id.component_id.0,
+                        &promise_id.worker_id.worker_name,
+                        &CompleteParameters {
+                            oplog_idx: promise_id.oplog_idx.into(),
+                            data,
+                        },
+                    )
+                    .await?;
+
+                Ok(())
+            }
         }
     }
 

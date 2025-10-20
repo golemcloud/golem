@@ -20,7 +20,7 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use crate::durable_host::serialized::SerializableError;
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use wasmtime_wasi_http::bindings::http::types::{
     DnsErrorPayload, ErrorCode, FieldSizePayload, Method, TlsAlertReceivedPayload,
 };

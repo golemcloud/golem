@@ -82,11 +82,11 @@ mod tests {
         RibCompilerConfig, TypeName, VariableId,
     };
     use bigdecimal::BigDecimal;
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         case, field, list, r#enum, str, u64, unit_case, variant,
     };
 
-    use golem_wasm_ast::analysis::analysed_type;
+    use golem_wasm::analysis::analysed_type;
     use test_r::test;
 
     #[test]
@@ -2467,12 +2467,12 @@ mod tests {
             VariableId,
         };
         use bigdecimal::BigDecimal;
-        use golem_wasm_ast::analysis::analysed_type::u64;
-        use golem_wasm_ast::analysis::{
+        use golem_wasm::analysis::analysed_type::u64;
+        use golem_wasm::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedType, TypeU32,
         };
-        use golem_wasm_rpc::{Value, ValueAndType};
+        use golem_wasm::{Value, ValueAndType};
         use uuid::Uuid;
 
         pub(crate) fn result(
@@ -2755,6 +2755,7 @@ mod tests {
             let component_dependency_key = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };
@@ -2772,7 +2773,7 @@ mod tests {
         pub(crate) fn create_none(typ: &AnalysedType) -> ValueAndType {
             ValueAndType::new(
                 Value::Option(None),
-                golem_wasm_ast::analysis::analysed_type::option(typ.clone()),
+                golem_wasm::analysis::analysed_type::option(typ.clone()),
             )
         }
 
@@ -2793,6 +2794,7 @@ mod tests {
             let component_dependency_key = ComponentDependencyKey {
                 component_name: "foo".to_string(),
                 component_id: Uuid::new_v4(),
+                component_version: 0,
                 root_package_name: None,
                 root_package_version: None,
             };

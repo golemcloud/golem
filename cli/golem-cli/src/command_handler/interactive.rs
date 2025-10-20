@@ -98,13 +98,50 @@ impl InteractiveHandler {
         )
     }
 
-    pub fn confirm_redeploy_workers(&self, number_of_workers: usize) -> anyhow::Result<bool> {
+    pub fn confirm_reset_http_api_defs(&self, rendered_steps: &[String]) -> anyhow::Result<bool> {
         self.confirm(
             true,
             format!(
-                "Redeploying will {} then recreate {} worker(s), do you want to continue?",
+                "Resetting HTTP API definitions will apply the following changes:\n{}\nDo you want to continue?",
+                rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_reset_http_deployments(
+        &self,
+        rendered_steps: &[String],
+    ) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Resetting HTTP API definitions will apply the following changes:\n{}\nDo you want to continue?",
+                rendered_steps.iter().map(|s| format!(" - {s}")).collect::<Vec<_>>().join("\n")
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_redeploy_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "Redeploying will {} then recreate {} agents(s), do you want to continue?",
                 "delete".log_color_warn(),
-                number_of_workers.to_string().log_color_highlight()
+                number_of_agents.to_string().log_color_highlight()
+            ),
+            None,
+        )
+    }
+
+    pub fn confirm_deleting_agents(&self, number_of_agents: usize) -> anyhow::Result<bool> {
+        self.confirm(
+            true,
+            format!(
+                "{} {} agents(s), do you want to continue?",
+                "Deleting".log_color_warn(),
+                number_of_agents.to_string().log_color_highlight()
             ),
             None,
         )
@@ -137,7 +174,7 @@ impl InteractiveHandler {
     ) -> anyhow::Result<bool> {
         self.confirm(
             true,
-            format!("Worker {}/{} will be updated to the latest component revision: {}. Do you want to continue?",
+            format!("Agent {}/{} will be updated to the latest component revision: {}. Do you want to continue?",
                     component_name.0.log_color_highlight(),
                     worker_name.0.log_color_highlight(),
                     target_revision.to_string().log_color_highlight()
@@ -598,9 +635,17 @@ impl InteractiveHandler {
         &self,
         existing_component_names: HashSet<String>,
     ) -> anyhow::Result<Option<(String, PackageName)>> {
+        let available_languages = self
+            .ctx
+            .templates(self.ctx.dev_mode())
+            .keys()
+            .collect::<HashSet<_>>();
+
         let Some(language) = Select::new(
             "Select language for the new component",
-            GuestLanguage::iter().collect(),
+            GuestLanguage::iter()
+                .filter(|lang| available_languages.contains(lang))
+                .collect(),
         )
         .prompt()
         .none_if_not_interactive_logged()?
@@ -610,7 +655,7 @@ impl InteractiveHandler {
 
         let template_options = self
             .ctx
-            .templates()
+            .templates(self.ctx.dev_mode())
             .get(&language)
             .unwrap()
             .get(&ComposableAppGroupName::default())
@@ -645,6 +690,7 @@ impl InteractiveHandler {
 
                 Ok(Validation::Valid)
             })
+            .with_placeholder("package-name:component-name")
             .prompt()
             .none_if_not_interactive_logged()?
         else {
@@ -821,8 +867,8 @@ impl Display for TemplateOption {
 
 #[derive(Debug, Clone, Copy, EnumIter)]
 enum AddComponentOrCreateApp {
-    AddComponent,
     CreateApp,
+    AddComponent,
 }
 
 impl Display for AddComponentOrCreateApp {

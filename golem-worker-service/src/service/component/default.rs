@@ -25,8 +25,10 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
@@ -35,6 +37,7 @@ use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::model::{Component, ComponentName};
 use http::Uri;
+use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
@@ -50,18 +53,25 @@ pub trait ComponentService: Send + Sync {
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
 
-    async fn get_latest(
+    async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
 
-    async fn get_by_name(
+    async fn get_latest_by_name(
         &self,
         component_id: &ComponentName,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Component>;
+
+    async fn get_all_by_name(
+        &self,
+        component_id: &ComponentName,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Vec<Component>>;
 
     async fn create_or_update_constraints(
         &self,
@@ -81,6 +91,102 @@ pub trait ComponentService: Send + Sync {
         constraints: &[FunctionSignature],
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints>;
+}
+
+pub struct CachedComponentService {
+    inner: Arc<dyn ComponentService>,
+    cache: Cache<VersionedComponentId, (), Component, ComponentServiceError>,
+}
+
+#[async_trait]
+impl ComponentService for CachedComponentService {
+    async fn get_by_version(
+        &self,
+        component_id: &ComponentId,
+        version: u64,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        let inner_clone = self.inner.clone();
+        self.cache
+            .get_or_insert_simple(
+                &VersionedComponentId {
+                    component_id: component_id.clone(),
+                    version,
+                },
+                || async {
+                    inner_clone
+                        .get_by_version(component_id, version, auth_ctx)
+                        .await
+                },
+            )
+            .await
+    }
+
+    async fn get_latest_by_id(
+        &self,
+        component_id: &ComponentId,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        self.inner.get_latest_by_id(component_id, auth_ctx).await
+    }
+
+    async fn get_latest_by_name(
+        &self,
+        component_id: &ComponentName,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Component> {
+        self.inner
+            .get_latest_by_name(component_id, namespace, auth_ctx)
+            .await
+    }
+
+    async fn get_all_by_name(
+        &self,
+        component_id: &ComponentName,
+        namespace: &Namespace,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<Vec<Component>> {
+        self.inner
+            .get_all_by_name(component_id, namespace, auth_ctx)
+            .await
+    }
+
+    async fn create_or_update_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: FunctionConstraints,
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        self.inner
+            .create_or_update_constraints(component_id, constraints, auth_ctx)
+            .await
+    }
+
+    async fn delete_constraints(
+        &self,
+        component_id: &ComponentId,
+        constraints: &[FunctionSignature],
+        auth_ctx: &AuthCtx,
+    ) -> ComponentResult<FunctionConstraints> {
+        self.inner
+            .delete_constraints(component_id, constraints, auth_ctx)
+            .await
+    }
+}
+
+impl CachedComponentService {
+    pub fn new(inner: Arc<dyn ComponentService>, cache_capacity: usize) -> Self {
+        Self {
+            inner,
+            cache: Cache::new(
+                Some(cache_capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "component-metadata-cache",
+            ),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -109,37 +215,50 @@ impl RemoteComponentService {
         }
     }
 
-    fn process_metadata_response(
+    fn process_metadata_response_opt(
         response: GetComponentMetadataResponse,
-    ) -> Result<Component, ComponentServiceError> {
+    ) -> Result<Option<Component>, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Empty response".to_string(),
             )),
 
             Some(get_component_metadata_response::Result::Success(response)) => {
-                let component_view: Result<Component, ComponentServiceError> = match response
-                    .component
-                {
-                    Some(component) => {
-                        let component: Component = component.clone().try_into().map_err(|err| {
-                            ComponentServiceError::Internal(format!(
-                                "Response conversion error: {err}"
-                            ))
-                        })?;
-                        Ok(component)
-                    }
-                    None => Err(ComponentServiceError::Internal(
-                        "Empty component response".to_string(),
-                    )),
-                };
-                Ok(component_view?)
+                response.component.map(Self::process_component).transpose()
             }
             Some(get_component_metadata_response::Result::Error(error)) => Err(error.into()),
         }
     }
 
+    fn process_metadata_response(
+        response: GetComponentMetadataResponse,
+    ) -> Result<Component, ComponentServiceError> {
+        match Self::process_metadata_response_opt(response)? {
+            Some(component) => Ok(component),
+            None => Err(ComponentServiceError::NotFound(
+                "Component not found".to_string(),
+            )),
+        }
+    }
+
     fn process_get_components_response(
+        response: GetComponentsResponse,
+    ) -> Result<Vec<Component>, ComponentServiceError> {
+        match response.result {
+            None => Err(ComponentServiceError::Internal(
+                "Empty response".to_string(),
+            )),
+
+            Some(get_components_response::Result::Success(response)) => response
+                .components
+                .into_iter()
+                .map(Self::process_component)
+                .collect::<Result<Vec<_>, _>>(),
+            Some(get_components_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    fn process_get_components_response_and_get_last(
         response: GetComponentsResponse,
     ) -> Result<Component, ComponentServiceError> {
         match response.result {
@@ -147,26 +266,26 @@ impl RemoteComponentService {
                 "Empty response".to_string(),
             )),
 
-            Some(get_components_response::Result::Success(response)) => {
-                let component = response.components.first();
-
-                let component_view: Result<Component, ComponentServiceError> = match component {
-                    Some(component) => {
-                        let component: Component = component.clone().try_into().map_err(|err| {
-                            ComponentServiceError::Internal(format!(
-                                "Response conversion error: {err}"
-                            ))
-                        })?;
-                        Ok(component)
-                    }
-                    None => Err(ComponentServiceError::Internal(
-                        "Empty component response".to_string(),
+            Some(get_components_response::Result::Success(mut response)) => {
+                match response.components.pop() {
+                    Some(component) => Self::process_component(component),
+                    None => Err(ComponentServiceError::NotFound(
+                        "Component not found".to_string(),
                     )),
-                };
-                Ok(component_view?)
+                }
             }
             Some(get_components_response::Result::Error(error)) => Err(error.into()),
         }
+    }
+
+    fn process_component(
+        component: golem_api_grpc::proto::golem::component::Component,
+    ) -> Result<Component, ComponentServiceError> {
+        component.try_into().map_err(|err| {
+            ComponentServiceError::Internal(format!(
+                "Response conversion error for component: {err}"
+            ))
+        })
     }
 
     fn process_create_component_constraint_response(
@@ -255,7 +374,7 @@ impl ComponentService for RemoteComponentService {
         version: u64,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let value = with_retries(
+        with_retries(
             "component",
             "get_component",
             Some(component_id.to_string()),
@@ -282,17 +401,15 @@ impl ComponentService for RemoteComponentService {
             },
             Self::is_retriable,
         )
-        .await?;
-
-        Ok(value)
+        .await
     }
 
-    async fn get_latest(
+    async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let value = with_retries(
+        with_retries(
             "component",
             "get_latest",
             Some(component_id.to_string()),
@@ -317,20 +434,59 @@ impl ComponentService for RemoteComponentService {
             },
             Self::is_retriable,
         )
-        .await?;
-
-        Ok(value)
+        .await
     }
 
-    async fn get_by_name(
+    async fn get_latest_by_name(
         &self,
         component_name: &ComponentName,
         namespace: &Namespace,
         metadata: &AuthCtx,
     ) -> ComponentResult<Component> {
-        let value = with_retries(
+        with_retries(
             "component",
-            "get_by_name",
+            "get_latest_by_name",
+            Some(component_name.to_string()),
+            &self.retry_config,
+            &(
+                self.client.clone(),
+                component_name.0.clone(),
+                namespace.project_id.clone(),
+                metadata.clone(),
+            ),
+            |(client, name, project_id, metadata)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get_components", move |client| {
+                            let request = GetComponentsRequest {
+                                project_id: Some(project_id.clone().into()),
+                                component_name: Some(name.clone()),
+                            };
+
+                            let request = with_metadata(request, metadata.clone());
+
+                            Box::pin(client.get_components(request))
+                        })
+                        .await?
+                        .into_inner();
+
+                    Self::process_get_components_response_and_get_last(response)
+                })
+            },
+            Self::is_retriable,
+        )
+        .await
+    }
+
+    async fn get_all_by_name(
+        &self,
+        component_name: &ComponentName,
+        namespace: &Namespace,
+        metadata: &AuthCtx,
+    ) -> ComponentResult<Vec<Component>> {
+        with_retries(
+            "component",
+            "get_all_by_name",
             Some(component_name.to_string()),
             &self.retry_config,
             &(
@@ -360,9 +516,7 @@ impl ComponentService for RemoteComponentService {
             },
             Self::is_retriable,
         )
-        .await?;
-
-        Ok(value)
+        .await
     }
 
     async fn create_or_update_constraints(

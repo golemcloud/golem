@@ -876,6 +876,8 @@ mod grpc {
         async fn all_cached_metadata(&self) -> Vec<ComponentDto> {
             self.component_metadata_cache
                 .iter()
+                .await
+                .into_iter()
                 .map(|(_, v)| v)
                 .collect()
         }

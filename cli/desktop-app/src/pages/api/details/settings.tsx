@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,14 +26,9 @@ export default function APISettings() {
   const { toast } = useToast();
   const navigate = useNavigate();
   const { apiName, version, appId } = useParams();
-  const [queryParams] = useSearchParams();
-  const reload = queryParams.get("reload");
 
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [showConfirmAllDialog, setShowConfirmAllDialog] = useState(false);
-  const [showConfirmAllRoutes, setShowConfirmAllRoutes] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [apiDetails, setApiDetails] = useState<HttpApiDefinition[]>([]);
   const [activeApiDetails, setActiveApiDetails] = useState<HttpApiDefinition>(
     {} as HttpApiDefinition,
   );
@@ -41,70 +36,30 @@ export default function APISettings() {
   useEffect(() => {
     if (apiName) {
       API.apiService.getApi(appId!, apiName).then(response => {
-        setApiDetails(response);
         const selectedApi = response.find(api => api.version === version);
         setActiveApiDetails(selectedApi!);
       });
     }
   }, [apiName, version]);
 
-  const handleDelete = async (type: "version" | "all" | "routes") => {
+  const handleDelete = async () => {
     setIsDeleting(true);
     try {
-      if (type === "version") {
-        await API.apiService.deleteApi(
-          appId!,
-          activeApiDetails.id!,
-          activeApiDetails.version,
-        );
-        toast({
-          title: "Version deleted",
-          description: `API version ${activeApiDetails.version} has been deleted successfully.`,
-          duration: 3000,
-        });
-        const newVersion = apiDetails.find(
-          api => api.version !== activeApiDetails.version,
-        );
-        navigate(
-          newVersion
-            ? `/app/${appId}/apis/${apiName}/version/${newVersion.version}`
-            : `/app/${appId}/apis`,
-        );
-        setShowConfirmDialog(false);
-      } else if (type === "all") {
-        await Promise.all(
-          apiDetails.map(api =>
-            API.apiService.deleteApi(appId!, api.id!, api.version),
-          ),
-        );
-        toast({
-          title: "All versions deleted",
-          description: "All API versions have been deleted successfully.",
-          duration: 3000,
-        });
-        navigate(`/app/${appId}/apis`);
-        setShowConfirmAllDialog(false);
-      } else {
-        await API.apiService.putApi(
-          activeApiDetails.id!,
-          activeApiDetails.version,
-          {
-            ...activeApiDetails,
-            routes: [],
-          },
-        );
-        toast({
-          title: "All routes deleted",
-          description: "All routes have been deleted successfully.",
-          duration: 3000,
-        });
-        navigate(
-          `/app/${appId}/apis/${apiName}/version/${version}?reload=${!reload}`,
-        );
-        setShowConfirmAllRoutes(false);
-      }
+      await API.apiService.deleteApi(
+        appId!,
+        activeApiDetails.id!,
+        activeApiDetails.version,
+      );
+      toast({
+        title: "Version deleted",
+        description: `API version ${activeApiDetails.version} has been deleted successfully.`,
+        duration: 3000,
+      });
+      navigate(`/app/${appId}/apis`);
+      setShowConfirmDialog(false);
     } finally {
       setIsDeleting(false);
+      setShowConfirmDialog(false);
     }
   };
 
@@ -129,23 +84,7 @@ export default function APISettings() {
                   "Once you delete an API, there is no going back. Please be certain.",
                 action: () => setShowConfirmDialog(prev => !prev),
                 confirm: showConfirmDialog,
-                handler: () => handleDelete("version"),
-              },
-              {
-                title: "Delete all API Versions",
-                description:
-                  "Once you delete all API versions, there is no going back. Please be certain.",
-                action: () => setShowConfirmAllDialog(prev => !prev),
-                confirm: showConfirmAllDialog,
-                handler: () => handleDelete("all"),
-              },
-              {
-                title: "Delete All Routes",
-                description:
-                  "Once you delete all routes, there is no going back. Please be certain.",
-                action: () => setShowConfirmAllRoutes(prev => !prev),
-                confirm: showConfirmAllRoutes,
-                handler: () => handleDelete("routes"),
+                handler: () => handleDelete(),
               },
             ].map(({ title, description, action, confirm, handler }, index) => (
               <div

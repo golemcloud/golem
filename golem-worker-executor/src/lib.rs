@@ -29,6 +29,7 @@ pub mod workerctx;
 #[cfg(test)]
 test_r::enable!();
 
+use self::services::promise::LazyPromiseService;
 use crate::grpc::WorkerExecutorImpl;
 use crate::services::active_workers::ActiveWorkers;
 use crate::services::agent_types::AgentTypesService;
@@ -393,8 +394,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     );
 
     let golem_config = Arc::new(golem_config.clone());
-    let promise_service: Arc<dyn PromiseService> =
-        Arc::new(DefaultPromiseService::new(key_value_storage.clone()));
+
     let shard_service = Arc::new(ShardServiceDefault::new());
 
     let mut oplog_archives: Vec<Arc<dyn OplogArchiveService>> = Vec::new();
@@ -514,6 +514,8 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         golem_config.clone(),
     ));
 
+    let promise_service = Arc::new(LazyPromiseService::new());
+
     let scheduler_service = SchedulerServiceDefault::new(
         key_value_storage.clone(),
         shard_service.clone(),
@@ -535,7 +537,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             worker_service,
             worker_enumeration_service,
             running_worker_enumeration_service,
-            promise_service,
+            promise_service.clone(),
             golem_config.clone(),
             shard_service,
             key_value_service,
@@ -553,6 +555,13 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
             agent_type_service,
         )
         .await?;
+
+    promise_service
+        .set_implementation(DefaultPromiseService::new(
+            key_value_storage.clone(),
+            all.clone(),
+        ))
+        .await;
 
     Ok((all, epoch_thread))
 }

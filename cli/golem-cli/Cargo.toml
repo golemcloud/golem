@@ -31,12 +31,11 @@ harness = false
 [dependencies]
 golem-templates = { workspace = true }
 golem-client = { workspace = true }
-golem-common = { workspace = true, default-features = true, features = ["agent-extraction"] }
-golem-rib = { workspace = true, default-features = true }
+golem-common = { workspace = true }
+golem-rib = { workspace = true }
 golem-rib-repl = { workspace = true }
-golem-wasm-ast = { workspace = true, default-features = true }
-golem-wasm-rpc = { workspace = true, default-features = true }
-golem-wasm-rpc-derive = { workspace = true }
+golem-wasm = { workspace = true }
+golem-wasm-derive = { workspace = true }
 
 # External deps
 anyhow = { workspace = true }
@@ -59,11 +58,11 @@ clap_complete = { workspace = true }
 cli-table = { workspace = true }
 colored = { workspace = true }
 dirs = { workspace = true }
-envsubst = { workspace = true }
 flate2 = { workspace = true }
 fs_extra = { workspace = true }
 futures-util = { workspace = true }
 fuzzy-matcher = { workspace = true }
+gag = { workspace = true }
 heck = { workspace = true }
 humansize = { workspace = true }
 indexmap = { workspace = true }
@@ -75,6 +74,7 @@ lenient_bool = { workspace = true }
 minijinja = { workspace = true }
 moonbit-component-generator = { workspace = true }
 native-tls = { workspace = true }
+nanoid = { workspace = true }
 nondestructive = { workspace = true }
 phf = { workspace = true }
 prettyplease = { workspace = true }
@@ -94,6 +94,7 @@ spdx = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 syn = { workspace = true }
+synoptic = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 textwrap = { workspace = true }
@@ -124,10 +125,9 @@ webbrowser = { workspace = true }
 warp = { workspace = true }
 
 [dev-dependencies]
-
-# External deps
 axum = { workspace = true }
 log = { workspace = true }
+pretty_assertions = { workspace = true }
 pretty_env_logger = { workspace = true }
 reqwest = { workspace = true }
 serde_json_path = { workspace = true }
@@ -136,4 +136,5 @@ test-r = { workspace = true }
 wasm-metadata = { workspace = true }
 
 [build-dependencies]
+lenient_bool = { workspace = true }
 shadow-rs = { workspace = true }

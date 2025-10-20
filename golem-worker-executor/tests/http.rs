@@ -21,7 +21,7 @@ use bytes::Bytes;
 use golem_common::model::{IdempotencyKey, RetryConfig};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_rpc::{IntoValueAndType, Value};
+use golem_wasm::{IntoValueAndType, Value};
 use http::HeaderMap;
 use serde_json::json;
 use std::collections::HashMap;
@@ -405,7 +405,7 @@ async fn outgoing_http_contains_idempotency_key(
     check!(
         result
             == vec![Value::String(
-                "200 ExampleResponse { percentage: 0.0, message: Some(\"e84f0762-e134-5eff-aa25-f023a376e058\") }"
+                "200 ExampleResponse { percentage: 0.0, message: Some(\"25b5624b-3a2a-5574-bdad-418287838cba\") }"
                     .to_string()
             )]
     );

@@ -15,6 +15,7 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
@@ -23,9 +24,9 @@ use golem_common::model::regions::DeletedRegions;
 use golem_common::model::{ ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
-    InterruptKind, WorkerExecutorError, WorkerOutOfMemory,
+    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use nonempty_collections::NEVec;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Debug, Display, Formatter};
@@ -74,24 +75,13 @@ impl WorkerConfig {
         worker_id: WorkerId,
         target_component_version: ComponentRevision,
         worker_args: Vec<String>,
-        mut worker_env: Vec<(String, String)>,
+        worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
         component_version_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
-        let worker_name = worker_id.worker_name.clone();
-        let component_id = worker_id.component_id;
-        let component_version = target_component_version.to_string();
-        worker_env.retain(|(key, _)| {
-            key != "GOLEM_WORKER_NAME"
-                && key != "GOLEM_COMPONENT_ID"
-                && key != "GOLEM_COMPONENT_VERSION"
-        });
-        worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name));
-        worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
-        worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
         WorkerConfig {
             args: worker_args,
             env: worker_env,
@@ -100,6 +90,34 @@ impl WorkerConfig {
             component_version_for_replay,
             created_by,
             initial_wasi_config_vars,
+        }
+    }
+
+    pub(crate) fn enrich_env(
+        worker_env: &mut Vec<(String, String)>,
+        worker_id: &WorkerId,
+        agent_id: &Option<AgentId>,
+        target_component_version: u64,
+    ) {
+        let worker_name = worker_id.worker_name.clone();
+        let component_id = &worker_id.component_id;
+        let component_version = target_component_version.to_string();
+        worker_env.retain(|(key, _)| {
+            key != "GOLEM_AGENT_ID"
+                && key != "GOLEM_AGENT_TYPE"
+                && key != "GOLEM_WORKER_NAME"
+                && key != "GOLEM_COMPONENT_ID"
+                && key != "GOLEM_COMPONENT_VERSION"
+        });
+        worker_env.push((String::from("GOLEM_AGENT_ID"), worker_name.clone()));
+        worker_env.push((String::from("GOLEM_WORKER_NAME"), worker_name)); // kept for backward compatibility temporarily
+        worker_env.push((String::from("GOLEM_COMPONENT_ID"), component_id.to_string()));
+        worker_env.push((String::from("GOLEM_COMPONENT_VERSION"), component_version));
+        if let Some(agent_id) = agent_id {
+            worker_env.push((
+                String::from("GOLEM_AGENT_TYPE"),
+                agent_id.agent_type.clone(),
+            ));
         }
     }
 }
@@ -125,24 +143,20 @@ impl From<golem_api_grpc::proto::golem::common::ResourceLimits> for CurrentResou
 #[derive(Clone, Debug)]
 pub enum ExecutionStatus {
     Loading {
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
     Running {
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
     Suspended {
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
     Interrupting {
         interrupt_kind: InterruptKind,
         await_interruption: Arc<tokio::sync::broadcast::Sender<()>>,
-        last_known_status: WorkerStatusRecord,
         component_type: ComponentType,
         timestamp: Timestamp,
     },
@@ -151,40 +165,6 @@ pub enum ExecutionStatus {
 impl ExecutionStatus {
     pub fn is_running(&self) -> bool {
         matches!(self, ExecutionStatus::Running { .. })
-    }
-
-    pub fn last_known_status(&self) -> &WorkerStatusRecord {
-        match self {
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => last_known_status,
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => last_known_status,
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => last_known_status,
-            ExecutionStatus::Interrupting {
-                last_known_status, ..
-            } => last_known_status,
-        }
-    }
-
-    pub fn set_last_known_status(&mut self, status: WorkerStatusRecord) {
-        match self {
-            ExecutionStatus::Loading {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Running {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Suspended {
-                last_known_status, ..
-            } => *last_known_status = status,
-            ExecutionStatus::Interrupting {
-                last_known_status, ..
-            } => *last_known_status = status,
-        }
     }
 
     pub fn timestamp(&self) -> Timestamp {
@@ -227,30 +207,55 @@ pub enum TrapType {
     /// Called the WASI exit function
     Exit,
     /// Failed with an error
-    Error(WorkerError),
+    Error {
+        error: WorkerError,
+        retry_from: OplogIndex,
+    },
 }
 
 impl TrapType {
-    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error) -> TrapType {
+    pub fn from_error<Ctx: WorkerCtx>(error: &anyhow::Error, retry_from: OplogIndex) -> TrapType {
         match error.root_cause().downcast_ref::<InterruptKind>() {
             Some(kind) => TrapType::Interrupt(kind.clone()),
             None => match Ctx::is_exit(error) {
                 Some(_) => TrapType::Exit,
                 None => match error.root_cause().downcast_ref::<Trap>() {
-                    Some(&Trap::StackOverflow) => TrapType::Error(WorkerError::StackOverflow),
-                    _ => match error.root_cause().downcast_ref::<WorkerOutOfMemory>() {
-                        Some(_) => TrapType::Error(WorkerError::OutOfMemory),
+                    Some(&Trap::StackOverflow) => TrapType::Error {
+                        error: WorkerError::StackOverflow,
+                        retry_from,
+                    },
+                    _ => match error.root_cause().downcast_ref::<GolemSpecificWasmTrap>() {
+                        Some(GolemSpecificWasmTrap::WorkerOutOfMemory) => TrapType::Error {
+                            error: WorkerError::OutOfMemory,
+                            retry_from,
+                        },
+                        Some(GolemSpecificWasmTrap::WorkerExceededMemoryLimit) => TrapType::Error {
+                            error: WorkerError::ExceededMemoryLimit,
+                            retry_from,
+                        },
                         None => match error.root_cause().downcast_ref::<WorkerExecutorError>() {
                             Some(WorkerExecutorError::InvalidRequest { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
                             }
                             Some(WorkerExecutorError::ParamTypeMismatch { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
                             }
                             Some(WorkerExecutorError::ValueMismatch { details }) => {
-                                TrapType::Error(WorkerError::InvalidRequest(details.clone()))
+                                TrapType::Error {
+                                    error: WorkerError::InvalidRequest(details.clone()),
+                                    retry_from,
+                                }
                             }
-                            _ => TrapType::Error(WorkerError::Unknown(format!("{error:#}"))),
+                            _ => TrapType::Error {
+                                error: WorkerError::Unknown(format!("{error:#}")),
+                                retry_from,
+                            },
                         },
                     },
                 },
@@ -263,7 +268,7 @@ impl TrapType {
             TrapType::Interrupt(InterruptKind::Interrupt) => Some(WorkerExecutorError::runtime(
                 "Interrupted via the Golem API",
             )),
-            TrapType::Error(error) => match error {
+            TrapType::Error { error, .. } => match error {
                 WorkerError::InvalidRequest(msg) => {
                     Some(WorkerExecutorError::invalid_request(msg.clone()))
                 }
@@ -286,17 +291,12 @@ impl TrapType {
 pub struct LastError {
     pub error: WorkerError,
     pub stderr: String,
-    pub retry_count: u64,
+    pub retry_from: OplogIndex,
 }
 
 impl Display for LastError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}, retried {} times",
-            self.error.to_string(&self.stderr),
-            self.retry_count
-        )
+        write!(f, "{}", self.error.to_string(&self.stderr))
     }
 }
 

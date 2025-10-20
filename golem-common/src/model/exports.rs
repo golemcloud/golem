@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedFunction};
+use golem_wasm::analysis::{AnalysedExport, AnalysedFunction};
 
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite};
 

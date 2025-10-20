@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package wasm.rpc;
+
+import "wasm/rpc/type.proto";
+import "wasm/rpc/val.proto";
+
+message ValueAndType {
+    wasm.rpc.Val value = 1;
+    wasm.rpc.Type typ = 2;
+}

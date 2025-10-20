@@ -14,12 +14,14 @@
 
 mod conversions;
 
-#[cfg(feature = "agent-extraction")]
+pub mod compact_value_formatter;
 pub mod extraction;
-#[cfg(feature = "protobuf")]
 mod protobuf;
+
 #[cfg(test)]
 mod tests;
+
+pub mod wit_naming;
 
 pub mod bindings {
     wasmtime::component::bindgen!({
@@ -28,32 +30,42 @@ pub mod bindings {
           async: true,
           trappable_imports: true,
           with: {
-            "golem:rpc/types": golem_wasm_rpc::golem_rpc_0_2_x::types,
+            "golem:rpc/types": golem_wasm::golem_rpc_0_2_x::types,
           },
           wasmtime_crate: ::wasmtime
     });
 }
 
+use crate::model::agent::compact_value_formatter::ToCompactString;
+use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::component::ComponentId;
 use crate::model::component_metadata::ComponentMetadata;
 use async_trait::async_trait;
 use base64::Engine;
 use bincode::{Decode, Encode};
-use golem_wasm_ast::analysis::analysed_type::{case, variant};
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm::analysis::analysed_type::{case, str, tuple, variant};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{parse_value_and_type, print_value_and_type, IntoValue, Value, ValueAndType};
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
-use std::future::Future;
-use std::pin::Pin;
 // NOTE: The primary reason for duplicating the model with handwritten Rust types is to avoid the need
 // to work with WitValue and WitType directly in the application code. Instead, we are converting them
 // to Value and AnalysedType which are much more ergonomic to work with.
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentConstructor {
     pub name: Option<String>,
@@ -62,9 +74,19 @@ pub struct AgentConstructor {
     pub input_schema: DataSchema,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDependency {
     pub type_name: String,
@@ -79,12 +101,48 @@ pub enum AgentError {
     InvalidMethod(String),
     InvalidType(String),
     InvalidAgentId(String),
-    CustomError(ValueAndType),
+    CustomError(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+impl Display for AgentError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentError::InvalidInput(msg) => {
+                write!(f, "Invalid input: {msg}")
+            }
+            AgentError::InvalidMethod(msg) => {
+                write!(f, "Invalid method: {msg}")
+            }
+            AgentError::InvalidType(msg) => {
+                write!(f, "Invalid type: {msg}")
+            }
+            AgentError::InvalidAgentId(msg) => {
+                write!(f, "Invalid agent id: {msg}")
+            }
+            AgentError::CustomError(value_and_type) => {
+                write!(
+                    f,
+                    "{}",
+                    print_value_and_type(value_and_type).unwrap_or("Unprintable error".to_string())
+                )
+            }
+        }
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentMethod {
     pub name: String,
@@ -94,9 +152,19 @@ pub struct AgentMethod {
     pub output_schema: DataSchema,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentType {
     pub type_name: String,
@@ -106,17 +174,34 @@ pub struct AgentType {
     pub dependencies: Vec<AgentDependency>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+impl AgentType {
+    pub fn wrapper_type_name(&self) -> String {
+        self.type_name.to_wit_naming()
+    }
+}
+
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryDescriptor {
     pub restrictions: Option<Vec<BinaryType>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum BinaryReference {
     Url(Url),
@@ -132,9 +217,10 @@ impl Display for BinaryReference {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinarySource {
     pub data: Vec<u8>,
@@ -152,26 +238,56 @@ impl Display for BinarySource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct BinaryType {
     pub mime_type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementSchema {
     pub name: String,
     pub schema: ElementSchema,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementSchemas {
     pub elements: Vec<NamedElementSchema>,
@@ -185,18 +301,36 @@ impl NamedElementSchemas {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum DataSchema {
     Tuple(NamedElementSchemas),
     Multimodal(NamedElementSchemas),
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+impl DataSchema {
+    pub fn is_unit(&self) -> bool {
+        match self {
+            DataSchema::Tuple(element_schemas) => element_schemas.elements.is_empty(),
+            DataSchema::Multimodal(element_schemas) => element_schemas.elements.is_empty(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, poem_openapi::Union)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum DataValue {
     Tuple(ElementValues),
@@ -339,9 +473,10 @@ impl IntoValue for DataValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ElementValues {
     pub elements: Vec<ElementValue>,
@@ -361,9 +496,10 @@ impl Display for ElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementValues {
     pub elements: Vec<NamedElementValue>,
@@ -383,9 +519,8 @@ impl Display for NamedElementValues {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NamedElementValue {
     pub name: String,
@@ -398,12 +533,23 @@ impl Display for NamedElementValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+impl IntoValue for NamedElementValue {
+    fn into_value(self) -> Value {
+        Value::Tuple(vec![self.name.into_value(), self.value.into_value()])
+    }
+
+    fn get_type() -> AnalysedType {
+        tuple(vec![str(), ElementValue::get_type()])
+    }
+}
+
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum ElementValue {
-    ComponentModel(ValueAndType),
+    ComponentModel(#[wit_field(convert = golem_wasm::WitValue)] ValueAndType),
     UnstructuredText(TextReference),
     UnstructuredBinary(BinaryReference),
 }
@@ -501,9 +647,19 @@ impl Display for ElementValue {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum ElementSchema {
     ComponentModel(ComponentModelElementSchema),
@@ -511,25 +667,46 @@ pub enum ElementSchema {
     UnstructuredBinary(BinaryDescriptor),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentModelElementSchema {
     pub element_type: AnalysedType,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TextDescriptor {
     pub restrictions: Option<Vec<TextType>>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum TextReference {
     Url(Url),
@@ -545,9 +722,10 @@ impl Display for TextReference {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Url {
     pub value: String,
@@ -559,9 +737,10 @@ impl Display for Url {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, Encode, Decode, IntoValue, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TextSource {
     pub data: String,
@@ -577,25 +756,44 @@ impl Display for TextSource {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct TextType {
     pub language_code: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    IntoValue,
+    poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct AgentTypes {
     pub types: Vec<AgentType>,
 }
 
-#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoValue)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(Debug, Clone, Encode, Decode, Serialize, Deserialize, IntoValue, poem_openapi::Object)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct RegisteredAgentType {
     pub agent_type: AgentType,
@@ -609,72 +807,80 @@ pub struct RegisteredAgentType {
 pub struct AgentId {
     pub agent_type: String,
     pub parameters: DataValue,
+    wrapper_agent_type: String,
 }
 
 impl AgentId {
-    pub async fn parse(
+    pub fn new(agent_type: String, parameters: DataValue) -> Self {
+        let wrapper_agent_type = agent_type.to_wit_naming();
+        Self {
+            agent_type,
+            parameters,
+            wrapper_agent_type,
+        }
+    }
+
+    pub fn parse(s: impl AsRef<str>, resolver: impl AgentTypeResolver) -> Result<Self, String> {
+        Self::parse_and_resolve_type(s, resolver).map(|(agent_id, _)| agent_id)
+    }
+
+    pub fn parse_and_resolve_type(
         s: impl AsRef<str>,
         resolver: impl AgentTypeResolver,
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, AgentType), String> {
         let s = s.as_ref();
 
         if let Some((agent_type, param_list)) = s.split_once('(') {
             if let Some(param_list) = param_list.strip_suffix(')') {
-                let agent_type = resolver.resolve_agent_type(agent_type).await?;
-                let schema = agent_type.constructor.input_schema;
-                let value = DataValue::parse(param_list, &schema)?;
-                Ok(AgentId {
-                    agent_type: agent_type.type_name,
-                    parameters: value,
-                })
+                let agent_type = resolver.resolve_agent_type_by_wrapper_name(agent_type)?;
+                let value = DataValue::parse(param_list, &agent_type.constructor.input_schema)?;
+                Ok((
+                    AgentId {
+                        agent_type: agent_type.type_name.clone(),
+                        wrapper_agent_type: agent_type.type_name.to_wit_naming(),
+                        parameters: value,
+                    },
+                    agent_type,
+                ))
             } else {
-                Err("Unexpected agent-id format - missing closing )".to_string())
+                Err(format!(
+                    "Unexpected agent-id format - missing closing ')', got: {s}"
+                ))
             }
         } else {
             Err(format!(
-                "Invalid agent-id {}. Unexpected agent-id format - must be agent-type(...)",
-                s
+                "Unexpected agent-id format - must be 'agent-type(...)', got: {s}"
             ))
         }
     }
 
-    pub fn parse_agent_type(s: impl AsRef<str>) -> Result<String, String> {
-        let s = s.as_ref();
-        if let Some((agent_type, _)) = s.split_once('(') {
-            Ok(agent_type.to_string())
-        } else {
-            Err("Unexpected agent-id format - must be agent-type(...)".to_string())
-        }
+    pub fn wrapper_agent_type(&self) -> &str {
+        self.wrapper_agent_type.as_str()
     }
 }
 
 impl Display for AgentId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}({})", self.agent_type, self.parameters)
+        write!(
+            f,
+            "{}({})",
+            self.wrapper_agent_type,
+            self.parameters.to_compact_string()
+        )
     }
 }
 
 #[async_trait]
 pub trait AgentTypeResolver {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String>;
-}
-
-#[async_trait]
-impl<F> AgentTypeResolver for F
-where
-    F: for<'a> Fn(&'a str) -> Pin<Box<dyn Future<Output = Result<AgentType, String>> + 'a + Send>>
-        + Send
-        + Sync,
-{
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        self(agent_type).await
-    }
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String>;
 }
 
 #[async_trait]
 impl AgentTypeResolver for &ComponentMetadata {
-    async fn resolve_agent_type(&self, agent_type: &str) -> Result<AgentType, String> {
-        let result = self.find_agent_type(agent_type).await?;
+    fn resolve_agent_type_by_wrapper_name(&self, agent_type: &str) -> Result<AgentType, String> {
+        let result = self
+            .find_agent_type_by_wrapper_name(agent_type)?
+            .to_wit_naming();
         result.ok_or_else(|| format!("Agent type not found: {agent_type}"))
     }
 }

@@ -243,7 +243,7 @@ impl RoutingTableService for RoutingTableServiceDefault {
         if skip_invalidate(last_invalidated_at.deref()) {
             return false;
         }
-        self.cache.remove(&());
+        self.cache.remove(&()).await;
         *last_invalidated_at = Some(Instant::now());
         true
     }

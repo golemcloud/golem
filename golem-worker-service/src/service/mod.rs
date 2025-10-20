@@ -55,7 +55,7 @@ use crate::service::api_domain::{
 use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
 use crate::service::auth::{AuthService, GrpcAuthService};
-use crate::service::component::{ComponentService, RemoteComponentService};
+use crate::service::component::{CachedComponentService, ComponentService, RemoteComponentService};
 use crate::service::gateway::api_definition::{
     ApiDefinitionService, ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
 };
@@ -224,10 +224,13 @@ impl Services {
             dyn ApiDefinitionValidatorService<HttpApiDefinition> + Send + Sync,
         > = Arc::new(HttpApiDefinitionValidator {});
 
-        let component_service: Arc<dyn ComponentService> = Arc::new(RemoteComponentService::new(
-            config.component_service.uri(),
-            config.component_service.retries.clone(),
-            config.component_service.connect_timeout,
+        let component_service: Arc<dyn ComponentService> = Arc::new(CachedComponentService::new(
+            Arc::new(RemoteComponentService::new(
+                config.component_service.uri(),
+                config.component_service.retries.clone(),
+                config.component_service.connect_timeout,
+            )),
+            config.component_service.cache_capacity,
         ));
 
         let identity_provider = Arc::new(DefaultIdentityProvider);
@@ -368,9 +371,12 @@ impl Services {
             config.cloud_service.clone(),
         ));
 
-        let worker_request_to_http_service: Arc<dyn GatewayWorkerRequestExecutor> = Arc::new(
-            GatewayWorkerRequestExecutorDefault::new(worker_service.clone()),
-        );
+        let worker_request_to_http_service: Arc<dyn GatewayWorkerRequestExecutor> =
+            Arc::new(GatewayWorkerRequestExecutorDefault::new(
+                worker_service.clone(),
+                component_service.clone(),
+                TokenSecret::new(config.component_service.access_token),
+            ));
 
         let http_request_api_definition_lookup_service = Arc::new(
             DefaultHttpApiDefinitionLookup::new(deployment_service.clone()),

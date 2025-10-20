@@ -17,11 +17,13 @@ use crate::fs;
 use crate::log::log_warn_action;
 use crate::model::app::{AppComponentName, DependentComponent};
 use crate::model::app_raw;
-use crate::model::app_raw::{GenerateQuickJSCrate, GenerateQuickJSDTS};
+use crate::model::app_raw::{
+    ComposeAgentWrapper, GenerateAgentWrapper, GenerateQuickJSCrate, GenerateQuickJSDTS,
+    InjectToPrebuiltQuickJs,
+};
 use anyhow::{anyhow, bail, Context};
 use golem_common::model::component::ComponentName;
 use golem_common::model::environment::EnvironmentId;
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -134,6 +136,66 @@ impl TaskResultMarkerHashSource for GenerateQuickJSDTSCommandMarkerHash<'_> {
     }
 }
 
+#[derive(Serialize)]
+pub struct AgentWrapperCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a GenerateAgentWrapper,
+}
+
+impl TaskResultMarkerHashSource for AgentWrapperCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "AgentWrapperCommandMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
+#[derive(Serialize)]
+pub struct ComposeAgentWrapperCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a ComposeAgentWrapper,
+}
+
+impl TaskResultMarkerHashSource for ComposeAgentWrapperCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "ComposeAgentWrapperCommandMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
+#[derive(Serialize)]
+pub struct InjectToPrebuiltQuickJsCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a InjectToPrebuiltQuickJs,
+}
+
+impl TaskResultMarkerHashSource for InjectToPrebuiltQuickJsCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "InjectToPrebuiltQuickJsCommandMarkerHash"
+    }
+
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
 pub struct ComponentGeneratorMarkerHash<'a> {
     pub component_name: &'a AppComponentName,
     pub generator_kind: &'a str,
@@ -158,7 +220,9 @@ impl TaskResultMarkerHashSource for ComponentGeneratorMarkerHash<'_> {
 
 pub struct LinkRpcMarkerHash<'a> {
     pub component_name: &'a AppComponentName,
-    pub dependencies: &'a BTreeSet<&'a DependentComponent>,
+    pub static_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
+    pub dynamic_wasm_rpc_dependencies: &'a BTreeSet<&'a DependentComponent>,
+    pub library_dependencies: &'a BTreeSet<&'a DependentComponent>,
 }
 
 impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
@@ -171,14 +235,32 @@ impl TaskResultMarkerHashSource for LinkRpcMarkerHash<'_> {
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
-        Ok(HashFromString(format!(
-            "{}#{}",
-            self.component_name,
-            self.dependencies
+        #[derive(Serialize)]
+        struct SerializedMarker<'a> {
+            component_name: &'a str,
+            static_wasm_rpc_deps: Vec<String>,
+            dynamic_wasm_rpc_deps: Vec<String>,
+            library_deps: Vec<String>,
+        }
+
+        Ok(HashFromString(serde_json::to_string(&SerializedMarker {
+            component_name: self.component_name.as_str(),
+            static_wasm_rpc_deps: self
+                .static_wasm_rpc_dependencies
                 .iter()
-                .map(|s| format!("{}#{}", s.source, s.dep_type.as_str()))
-                .join(",")
-        )))
+                .map(|dep| dep.source.to_string())
+                .collect(),
+            dynamic_wasm_rpc_deps: self
+                .dynamic_wasm_rpc_dependencies
+                .iter()
+                .map(|dep| dep.source.to_string())
+                .collect(),
+            library_deps: self
+                .library_dependencies
+                .iter()
+                .map(|dep| dep.source.to_string())
+                .collect(),
+        })?))
     }
 }
 

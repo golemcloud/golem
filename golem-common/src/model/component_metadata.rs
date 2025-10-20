@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
 use crate::model::component::ComponentType;
@@ -20,30 +21,24 @@ use bincode::de::BorrowDecoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-use golem_wasm_ast::analysis::wit_parser::WitAnalysisContext;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wit_parser::WitAnalysisContext;
+use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysisFailure};
+use golem_wasm::analysis::{
     AnalysedFunctionParameter, AnalysedInstance, AnalysedResourceId, AnalysedResourceMode,
     AnalysedType, TypeHandle,
 };
-use golem_wasm_ast::core::Mem;
-use golem_wasm_ast::metadata::Producers as WasmAstProducers;
-use golem_wasm_ast::{
-    analysis::{AnalysedExport, AnalysedFunction, AnalysisContext, AnalysisFailure},
-    component::Component,
-    IgnoreAllButMetadata,
-};
-use heck::ToKebabCase;
+use golem_wasm::metadata::Producers as WasmAstProducers;
 use rib::{ParsedFunctionName, ParsedFunctionReference, ParsedFunctionSite, SemVer};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use wasmtime::component::__internal::wasmtime_environ::wasmparser;
 
 #[derive(Clone, Default)]
 pub struct ComponentMetadata {
     data: Arc<ComponentMetadataInnerData>,
-    cache: Arc<Mutex<ComponentMetadataInnerCache>>,
+    cache: Arc<std::sync::Mutex<ComponentMetadataInnerCache>>,
 }
 
 impl ComponentMetadata {
@@ -55,7 +50,7 @@ impl ComponentMetadata {
         let raw = RawComponentMetadata::analyse_component(data)?;
         Ok(Self {
             data: Arc::new(raw.into_metadata(dynamic_linking, agent_types)),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 
@@ -78,7 +73,7 @@ impl ComponentMetadata {
                 dynamic_linking,
                 agent_types,
             }),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         }
     }
 
@@ -118,33 +113,53 @@ impl ComponentMetadata {
         !self.data.agent_types.is_empty()
     }
 
-    pub async fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().await.load_snapshot(&self.data)
+    pub fn load_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().load_snapshot(&self.data)
     }
 
-    pub async fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().await.save_snapshot(&self.data)
+    pub fn save_snapshot(&self) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().save_snapshot(&self.data)
     }
 
-    pub async fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
-        self.cache.lock().await.find_function(&self.data, name)
+    pub fn find_function(&self, name: &str) -> Result<Option<InvokableFunction>, String> {
+        self.cache.lock().unwrap().find_function(&self.data, name)
     }
 
-    pub async fn find_parsed_function(
+    pub fn find_parsed_function(
         &self,
         parsed: &ParsedFunctionName,
     ) -> Result<Option<InvokableFunction>, String> {
         self.cache
             .lock()
-            .await
+            .unwrap()
             .find_parsed_function(&self.data, parsed)
     }
 
-    pub async fn find_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
         self.cache
             .lock()
-            .await
-            .find_agent_type(&self.data, agent_type)
+            .unwrap()
+            .find_agent_type_by_name(&self.data, agent_type)
+    }
+
+    pub fn find_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
+        self.cache
+            .lock()
+            .unwrap()
+            .find_agent_type_by_wrapper_name(&self.data, agent_type)
+    }
+
+    pub fn find_wrapper_function_by_agent_constructor(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        self.cache
+            .lock()
+            .unwrap()
+            .find_wrapper_function_by_agent_constructor(&self.data, agent_type)
     }
 }
 
@@ -188,7 +203,7 @@ impl<'de> Deserialize<'de> for ComponentMetadata {
         let data = ComponentMetadataInnerData::deserialize(deserializer)?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -204,7 +219,7 @@ impl<Context> Decode<Context> for ComponentMetadata {
         let data = ComponentMetadataInnerData::decode(decoder)?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
@@ -216,12 +231,11 @@ impl<'de, Context> BorrowDecode<'de, Context> for ComponentMetadata {
         let data = ComponentMetadataInnerData::borrow_decode(decoder)?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::Type for ComponentMetadata {
     const IS_REQUIRED: bool =
         <ComponentMetadataInnerData as poem_openapi::types::Type>::IS_REQUIRED;
@@ -252,72 +266,63 @@ impl poem_openapi::types::Type for ComponentMetadata {
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::IsObjectType for ComponentMetadata {}
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromJSON for ComponentMetadata {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_json(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToJSON for ComponentMetadata {
     fn to_json(&self) -> Option<serde_json::Value> {
         self.data.to_json()
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromXML for ComponentMetadata {
     fn parse_from_xml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_xml(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToXML for ComponentMetadata {
     fn to_xml(&self) -> Option<serde_json::Value> {
         self.data.to_xml()
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ParseFromYAML for ComponentMetadata {
     fn parse_from_yaml(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         let data =
             ComponentMetadataInnerData::parse_from_yaml(value).map_err(|err| err.propagate())?;
         Ok(Self {
             data: Arc::new(data),
-            cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+            cache: Arc::default(),
         })
     }
 }
 
-#[cfg(feature = "poem")]
 impl poem_openapi::types::ToYAML for ComponentMetadata {
     fn to_yaml(&self) -> Option<serde_json::Value> {
         self.data.to_yaml()
     }
 }
 
-#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(
-    feature = "poem",
-    oai(rename = "ComponentMetadata", rename_all = "camelCase")
+#[derive(
+    Clone, Default, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
 )]
+#[oai(rename = "ComponentMetadata", rename_all = "camelCase")]
 #[serde(rename = "ComponentMetadata", rename_all = "camelCase")]
 pub struct ComponentMetadataInnerData {
     pub exports: Vec<AnalysedExport>,
@@ -391,12 +396,60 @@ impl ComponentMetadataInnerData {
             ))
     }
 
-    pub fn find_agent_type(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
+    pub fn find_agent_type_by_name(&self, agent_type: &str) -> Result<Option<AgentType>, String> {
         Ok(self
             .agent_types
             .iter()
             .find(|t| t.type_name == agent_type)
             .cloned())
+    }
+
+    pub fn find_agent_type_by_wrapper_name(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
+        Ok(self
+            .agent_types
+            .iter()
+            .find(|t| t.type_name.to_wit_naming() == agent_type)
+            .cloned())
+    }
+
+    pub fn find_wrapper_function_by_agent_constructor(
+        &self,
+        agent_type: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        let agent_type = self
+            .find_agent_type_by_name(agent_type)?
+            .ok_or_else(|| format!("Agent type {} not found", agent_type))?;
+
+        let root_package_name = self
+            .root_package_name
+            .as_ref()
+            .ok_or("Agents must have a root package name")?;
+        let (namespace, package) = root_package_name
+            .split_once(':')
+            .ok_or("Root package name must be in the form namespace:package")?;
+        let version = self
+            .root_package_version
+            .as_ref()
+            .map(|v| SemVer::parse(v))
+            .transpose()?;
+
+        let interface = agent_type.wrapper_type_name();
+        let function = ParsedFunctionName::new(
+            ParsedFunctionSite::PackagedInterface {
+                namespace: namespace.to_string(),
+                package: package.to_string(),
+                interface,
+                version,
+            },
+            ParsedFunctionReference::Function {
+                function: "initialize".to_string(),
+            },
+        );
+
+        self.find_parsed_function(&function)
     }
 
     /// Finds a function ignoring the function site's version. Returns None if it was not found.
@@ -502,14 +555,14 @@ impl ComponentMetadataInnerData {
                         let agent = self
                             .agent_types
                             .iter()
-                            .find(|agent| agent.type_name.to_kebab_case() == resource_name);
+                            .find(|agent| agent.wrapper_type_name() == resource_name);
 
                         let method = agent.and_then(|agent| {
                             agent
                                 .methods
                                 .iter()
                                 .find(|method| {
-                                    method.name.to_kebab_case() == parsed.function().function_name()
+                                    method.name.to_wit_naming() == parsed.function().function_name()
                                 })
                                 .cloned()
                         });
@@ -521,7 +574,7 @@ impl ComponentMetadataInnerData {
                             let agent = self
                                 .agent_types
                                 .iter()
-                                .find(|agent| agent.type_name.to_kebab_case() == resource_name);
+                                .find(|agent| agent.wrapper_type_name() == resource_name);
 
                             Ok(agent.map(|agent| {
                                 AgentMethodOrConstructor::Constructor(agent.constructor.clone())
@@ -550,7 +603,9 @@ struct ComponentMetadataInnerCache {
     save_snapshot: Option<Result<Option<InvokableFunction>, String>>,
     functions_unparsed: HashMap<String, Result<Option<InvokableFunction>, String>>,
     functions_parsed: HashMap<ParsedFunctionName, Result<Option<InvokableFunction>, String>>,
-    agent_types: HashMap<String, Result<Option<AgentType>, String>>,
+    agent_types_by_type_name: HashMap<String, Result<Option<AgentType>, String>>,
+    agent_types_by_wrapper_type_name: HashMap<String, Result<Option<AgentType>, String>>,
+    functions_by_agent_constructor: HashMap<String, Result<Option<InvokableFunction>, String>>,
 }
 
 impl ComponentMetadataInnerCache {
@@ -610,16 +665,46 @@ impl ComponentMetadataInnerCache {
         }
     }
 
-    pub fn find_agent_type(
+    pub fn find_agent_type_by_name(
         &mut self,
         data: &ComponentMetadataInnerData,
         agent_type: &str,
     ) -> Result<Option<AgentType>, String> {
-        if let Some(cached) = self.agent_types.get(agent_type) {
+        if let Some(cached) = self.agent_types_by_type_name.get(agent_type) {
             cached.clone()
         } else {
-            let result = data.find_agent_type(agent_type);
-            self.agent_types
+            let result = data.find_agent_type_by_name(agent_type);
+            self.agent_types_by_type_name
+                .insert(agent_type.to_string(), result.clone());
+            result
+        }
+    }
+
+    pub fn find_agent_type_by_wrapper_name(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        agent_type: &str,
+    ) -> Result<Option<AgentType>, String> {
+        if let Some(cached) = self.agent_types_by_wrapper_type_name.get(agent_type) {
+            cached.clone()
+        } else {
+            let result = data.find_agent_type_by_wrapper_name(agent_type);
+            self.agent_types_by_wrapper_type_name
+                .insert(agent_type.to_string(), result.clone());
+            result
+        }
+    }
+
+    pub fn find_wrapper_function_by_agent_constructor(
+        &mut self,
+        data: &ComponentMetadataInnerData,
+        agent_type: &str,
+    ) -> Result<Option<InvokableFunction>, String> {
+        if let Some(cached) = self.functions_by_agent_constructor.get(agent_type) {
+            cached.clone()
+        } else {
+            let result = data.find_wrapper_function_by_agent_constructor(agent_type);
+            self.functions_by_agent_constructor
                 .insert(agent_type.to_string(), result.clone());
             result
         }
@@ -640,17 +725,19 @@ pub struct InvokableFunction {
     pub agent_method_or_constructor: Option<AgentMethodOrConstructor>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Union))]
-#[cfg_attr(feature = "poem", oai(discriminator_name = "type", one_of = true))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Union,
+)]
+#[oai(discriminator_name = "type", one_of = true)]
 #[serde(tag = "type")]
 pub enum DynamicLinkedInstance {
     WasmRpc(DynamicLinkedWasmRpc),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct DynamicLinkedWasmRpc {
     /// Maps resource names within the dynamic linked interface to target information
@@ -665,9 +752,10 @@ impl DynamicLinkedWasmRpc {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct WasmRpcTarget {
     pub interface_name: String,
@@ -692,10 +780,20 @@ impl Display for WasmRpcTarget {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct ProducerField {
     pub name: String,
@@ -703,10 +801,20 @@ pub struct ProducerField {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct VersionedName {
     pub name: String,
@@ -714,18 +822,29 @@ pub struct VersionedName {
 }
 
 #[derive(
-    Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd, Serialize, Deserialize, Encode, Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    Ord,
+    PartialOrd,
+    Serialize,
+    Deserialize,
+    Encode,
+    Decode,
+    poem_openapi::Object,
 )]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct Producers {
     pub fields: Vec<ProducerField>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Encode, Decode, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct LinearMemory {
     /// Initial size of the linear memory in bytes
@@ -738,15 +857,11 @@ impl LinearMemory {
     const PAGE_SIZE: u64 = 65536;
 }
 
-impl From<Mem> for LinearMemory {
-    fn from(value: Mem) -> Self {
+impl From<wasmparser::MemoryType> for LinearMemory {
+    fn from(value: wasmparser::MemoryType) -> Self {
         Self {
-            initial: value.mem_type.limits.min * LinearMemory::PAGE_SIZE,
-            maximum: value
-                .mem_type
-                .limits
-                .max
-                .map(|m| m * LinearMemory::PAGE_SIZE),
+            initial: value.initial * LinearMemory::PAGE_SIZE,
+            maximum: value.maximum.map(|m| m * LinearMemory::PAGE_SIZE),
         }
     }
 }
@@ -756,7 +871,7 @@ impl From<Mem> for LinearMemory {
 pub struct RawComponentMetadata {
     pub exports: Vec<AnalysedExport>,
     pub producers: Vec<WasmAstProducers>,
-    pub memories: Vec<Mem>,
+    pub memories: Vec<LinearMemory>,
     pub binary_wit: Vec<u8>,
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
@@ -766,16 +881,6 @@ impl RawComponentMetadata {
     pub fn analyse_component(
         data: &[u8],
     ) -> Result<RawComponentMetadata, ComponentProcessingError> {
-        let component = Component::<IgnoreAllButMetadata>::from_bytes(data)
-            .map_err(ComponentProcessingError::Parsing)?;
-
-        let producers = component
-            .get_all_producers()
-            .into_iter()
-            .collect::<Vec<_>>();
-
-        let analysis = AnalysisContext::new(component);
-
         let wit_analysis =
             WitAnalysisContext::new(data).map_err(ComponentProcessingError::Analysis)?;
 
@@ -787,7 +892,6 @@ impl RawComponentMetadata {
             .map_err(ComponentProcessingError::Analysis)?;
         let root_package = wit_analysis.root_package_name();
 
-        #[cfg(feature = "observability")]
         for warning in wit_analysis.warnings() {
             tracing::warn!("Wit analysis warning: {}", warning);
         }
@@ -795,13 +899,14 @@ impl RawComponentMetadata {
         add_resource_drops(&mut exports);
         add_virtual_exports(&mut exports);
 
-        let exports = exports.into_iter().collect::<Vec<_>>();
-
-        let memories: Vec<Mem> = analysis
-            .get_all_memories()
-            .map_err(ComponentProcessingError::Analysis)?
-            .into_iter()
+        let memories = wit_analysis
+            .linear_memories()
+            .iter()
+            .cloned()
+            .map(LinearMemory::from)
             .collect();
+
+        let producers = wit_analysis.producers().to_vec();
 
         Ok(RawComponentMetadata {
             exports,
@@ -828,7 +933,7 @@ impl RawComponentMetadata {
 
         let exports = self.exports.into_iter().collect::<Vec<_>>();
 
-        let memories = self.memories.into_iter().map(LinearMemory::from).collect();
+        let memories = self.memories.into_iter().collect();
 
         ComponentMetadataInnerData {
             exports,
@@ -843,8 +948,8 @@ impl RawComponentMetadata {
     }
 }
 
-impl From<golem_wasm_ast::metadata::Producers> for Producers {
-    fn from(value: golem_wasm_ast::metadata::Producers) -> Self {
+impl From<golem_wasm::metadata::Producers> for Producers {
+    fn from(value: golem_wasm::metadata::Producers) -> Self {
         Self {
             fields: value
                 .fields
@@ -855,7 +960,7 @@ impl From<golem_wasm_ast::metadata::Producers> for Producers {
     }
 }
 
-impl From<Producers> for golem_wasm_ast::metadata::Producers {
+impl From<Producers> for golem_wasm::metadata::Producers {
     fn from(value: Producers) -> Self {
         Self {
             fields: value
@@ -867,8 +972,8 @@ impl From<Producers> for golem_wasm_ast::metadata::Producers {
     }
 }
 
-impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
-    fn from(value: golem_wasm_ast::metadata::ProducersField) -> Self {
+impl From<golem_wasm::metadata::ProducersField> for ProducerField {
+    fn from(value: golem_wasm::metadata::ProducersField) -> Self {
         Self {
             name: value.name,
             values: value
@@ -883,14 +988,14 @@ impl From<golem_wasm_ast::metadata::ProducersField> for ProducerField {
     }
 }
 
-impl From<ProducerField> for golem_wasm_ast::metadata::ProducersField {
+impl From<ProducerField> for golem_wasm::metadata::ProducersField {
     fn from(value: ProducerField) -> Self {
         Self {
             name: value.name,
             values: value
                 .values
                 .into_iter()
-                .map(|value| golem_wasm_ast::metadata::VersionedName {
+                .map(|value| golem_wasm::metadata::VersionedName {
                     name: value.name,
                     version: value.version,
                 })
@@ -1036,7 +1141,7 @@ fn drop_from_constructor_or_method(fun: &AnalysedFunction) -> AnalysedFunction {
 }
 
 fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
-    // Some interfaces like the golem/http:incoming-handler do not exist on the component,
+    // Some interfaces like the golem/http:incoming-handler do not exist on the component
     // but are dynamically created by the worker executor based on other existing interfaces.
 
     if virtual_exports::http_incoming_handler::implements_required_interfaces(exports) {
@@ -1046,18 +1151,15 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
     };
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::model::base64::Base64;
     use crate::model::component::ComponentType;
     use crate::model::component_metadata::{
-        ComponentMetadata, ComponentMetadataInnerCache, ComponentMetadataInnerData,
-        DynamicLinkedInstance, DynamicLinkedWasmRpc, LinearMemory, ProducerField, Producers,
-        VersionedName, WasmRpcTarget,
+        ComponentMetadata, ComponentMetadataInnerData, DynamicLinkedInstance, DynamicLinkedWasmRpc,
+        LinearMemory, ProducerField, Producers, VersionedName, WasmRpcTarget,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
 
     impl From<golem_api_grpc::proto::golem::component::VersionedName> for VersionedName {
         fn from(value: golem_api_grpc::proto::golem::component::VersionedName) -> Self {
@@ -1138,7 +1240,7 @@ mod protobuf {
             let inner_data = ComponentMetadataInnerData::try_from(value)?;
             Ok(Self {
                 data: Arc::new(inner_data),
-                cache: Arc::new(Mutex::new(ComponentMetadataInnerCache::default())),
+                cache: Arc::default(),
             })
         }
     }

@@ -34,9 +34,6 @@ const PROFILE_NAME_LOCAL: &str = "local";
 const PROFILE_NAME_CLOUD: &str = "cloud";
 pub const LOCAL_WELL_KNOWN_TOKEN: Uuid = uuid::uuid!("5c832d93-ff85-4a8f-9803-513950fdfdb1");
 
-// TODO: review and separate model, config and serialization parts
-// TODO: when doing the serialization we can do a legacy migration
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Config {
     pub profiles: HashMap<ProfileName, Profile>,
@@ -153,7 +150,7 @@ pub struct ProfileConfig {
 
 impl Config {
     fn config_path(config_dir: &Path) -> PathBuf {
-        config_dir.join("config-v2.json")
+        config_dir.join("config-v3.json")
     }
 
     pub fn default_profile_name(&self) -> ProfileName {

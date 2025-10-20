@@ -53,6 +53,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .get_many(environment_id, bucket, keys)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -112,6 +113,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .get_keys(environment_id, bucket.clone())
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, bucket, result).await
         } else {
             durability.replay(self).await
@@ -168,6 +170,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .set_many(environment_id, bucket, key_values)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await
@@ -213,6 +216,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .key_value_service
                 .delete_many(project_id, bucket, keys)
                 .await;
+            durability.try_trigger_retry(self, &result).await?;
             durability.persist(self, input, result).await
         } else {
             durability.replay(self).await

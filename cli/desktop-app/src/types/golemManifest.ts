@@ -92,6 +92,7 @@ export interface HttpApiDefinition {
   // id and componentId not part of YAML
   id?: string;
   componentId?: string;
+  draft?: boolean;
 }
 
 export function serializeHttpApiDefinition(
@@ -141,11 +142,11 @@ export interface Profile {
   cloud?: boolean;
   project?: string;
   url?: string;
-  workerUrl?: string;
+  agentUrl?: string;
   format?: "text" | "json" | "yaml";
   buildProfile?: string;
   autoConfirm?: boolean;
-  redeployWorkers?: boolean;
+  redeployAgents?: boolean;
   redeployHttpApi?: boolean;
   redeployAll?: boolean;
 }

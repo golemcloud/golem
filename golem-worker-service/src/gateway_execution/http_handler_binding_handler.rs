@@ -19,7 +19,7 @@ use bytes::Bytes;
 use golem_common::model::auth::Namespace;
 use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
 use golem_common::{virtual_exports, widen_infallible};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use http::StatusCode;
 use http_body_util::combinators::BoxBody;
 use http_body_util::BodyExt;
@@ -77,6 +77,7 @@ impl HttpHandlerBindingHandler for DefaultHttpHandlerBindingHandler {
 
         let resolved_request = GatewayResolvedWorkerRequest {
             component_id,
+            component_version: worker_detail.component_version,
             worker_name: worker_detail
                 .worker_name
                 .as_ref()

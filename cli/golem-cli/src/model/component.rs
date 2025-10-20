@@ -20,14 +20,19 @@ use chrono::{DateTime, Utc};
 use golem_client::model::AnalysedType;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, ComponentType, InitialComponentFile};
+use golem_common::model::agent::wit_naming::ToWitNaming;
+use golem_common::model::agent::{
+    AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
+};
 use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
-use golem_wasm_ast::analysis::wave::DisplayNamedFunc;
-use golem_wasm_ast::analysis::{
+use golem_wasm::analysis::wave::DisplayNamedFunc;
+use golem_wasm::analysis::{
     AnalysedExport, AnalysedFunction, AnalysedInstance, AnalysedResourceMode, NameOptionTypePair,
     NameTypePair, TypeEnum, TypeFlags, TypeRecord, TypeTuple, TypeVariant,
 };
+use itertools::Itertools;
 use rib::{ParsedFunctionName, ParsedFunctionSite};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -184,6 +189,8 @@ impl ComponentUpsertResult {
 pub struct ComponentView {
     #[serde(skip)]
     pub show_sensitive: bool,
+    #[serde(skip)]
+    pub show_exports_for_rib: bool,
 
     pub component_name: ComponentName,
     pub component_id: ComponentId,
@@ -195,15 +202,55 @@ pub struct ComponentView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment_id: Option<EnvironmentId>,
     pub exports: Vec<String>,
+    pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
 }
 
 impl ComponentView {
-    pub fn new(show_sensitive: bool, value: Component) -> Self {
+    pub fn new_rib_style(show_sensitive: bool, value: Component) -> Self {
+        Self::new(show_sensitive, true, value)
+    }
+
+    pub fn new_wit_style(show_sensitive: bool, value: Component) -> Self {
+        Self::new(show_sensitive, false, value)
+    }
+
+    pub fn new(show_sensitive: bool, show_exports_for_rib: bool, value: Component) -> Self {
+        let exports = {
+            if value.metadata.is_agent() {
+                if show_exports_for_rib {
+                    let agent_types = value
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .map(|a| a.to_wit_naming())
+                        .collect::<Vec<_>>();
+
+                    show_exported_agents(&agent_types)
+                } else {
+                    value
+                        .metadata
+                        .agent_types()
+                        .iter()
+                        .flat_map(|agent| {
+                            show_exported_functions(
+                                value.metadata.exports(),
+                                true,
+                                agent_interface_name(&value, &agent.wrapper_type_name()).as_deref(),
+                            )
+                        })
+                        .collect()
+                }
+            } else {
+                show_exported_functions(value.metadata.exports(), true, None)
+            }
+        };
+
         ComponentView {
             show_sensitive,
+            show_exports_for_rib,
             component_name: value.component_name,
             component_id: value.component_id,
             component_type: value.component_type,
@@ -212,7 +259,8 @@ impl ComponentView {
             component_size: value.component_size,
             created_at: value.created_at,
             environment_id: value.environment_id,
-            exports: show_exported_functions(value.metadata.exports(), true),
+            exports,
+            agent_types: value.metadata.agent_types().to_vec(),
             dynamic_linking: value
                 .metadata
                 .dynamic_linking()
@@ -254,7 +302,7 @@ pub fn render_type(typ: &AnalysedType) -> String {
                 .iter()
                 .map(|NameOptionTypePair { name, typ }| match typ {
                     None => name.to_string(),
-                    Some(typ) => format!("{name}({})", render_type(typ)),
+                    Some(typ) => format!("{}({})", name, render_type(typ)),
                 })
                 .collect::<Vec<String>>()
                 .join(", ");
@@ -277,12 +325,16 @@ pub fn render_type(typ: &AnalysedType) -> String {
             }
         }
         AnalysedType::Option(boxed) => format!("option<{}>", render_type(&boxed.inner)),
-        AnalysedType::Enum(TypeEnum { cases, .. }) => format!("enum {{ {} }}", cases.join(", ")),
-        AnalysedType::Flags(TypeFlags { names, .. }) => format!("flags {{ {} }}", names.join(", ")),
+        AnalysedType::Enum(TypeEnum { cases, .. }) => {
+            format!("enum {{ {} }}", cases.iter().join(", "))
+        }
+        AnalysedType::Flags(TypeFlags { names, .. }) => {
+            format!("flags {{ {} }}", names.iter().join(", "))
+        }
         AnalysedType::Record(TypeRecord { fields, .. }) => {
             let pairs: Vec<String> = fields
                 .iter()
-                .map(|NameTypePair { name, typ }| format!("{name}: {}", render_type(typ)))
+                .map(|NameTypePair { name, typ }| format!("{}: {}", name, render_type(typ)))
                 .collect();
 
             format!("record {{ {} }}", pairs.join(", "))
@@ -312,13 +364,122 @@ pub fn render_type(typ: &AnalysedType) -> String {
     }
 }
 
-pub fn show_exported_functions(exports: &[AnalysedExport], with_parameters: bool) -> Vec<String> {
+pub fn show_exported_agents(agents: &[AgentType]) -> Vec<String> {
+    agents.iter().flat_map(render_exported_agent).collect()
+}
+
+pub fn show_exported_agent_constructors(agents: &[AgentType]) -> Vec<String> {
+    agents
+        .iter()
+        .map(|c| render_agent_constructor(c, true))
+        .collect()
+}
+
+fn render_exported_agent(agent: &AgentType) -> Vec<String> {
+    let mut result = Vec::new();
+    result.push(render_agent_constructor(agent, true));
+    for method in &agent.methods {
+        let output = render_data_schema(&method.output_schema);
+        if output.is_empty() {
+            result.push(format!(
+                "{}.{}({})",
+                agent.wrapper_type_name(),
+                method.name,
+                render_data_schema(&method.input_schema),
+            ));
+        } else {
+            result.push(format!(
+                "{}.{}({}) -> {}",
+                agent.wrapper_type_name(),
+                method.name,
+                render_data_schema(&method.input_schema),
+                output
+            ));
+        }
+    }
+
+    result
+}
+
+pub fn render_agent_constructor(agent: &AgentType, show_dummy_return_type: bool) -> String {
+    let dummy_return_type = if show_dummy_return_type {
+        " agent constructor"
+    } else {
+        ""
+    };
+    format!(
+        "{}({}){}",
+        agent.wrapper_type_name(),
+        render_data_schema(&agent.constructor.input_schema.to_wit_naming()),
+        dummy_return_type
+    )
+}
+
+fn render_data_schema(schema: &DataSchema) -> String {
+    match schema {
+        DataSchema::Tuple(elements) => elements
+            .elements
+            .iter()
+            .map(|named_elem| render_element_schema(&named_elem.schema))
+            .join(", "),
+        DataSchema::Multimodal(elements) => elements
+            .elements
+            .iter()
+            .map(|named_elem| {
+                format!(
+                    "{}({})",
+                    named_elem.name,
+                    render_element_schema(&named_elem.schema)
+                )
+            })
+            .join(" | "),
+    }
+}
+
+fn render_element_schema(schema: &ElementSchema) -> String {
+    match schema {
+        ElementSchema::ComponentModel(ComponentModelElementSchema { element_type }) => {
+            render_type(element_type)
+        }
+        ElementSchema::UnstructuredText(text_descriptor) => {
+            let mut result = "text".to_string();
+            if let Some(restrictions) = &text_descriptor.restrictions {
+                result.push('[');
+                result.push_str(&restrictions.iter().map(|r| &r.language_code).join(", "));
+                result.push(']');
+            }
+            result
+        }
+        ElementSchema::UnstructuredBinary(binary_descriptor) => {
+            let mut result = "binary".to_string();
+            if let Some(restrictions) = &binary_descriptor.restrictions {
+                result.push('[');
+                result.push_str(&restrictions.iter().map(|r| &r.mime_type).join(", "));
+                result.push(']');
+            }
+            result
+        }
+    }
+}
+
+pub fn show_exported_functions(
+    exports: &[AnalysedExport],
+    with_parameters: bool,
+    agent_instance_name_filter: Option<&str>,
+) -> Vec<String> {
+    let is_agent = agent_instance_name_filter.is_some();
     exports
         .iter()
         .flat_map(|exp| match exp {
             AnalysedExport::Instance(AnalysedInstance { name, functions }) => {
+                if let Some(instance_name_filter) = agent_instance_name_filter {
+                    if name != instance_name_filter {
+                        return vec![];
+                    }
+                }
                 let fs: Vec<String> = functions
                     .iter()
+                    .filter(|f| !is_agent || f.name != "get-definition")
                     .map(|f| render_exported_function(Some(name), f, with_parameters))
                     .collect();
                 fs
@@ -447,17 +608,28 @@ pub fn function_params_types<'t>(
     Ok(func.parameters.iter().map(|r| &r.typ).collect())
 }
 
+pub fn agent_interface_name(component: &Component, agent_type_name: &str) -> Option<String> {
+    match (
+        component.metadata.root_package_name(),
+        component.metadata.root_package_version(),
+    ) {
+        (Some(name), Some(version)) => Some(format!("{}/{}@{}", name, agent_type_name, version)),
+        (Some(name), None) => Some(format!("{}/{}", name, agent_type_name)),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use test_r::test;
 
     use crate::model::component::render_exported_function;
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         bool, case, chr, f32, f64, field, flags, handle, list, option, r#enum, record, result,
         result_err, result_ok, s16, s32, s64, s8, str, tuple, u16, u32, u64, u8, unit_case,
         variant,
     };
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult, AnalysedResourceId,
         AnalysedResourceMode, AnalysedType,
     };

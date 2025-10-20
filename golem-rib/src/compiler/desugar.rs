@@ -638,7 +638,7 @@ mod desugar_tests {
     use crate::{
         ComponentDependency, ComponentDependencyKey, Expr, RibCompiler, RibCompilerConfig,
     };
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use std::ops::Deref;
@@ -667,6 +667,7 @@ mod desugar_tests {
         let component_dependency_key = ComponentDependencyKey {
             component_name: "foo".to_string(),
             component_id: Uuid::new_v4(),
+            component_version: 0,
             root_package_name: None,
             root_package_version: None,
         };

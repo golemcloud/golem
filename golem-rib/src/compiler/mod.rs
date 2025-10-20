@@ -23,7 +23,7 @@ use crate::{
     ComponentDependencies, ComponentDependencyKey, CustomInstanceSpec, Expr,
     GlobalVariableTypeSpec, InferredExpr, RibInputTypeInfo, RibOutputTypeInfo,
 };
-use golem_wasm_ast::analysis::{AnalysedExport, TypeEnum, TypeVariant};
+use golem_wasm::analysis::{AnalysedExport, TypeEnum, TypeVariant};
 use std::error::Error;
 use std::fmt::Display;
 
@@ -72,6 +72,13 @@ impl RibCompiler {
             let rib_type_error = RibTypeError::from_rib_type_error_internal(err, expr);
             RibCompilationError::RibTypeError(Box::new(rib_type_error))
         })
+    }
+
+    pub fn get_custom_instance_names(&self) -> Vec<String> {
+        self.custom_instance_spec
+            .iter()
+            .map(|spec| spec.instance_name.clone())
+            .collect::<Vec<_>>()
     }
 
     // Currently supports only 1 component and hence really only one InstanceType
@@ -167,7 +174,7 @@ impl RibCompilerConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComponentDependency {
     component_dependency_key: ComponentDependencyKey,
     component_exports: Vec<AnalysedExport>,
@@ -906,10 +913,10 @@ mod compiler_error_tests {
 
     mod test_utils {
         use crate::{ComponentDependency, ComponentDependencyKey};
-        use golem_wasm_ast::analysis::analysed_type::{
+        use golem_wasm::analysis::analysed_type::{
             case, f32, field, handle, list, record, s32, str, tuple, u32, u64, variant,
         };
-        use golem_wasm_ast::analysis::{
+        use golem_wasm::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, NameTypePair,
         };
@@ -1113,6 +1120,7 @@ mod compiler_error_tests {
                 component_dependency_key: ComponentDependencyKey {
                     component_name: "some_name".to_string(),
                     component_id: Uuid::new_v4(),
+                    component_version: 0,
                     root_package_name: None,
                     root_package_version: None,
                 },

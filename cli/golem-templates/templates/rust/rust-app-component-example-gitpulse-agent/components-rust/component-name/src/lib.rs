@@ -2,13 +2,13 @@ mod bindings;
 mod github;
 
 use crate::bindings::exports::pa_ck::na_me_exports::component_name_api::*;
-use crate::bindings::golem::llm::llm::{self, ChatEvent, CompleteResponse, ContentPart};
-use std::collections::HashSet;
-use std::sync::{LazyLock, RwLock};
-use chrono::{Utc, DateTime};
+use crate::bindings::golem::llm::llm;
+use chrono::{DateTime, Utc};
 use reqwest::{self, header};
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use std::collections::HashSet;
+use std::sync::{LazyLock, RwLock};
 
 /// The internal status of our component. This will be automatically persisted by golem.
 struct State {
@@ -17,7 +17,7 @@ struct State {
     seen_notifications: HashSet<String>,
     github_username: String,
     github_auth_token: String,
-    client: reqwest::Client
+    client: reqwest::Client,
 }
 
 static STATE: LazyLock<RwLock<Option<State>>> = LazyLock::new(|| RwLock::new(None));
@@ -27,11 +27,11 @@ const GITHUB_API_HOST: &str = "https://api.github.com";
 static LLM_CONFIG: LazyLock<llm::Config> = LazyLock::new(|| llm::Config {
     model: "gpt-4.1-nano".to_string(),
     temperature: Some(0.2),
-    tools: vec![],
-    provider_options: vec![],
+    tools: None,
+    provider_options: None,
     max_tokens: None,
     tool_choice: None,
-    stop_sequences: None
+    stop_sequences: None,
 });
 
 const LLM_RESPONSE_FORMAT: &str = r#"
@@ -55,7 +55,10 @@ impl Guest for Component {
             seen_notifications: HashSet::new(),
             github_username: args.github_username,
             github_auth_token: args.github_auth_token,
-            client: reqwest::Client::builder().user_agent("golem-ai-agent").build().unwrap()
+            client: reqwest::Client::builder()
+                .user_agent("golem-ai-agent")
+                .build()
+                .unwrap(),
         });
     }
 
@@ -77,7 +80,7 @@ impl Guest for Component {
             fyi: Vec::new(),
             releases: Vec::new(),
             ci_cd: Vec::new(),
-            last_checked: now.to_rfc3339()
+            last_checked: now.to_rfc3339(),
         };
 
         for notification in state.pending_notifications.iter() {
@@ -87,7 +90,7 @@ impl Guest for Component {
                 Category::Fyi => result.fyi.push(notification.clone()),
                 Category::Releases => result.fyi.push(notification.clone()),
             }
-        };
+        }
 
         result
     }
@@ -115,7 +118,10 @@ impl Guest for Component {
 
         state.seen_notifications.insert(id.clone());
 
-        let index = state.pending_notifications.iter().position(|pn| pn.id == id);
+        let index = state
+            .pending_notifications
+            .iter()
+            .position(|pn| pn.id == id);
         if let Some(index) = index {
             state.pending_notifications.swap_remove(index);
         }
@@ -130,9 +136,23 @@ fn update_notifications(state: &mut State) -> DateTime<Utc> {
 
     for notification in new_notifications {
         match notification.subject.r#type.as_str() {
-            "Issue" => state.pending_notifications.push(process_issue_notification(state, since, &before, notification)),
-            "PullRequest" => state.pending_notifications.push(process_pull_request_notification(state, since, &before, notification)),
-            "CheckSuite" => state.pending_notifications.push(process_check_suite_notification(notification)),
+            "Issue" => state.pending_notifications.push(process_issue_notification(
+                state,
+                since,
+                &before,
+                notification,
+            )),
+            "PullRequest" => state
+                .pending_notifications
+                .push(process_pull_request_notification(
+                    state,
+                    since,
+                    &before,
+                    notification,
+                )),
+            "CheckSuite" => state
+                .pending_notifications
+                .push(process_check_suite_notification(notification)),
             other => {
                 // Optionally add support for other notification type heer
                 println!("Ignoring notification for subject type {other}")
@@ -141,14 +161,14 @@ fn update_notifications(state: &mut State) -> DateTime<Utc> {
     }
 
     state.last_checked = Some(before);
-    return before
+    return before;
 }
 
 fn process_pull_request_notification(
     state: &State,
     since: Option<&DateTime<Utc>>,
     before: &DateTime<Utc>,
-    notification: github::Notification
+    notification: github::Notification,
 ) -> EnhancedNotification {
     let pull_request = get_notification_subject::<github::PullRequest>(state, &notification);
 
@@ -158,56 +178,50 @@ fn process_pull_request_notification(
 
     let pull_request_comments = get_pull_request_comments(state, &pull_request, since, &before);
     let llm_response = llm::send(
-        &vec![
-            llm::Message {
-                role: llm::Role::System,
-                name: None,
-                content: vec![
-                    llm::ContentPart::Text(
-                        format!(
-                            r#"
-                                You are used as part of an application to automatically categorize GitHub notifications.
-                                Your responses should have the following json structure:
+        &vec![llm::Event::Message(llm::Message {
+            role: llm::Role::System,
+            name: None,
+            content: vec![llm::ContentPart::Text(format!(
+                r#"
+                    You are used as part of an application to automatically categorize GitHub notifications.
+                    Your responses should have the following json structure:
 
-                                ```
-                                {LLM_RESPONSE_FORMAT}
-                                ```
-                                Your entire response should be valid json. Do not include any headers / trailers like ``` that would prevent
-                                the response from being parsed as json.
+                    ```
+                    {LLM_RESPONSE_FORMAT}
+                    ```
+                    Your entire response should be valid json. Do not include any headers / trailers like ``` that would prevent
+                    the response from being parsed as json.
 
-                                The GitHub handle of the user reading the notifications is `{}`
+                    The GitHub handle of the user reading the notifications is `{}`
 
-                                The notification is for a pull request, this is the raw notification:
-                                ```
-                                {}
-                                ```
+                    The notification is for a pull request, this is the raw notification:
+                    ```
+                    {}
+                    ```
 
-                                This is the pull request. Pay special attention to whether the author of the pull
-                                request is the current user and tailor your response accordingly:
-                                ```
-                                {}
-                                ```
+                    This is the pull request. Pay special attention to whether the author of the pull
+                    request is the current user and tailor your response accordingly:
+                    ```
+                    {}
+                    ```
 
-                                And these are the new comments in the pull request:
-                                ```
-                                {}
-                                ```
+                    And these are the new comments in the pull request:
+                    ```
+                    {}
+                    ```
 
-                                Make a response summarizing what happened in the pull request as part of the new comments in the requested format
-                            "#,
-                            state.github_username,
-                            serde_json::to_string(&notification).unwrap(),
-                            serde_json::to_string(&pull_request).unwrap(),
-                            serde_json::to_string(&pull_request_comments).unwrap(),
-                        )
-                    )
-                ]
-            }
-        ],
-        &LLM_CONFIG
+                    Make a response summarizing what happened in the pull request as part of the new comments in the requested format
+                "#,
+                state.github_username,
+                serde_json::to_string(&notification).unwrap(),
+                serde_json::to_string(&pull_request).unwrap(),
+                serde_json::to_string(&pull_request_comments).unwrap(),
+            ))],
+        })],
+        &LLM_CONFIG,
     );
 
-    let parsed_llm_response = parse_llm_response(llm_response);
+    let parsed_llm_response = parse_llm_response(llm_response.unwrap());
 
     EnhancedNotification {
         id: notification.id.to_string(),
@@ -215,11 +229,11 @@ fn process_pull_request_notification(
         subject: Subject {
             type_: SubjectType::PullRequest,
             title: notification.subject.title,
-            url: notification.subject.url.map(|u| u.to_string())
+            url: notification.subject.url.map(|u| u.to_string()),
         },
         repository: Repository {
             owner: notification.repository.owner.unwrap().login,
-            name: notification.repository.name
+            name: notification.repository.name,
         },
         action_items: parsed_llm_response.action_items,
         priority: parsed_llm_response.priority.into(),
@@ -227,7 +241,7 @@ fn process_pull_request_notification(
         url: notification.url.to_string(),
         category: parsed_llm_response.category.into(),
         summary: parsed_llm_response.summary,
-        key_points: parsed_llm_response.key_points
+        key_points: parsed_llm_response.key_points,
     }
 }
 
@@ -235,61 +249,55 @@ fn process_issue_notification(
     state: &State,
     since: Option<&DateTime<Utc>>,
     before: &DateTime<Utc>,
-    notification: github::Notification
+    notification: github::Notification,
 ) -> EnhancedNotification {
     let issue = get_notification_subject::<github::Issue>(state, &notification);
     let issue_comments = get_issue_comments(state, &issue, since, &before);
     let llm_response = llm::send(
-        &vec![
-            llm::Message {
-                role: llm::Role::System,
-                name: None,
-                content: vec![
-                    llm::ContentPart::Text(
-                        format!(
-                            r#"
-                                You are used as part of an application to automatically categorize GitHub notifications.
-                                Your responses should have the following json structure:
+        &vec![llm::Event::Message(llm::Message {
+            role: llm::Role::System,
+            name: None,
+            content: vec![llm::ContentPart::Text(format!(
+                r#"
+                    You are used as part of an application to automatically categorize GitHub notifications.
+                    Your responses should have the following json structure:
 
-                                ```
-                                {LLM_RESPONSE_FORMAT}
-                                ```
-                                Your entire response should be valid json. Do not include any headers / trailers like ``` that would prevent
-                                the response from being parsed as json.
+                    ```
+                    {LLM_RESPONSE_FORMAT}
+                    ```
+                    Your entire response should be valid json. Do not include any headers / trailers like ``` that would prevent
+                    the response from being parsed as json.
 
-                                The GitHub handle of the user reading the notifications is `{}`
+                    The GitHub handle of the user reading the notifications is `{}`
 
-                                The notification is for an issue, this is the raw notification:
-                                ```
-                                {}
-                                ```
+                    The notification is for an issue, this is the raw notification:
+                    ```
+                    {}
+                    ```
 
-                                This is the issue. Pay special attention to whether the author of the issue
-                                is the current user and tailor your response accordingly:
-                                ```
-                                {}
-                                ```
+                    This is the issue. Pay special attention to whether the author of the issue
+                    is the current user and tailor your response accordingly:
+                    ```
+                    {}
+                    ```
 
-                                And these are the new comments in the issue:
-                                ```
-                                {}
-                                ```
+                    And these are the new comments in the issue:
+                    ```
+                    {}
+                    ```
 
-                                Make a response summarizing what happened in the issue as part of the new comments in the requested format
-                            "#,
-                            state.github_username,
-                            serde_json::to_string(&notification).unwrap(),
-                            serde_json::to_string(&issue).unwrap(),
-                            serde_json::to_string(&issue_comments).unwrap(),
-                        )
-                    )
-                ]
-            }
-        ],
-        &LLM_CONFIG
+                    Make a response summarizing what happened in the issue as part of the new comments in the requested format
+                "#,
+                state.github_username,
+                serde_json::to_string(&notification).unwrap(),
+                serde_json::to_string(&issue).unwrap(),
+                serde_json::to_string(&issue_comments).unwrap(),
+            ))],
+        })],
+        &LLM_CONFIG,
     );
 
-    let parsed_llm_response = parse_llm_response(llm_response);
+    let parsed_llm_response = parse_llm_response(llm_response.unwrap());
 
     EnhancedNotification {
         id: notification.id.to_string(),
@@ -297,11 +305,11 @@ fn process_issue_notification(
         subject: Subject {
             type_: SubjectType::Issue,
             title: notification.subject.title,
-            url: notification.subject.url.map(|u| u.to_string())
+            url: notification.subject.url.map(|u| u.to_string()),
         },
         repository: Repository {
             owner: notification.repository.owner.unwrap().login,
-            name: notification.repository.name
+            name: notification.repository.name,
         },
         action_items: parsed_llm_response.action_items,
         priority: parsed_llm_response.priority.into(),
@@ -309,24 +317,22 @@ fn process_issue_notification(
         url: notification.url.to_string(),
         category: parsed_llm_response.category.into(),
         summary: parsed_llm_response.summary,
-        key_points: parsed_llm_response.key_points
+        key_points: parsed_llm_response.key_points,
     }
 }
 
-fn process_check_suite_notification(
-    notification: github::Notification
-) -> EnhancedNotification {
+fn process_check_suite_notification(notification: github::Notification) -> EnhancedNotification {
     EnhancedNotification {
         id: notification.id.to_string(),
         reason: notification.reason,
         subject: Subject {
             type_: SubjectType::CheckSuite,
             title: notification.subject.title.clone(),
-            url: notification.subject.url.map(|u| u.to_string())
+            url: notification.subject.url.map(|u| u.to_string()),
         },
         repository: Repository {
             owner: notification.repository.owner.unwrap().login,
-            name: notification.repository.name
+            name: notification.repository.name,
         },
         action_items: vec![],
         priority: Priority::Normal,
@@ -334,65 +340,98 @@ fn process_check_suite_notification(
         url: notification.url.to_string(),
         category: Category::CiCd,
         summary: notification.subject.title,
-        key_points: vec![]
+        key_points: vec![],
     }
 }
 
-fn get_notifications(state: &State, since: Option<&DateTime<Utc>>, before: &DateTime<Utc>) -> Vec<github::Notification> {
+fn get_notifications(
+    state: &State,
+    since: Option<&DateTime<Utc>>,
+    before: &DateTime<Utc>,
+) -> Vec<github::Notification> {
     // Add support for pagination here to handle users with a lot of notifications
     let mut query_params = vec![("before", before.to_rfc3339())];
     if let Some(since) = since {
         query_params.push(("since", since.to_rfc3339()));
     }
 
-    let res = state.client
+    let res = state
+        .client
         .get(format!("{}/notifications", GITHUB_API_HOST))
         .query(&query_params)
-        .header(header::AUTHORIZATION, format!("Bearer {}", state.github_auth_token))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", state.github_auth_token),
+        )
         .send()
         .unwrap();
 
     res.json().unwrap()
 }
 
-fn get_notification_subject<T: DeserializeOwned>(state: &State, notification: &github::Notification) -> T {
-    let res = state.client
+fn get_notification_subject<T: DeserializeOwned>(
+    state: &State,
+    notification: &github::Notification,
+) -> T {
+    let res = state
+        .client
         .get(notification.subject.url.clone().unwrap())
-        .header(header::AUTHORIZATION, format!("Bearer {}", state.github_auth_token))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", state.github_auth_token),
+        )
         .send()
         .unwrap();
 
     res.json().unwrap()
 }
 
-fn get_issue_comments(state: &State, issue: &github::Issue, since: Option<&DateTime<Utc>>, before: &DateTime<Utc>) -> Vec<github::IssueComment> {
+fn get_issue_comments(
+    state: &State,
+    issue: &github::Issue,
+    since: Option<&DateTime<Utc>>,
+    before: &DateTime<Utc>,
+) -> Vec<github::IssueComment> {
     // Add pagination here to support issues with a lot of comments
     let mut query_params = vec![("before", before.to_rfc3339())];
     if let Some(since) = since {
         query_params.push(("since", since.to_rfc3339()));
     }
 
-    let res = state.client
+    let res = state
+        .client
         .get(issue.comments_url.clone())
         .query(&query_params)
-        .header(header::AUTHORIZATION, format!("Bearer {}", state.github_auth_token))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", state.github_auth_token),
+        )
         .send()
         .unwrap();
 
     res.json().unwrap()
 }
 
-fn get_pull_request_comments(state: &State, pull_request: &github::PullRequest, since: Option<&DateTime<Utc>>, before: &DateTime<Utc>) -> Vec<github::PullRequestComment> {
+fn get_pull_request_comments(
+    state: &State,
+    pull_request: &github::PullRequest,
+    since: Option<&DateTime<Utc>>,
+    before: &DateTime<Utc>,
+) -> Vec<github::PullRequestComment> {
     // Add pagination here to support pull requests with a lot of comments
     let mut query_params = vec![("before", before.to_rfc3339())];
     if let Some(since) = since {
         query_params.push(("since", since.to_rfc3339()));
     }
 
-    let res = state.client
+    let res = state
+        .client
         .get(pull_request.comments_url.clone().unwrap())
         .query(&query_params)
-        .header(header::AUTHORIZATION, format!("Bearer {}", state.github_auth_token))
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", state.github_auth_token),
+        )
         .send()
         .unwrap();
 
@@ -400,7 +439,7 @@ fn get_pull_request_comments(state: &State, pull_request: &github::PullRequest, 
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all="kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum LLMResponseCategory {
     ActionNeeded,
     Fyi,
@@ -414,13 +453,13 @@ impl From<LLMResponseCategory> for Category {
             LLMResponseCategory::ActionNeeded => Category::ActionNeeded,
             LLMResponseCategory::Fyi => Category::Fyi,
             LLMResponseCategory::Releases => Category::Releases,
-            LLMResponseCategory::CiCd => Category::CiCd
+            LLMResponseCategory::CiCd => Category::CiCd,
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all="kebab-case")]
+#[serde(rename_all = "kebab-case")]
 pub enum LLMResponsePriority {
     Urgent,
     High,
@@ -434,34 +473,25 @@ impl From<LLMResponsePriority> for Priority {
             LLMResponsePriority::High => Priority::High,
             LLMResponsePriority::Low => Priority::Low,
             LLMResponsePriority::Normal => Priority::Normal,
-            LLMResponsePriority::Urgent => Priority::Urgent
+            LLMResponsePriority::Urgent => Priority::Urgent,
         }
     }
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all="kebab-case")]
+#[serde(rename_all = "kebab-case")]
 struct LLMResponse {
     category: LLMResponseCategory,
     priority: LLMResponsePriority,
     summary: String,
     action_items: Vec<String>,
-    key_points: Vec<String>
+    key_points: Vec<String>,
 }
 
-fn parse_llm_response(raw_response: ChatEvent) -> LLMResponse {
-    match raw_response {
-        ChatEvent::Message(CompleteResponse {
-            content, ..
-        }) => {
-            match content.as_slice() {
-                [ContentPart::Text(text)] => {
-                    serde_json::from_str(&text).unwrap()
-                }
-                _ => panic!("received unexpected content from llm")
-            }
-        }
-        _ => panic!("received unexpected response from llm")
+fn parse_llm_response(raw_response: llm::Response) -> LLMResponse {
+    match raw_response.content.as_slice() {
+        [llm::ContentPart::Text(text)] => serde_json::from_str(&text).unwrap(),
+        _ => panic!("received unexpected content from llm"),
     }
 }
 

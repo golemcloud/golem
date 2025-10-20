@@ -18,7 +18,7 @@ use crate::{
     CallType, DynamicParsedFunctionName, DynamicParsedFunctionReference, FunctionTypeRegistry,
     InferredType, ParsedFunctionSite, RegistryKey, RegistryValue, SemVer,
 };
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
+use golem_wasm::analysis::{AnalysedExport, AnalysedType, TypeEnum, TypeVariant};
 use std::collections::BTreeMap;
 use std::convert::TryFrom;
 use std::fmt::{Debug, Display, Formatter};
@@ -70,17 +70,20 @@ impl FunctionDictionary {
             _ => None,
         })
     }
-    pub fn get_variant_info(&self, identifier_name: &str) -> Option<TypeVariant> {
-        self.name_and_types.iter().find_map(|(f, ftype)| match f {
-            FunctionName::Variant(name) => {
-                if name == identifier_name {
-                    ftype.as_type_variant()
-                } else {
-                    None
+    pub fn get_variant_info(&self, identifier_name: &str) -> Vec<TypeVariant> {
+        self.name_and_types
+            .iter()
+            .filter_map(|(f, ftype)| match f {
+                FunctionName::Variant(name) => {
+                    if name == identifier_name {
+                        ftype.as_type_variant()
+                    } else {
+                        None
+                    }
                 }
-            }
-            _ => None,
-        })
+                _ => None,
+            })
+            .collect::<Vec<_>>()
     }
 
     pub fn function_names(&self) -> Vec<String> {
@@ -619,53 +622,58 @@ impl FunctionType {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use crate::FunctionName;
 
-    impl TryFrom<golem_api_grpc::proto::golem::rib::function_name_type::FunctionName> for FunctionName {
+    impl TryFrom<crate::proto::golem::rib::function_name_type::FunctionName> for FunctionName {
         type Error = String;
 
         fn try_from(
-            value: golem_api_grpc::proto::golem::rib::function_name_type::FunctionName,
+            value: crate::proto::golem::rib::function_name_type::FunctionName,
         ) -> Result<Self, Self::Error> {
             match value {
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::VariantName(name) => {
+                crate::proto::golem::rib::function_name_type::FunctionName::VariantName(name) => {
                     Ok(FunctionName::Variant(name))
                 }
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::EnumName(name) => {
+                crate::proto::golem::rib::function_name_type::FunctionName::EnumName(name) => {
                     Ok(FunctionName::Enum(name))
                 }
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::Function(fqfn) => {
+                crate::proto::golem::rib::function_name_type::FunctionName::Function(fqfn) => {
                     Ok(FunctionName::Function(fqfn.try_into()?))
                 }
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::ResourceConstructor(fqrc) => {
-                    Ok(FunctionName::ResourceConstructor(fqrc.try_into()?))
-                }
-                golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::ResourceMethod(fqrm) => {
-                    Ok(FunctionName::ResourceMethod(fqrm.try_into()?))
-                }
+                crate::proto::golem::rib::function_name_type::FunctionName::ResourceConstructor(
+                    fqrc,
+                ) => Ok(FunctionName::ResourceConstructor(fqrc.try_into()?)),
+                crate::proto::golem::rib::function_name_type::FunctionName::ResourceMethod(
+                    fqrm,
+                ) => Ok(FunctionName::ResourceMethod(fqrm.try_into()?)),
             }
         }
     }
 
-    impl From<FunctionName> for golem_api_grpc::proto::golem::rib::function_name_type::FunctionName {
+    impl From<FunctionName> for crate::proto::golem::rib::function_name_type::FunctionName {
         fn from(value: FunctionName) -> Self {
             match value {
                 FunctionName::Variant(name) => {
-                    golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::VariantName(name)
+                    crate::proto::golem::rib::function_name_type::FunctionName::VariantName(name)
                 }
                 FunctionName::Enum(name) => {
-                    golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::EnumName(name)
+                    crate::proto::golem::rib::function_name_type::FunctionName::EnumName(name)
                 }
                 FunctionName::Function(fqfn) => {
-                    golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::Function(fqfn.into())
+                    crate::proto::golem::rib::function_name_type::FunctionName::Function(
+                        fqfn.into(),
+                    )
                 }
                 FunctionName::ResourceConstructor(fqrc) => {
-                    golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::ResourceConstructor(fqrc.into())
+                    crate::proto::golem::rib::function_name_type::FunctionName::ResourceConstructor(
+                        fqrc.into(),
+                    )
                 }
                 FunctionName::ResourceMethod(fqrm) => {
-                    golem_api_grpc::proto::golem::rib::function_name_type::FunctionName::ResourceMethod(fqrm.into())
+                    crate::proto::golem::rib::function_name_type::FunctionName::ResourceMethod(
+                        fqrm.into(),
+                    )
                 }
             }
         }

@@ -30,7 +30,7 @@ use golem_test_framework::components::worker_executor::provided::ProvidedWorkerE
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
+use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -52,7 +52,6 @@ pub mod http;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
-pub mod measure_test_component_mem;
 pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
@@ -61,8 +60,6 @@ pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
 pub mod transactions;
-pub mod ts_rpc1_stubless;
-pub mod ts_rpc2_stubless;
 pub mod wasi;
 
 test_r::enable!();
@@ -78,17 +75,12 @@ tag_suite!(transactions, group2);
 tag_suite!(wasi, group2);
 tag_suite!(revert, group2);
 tag_suite!(durability, group2);
+tag_suite!(observability, group2);
 
 tag_suite!(scalability, group3);
 tag_suite!(hot_update, group3);
 tag_suite!(rust_rpc, group3);
 tag_suite!(rust_rpc_stubless, group3);
-
-tag_suite!(ts_rpc1, group4);
-tag_suite!(ts_rpc1_stubless, group4);
-
-tag_suite!(ts_rpc2, group5);
-tag_suite!(ts_rpc2_stubless, group5);
 
 tag_suite!(rdbms_service, rdbms_service);
 

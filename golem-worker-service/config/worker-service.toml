@@ -30,6 +30,7 @@ multiplier = 2.0
 
 [component_service]
 access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+cache_capacity = 1000
 host = "localhost"
 port = 9090
 
@@ -158,6 +159,7 @@ multiplier = 10.0
 # 
 # [component_service]
 # access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# cache_capacity = 1000
 # host = "localhost"
 # port = 9090
 # 
@@ -304,6 +306,7 @@ multiplier = 10.0
 # 
 # [component_service]
 # access_token = "5c832d93-ff85-4a8f-9803-513950fdfdb1"
+# cache_capacity = 1000
 # host = "localhost"
 # port = 9090
 # 

@@ -127,6 +127,10 @@ export interface ComponentList {
   componentId?: string;
 }
 
+export interface UnbuiltComponent {
+  name: string;
+}
+
 export interface ComponentExportFunction {
   name: string;
   parameters: Parameter[];

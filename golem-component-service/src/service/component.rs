@@ -58,7 +58,7 @@ use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 use rib::FunctionDictionary;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -883,7 +883,6 @@ impl ComponentServiceDefault {
 
         info!(
             owner = %owner,
-            exports = ?component.metadata.exports(),
             dynamic_linking = ?component.metadata.dynamic_linking(),
             "Uploaded component",
         );

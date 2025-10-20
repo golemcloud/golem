@@ -317,7 +317,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                     .handle_command(subcommand)
                     .await
             }
-            GolemCliSubcommand::Worker { subcommand } => {
+            GolemCliSubcommand::Agent { subcommand } => {
                 self.ctx.worker_handler().handle_command(subcommand).await
             }
             GolemCliSubcommand::Api { subcommand } => {
@@ -344,10 +344,21 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
             GolemCliSubcommand::Repl {
                 component_name,
                 version,
+                deploy_args,
+                script,
+                script_file,
+                disable_stream,
             } => {
                 self.ctx
                     .rib_repl_handler()
-                    .cmd_repl(component_name.component_name, version)
+                    .cmd_repl(
+                        component_name.component_name,
+                        version,
+                        deploy_args.as_ref(),
+                        script,
+                        script_file,
+                        !disable_stream,
+                    )
                     .await
             }
             GolemCliSubcommand::Completion { shell } => self.cmd_completion(shell),

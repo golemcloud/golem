@@ -53,6 +53,7 @@ redirect_uri = "http://localhost:8080/v1/login/oauth2/web/callback/github"
 
 [plans.default]
 component_limit = 100
+max_memory_per_worker = 1073741824
 monthly_gas_limit = 1000000000000
 monthly_upload_limit = 1000000000
 plan_id = "00000000-0000-0000-0000-000000000000"

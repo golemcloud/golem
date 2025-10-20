@@ -73,7 +73,6 @@ declare_unions! {
     }
 }
 
-#[cfg(feature = "protobuf")]
 mod protobuf {
     use super::*;
 

@@ -19,8 +19,8 @@ import {
   Send,
   Loader2,
 } from "lucide-react";
-import { YamlViewerModal } from "@/components/yaml-viewer-modal";
 import { useLogViewer } from "@/contexts/log-viewer-context";
+import { YamlViewerModal } from "@/components/yaml-viewer-modal";
 
 export const Dashboard = () => {
   const { appId } = useParams();
@@ -30,13 +30,12 @@ export const Dashboard = () => {
   const [appName, setAppName] = useState<string>("");
   const [loadingStates, setLoadingStates] = useState({
     build: false,
-    updateWorkers: false,
-    deployWorkers: false,
+    updateAgents: false,
+    deployAgents: false,
     deployApp: false,
     clean: false,
   });
   const [isYamlModalOpen, setIsYamlModalOpen] = useState(false);
-  const [yamlContent, setYamlContent] = useState<string>("");
 
   useEffect(() => {
     // If no app ID is in the URL, redirect to home
@@ -90,60 +89,60 @@ export const Dashboard = () => {
       });
   };
 
-  const handleUpdateWorkers = () => {
+  const handleUpdateAgents = () => {
     if (!appId) return;
-    setLoadingStates(prev => ({ ...prev, updateWorkers: true }));
+    setLoadingStates(prev => ({ ...prev, updateAgents: true }));
 
     // Run async operation without blocking using .then()
     API.appService
-      .updateWorkers(appId)
+      .updateAgents(appId)
       .then(result => {
         if (result.success) {
           toast({
-            title: "Workers Update Completed",
-            description: "Worker update process completed successfully.",
+            title: "Agents Update Completed",
+            description: "Agent update process completed successfully.",
           });
         } else {
           showLog({
-            title: "Workers Update Failed",
+            title: "Agents Update Failed",
             logs: result.logs,
             status: "error",
-            operation: "Update Workers",
+            operation: "Update Agents",
           });
         }
       })
       .catch(error => {
         showLog({
-          title: "Workers Update Failed",
+          title: "Agents Update Failed",
           logs: String(error),
           status: "error",
-          operation: "Update Workers",
+          operation: "Update Agents",
         });
       })
       .finally(() => {
-        setLoadingStates(prev => ({ ...prev, updateWorkers: false }));
+        setLoadingStates(prev => ({ ...prev, updateAgents: false }));
       });
   };
 
-  const handleDeployWorkers = () => {
+  const handleDeployAgents = () => {
     if (!appId) return;
-    setLoadingStates(prev => ({ ...prev, deployWorkers: true }));
+    setLoadingStates(prev => ({ ...prev, deployAgents: true }));
 
     // Run async operation without blocking using .then()
     API.appService
-      .deployWorkers(appId)
+      .deployAgents(appId)
       .then(result => {
         if (result.success) {
           toast({
             title: "Deployment Completed",
-            description: "Worker deployment completed successfully.",
+            description: "Agent deployment completed successfully.",
           });
         } else {
           showLog({
             title: "Deployment Failed",
             logs: result.logs,
             status: "error",
-            operation: "Deploy Workers",
+            operation: "Deploy Agents",
           });
         }
       })
@@ -152,11 +151,11 @@ export const Dashboard = () => {
           title: "Deployment Failed",
           logs: String(error),
           status: "error",
-          operation: "Deploy Workers",
+          operation: "Deploy Agents",
         });
       })
       .finally(() => {
-        setLoadingStates(prev => ({ ...prev, deployWorkers: false }));
+        setLoadingStates(prev => ({ ...prev, deployAgents: false }));
       });
   };
 
@@ -201,7 +200,7 @@ export const Dashboard = () => {
 
     // Run async operation without blocking using .then()
     API.appService
-      .deployWorkers(appId)
+      .deployAgents(appId)
       .then(result => {
         if (result.success) {
           toast({
@@ -233,19 +232,9 @@ export const Dashboard = () => {
       });
   };
 
-  const handleViewYaml = async () => {
+  const handleViewYaml = () => {
     if (!appId) return;
-    try {
-      const yamlContent = await API.manifestService.getAppYamlContent(appId);
-      setYamlContent(yamlContent);
-      setIsYamlModalOpen(true);
-    } catch (error) {
-      toast({
-        title: "Failed to Load YAML",
-        description: String(error),
-        variant: "destructive",
-      });
-    }
+    setIsYamlModalOpen(true);
   };
 
   return (
@@ -279,28 +268,28 @@ export const Dashboard = () => {
           <Button
             variant="outline"
             size="sm"
-            onClick={handleUpdateWorkers}
-            disabled={loadingStates.updateWorkers}
+            onClick={handleUpdateAgents}
+            disabled={loadingStates.updateAgents}
           >
-            {loadingStates.updateWorkers ? (
+            {loadingStates.updateAgents ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (
               <RefreshCw className="h-4 w-4 mr-2" />
             )}
-            Update Workers
+            Update Agents
           </Button>
           <Button
             variant="outline"
             size="sm"
-            onClick={handleDeployWorkers}
-            disabled={loadingStates.deployWorkers}
+            onClick={handleDeployAgents}
+            disabled={loadingStates.deployAgents}
           >
-            {loadingStates.deployWorkers ? (
+            {loadingStates.deployAgents ? (
               <Loader2 className="h-4 w-4 mr-2 animate-spin" />
             ) : (
               <Upload className="h-4 w-4 mr-2" />
             )}
-            Deploy Workers
+            Deploy Agents
           </Button>
           <Button
             variant="outline"
@@ -343,14 +332,10 @@ export const Dashboard = () => {
         </div>
       </div>
 
-      {/* YAML Viewer Modal */}
       <YamlViewerModal
         isOpen={isYamlModalOpen}
         onOpenChange={setIsYamlModalOpen}
-        title="Application Manifest (golem.yaml)"
-        yamlContent={yamlContent}
-        appId={appId}
-        isAppYaml={true}
+        appId={appId || ""}
       />
     </div>
   );
