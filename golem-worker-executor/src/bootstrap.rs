@@ -25,7 +25,6 @@ use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::{PluginsService};
-use crate::services::projects::ProjectService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -148,7 +147,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            project_service.clone(),
             agent_type_service.clone(),
             additional_deps.clone(),
         ));
@@ -182,7 +180,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            project_service.clone(),
             agent_type_service.clone(),
             additional_deps.clone(),
         ));
@@ -215,7 +212,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
-            project_service,
             additional_deps,
         ))
     }
