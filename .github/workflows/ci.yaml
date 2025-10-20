@@ -57,7 +57,7 @@ jobs:
           path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
-        run: cargo nextest archive --archive-file ~/golem-binaries-cache/golem-binaries.tar.zst
+        run: cargo nextest archive --archive-file ~/golem-binaries-cache/golem-binaries.tar.zst --zstd-level -7
 
 #      - name: Save packaged binaries to cache
 #        uses: actions/cache/save@v4
@@ -86,7 +86,7 @@ jobs:
           prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
-          save-if: true
+          save-if: false
       - uses: davidB/rust-cargo-make@v1
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
