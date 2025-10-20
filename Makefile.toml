@@ -439,7 +439,7 @@ dependencies = ["wit"]
 description = "Runs only untagged worker-executor-tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms-service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group1]
@@ -479,7 +479,7 @@ dependencies = [
 
 [tasks.integration-tests-group1]
 description = "Runs integration tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "debug", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time
@@ -516,7 +516,7 @@ cargo-test-r run --package golem-debugging-service --test 'integration' -- --rep
 
 [tasks.integration-tests-group5]
 description = "Runs sharding integration tests only"
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo-test-r run --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
