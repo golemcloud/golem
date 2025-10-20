@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -74,7 +74,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -102,7 +102,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -144,7 +144,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -198,7 +198,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -273,7 +273,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -336,7 +336,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - name: Install cargo-component
@@ -428,7 +428,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Prepare
         run: |
           platform=${{ matrix.platform.platform }}
@@ -477,7 +477,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -582,7 +582,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -680,7 +680,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -735,7 +735,7 @@ jobs:
           fetch-depth: 1
           submodules: recursive
       - name: Fetch tag
-        run: git fetch origin --deepen=1
+        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
       - uses: davidB/rust-cargo-make@v1
