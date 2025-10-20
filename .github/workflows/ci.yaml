@@ -130,7 +130,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          mv -v target/nextest-archive/target/debug/* target/debug/ || true
+          mv -vf target/nextest-archive/target/debug/* target/debug/ || true
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -329,7 +329,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          mv -v target/nextest-archive/target/debug/* target/debug/ || true
+          mv -vf target/nextest-archive/target/debug/* target/debug/ || true
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
