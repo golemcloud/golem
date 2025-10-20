@@ -58,7 +58,7 @@ jobs:
           path: target/golem-binaries.tar.zst
           retention-days: 1
 
-  build:
+  check-clippy-and-format:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
@@ -81,22 +81,15 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
-      - name: Building all executables
-        env:
-          QUIET: true
-        run: cargo make --profile ci build
-        timeout-minutes: 45
-      - name: Check openapi is up to date
-        run: cargo make --profile ci check-openapi
-      - name: Check configs are up to date
-        run: cargo make --profile ci check-configs
+
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
 
-  unit-tests-and-checks:
+  checks:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
+    needs: build-and-store
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -114,6 +107,60 @@ jobs:
           cache-all-crates: true
           save-if: false
       - uses: davidB/rust-cargo-make@v1
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+      - name: Restore binary archive
+        uses: actions/download-artifact@v4
+        with:
+          name: all-bins-including-tests
+          path: target/golem-binaries.tar.zst
+      - name: Apply binary archive
+        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+      - name: Copy required binaries to target # TODO: this should be encoded in the makefile
+        run: cp -v target/nextest-archive/target/debug/* target/debug/
+
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+
+      - name: Check openapi is up to date
+        run: cargo make --profile ci check-openapi
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
+
+  unit-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-16vcpu-ubuntu-2204
+    needs: build-and-store
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: useblacksmith/rust-cache@v3
+        with:
+          prefix-key: v3-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+      - name: Restore binary archive
+        uses: actions/download-artifact@v4
+        with:
+          name: all-bins-including-tests
+          path: target/golem-binaries.tar.zst
+      - name: Apply binary archive
+        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
       - name: Unit tests
@@ -130,6 +177,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
+    needs: build-and-store
     strategy:
       fail-fast: false
       matrix:
@@ -162,8 +210,20 @@ jobs:
         with:
           redis-version: latest
           auto-start: false
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+      - name: Restore binary archive
+        uses: actions/download-artifact@v4
+        with:
+          name: all-bins-including-tests
+          path: target/golem-binaries.tar.zst
+      - name: Apply binary archive
+        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
+
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
+
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
         timeout-minutes: 40
@@ -179,6 +239,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-16vcpu-ubuntu-2204
+    needs: build-and-store
     strategy:
       fail-fast: false
       matrix:
@@ -237,6 +298,16 @@ jobs:
       - name: Install wit-bindgen
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+      - name: Restore binary archive
+        uses: actions/download-artifact@v4
+        with:
+          name: all-bins-including-tests
+          path: target/golem-binaries.tar.zst
+      - name: Apply binary archive
+        run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
