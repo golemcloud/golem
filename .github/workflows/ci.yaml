@@ -29,7 +29,7 @@ jobs:
         with:
           fetch-depth: 1
       - name: Fetch tag
-        run: git fetch origin --shallow-since="2 weeks"
+        run: git fetch origin --deepen=1
 
       - name: Git describe
         run: git describe --tags --match v*
