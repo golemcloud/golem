@@ -130,7 +130,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          find target/nextest-archive/target/debug -maxdepth 1 -type f -exec mv -vf {} target/debug/ +          
+          find target/nextest-archive/target/debug -maxdepth 1 -type f | xargs mv -t target/debug/          
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -329,7 +329,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          find target/nextest-archive/target/debug -maxdepth 1 -type f -exec mv -vf {} target/debug/ +
+          find target/nextest-archive/target/debug -maxdepth 1 -type f | xargs mv -t target/debug/
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8

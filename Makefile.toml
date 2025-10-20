@@ -35,9 +35,11 @@ AWS_EC2_METADATA_DISABLED = "true"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
-# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
+CARGO_PROFILE_dev_STRIP = "debuginfo"
+CARGO_PROFILE_test_STRIP = "debuginfo"
 JUNIT_OPTS = "--format junit --logfile target/report.xml"
 CI = "true"
+# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
