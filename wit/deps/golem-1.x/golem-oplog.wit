@@ -1,18 +1,18 @@
-package golem:api@2.0.0;
+package golem:api@1.1.7;
 
-/// Host interface for enumerating and searching for worker oplogs
+/// Host interface for enumerating and searching for agent oplogs
 interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:rpc/types@0.2.2.{wit-value};
 
-    use host.{account-id, component-version, oplog-index, persistence-level, environment-id, retry-policy, uuid, worker-id};
+    use host.{account-id, component-version, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
-        /// The side-effect reads from the worker's local state (for example local file system,
+        /// The side-effect reads from the agent's local state (for example local file system,
         /// random generator, etc.)
         read-local,
-        /// The side-effect writes to the worker's local state (for example local file system)
+        /// The side-effect writes to the agent's local state (for example local file system)
         write-local,
         /// The side-effect reads from external state (for example a key-value store)
         read-remote,
@@ -25,7 +25,8 @@ interface oplog {
         /// writing a `BeginRemoteWrite` entry in the oplog. Followup invocations should contain
         /// this entry's index as the parameter. In batched remote writes it is the caller's responsibility
         /// to manually write an `EndRemoteWrite` entry (using `end_function`) when the operation is completed.
-        write-remote-batched(option<oplog-index>)
+        write-remote-batched(option<oplog-index>),
+        write-remote-transaction(option<oplog-index>)
     }
 
     record plugin-installation-description {
@@ -37,13 +38,13 @@ interface oplog {
 
     record create-parameters {
         timestamp: datetime,
-        worker-id: worker-id,
+        agent-id: agent-id,
         component-version: component-version,
         args: list<string>,
         env: list<tuple<string, string>>,
         created-by: account-id,
         environment-id: environment-id,
-        parent: option<worker-id>,
+        parent: option<agent-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>
@@ -126,14 +127,14 @@ interface oplog {
         input: option<list<wit-value>>
     }
 
-    variant worker-invocation {
+    variant agent-invocation {
         exported-function(exported-function-invocation-parameters),
         manual-update(component-version)
     }
 
-    record pending-worker-invocation-parameters {
+    record pending-agent-invocation-parameters {
         timestamp: datetime,
-        invocation: worker-invocation
+        invocation: agent-invocation
     }
 
     variant update-description {
@@ -167,18 +168,18 @@ interface oplog {
         delta: u64
     }
 
-    type worker-resource-id = u64;
+    type agent-resource-id = u64;
 
     record create-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id,
+        resource-id: agent-resource-id,
         name: string,
         owner: string
     }
 
     record drop-resource-parameters {
         timestamp: datetime,
-        resource-id: worker-resource-id,
+        resource-id: agent-resource-id,
         name: string,
         owner: string
     }
@@ -247,33 +248,43 @@ interface oplog {
         persistence-level: persistence-level
     }
 
+    record begin-remote-transaction-parameters {
+        timestamp: datetime,
+        transaction-id: string
+    }
+
+    record remote-transaction-parameters {
+        timestamp: datetime,
+        begin-index: oplog-index
+    }
+
     variant oplog-entry {
-        /// The initial worker oplog entry
+        /// The initial agent oplog entry
         create(create-parameters),
-        /// The worker invoked a host function
+        /// The agent invoked a host function
         imported-function-invoked(imported-function-invoked-parameters),
-        /// The worker has been invoked
+        /// The agent has been invoked
         exported-function-invoked(exported-function-invoked-parameters),
-        /// The worker has completed an invocation
+        /// The agent has completed an invocation
         exported-function-completed(exported-function-completed-parameters),
-        /// Worker suspended
+        /// Agent suspended
         suspend(datetime),
-        /// Worker failed
+        /// Agent failed
         error(error-parameters),
-        /// Marker entry added when get-oplog-index is called from the worker, to make the jumping behavior
+        /// Marker entry added when get-oplog-index is called from the agent, to make the jumping behavior
         /// more predictable.
         no-op(datetime),
-        /// The worker needs to recover up to the given target oplog index and continue running from
+        /// The agent needs to recover up to the given target oplog index and continue running from
         /// the source oplog index from there
         /// `jump` is an oplog region representing that from the end of that region we want to go back to the start and
         /// ignore all recorded operations in between.
         jump(jump-parameters),
-        /// Indicates that the worker has been interrupted at this point.
-        /// Only used to recompute the worker's (cached) status, has no effect on execution.
+        /// Indicates that the agent has been interrupted at this point.
+        /// Only used to recompute the agent's (cached) status, has no effect on execution.
         interrupted(datetime),
-        /// Indicates that the worker has been exited using WASI's exit function.
+        /// Indicates that the agent has been exited using WASI's exit function.
         exited(datetime),
-        /// Overrides the worker's retry policy
+        /// Overrides the agent's retry policy
         change-retry-policy(change-retry-policy-parameters),
         /// Begins an atomic region. All oplog entries after `BeginAtomicRegion` are to be ignored during
         /// recovery except if there is a corresponding `EndAtomicRegion` entry.
@@ -288,9 +299,9 @@ interface oplog {
         begin-remote-write(datetime),
         /// Marks the end of a remote write operation. Only used when idempotence mode is off.
         end-remote-write(end-remote-write-parameters),
-        /// An invocation request arrived while the worker was busy
-        pending-worker-invocation(pending-worker-invocation-parameters),
-        /// An update request arrived and will be applied as soon the worker restarts
+        /// An invocation request arrived while the agent was busy
+        pending-agent-invocation(pending-agent-invocation-parameters),
+        /// An update request arrived and will be applied as soon the agent restarts
         pending-update(pending-update-parameters),
         /// An update was successfully applied
         successful-update(successful-update-parameters),
@@ -302,15 +313,15 @@ interface oplog {
         create-resource(create-resource-parameters),
         /// Dropped a resource instance
         drop-resource(drop-resource-parameters),
-        /// The worker emitted a log message
+        /// The agent emitted a log message
         log(log-parameters),
-        /// The worker's has been restarted, forgetting all its history
+        /// The agent's has been restarted, forgetting all its history
         restart(datetime),
         /// Activates a plugin
         activate-plugin(activate-plugin-parameters),
         /// Deactivates a plugin
         deactivate-plugin(deactivate-plugin-parameters),
-        /// Revert a worker to a previous state
+        /// Revert an agent to a previous state
         revert(revert-parameters),
         /// Cancel a pending invocation
         cancel-invocation(cancel-invocation-parameters),
@@ -321,16 +332,26 @@ interface oplog {
         /// Set an attribute on an open span in the invocation context
         set-span-attribute(set-span-attribute-parameters),
         /// Change the current persistence level
-        change-persistence-level(change-persistence-level-parameters)
+        change-persistence-level(change-persistence-level-parameters),
+        /// Begins a transaction operation
+        begin-remote-transaction(begin-remote-transaction-parameters),
+        /// Pre-Commit of the transaction, indicating that the transaction will be committed
+        pre-commit-remote-transaction(remote-transaction-parameters),
+        /// Pre-Rollback of the transaction, indicating that the transaction will be rolled back
+        pre-rollback-remote-transaction(remote-transaction-parameters),
+        /// Committed transaction operation, indicating that the transaction was committed
+        committed-remote-transaction(remote-transaction-parameters),
+        /// Rolled back transaction operation, indicating that the transaction was rolled back
+        rolled-back-remote-transaction(remote-transaction-parameters)
     }
 
     resource get-oplog {
-        constructor(worker-id: worker-id, start: oplog-index);
+        constructor(agent-id: agent-id, start: oplog-index);
         get-next: func() -> option<list<oplog-entry>>;
     }
 
     resource search-oplog {
-        constructor(worker-id: worker-id, text: string);
+        constructor(agent-id: agent-id, text: string);
         get-next: func() -> option<list<tuple<oplog-index, oplog-entry>>>;
     }
 }

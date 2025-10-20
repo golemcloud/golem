@@ -133,7 +133,7 @@ mod filesystem {
     use async_trait::async_trait;
     use golem_common::cache::Cache;
     use golem_common::cache::SimpleCache;
-    use golem_common::model::component::{ComponentDto, ComponentOwner};
+    use golem_common::model::component::{ComponentDto};
     use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::testing::LocalFileSystemComponentMetadata;

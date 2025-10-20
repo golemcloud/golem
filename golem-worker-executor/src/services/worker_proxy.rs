@@ -29,8 +29,9 @@ use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters,
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId,
+    IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
@@ -44,7 +45,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
-use golem_common::model::component::ComponentRevision;
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {

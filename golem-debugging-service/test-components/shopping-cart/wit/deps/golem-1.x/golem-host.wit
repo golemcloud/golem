@@ -25,8 +25,8 @@ interface host {
         value: string
     }
 
-    /// Represents a Golem project
-    record project-id {
+    /// Represents a Golem environment
+    record environment-id {
       uuid: uuid,
     }
 

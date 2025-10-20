@@ -24,8 +24,9 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::component::{ComponentId, ComponentType};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
+    OwnedWorkerId, ScanCursor, WorkerMetadata,
     WorkerStatusRecord,
 };
 use golem_common::read_only_lock;

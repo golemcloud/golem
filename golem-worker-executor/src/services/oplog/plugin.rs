@@ -30,14 +30,12 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::plugin::{
-    OplogProcessorDefinition, PluginDefinition, PluginTypeSpecificDefinition,
-};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, PluginInstallationId,
-    ProjectId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
+    IdempotencyKey, OwnedWorkerId,
+    ScanCursor, ShardId, WorkerId, WorkerMetadata,
 };
+use golem_common::model::environment::EnvironmentId;
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{IntoValue, Value};

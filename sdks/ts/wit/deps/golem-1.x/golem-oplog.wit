@@ -1,4 +1,4 @@
-package golem:api@2.0.0;
+package golem:api@1.1.7;
 
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {
@@ -43,16 +43,8 @@ interface oplog {
         args: list<string>,
         env: list<tuple<string, string>>,
         created-by: account-id,
-<<<<<<< HEAD
         environment-id: environment-id,
-        parent: option<worker-id>,
-||||||| a819578bd
-        project-id: project-id,
-        parent: option<worker-id>,
-=======
-        project-id: project-id,
         parent: option<agent-id>,
->>>>>>> origin/main-atomic-deployment
         component-size: u64,
         initial-total-linear-memory-size: u64,
         initial-active-plugins: list<plugin-installation-description>

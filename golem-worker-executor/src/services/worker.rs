@@ -23,8 +23,9 @@ use crate::storage::keyvalue::{
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use async_trait::async_trait;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
+use golem_common::model::component::ComponentType;
 use golem_common::model::{
-    ComponentType, OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
+    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
     WorkerStatusRecord,
 };
 use std::sync::Arc;

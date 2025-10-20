@@ -1,4 +1,4 @@
-package golem:api@2.0.0;
+package golem:api@1.1.7;
 
 /// Host interface for enumerating and searching for agent oplogs
 interface oplog {

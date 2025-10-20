@@ -26,7 +26,7 @@ use golem_common::model::oplog::{
 use golem_common::model::component::{ComponentId,  ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    ComponentId, ComponentVersion, IdempotencyKey, OwnedWorkerId, ProjectId, ScanCursor, Timestamp,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
     WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;

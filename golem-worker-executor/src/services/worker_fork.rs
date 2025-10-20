@@ -22,7 +22,6 @@ use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps};
 use crate::services::plugins::PluginsService;
-use crate::services::projects::ProjectService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::rpc::Rpc;
 use crate::services::shard::ShardService;
@@ -32,7 +31,7 @@ use crate::services::{
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService,
-    HasPlugins, HasProjectService, HasPromiseService, HasResourceLimits, HasRpc,
+    HasPlugins, HasPromiseService, HasResourceLimits, HasRpc,
     HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
     HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
     HasWorkerProxy, HasWorkerService,
@@ -41,17 +40,17 @@ use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
-use golem_common::model::{AccountId, ProjectId, Timestamp, WorkerMetadata};
+use golem_common::model::{Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_common::read_only_lock;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tokio::runtime::Handle;
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 pub trait WorkerForkService: Send + Sync {
@@ -100,7 +99,6 @@ pub struct DefaultWorkerFork<Ctx: WorkerCtx> {
     pub plugins: Arc<dyn PluginsService>,
     pub oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     pub resource_limits: Arc<dyn ResourceLimits>,
-    pub project_service: Arc<dyn ProjectService>,
     pub extra_deps: Ctx::ExtraDeps,
 }
 
@@ -270,12 +268,6 @@ impl<Ctx: WorkerCtx> HasResourceLimits for DefaultWorkerFork<Ctx> {
     }
 }
 
-impl<Ctx: WorkerCtx> HasProjectService for DefaultWorkerFork<Ctx> {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
-    }
-}
-
 impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
     fn clone(&self) -> Self {
         Self {
@@ -305,7 +297,6 @@ impl<Ctx: WorkerCtx> Clone for DefaultWorkerFork<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
-            project_service: self.project_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
     }
@@ -341,7 +332,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types: Arc<dyn AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -372,7 +362,6 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
-            project_service,
             extra_deps,
         }
     }

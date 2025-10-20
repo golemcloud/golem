@@ -46,15 +46,18 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use golem_common::base_model::{OplogIndex, ProjectId};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
+use golem_common::base_model::{OplogIndex};
 use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey,
+    OwnedWorkerId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,

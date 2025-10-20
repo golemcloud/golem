@@ -23,7 +23,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{
-    ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
