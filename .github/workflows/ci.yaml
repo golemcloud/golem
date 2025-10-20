@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v3-rust
           shared-key: debug
@@ -79,7 +79,7 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v3-rust
           shared-key: debug
@@ -368,7 +368,7 @@ jobs:
         run: rustup update stable --no-self-update && rustup default stable
       - name: Install cargo-component
         run: cargo install --force --locked cargo-component@0.21.1
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v3-rust
           shared-key: debug
@@ -386,7 +386,7 @@ jobs:
     runs-on: blacksmith
     steps:
       - uses: actions/checkout@v5
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v1-golem-rust
           shared-key: debug
@@ -465,7 +465,7 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v3-rust
           shared-key: debug
@@ -710,7 +710,7 @@ jobs:
 
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v3-rust
           shared-key: release
@@ -766,7 +766,7 @@ jobs:
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
       - uses: davidB/rust-cargo-make@v1
-      - uses: Swatinem/rust-cache@v2
+      - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: "v0-rust"
           shared-key: release-${{ matrix.cfg.rust-target }}
