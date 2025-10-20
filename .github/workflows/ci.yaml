@@ -55,7 +55,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
-        run: cargo nextest archive --archive-file target/golem-binaries.tar.zst
+        run: cargo nextest archive --archive-file target/golem-binaries.tar.zst --zstd-level 22
 
       - name: Dump archive
         run: tar --zstd  -tvf target/golem-binaries.tar.zst
