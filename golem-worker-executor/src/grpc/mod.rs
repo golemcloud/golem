@@ -60,7 +60,7 @@ use golem_common::model::component::{ComponentId, ComponentFilePath, ComponentTy
 use golem_common::model::account::AccountId;
 use golem_common::model::{
     GetFileSystemNodeResult,
-    IdempotencyKey, OwnedWorkerId, PluginInstallationId, ScanCursor, ShardId,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
     TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus,
 };
@@ -70,7 +70,6 @@ use golem_wasm::protobuf::Val;
 use golem_wasm::ValueAndType;
 use std::cmp::min;
 use std::collections::HashMap;
-use std::fmt::{Debug, Display, Formatter};
 use std::marker::PhantomData;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -81,7 +80,6 @@ use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
 use tonic::{Request, Response, Status};
 use tracing::info_span;
 use tracing::{debug, info, warn, Instrument};
-use uuid::Uuid;
 use wasmtime::Error;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
@@ -361,10 +359,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let account_id: AccountId = account_id_proto.into();
 
-        let project_id_proto = request
-            .project_id
+        let environment_id_proto = request
+            .environment
             .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?;
-        let project_id: ProjectId = project_id_proto
+        let environment_id: EnvironmentId = environment_id_proto
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
@@ -377,7 +375,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_target_worker_id = OwnedWorkerId::new(&project_id, &target_worker_id);
+        let owned_target_worker_id = OwnedWorkerId::new(&environment_id, &target_worker_id);
 
         let source_worker_id_proto = request
             .source_worker_id
@@ -388,7 +386,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
 
-        let owned_source_worker_id = OwnedWorkerId::new(&project_id, &source_worker_id);
+        let owned_source_worker_id = OwnedWorkerId::new(&environment_id, &source_worker_id);
 
         self.services
             .worker_fork_service()
@@ -1145,7 +1143,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 self.component_service(),
                 self.oplog_service(),
                 self.plugins(),
-                self.project_service(),
                 &owned_worker_id,
                 ComponentRevision(cursor.current_component_version),
                 OplogIndex::from_u64(cursor.next_oplog_index),
@@ -1166,7 +1163,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     self.component_service(),
                     self.oplog_service(),
                     self.plugins(),
-                    self.project_service(),
                     &owned_worker_id,
                     initial_component_version,
                     start,

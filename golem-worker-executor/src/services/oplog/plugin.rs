@@ -32,7 +32,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
     IdempotencyKey, OwnedWorkerId,
-    ScanCursor, ShardId, WorkerId, WorkerMetadata,
+    ScanCursor, ShardId, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -49,6 +49,7 @@ use uuid::Uuid;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::plugin_registration::{OplogProcessorPluginSpec, PluginRegistrationDto, PluginSpecDto};
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -120,7 +121,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
 
         let workers = self.workers.upgradable_read().await;
         let key = (
-            project_id.clone(),
+            environment_id.clone(),
             definition.name.to_string(),
             definition.version.to_string(),
         );
@@ -135,7 +136,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             Self::get_oplog_processor_component_id(&definition)?;
                         let worker_id = self.generate_worker_id_for(&plugin_component_id).await?;
                         let owned_worker_id = OwnedWorkerId {
-                            project_id: project_id.clone(),
+                            environment_id: environment_id.clone(),
                             worker_id: worker_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
@@ -167,13 +168,13 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     }
 
     fn get_oplog_processor_component_id(
-        definition: &PluginDefinition,
+        definition: &PluginRegistrationDto,
     ) -> Result<(ComponentId, ComponentRevision), WorkerExecutorError> {
-        match &definition.specs {
-            PluginTypeSpecificDefinition::OplogProcessor(OplogProcessorDefinition {
+        match &definition.spec {
+            PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
                 component_id,
-                component_version,
-            }) => Ok((component_id.clone(), *component_version)),
+                component_revision,
+            }) => Ok((component_id.clone(), *component_revision)),
             _ => Err(WorkerExecutorError::runtime(
                 "Plugin is not an oplog processor",
             )),
@@ -330,8 +331,7 @@ impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
             component_service: self.component_service.clone(),
             shard_service: self.shard_service.clone(),
             worker_activator: self.worker_activator.clone(),
-            plugins: self.plugins.clone(),
-            project_service: self.project_service.clone(),
+            plugins: self.plugins.clone()
         }
     }
 }
@@ -374,11 +374,10 @@ struct CreateOplogConstructor {
     last_oplog_index: OplogIndex,
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     initial_worker_metadata: WorkerMetadata,
     last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
     execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
-    project_service: Arc<dyn ProjectService>,
 }
 
 impl CreateOplogConstructor {
@@ -389,11 +388,10 @@ impl CreateOplogConstructor {
         last_oplog_index: OplogIndex,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
-        project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
             owned_worker_id,
@@ -405,8 +403,7 @@ impl CreateOplogConstructor {
             plugins,
             initial_worker_metadata,
             last_known_status,
-            execution_status,
-            project_service,
+            execution_status
         }
     }
 }
@@ -442,7 +439,6 @@ impl OplogConstructor for CreateOplogConstructor {
             self.inner,
             self.components,
             self.plugins,
-            self.project_service,
             self.initial_worker_metadata,
             self.last_known_status,
             self.last_oplog_index,
@@ -465,8 +461,7 @@ impl ForwardingOplogService {
         inner: Arc<dyn OplogService>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn PluginsService>,
-        project_service: Arc<dyn ProjectService>,
+        plugins: Arc<dyn PluginsService>
     ) -> Self {
         Self {
             inner,
@@ -474,7 +469,6 @@ impl ForwardingOplogService {
             oplog_plugins,
             components,
             plugins,
-            project_service,
         }
     }
 }
@@ -508,8 +502,7 @@ impl OplogService for ForwardingOplogService {
                     self.plugins.clone(),
                     initial_worker_metadata,
                     last_known_status,
-                    execution_status,
-                    self.project_service.clone(),
+                    execution_status
                 ),
             )
             .await
@@ -536,8 +529,7 @@ impl OplogService for ForwardingOplogService {
                     self.plugins.clone(),
                     initial_worker_metadata,
                     last_known_status,
-                    execution_status,
-                    self.project_service.clone(),
+                    execution_status
                 ),
             )
             .await
@@ -566,13 +558,13 @@ impl OplogService for ForwardingOplogService {
 
     async fn scan_for_component(
         &self,
-        account_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
     ) -> Result<(ScanCursor, Vec<OwnedWorkerId>), WorkerExecutorError> {
         self.inner
-            .scan_for_component(account_id, component_id, cursor, count)
+            .scan_for_component(environment_id, component_id, cursor, count)
             .await
     }
 
@@ -610,7 +602,6 @@ impl ForwardingOplog {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         plugins: Arc<dyn PluginsService>,
-        project_service: Arc<dyn ProjectService>,
         initial_worker_metadata: WorkerMetadata,
         last_known_status: read_only_lock::tokio::ReadOnlyLock<WorkerStatusRecord>,
         last_oplog_idx: OplogIndex,
@@ -626,8 +617,7 @@ impl ForwardingOplog {
             last_oplog_idx,
             oplog_service,
             components,
-            plugins,
-            project_service,
+            plugins
         }));
 
         let timer = tokio::spawn({
@@ -732,8 +722,7 @@ struct ForwardingOplogState {
     last_oplog_idx: OplogIndex,
     oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn PluginsService>,
-    project_service: Arc<dyn ProjectService>,
+    plugins: Arc<dyn PluginsService>
 }
 
 impl ForwardingOplogState {
@@ -789,7 +778,6 @@ impl ForwardingOplogState {
                 self.oplog_service.clone(),
                 self.components.clone(),
                 self.plugins.clone(),
-                self.project_service.clone(),
                 &metadata.owned_worker_id(),
                 metadata.last_known_status.component_version, // NOTE: this is only safe if the component version is not changing within one batch
             )

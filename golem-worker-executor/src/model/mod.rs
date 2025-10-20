@@ -21,8 +21,7 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{ ShardAssignment, ShardId, Timestamp, WorkerId, WorkerStatusRecord,
-};
+use golem_common::model::{ OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };

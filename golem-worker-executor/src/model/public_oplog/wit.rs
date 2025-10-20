@@ -15,7 +15,6 @@
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
 use crate::preview2::golem_api_1_x::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
     ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
@@ -58,7 +57,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 created_by: oplog::AccountId {
                     value: created_by.0,
                 },
-                project_id: project_id.into(),
+                environment_id: environment_id.into(),
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
@@ -478,14 +477,6 @@ impl From<PublicAttributeValue> for oplog::AttributeValue {
     fn from(value: PublicAttributeValue) -> Self {
         match value {
             PublicAttributeValue::String(StringAttributeValue { value }) => Self::String(value),
-        }
-    }
-}
-
-impl From<ProjectId> for oplog::ProjectId {
-    fn from(value: ProjectId) -> Self {
-        Self {
-            uuid: value.0.into(),
         }
     }
 }

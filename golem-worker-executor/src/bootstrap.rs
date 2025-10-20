@@ -73,16 +73,14 @@ impl Bootstrap<Context> for ServerBootstrap {
         &self,
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
-        plugin_observations: Arc<dyn PluginsService>,
-        project_service: Arc<dyn ProjectService>,
+        plugins: Arc<dyn PluginsService>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
-            plugin_observations,
-            project_service,
+            plugins,
         )
     }
 
@@ -111,7 +109,6 @@ impl Bootstrap<Context> for ServerBootstrap {
         file_loader: Arc<FileLoader>,
         plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-        project_service: Arc<dyn ProjectService>,
         agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);

@@ -28,6 +28,7 @@ use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use super::plugins::PluginsService;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -63,6 +64,7 @@ pub fn configured(
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
     blob_storage: Arc<dyn BlobStorage>,
+    plugins_service: Arc<dyn PluginsService>
 ) -> Arc<dyn ComponentService> {
     let compiled_component_service = golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
     match config {
@@ -82,8 +84,7 @@ pub fn configured(
                 config.connect_timeout,
                 compiled_component_service,
                 config.max_component_size,
-                plugin_observations,
-                project_service,
+                plugins_service
             ))
         }
         ComponentServiceConfig::Local(config) => {
@@ -448,7 +449,7 @@ mod filesystem {
                 .cloned())
         }
 
-        async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
+        async fn all_cached_metadata(&self) -> Vec<golem_common::model::component::ComponentDto> {
             self.index
                 .read()
                 .await
@@ -514,6 +515,7 @@ mod grpc {
     use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::account::AccountId;
+    use crate::services::plugins::PluginsService;
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
@@ -525,8 +527,7 @@ mod grpc {
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService>,
         component_client: GrpcClient<ComponentServiceClient<Channel>>,
-        plugin_observations: Arc<dyn PluginsObservations>,
-        project_service: Arc<dyn ProjectService>,
+        plugins_service: Arc<dyn PluginsService>,
     }
 
     impl ComponentServiceGrpc {
@@ -541,8 +542,7 @@ mod grpc {
             connect_timeout: Duration,
             compiled_component_service: Arc<dyn CompiledComponentService>,
             max_component_size: usize,
-            plugin_observations: Arc<dyn PluginsObservations>,
-            project_service: Arc<dyn ProjectService>,
+            plugins_service: Arc<dyn PluginsService>,
         ) -> Self {
             Self {
                 component_cache: create_component_cache(max_component_capacity, time_to_idle),
@@ -571,8 +571,7 @@ mod grpc {
                         connect_timeout,
                     },
                 ),
-                plugin_observations,
-                project_service,
+                plugins_service
             }
         }
 

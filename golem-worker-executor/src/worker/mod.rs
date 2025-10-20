@@ -631,7 +631,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// triggers a restart immediately.
     pub async fn enqueue_manual_update(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
         self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_version })
             .await

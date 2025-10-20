@@ -84,7 +84,6 @@ pub async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     plugins: Arc<dyn PluginsService>,
-    projects: Arc<dyn ProjectService>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentRevision,
     initial_oplog_index: OplogIndex,
@@ -115,7 +114,6 @@ pub async fn get_public_oplog_chunk(
             oplog_service.clone(),
             components.clone(),
             plugins.clone(),
-            projects.clone(),
             owned_worker_id,
             current_component_version,
         )
@@ -144,7 +142,6 @@ pub async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     plugin_service: Arc<dyn PluginsService>,
-    project_service: Arc<dyn ProjectService>,
     owned_worker_id: &OwnedWorkerId,
     initial_component_version: ComponentRevision,
     initial_oplog_index: OplogIndex,
@@ -163,7 +160,6 @@ pub async fn search_public_oplog(
             component_service.clone(),
             oplog_service.clone(),
             plugin_service.clone(),
-            project_service.clone(),
             owned_worker_id,
             current_component_version,
             current_index,
@@ -232,7 +228,6 @@ pub trait PublicOplogEntryOps: Sized {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         plugins: Arc<dyn PluginsService>,
-        projects: Arc<dyn ProjectService>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentRevision,
     ) -> Result<Self, String>;
@@ -246,7 +241,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         oplog_service: Arc<dyn OplogService>,
         components: Arc<dyn ComponentService>,
         plugins: Arc<dyn PluginsService>,
-        projects: Arc<dyn ProjectService>,
         owned_worker_id: &OwnedWorkerId,
         component_version: ComponentRevision,
     ) -> Result<Self, String> {

@@ -91,7 +91,7 @@ use golem_common::model::oplog::{
     TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::RetryConfig;
+use golem_common::model::{RetryConfig, TransactionId};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{ComponentFileSystemNode,
     ComponentFileSystemNodeDetails,
@@ -267,7 +267,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
-                project_service,
                 worker_config.created_by.clone(),
                 worker_config.initial_wasi_config_vars,
                 wasi_config_vars,
@@ -2177,7 +2176,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         _this: &T,
-        _project_id: &ProjectId,
+        _environment_id: &EnvironmentId,
         _last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
@@ -2633,7 +2632,6 @@ struct PrivateDurableWorkerState {
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
-    project_service: Arc<dyn ProjectService>,
     shard_service: Arc<dyn ShardService>,
 
     /// The initial config vars that the worker was configured with
@@ -3013,7 +3011,7 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    project_id: &ProjectId,
+    environment_id: &EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
@@ -3027,7 +3025,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(project_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3040,7 +3038,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
