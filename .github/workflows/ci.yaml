@@ -297,7 +297,7 @@ jobs:
         if: startsWith(matrix.group.name, 'cli-integration-tests')
       - name: Install cargo-component
         if: startsWith(matrix.group.name, 'cli-integration-tests')
-        run: cargo install cargo-component@0.21.1
+        run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-tools
         if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wasm-tools@1.227.1
@@ -366,8 +366,9 @@ jobs:
           fetch-depth: 1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install --force --locked cargo-component@0.21.1
+        run: cargo binstall --force cargo-component@0.21.1
       - uses: useblacksmith/rust-cache@v3
         with:
           prefix-key: v3-rust
