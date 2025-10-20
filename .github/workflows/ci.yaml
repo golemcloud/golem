@@ -210,7 +210,7 @@ jobs:
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-      - name: Restore binary archive
+#      - name: Restore binary archive
 #        uses: actions/download-artifact@v4
 #        with:
 #          name: all-bins-including-tests
