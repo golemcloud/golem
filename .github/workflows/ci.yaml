@@ -32,7 +32,7 @@ jobs:
         run: git fetch origin --deepen=1
 
       - name: Git describe
-        run: git describe --tags --match v*
+        run: git describe --tags --match 'v*'
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
