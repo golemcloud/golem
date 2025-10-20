@@ -18,7 +18,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
-use golem_wasm_rpc_derive::IntoValue;
+use golem_wasm_derive::IntoValue;
 use golem_common::model::environment::EnvironmentId;
 
 /// Interface for storing blobs in a persistent storage.

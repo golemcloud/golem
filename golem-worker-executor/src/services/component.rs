@@ -16,9 +16,7 @@ use super::golem_config::{
     ComponentCacheConfig, ComponentServiceConfig,
 };
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
-use super::plugins::PluginsObservations;
 use crate::metrics::component::record_compilation_time;
-use crate::services::projects::ProjectService;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -65,8 +63,6 @@ pub fn configured(
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
     blob_storage: Arc<dyn BlobStorage>,
-    plugin_observations: Arc<dyn PluginsObservations>,
-    project_service: Arc<dyn ProjectService>,
 ) -> Arc<dyn ComponentService> {
     let compiled_component_service = golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
     match config {
@@ -145,6 +141,7 @@ mod filesystem {
     use tracing::{debug, warn, Instrument};
     use wasmtime::component::Component;
     use wasmtime::Engine;
+    use golem_common::model::environment::EnvironmentId;
 
     pub struct ComponentServiceLocalFileSystem {
         root: PathBuf,
@@ -250,7 +247,7 @@ mod filesystem {
             &self,
             wasm_path: &Path,
             engine: &Engine,
-            project_id: &ProjectId,
+            environment_id: &EnvironmentId,
             component_id: &ComponentId,
             component_version: ComponentRevision,
         ) -> Result<Component, WorkerExecutorError> {
@@ -267,7 +264,7 @@ mod filesystem {
                 .get_or_insert_simple(&key.clone(), || {
                     Box::pin(async move {
                         let result = compiled_component_service
-                            .get(project_id, &component_id, component_version, &engine)
+                            .get(environment_id, &component_id, component_version, &engine)
                             .await;
 
                         let component = match result {
@@ -312,7 +309,7 @@ mod filesystem {
                                 );
 
                                 let result = compiled_component_service
-                                    .put(project_id, &component_id, component_version, &component)
+                                    .put(environment_id, &component_id, component_version, &component)
                                     .await;
 
                                 match result {
@@ -458,7 +455,7 @@ mod filesystem {
                 .metadata
                 .values()
                 .map(|local_metadata| {
-                    golem_service_base::model::Component::from(local_metadata.clone())
+                    golem_common::model::component::ComponentDto::from(local_metadata.clone())
                 })
                 .collect()
         }
@@ -488,8 +485,6 @@ mod grpc {
     use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
     use crate::metrics::component::record_compilation_time;
     use golem_service_base::service::compiled_component::CompiledComponentService;
-    use crate::services::plugins::PluginsObservations;
-    use crate::services::projects::ProjectService;
     use async_trait::async_trait;
     use futures::TryStreamExt;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;

@@ -25,7 +25,7 @@ use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActiva
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
-    HasProjectService, HasPromiseService, HasRunningWorkerEnumerationService,
+    HasPromiseService, HasRunningWorkerEnumerationService,
     HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
     UsesAllDeps,
 };

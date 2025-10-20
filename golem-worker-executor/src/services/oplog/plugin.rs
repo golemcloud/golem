@@ -17,7 +17,6 @@ use crate::model::ExecutionStatus;
 use crate::services::component::ComponentService;
 use crate::services::oplog::{CommitLevel, OpenOplogs, Oplog, OplogConstructor, OplogService};
 use crate::services::plugins::PluginsService;
-use crate::services::projects::ProjectService;
 use crate::services::shard::ShardService;
 use crate::services::worker_activator::WorkerActivator;
 use crate::services::{
@@ -35,7 +34,6 @@ use golem_common::model::{
     IdempotencyKey, OwnedWorkerId,
     ScanCursor, ShardId, WorkerId, WorkerMetadata,
 };
-use golem_common::model::environment::EnvironmentId;
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{IntoValue, Value};
@@ -50,6 +48,7 @@ use tracing::Instrument;
 use uuid::Uuid;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -72,11 +71,10 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     component_service: Arc<dyn ComponentService>,
     shard_service: Arc<dyn ShardService>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
-    plugins: Arc<dyn PluginsService>,
-    project_service: Arc<dyn ProjectService>,
+    plugins: Arc<dyn PluginsService>
 }
 
-type WorkerKey = (ProjectId, String, String);
+type WorkerKey = (EnvironmentId, String, String);
 
 #[derive(Debug, Clone)]
 struct RunningPlugin {
@@ -92,21 +90,19 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         shard_service: Arc<dyn ShardService>,
         worker_activator: Arc<dyn WorkerActivator<Ctx>>,
         plugins: Arc<dyn PluginsService>,
-        project_service: Arc<dyn ProjectService>,
     ) -> Self {
         Self {
             workers: Arc::new(RwLock::new(HashMap::new())),
             component_service,
             shard_service,
             worker_activator,
-            plugins,
-            project_service,
+            plugins
         }
     }
 
     async fn resolve_plugin_worker(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         component_version: ComponentRevision,
         plugin_installation_id: &PluginInstallationId,
@@ -461,8 +457,7 @@ pub struct ForwardingOplogService {
 
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn PluginsService>,
-    project_service: Arc<dyn ProjectService>,
+    plugins: Arc<dyn PluginsService>
 }
 
 impl ForwardingOplogService {

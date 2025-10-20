@@ -31,7 +31,6 @@ use crate::preview2::golem_api_1_x::host::ForkResult;
 use crate::services::component::ComponentService;
 use crate::services::oplog::OplogService;
 use crate::services::plugins::PluginsService;
-use crate::services::projects::ProjectService;
 use crate::services::rdbms::mysql::types as mysql_types;
 use crate::services::rdbms::mysql::MysqlType;
 use crate::services::rdbms::postgres::types as postgres_types;

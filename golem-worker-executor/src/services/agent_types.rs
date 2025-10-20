@@ -124,7 +124,6 @@ impl AgentTypesService for CachedAgentTypes {
 }
 
 mod grpc {
-    use crate::grpc::authorised_grpc_request;
     use crate::services::agent_types::AgentTypesService;
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::component::v1::agent_types_service_client::AgentTypesServiceClient;
@@ -142,6 +141,7 @@ mod grpc {
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
+    use golem_service_base::grpc::authorised_grpc_request;
 
     #[derive(Clone)]
     pub struct AgentTypesServiceGrpc {

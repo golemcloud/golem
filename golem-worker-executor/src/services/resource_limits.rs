@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::{is_grpc_retriable, GrpcError};
+use golem_service_base::grpc::{is_grpc_retriable, GrpcError};
 use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;

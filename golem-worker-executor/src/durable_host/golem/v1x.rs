@@ -28,7 +28,7 @@ use crate::preview2::{golem_api_1_x, Pollable};
 use crate::services::oplog::CommitLevel;
 use crate::services::promise::{PromiseHandle, PromiseService};
 use crate::services::worker::GetWorkerMetadataResult;
-use crate::services::{HasOplogService, HasPlugins, HasProjectService, HasWorker};
+use crate::services::{HasOplogService, HasPlugins, HasWorker};
 use crate::workerctx::{InvocationManagement, StatusManagement, WorkerCtx};
 use anyhow::anyhow;
 use async_trait::async_trait;
