@@ -52,11 +52,16 @@ jobs:
         timeout-minutes: 45
       - name: Packaging all binaries with cargo-nextest
         run: cargo nextest archive --archive-file target/golem-binaries.tar.zst
-      - uses: actions/upload-artifact@v4
+      - name: Save packaged binaries to cache
+        uses: actions/cache/save@v4
         with:
-          name: all-bins-including-tests
           path: target/golem-binaries.tar.zst
-          retention-days: 1
+          key: golem-binaries-{{ github.run_id }}
+#      - uses: actions/upload-artifact@v4 # TODO: try blacksmith cache instead or sticky disk
+#        with:
+#          name: all-bins-including-tests
+#          path: target/golem-binaries.tar.zst
+#          retention-days: 1
 
   check-clippy-and-format:
     env:
@@ -100,21 +105,20 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-      - name: Restore binary archive
-        uses: actions/download-artifact@v4
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: target/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
         with:
-          name: all-bins-including-tests
           path: target/golem-binaries.tar.zst
+          key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
         run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
@@ -143,21 +147,20 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-      - name: Restore binary archive
-        uses: actions/download-artifact@v4
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: target/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
         with:
-          name: all-bins-including-tests
           path: target/golem-binaries.tar.zst
+          key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
         run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
@@ -198,12 +201,6 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
@@ -214,10 +211,15 @@ jobs:
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
       - name: Restore binary archive
-        uses: actions/download-artifact@v4
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: target/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
         with:
-          name: all-bins-including-tests
           path: target/golem-binaries.tar.zst
+          key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
         run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
@@ -274,12 +276,6 @@ jobs:
         run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
@@ -301,11 +297,16 @@ jobs:
 
       - name: Install cargo-test-r
         run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-      - name: Restore binary archive
-        uses: actions/download-artifact@v4
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: target/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
         with:
-          name: all-bins-including-tests
           path: target/golem-binaries.tar.zst
+          key: golem-binaries-{{ github.run_id }}
       - name: Apply binary archive
         run: cargo test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
 
@@ -458,7 +459,6 @@ jobs:
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make --profile ci package-release
-
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
