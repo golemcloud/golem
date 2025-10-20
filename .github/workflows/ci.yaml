@@ -663,8 +663,9 @@ jobs:
 
   publish:
     needs:
-      - build
-      - unit-tests-and-checks
+      - checks
+      - check-clippy-and-format
+      - unit-tests
       - wasm-rpc-stub
       - worker-tests
       - it
