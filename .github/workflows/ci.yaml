@@ -28,7 +28,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --shallow-since="2 weeks"
+
       - name: Git describe
         run: git describe --tags --match v*
       - name: Setup Rust
@@ -353,7 +355,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
 
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -444,7 +447,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
 
       - name: Prepare
         run: |
@@ -492,7 +496,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
 
       - name: Prepare
         run: |
@@ -596,7 +601,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
 
       - name: Prepare
         run: |
@@ -693,7 +699,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
 
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
@@ -747,7 +754,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          fetch-tags: 'true'
+      - name: Fetch tag
+        run: git fetch origin --deepen=1
 
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
