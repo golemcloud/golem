@@ -22,7 +22,7 @@ jobs:
   build-and-store:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -55,7 +55,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
-        run: cargo nextest archive --archive-file target/golem-binaries.tar.zst
+        run: cargo nextest -v archive --archive-file target/golem-binaries.tar.zst
 
       - name: Dump archive
         run: tar --zstd  -tvf target/golem-binaries.tar.zst
@@ -72,7 +72,7 @@ jobs:
   check-clippy-and-format:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -96,7 +96,7 @@ jobs:
   checks:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
     steps:
       - name: Checkout
@@ -143,7 +143,7 @@ jobs:
   unit-tests:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
     steps:
       - name: Checkout
@@ -190,7 +190,7 @@ jobs:
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
     strategy:
       fail-fast: false
@@ -254,7 +254,7 @@ jobs:
   it:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
     strategy:
       fail-fast: false
