@@ -28,9 +28,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -72,7 +70,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -98,7 +95,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -138,7 +134,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -190,7 +185,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -263,7 +257,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -324,9 +317,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
+
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - name: Install cargo-component
@@ -416,9 +408,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
+
       - name: Prepare
         run: |
           platform=${{ matrix.platform.platform }}
@@ -465,9 +456,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
+
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -570,9 +560,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
+
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -668,9 +657,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
+
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -723,9 +711,8 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
+          fetch-tags: 'true'
+
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
       - uses: davidB/rust-cargo-make@v1
