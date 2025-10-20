@@ -73,8 +73,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: useblacksmith/rust-cache@v3
@@ -101,8 +99,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -143,8 +139,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -197,8 +191,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
@@ -272,8 +264,6 @@ jobs:
         with:
           fetch-depth: 1
           submodules: recursive
-      - name: Fetch tag
-        run: git fetch --depth=1 origin +refs/tags/*:refs/tags/*
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
       - uses: davidB/rust-cargo-make@v1
