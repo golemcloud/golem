@@ -135,6 +135,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
+          find target/nextest-archive
           find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/          
 
       - name: Purge v8 from cache
