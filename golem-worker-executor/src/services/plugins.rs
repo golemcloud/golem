@@ -15,7 +15,7 @@
 use super::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
+use golem_common::model::plugin_registration::{PluginRegistrationId};
 use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin, PluginPriority};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
@@ -24,19 +24,6 @@ use golem_service_base::model::plugin_registration::PluginRegistration;
 
 #[async_trait]
 pub trait PluginsService: Send + Sync {
-    // /// Observes a known plugin installation; as getting component metadata returns the active set
-    // /// of installed plugins in its result, it is an opportunity to cache this information and
-    // /// use it in further calls to `get`.
-    // ///
-    // /// Calling this method is completely optional and only serves performance improvement purposes.
-    // /// `get` must always work even if `observe_plugin_installation` was never called.
-    // async fn observe_plugin_installation(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     component_version: ComponentRevision,
-    //     plugin_priority: &i32,
-    // ) -> Result<(), WorkerExecutorError>;
-
     /// Gets a plugin installation and the plugin definition it refers to for a given plugin
     /// installation id belonging to a specific component version
     async fn get(
@@ -48,7 +35,7 @@ pub trait PluginsService: Send + Sync {
         let plugin_installation = self
             .get_plugin_installation(component_id, component_version, plugin_priority)
             .await?;
-        let plugin_definition = self.get_plugin_definition(&plugin_installation.plugin_id).await?;
+        let plugin_definition = self.get_plugin_definition(&plugin_installation.plugin_registration_id).await?;
         Ok((plugin_installation, plugin_definition))
     }
 
@@ -93,14 +80,14 @@ pub struct CachedPlugins<Inner: PluginsService> {
         (
             ComponentId,
             ComponentRevision,
-            i32,
+            PluginPriority,
         ),
         (),
         InstalledPlugin,
         WorkerExecutorError,
     >,
     cached_plugin_definitions:
-        Cache<PluginRegistrationId, (), PluginRegistrationDto, WorkerExecutorError>,
+        Cache<PluginRegistrationId, (), PluginRegistration, WorkerExecutorError>,
 }
 
 impl<Inner: PluginsService + Clone> Clone for CachedPlugins<Inner> {
@@ -158,7 +145,7 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
         &self,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: i32
+        plugin_priority: PluginPriority
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
         let key = (
             component_id.clone(),
@@ -220,7 +207,7 @@ impl PluginsService for PluginsUnavailable {
         &self,
         _component_id: &ComponentId,
         _component_version: ComponentRevision,
-        _plugin_priority: i32
+        _plugin_priority: PluginPriority
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
     }
@@ -254,7 +241,6 @@ mod grpc {
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
-    use golem_common::model::plugin_registration::PluginRegistrationDto;
     use golem_common::model::plugin_registration::PluginRegistrationId;
     use golem_service_base::model::plugin_registration::PluginRegistration;
 
@@ -306,22 +292,12 @@ mod grpc {
 
     #[async_trait]
     impl PluginsService for PluginsGrpc {
-        // async fn observe_plugin_installation(
-        //     &self,
-        //     _account_id: &AccountId,
-        //     _component_id: &ComponentId,
-        //     _component_version: ComponentRevision,
-        //     _plugin_installation: &PluginInstallation,
-        // ) -> Result<(), WorkerExecutorError> {
-        //     Ok(())
-        // }
-
         async fn get_plugin_installation(
             &self,
             component_id: &ComponentId,
             component_version: ComponentRevision,
             plugin_priority: PluginPriority
-        ) -> Result<PluginRegistration, WorkerExecutorError> {
+        ) -> Result<InstalledPlugin, WorkerExecutorError> {
             let response = self
                 .components_client
                 .call("get_installed_plugins", move |client| {
@@ -356,14 +332,7 @@ mod grpc {
 
             let mut result = None;
             for installation in installations {
-                self.observe_plugin_installation(
-                    component_id,
-                    component_version,
-                    &installation,
-                )
-                .await?;
-
-                if installation.priority == *plugin_priority {
+                if installation.priority == plugin_priority {
                     result = Some(installation);
                 }
             }

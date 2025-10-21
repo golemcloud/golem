@@ -101,7 +101,7 @@ impl ResourceLimitsGrpc {
         updates: HashMap<AccountId, i64>,
     ) -> Result<(), WorkerExecutorError> {
         let body = BatchUpdateResourceLimits {
-            updates: updates.into_iter().map(|(k, v)| (k.0, v)).collect(),
+            updates: updates.into_iter().map(|(k, v)| (k.0.to_string(), v)).collect(),
         };
         with_retries(
             "resource_limits",

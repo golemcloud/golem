@@ -149,6 +149,7 @@ mod filesystem {
     use wasmtime::Engine;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
 
     pub struct ComponentServiceLocalFileSystem {
         root: PathBuf,
@@ -445,6 +446,7 @@ mod filesystem {
             &self,
             component_reference: String,
             _resolving_environment: EnvironmentId,
+            _resolving_application: ApplicationId,
             _resolving_account: AccountId
         ) -> Result<Option<ComponentId>, WorkerExecutorError> {
             Ok(self
