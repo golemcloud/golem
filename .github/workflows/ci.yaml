@@ -14,6 +14,8 @@ concurrency:
 permissions:
   checks: write
   pull-requests: write
+  actions: read
+  contents: read
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
@@ -198,6 +200,8 @@ jobs:
           github-report: true
           pull-request: true
           update-comment: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   worker-tests:
     env:
@@ -266,6 +270,8 @@ jobs:
           github-report: true
           pull-request: true
           update-comment: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   it:
     env:
@@ -366,6 +372,8 @@ jobs:
           github-report: true
           pull-request: true
           update-comment: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
 #  cleanup:
 #    runs-on: blacksmith
