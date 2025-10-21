@@ -55,7 +55,9 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
-        run: cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+        run: |
+          mkdir -pv tmp
+          cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
         timeout-minutes: 5
 
       - name: Extract archive
