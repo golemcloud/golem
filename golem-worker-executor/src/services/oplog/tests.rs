@@ -12,6 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::compressed::CompressedOplogArchiveService;
+use crate::services::oplog::multilayer::OplogArchiveService;
+use crate::storage::indexed::memory::InMemoryIndexedStorage;
+use crate::storage::indexed::redis::RedisIndexedStorage;
+use crate::storage::indexed::IndexedStorage;
 use assert2::check;
 use golem_common::config::RedisConfig;
 use golem_common::model::account::AccountId;
@@ -21,6 +26,7 @@ use golem_common::model::regions::OplogRegion;
 use golem_common::model::WorkerStatusRecord;
 use golem_common::redis::RedisPool;
 use golem_common::tracing::{init_tracing, TracingConfig};
+use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use nonempty_collections::nev;
 use std::collections::HashSet;
 use std::sync::RwLock;
@@ -28,13 +34,6 @@ use std::time::Instant;
 use test_r::{test, test_dep};
 use tracing::{debug, info};
 use uuid::Uuid;
-
-use crate::services::oplog::compressed::CompressedOplogArchiveService;
-use crate::services::oplog::multilayer::OplogArchiveService;
-use crate::storage::indexed::memory::InMemoryIndexedStorage;
-use crate::storage::indexed::redis::RedisIndexedStorage;
-use crate::storage::indexed::IndexedStorage;
-use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 
 use super::*;
 

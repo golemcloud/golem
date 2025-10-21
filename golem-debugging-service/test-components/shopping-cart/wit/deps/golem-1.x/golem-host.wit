@@ -30,6 +30,11 @@ interface host {
       uuid: uuid,
     }
 
+    /// Represents a Golem project
+    record project-id {
+      uuid: uuid,
+    }
+
     /// Configures how the executor retries failures
     record retry-policy {
         /// The maximum number of retries before the agent becomes permanently failed
