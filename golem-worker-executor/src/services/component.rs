@@ -1058,6 +1058,10 @@ mod grpc {
                 Err("Unexpected number of \"/\"-delimited parts in component reference")?
             };
 
+            if parts.iter().any(|p| p.is_empty()) {
+                Err("Empty part in the component reference")?
+            };
+
             parts.reverse();
 
             Ok(ComponentSlug {
