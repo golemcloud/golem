@@ -29,6 +29,8 @@ use wasmtime::component::Component;
 use wasmtime::Engine;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
 use super::plugins::PluginsService;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::account::AccountId;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -51,7 +53,8 @@ pub trait ComponentService: Send + Sync {
     async fn resolve_component(
         &self,
         component_reference: String,
-        resolving_component: ComponentOwner,
+        resolving_environment: EnvironmentId,
+        resolving_account: AccountId
     ) -> Result<Option<ComponentId>, WorkerExecutorError>;
 
     /// Returns all the component metadata the implementation has cached.
@@ -143,6 +146,7 @@ mod filesystem {
     use wasmtime::component::Component;
     use wasmtime::Engine;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::account::AccountId;
 
     pub struct ComponentServiceLocalFileSystem {
         root: PathBuf,
@@ -438,7 +442,8 @@ mod filesystem {
         async fn resolve_component(
             &self,
             component_reference: String,
-            _resolving_component: ComponentOwner,
+            _resolving_environment: EnvironmentId,
+            _resolving_account: AccountId
         ) -> Result<Option<ComponentId>, WorkerExecutorError> {
             Ok(self
                 .index
@@ -516,6 +521,7 @@ mod grpc {
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::account::AccountId;
     use crate::services::plugins::PluginsService;
+    use golem_common::model::application::ApplicationId;
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
@@ -620,18 +626,8 @@ mod grpc {
                                 .expect("Didn't receive expected field result")
                             {
                                 get_components_response::Result::Success(payload) => {
-                                    let component_id = payload.components.first().map(|c| {
-                                        c.versioned_component_id
-                                            .expect(
-                                                "didn't receive expected versioned component id",
-                                            )
-                                            .component_id
-                                            .expect("didn't receive expected component id")
-                                    });
-                                    Ok(component_id.map(|c| {
-                                        ComponentId::try_from(c)
-                                            .expect("failed to convert component id")
-                                    }))
+                                    let component_id = payload.components.first().map(|c| c.component_id.unwrap().try_into().unwrap());
+                                    Ok(component_id)
                                 }
                                 get_components_response::Result::Error(err) => {
                                     Err(GrpcError::Domain(err))?
@@ -770,7 +766,7 @@ mod grpc {
                     let access_token = self.access_token;
                     let retry_config = self.retry_config.clone();
                     let component_id = component_id.clone();
-                    let plugin_observations = self.plugin_observations.clone();
+                    let plugins_service = self.plugins_service.clone();
                     self.component_metadata_cache
                         .get_or_insert_simple(
                             &ComponentKey {
@@ -787,20 +783,6 @@ mod grpc {
                                         forced_version,
                                     )
                                     .await?;
-                                    let account_id = self
-                                        .project_service
-                                        .get_project_owner(&metadata.environment_id)
-                                        .await?;
-                                    for installation in &metadata.installed_plugins {
-                                        plugin_observations
-                                            .observe_plugin_installation(
-                                                &account_id,
-                                                &component_id,
-                                                metadata.revision,
-                                                installation,
-                                            )
-                                            .await?;
-                                    }
                                     Ok(metadata)
                                 })
                             },
@@ -836,7 +818,9 @@ mod grpc {
         async fn resolve_component(
             &self,
             component_reference: String,
-            resolving_component: ComponentOwner,
+            resolving_environment: EnvironmentId,
+            resolving_application: ApplicationId,
+            resolving_account: AccountId
         ) -> Result<Option<ComponentId>, WorkerExecutorError> {
             let component_slug = ComponentSlug::parse(&component_reference).map_err(|e| {
                 WorkerExecutorError::invalid_request(format!("Invalid component reference: {e}"))
@@ -845,7 +829,7 @@ mod grpc {
             let account_id = component_slug
                 .account_id
                 .clone()
-                .unwrap_or(resolving_component.account_id);
+                .unwrap_or(resolving_account);
 
             let project_id = if let Some(project_name) = component_slug.project_name {
                 self.project_service
