@@ -479,7 +479,7 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
 script = '''
 cargo-test-r run --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-component-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-cargo-test-r run --package golem-service-base --test * -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
 '''
