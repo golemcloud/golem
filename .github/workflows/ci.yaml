@@ -46,7 +46,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci build-all-bins-including-tests
-        timeout-minutes: 45
+        timeout-minutes: 15
 
 #      - name: Mount binary store
 #        uses: useblacksmith/stickydisk@v1
@@ -55,12 +55,14 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
-        run: cargo nextest -v archive --archive-file target/golem-binaries.tar.zst --zstd-level -7 --profile dev-ci
+        run: cargo nextest -v archive --archive-file target/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+        timeout-minutes: 5
 
       - name: Extract archive
         run: |
           mkdir target/golem-binaries
           tar --zstd -xvf target/golem-binaries.tar.zst -C target/golem-binaries 
+        timeout-minutes: 2
 
 #      - name: Move archive to sticky disk
 #        run: mv target/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
@@ -128,10 +130,8 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-#        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
-        run: |
-          mkdir -pv target/nextest-archive
-          mv target/golem-binaries/* target/nextest-archive
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
+
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
@@ -178,10 +178,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-#        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
-        run: |
-          mkdir -pv target/nextest-archive
-          mv target/golem-binaries/* target/nextest-archive      
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -243,10 +240,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-#        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
-        run: |
-          mkdir -pv target/nextest-archive
-          mv target/golem-binaries/* target/nextest-archive
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -336,10 +330,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-#        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries.tar.zst
-        run: |
-          mkdir -pv target/nextest-archive
-          mv target/golem-binaries/* target/nextest-archive
+        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
 
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
