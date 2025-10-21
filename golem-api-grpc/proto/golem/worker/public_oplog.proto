@@ -70,7 +70,7 @@ message WrappedFunctionType {
 }
 
 message PluginInstallationDescription {
-  golem.common.PluginInstallationId installation_id = 1;
+  int32 plugin_priority = 1;
   string plugin_name = 2;
   string plugin_version = 3;
   map<string, string> parameters = 4;

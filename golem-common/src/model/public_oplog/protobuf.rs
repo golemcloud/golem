@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::ComponentRevision;
+use crate::model::component::{ComponentRevision, PluginPriority};
 use crate::model::invocation_context::{SpanId, TraceId};
 use crate::model::oplog::{LogLevel, OplogIndex, WorkerResourceId};
 use crate::model::public_oplog::{
@@ -66,7 +66,7 @@ impl From<PluginInstallationDescription>
 {
     fn from(plugin_installation_description: PluginInstallationDescription) -> Self {
         golem_api_grpc::proto::golem::worker::PluginInstallationDescription {
-            installation_id: Some(plugin_installation_description.installation_id.into()),
+            plugin_priority: plugin_installation_description.plugin_priority.0,
             plugin_name: plugin_installation_description.plugin_name,
             plugin_version: plugin_installation_description.plugin_version,
             parameters: HashMap::from_iter(plugin_installation_description.parameters),
@@ -84,10 +84,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::PluginInstallationDescription
         value: golem_api_grpc::proto::golem::worker::PluginInstallationDescription,
     ) -> Result<Self, Self::Error> {
         Ok(PluginInstallationDescription {
-            installation_id: value
-                .installation_id
-                .ok_or("Missing installation_id".to_string())?
-                .try_into()?,
+            plugin_priority: PluginPriority(value.plugin_priority),
             plugin_name: value.plugin_name,
             plugin_version: value.plugin_version,
             registered: value.registered,

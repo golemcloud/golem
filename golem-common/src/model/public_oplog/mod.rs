@@ -217,7 +217,7 @@ pub enum PublicWorkerInvocation {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationDescription {
-    pub installation_id: PluginPriority,
+    pub plugin_priority: PluginPriority,
     pub plugin_name: String,
     pub plugin_version: String,
     pub registered: bool,

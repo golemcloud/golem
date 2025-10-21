@@ -44,7 +44,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::account::AccountId;
 use golem_common::model::{RetryConfig};
-use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPriority, PluginPriority};
+use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPriority};
 use golem_common::model::{
     GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,

@@ -50,7 +50,7 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
-    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string, proto_plugin_installation_id_string, proto_promise_id_string, proto_worker_id_string
+    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string, proto_worker_id_string
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -1505,7 +1505,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if component_metadata
                 .installed_plugins
                 .iter()
-                .any(|installation| installation.id == plugin_installation_id)
+                .any(|installation| installation.priority == plugin_priority)
             {
                 let worker = Worker::get_or_create_suspended(
                     self,
