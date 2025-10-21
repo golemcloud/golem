@@ -52,9 +52,10 @@ pub struct LocalFileSystemComponentMetadata {
 impl From<LocalFileSystemComponentMetadata> for ComponentDto {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
-            environment_id: value.environment_id,
             id: value.component_id,
             revision: value.version,
+            account_id: value.account_id,
+            environment_id: value.environment_id,
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(

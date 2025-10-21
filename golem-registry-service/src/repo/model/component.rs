@@ -467,43 +467,42 @@ pub struct ComponentExtRevisionRecord {
     pub revision: ComponentRevisionRecord,
 }
 
-impl TryFrom<ComponentExtRevisionRecord> for Component {
-    type Error = RepoError;
-
-    fn try_from(value: ComponentExtRevisionRecord) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: ComponentId(value.revision.component_id),
-            revision: ComponentRevision(value.revision.revision_id as u64),
-            environment_id: EnvironmentId(value.environment_id),
-            component_name: ComponentName(value.name),
-            component_size: value.revision.size as u64,
-            metadata: value.revision.metadata.into(),
-            created_at: value.revision.audit.created_at.into(),
-            component_type: ComponentType::from_repr(value.revision.component_type)
+impl ComponentExtRevisionRecord {
+    pub fn try_into_model(self, account_id: AccountId) -> Result<Component, RepoError> {
+        Ok(Component {
+            id: ComponentId(self.revision.component_id),
+            revision: ComponentRevision(self.revision.revision_id as u64),
+            account_id,
+            environment_id: EnvironmentId(self.environment_id),
+            component_name: ComponentName(self.name),
+            component_size: self.revision.size as u64,
+            metadata: self.revision.metadata.into(),
+            created_at: self.revision.audit.created_at.into(),
+            component_type: ComponentType::from_repr(self.revision.component_type)
                 .ok_or(anyhow!("Failed converting component type"))?,
-            files: value
+            files: self
                 .revision
                 .files
                 .into_iter()
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
-            installed_plugins: value
+            installed_plugins: self
                 .revision
                 .plugins
                 .into_iter()
                 .map(|p| p.into())
                 .collect(),
-            env: value.revision.env.0,
-            object_store_key: value.revision.object_store_key,
-            wasm_hash: blake3::Hash::from(value.revision.binary_hash).into(),
-            original_files: value
+            env: self.revision.env.0,
+            object_store_key: self.revision.object_store_key,
+            wasm_hash: blake3::Hash::from(self.revision.binary_hash).into(),
+            original_files: self
                 .revision
                 .original_files
                 .into_iter()
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
-            original_env: value.revision.original_env.0,
-            transformed_object_store_key: value.revision.transformed_object_store_key,
+            original_env: self.revision.original_env.0,
+            transformed_object_store_key: self.revision.transformed_object_store_key,
         })
     }
 }

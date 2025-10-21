@@ -187,7 +187,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(environment.owner_account_id)?;
 
         account_usage.ack();
 
@@ -208,22 +208,18 @@ impl ComponentWriteService {
     ) -> Result<Component, ComponentError> {
         let new_wasm: Option<Arc<[u8]>> = new_wasm.map(Arc::from);
 
-        let component: Component = self
+        let component_record = self
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::NotFound)?
-            .try_into()?;
+            .ok_or(ComponentError::NotFound)?;
 
-        // Fast path. If the current revision does not match we will reject it later anyway
-        if component.revision != component_update.current_revision {
-            Err(ComponentError::InvalidCurrentRevision)?
-        };
+        let environment_id = EnvironmentId(component_record.environment_id.clone());
 
         let environment = self
             .environment_service
             .get_and_authorize(
-                &component.environment_id,
+                &environment_id,
                 EnvironmentAction::UpdateComponent,
                 auth,
             )
@@ -233,6 +229,13 @@ impl ComponentWriteService {
                 EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
                 other => other.into(),
             })?;
+
+        let component = component_record.try_into_model(environment.owner_account_id.clone())?;
+
+        // Fast path. If the current revision does not match we will reject it later anyway
+        if component.revision != component_update.current_revision {
+            Err(ComponentError::InvalidCurrentRevision)?
+        };
 
         let environment_id = component.environment_id.clone();
         let component_id = component.id.clone();
@@ -316,7 +319,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(environment.owner_account_id)?;
 
         if let Some(mut account_usage) = account_usage {
             account_usage.ack();

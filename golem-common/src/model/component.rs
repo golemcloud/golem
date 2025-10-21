@@ -33,6 +33,7 @@ use strum_macros::FromRepr;
 use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
 use golem_wasm_derive::IntoValue;
+use crate::model::account::AccountId;
 
 newtype_uuid!(
     ComponentId,
@@ -122,6 +123,7 @@ declare_structs! {
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
+        pub account_id: AccountId,
         pub environment_id: EnvironmentId,
         pub component_name: ComponentName,
         pub component_size: u64,

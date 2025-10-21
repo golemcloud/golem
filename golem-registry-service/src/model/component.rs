@@ -25,6 +25,7 @@ use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
+use golem_common::model::account::AccountId;
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {
@@ -129,6 +130,7 @@ pub struct FinalizedComponentRevision {
 pub struct Component {
     pub id: ComponentId,
     pub revision: ComponentRevision,
+    pub account_id: AccountId,
     pub environment_id: EnvironmentId,
     pub component_name: ComponentName,
     pub component_size: u64,
@@ -174,6 +176,7 @@ impl From<Component> for golem_common::model::component::ComponentDto {
         Self {
             id: value.id,
             revision: value.revision,
+            account_id: value.account_id,
             environment_id: value.environment_id,
             component_name: value.component_name,
             component_size: value.component_size,
