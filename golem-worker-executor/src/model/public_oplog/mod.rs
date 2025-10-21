@@ -70,7 +70,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
-use golem_common::model::component::{ComponentId, ComponentRevision, PluginInstallation};
+use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_service_base::model::plugin_registration::PluginRegistration;
 
 pub struct PublicOplogChunk {
@@ -1896,13 +1896,12 @@ fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
 
 fn make_plugin_installation_description(
     registration: PluginRegistration,
-    installation: PluginInstallation
+    installation: InstalledPlugin
 ) -> PluginInstallationDescription {
     PluginInstallationDescription {
         plugin_priority: installation.priority,
         plugin_name: registration.name,
         plugin_version: registration.version,
-        plugin_registration_id: registration.id,
         registered: !registration.deleted,
         parameters: installation.parameters
     }

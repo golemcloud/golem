@@ -822,8 +822,8 @@ mod grpc {
             &self,
             component_reference: String,
             resolving_environment: EnvironmentId,
-            resolving_application: ApplicationId,
-            resolving_account: AccountId
+            _resolving_application: ApplicationId,
+            _resolving_account: AccountId
         ) -> Result<Option<ComponentId>, WorkerExecutorError> {
             let component_slug = ComponentSlug::parse(&component_reference).map_err(|e| {
                 WorkerExecutorError::invalid_request(format!("Invalid component reference: {e}"))

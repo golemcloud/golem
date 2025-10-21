@@ -162,6 +162,7 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                             .ok_or(anyhow!("no blob_storage_key field"))?,
                     ),
                 }),
+                deleted: value.audit.deleted_at.is_some()
             }),
             LIBRARY_PLUGIN_TYPE => Ok(Self {
                 id: PluginRegistrationId(value.plugin_id),
@@ -178,6 +179,7 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                             .ok_or(anyhow!("no blob_storage_key field"))?,
                     ),
                 }),
+                deleted: value.audit.deleted_at.is_some()
             }),
             COMPONENT_TRANSFORMER_PLUGIN_TYPE => Ok(Self {
                 id: PluginRegistrationId(value.plugin_id),
@@ -195,6 +197,7 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                         .transform_url
                         .ok_or(anyhow!("no transform_url field"))?,
                 }),
+                deleted: value.audit.deleted_at.is_some()
             }),
             OPLOG_PROCESSOR_PLUGIN_TYPE => Ok(Self {
                 id: PluginRegistrationId(value.plugin_id),
@@ -213,6 +216,7 @@ impl TryFrom<PluginRecord> for PluginRegistration {
                         .ok_or(anyhow!("no component_revision field"))?
                         .into(),
                 }),
+                deleted: value.audit.deleted_at.is_some()
             }),
             other => Err(anyhow!("Unknown plugin type {other}"))?,
         }
