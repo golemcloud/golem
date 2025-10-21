@@ -106,6 +106,7 @@ jobs:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
     needs: build-and-store
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -219,7 +220,7 @@ jobs:
 
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 40
+        timeout-minutes: 10
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()
@@ -317,7 +318,7 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 45
+        timeout-minutes: 15
       - name: Publish Test Report
         uses: ctrf-io/github-test-reporter@v1
         if: always()
