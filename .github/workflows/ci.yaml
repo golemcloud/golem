@@ -161,7 +161,6 @@ jobs:
           slowest-report: true
           github-report: true
           pull-request-report: true
-          update-comment: true
           flaky-report: true
           collapse-large-reports: true
         env:
@@ -232,7 +231,6 @@ jobs:
           slowest-report: true
           github-report: true
           pull-request-report: true
-          update-comment: true
           flaky-report: true
           collapse-large-reports: true
         env:
@@ -331,7 +329,6 @@ jobs:
           slowest-report: true
           github-report: true
           pull-request-report: true
-          update-comment: true
           flaky-report: true
           collapse-large-reports: true
         env:
