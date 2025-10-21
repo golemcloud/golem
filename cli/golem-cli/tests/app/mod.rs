@@ -286,7 +286,9 @@ impl TestContext {
             data_dir: TempDir::new().unwrap(),
             working_dir,
             server_process: None,
-            env: HashMap::new(),
+            env: HashMap::from_iter(vec![
+                ("GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(), "true".to_string())
+            ]),
         };
 
         info!(ctx = ?ctx ,"Created test context");

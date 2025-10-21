@@ -198,7 +198,7 @@ jobs:
           failed-report: true
           slowest-report: true
           github-report: true
-          pull-request: true
+          pull-request-report: true
           update-comment: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -268,7 +268,7 @@ jobs:
           failed-report: true
           slowest-report: true
           github-report: true
-          pull-request: true
+          pull-request-report: true
           update-comment: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -370,7 +370,7 @@ jobs:
           failed-report: true
           slowest-report: true
           github-report: true
-          pull-request: true
+          pull-request-report: true
           update-comment: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -733,8 +733,8 @@ jobs:
       - it
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -772,9 +772,9 @@ jobs:
           - golem
         cfg:
           - rust-target: x86_64-unknown-linux-gnu
-            os: blacksmith-16vcpu-ubuntu-2204
+            os: blacksmith-32vcpu-ubuntu-2204
           - rust-target: aarch64-unknown-linux-gnu
-            os: blacksmith-16vcpu-ubuntu-2204
+            os: blacksmith-32vcpu-ubuntu-2204
             cross: true
           - rust-target: x86_64-apple-darwin
             os: macos-latest

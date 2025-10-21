@@ -56,9 +56,9 @@ use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig, CompiledComponentServiceConfig,
     CompiledComponentServiceEnabledConfig, ComponentServiceConfig, ComponentServiceLocalConfig,
-    GolemConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig,
-    MemoryConfig, ProjectServiceConfig, ProjectServiceDisabledConfig, ShardManagerServiceConfig,
-    ShardManagerServiceSingleShardConfig,
+    EngineConfig, GolemConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
+    KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig, ProjectServiceDisabledConfig,
+    ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
@@ -308,6 +308,9 @@ pub async fn start_customized(
             project_name: admin_project_name,
         }),
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
+        engine: EngineConfig {
+            enable_fs_cache: true,
+        },
         ..Default::default()
     };
     if let Some(retry) = retry_override {
