@@ -593,7 +593,7 @@ impl ComponentPluginInstallationRecord {
         Self {
             component_id,
             revision_id: 0,
-            plugin_id: plugin_installation.plugin_id.0,
+            plugin_id: plugin_installation.plugin_registration_id.0,
             plugin_name: "".to_string(),
             plugin_version: "".to_string(),
             audit: RevisionAuditFields::new(actor.0),
@@ -611,7 +611,7 @@ impl ComponentPluginInstallationRecord {
 impl From<ComponentPluginInstallationRecord> for InstalledPlugin {
     fn from(value: ComponentPluginInstallationRecord) -> Self {
         Self {
-            plugin_id: PluginRegistrationId(value.plugin_id),
+            plugin_registration_id: PluginRegistrationId(value.plugin_id),
             priority: PluginPriority(value.priority),
             parameters: value.parameters.0,
         }

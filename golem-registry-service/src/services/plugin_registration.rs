@@ -181,7 +181,7 @@ impl PluginRegistrationService {
         plugin_id: &PluginRegistrationId,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
-        let plugin = self.get_plugin(plugin_id, auth).await?;
+        let plugin = self.get_plugin(plugin_id, false, auth).await?;
 
         auth.authorize_account_action(&plugin.account_id, AccountAction::DeletePlugin)?;
 
@@ -200,11 +200,12 @@ impl PluginRegistrationService {
     pub async fn get_plugin(
         &self,
         plugin_id: &PluginRegistrationId,
+        include_deleted: bool,
         auth: &AuthCtx,
     ) -> Result<PluginRegistration, PluginRegistrationError> {
         let plugin: PluginRegistration = self
             .plugin_repo
-            .get_by_id(&plugin_id.0)
+            .get_by_id(&plugin_id.0, include_deleted)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
                 plugin_id.clone(),

@@ -104,7 +104,7 @@ impl EnvironmentPluginGrantService {
         // check plugin is accessible
         let _plugin_registration = self
             .plugin_registration_service
-            .get_plugin(&data.plugin_id, auth)
+            .get_plugin(&data.plugin_registration_id, false, auth)
             .await
             .map_err(|err| match err {
                 PluginRegistrationError::PluginRegistrationNotFound(plugin_registration_id) => {
@@ -122,7 +122,7 @@ impl EnvironmentPluginGrantService {
         let grant = EnvironmentPluginGrant {
             id: EnvironmentPluginGrantId::new_v4(),
             environment_id,
-            plugin_registration_id: data.plugin_id,
+            plugin_registration_id: data.plugin_registration_id,
         };
 
         let record = EnvironmentPluginGrantRecord::from_model(

@@ -621,7 +621,7 @@ impl ComponentWriteService {
         for installation in installed_plugins {
             let plugin = self
                 .plugin_registration_service
-                .get_plugin(&installation.plugin_registration_id, &auth)
+                .get_plugin(&installation.plugin_registration_id, true, &auth)
                 .await?;
 
             match plugin.spec {
@@ -646,7 +646,7 @@ impl ComponentWriteService {
                 PluginSpec::Library(spec) => {
                     let span = info_span!("library plugin",
                         component_id = %component.component_id,
-                        plugin_id = %installation.plugin_id,
+                        plugin_registration_id = %installation.plugin_registration_id,
                         plugin_priority = %installation.priority,
                     );
                     data = self
@@ -662,7 +662,7 @@ impl ComponentWriteService {
                 PluginSpec::App(spec) => {
                     let span = info_span!("app plugin",
                         component_id = %component.component_id,
-                        plugin_id = %installation.plugin_id,
+                        plugin_registration_id = %installation.plugin_registration_id,
                         plugin_priority = %installation.priority,
                     );
                     data = self

@@ -77,7 +77,7 @@ impl PluginRegistrationsApi {
     ) -> ApiResult<Json<PluginRegistrationDto>> {
         let plugin_registration = self
             .plugin_registration_service
-            .get_plugin(&plugin_id, &auth)
+            .get_plugin(&plugin_id, false, &auth)
             .await?;
         Ok(Json(plugin_registration.into()))
     }
