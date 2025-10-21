@@ -29,6 +29,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use anyhow::anyhow;
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.
@@ -346,7 +347,7 @@ impl BlobOplogArchive {
         &self,
         beginning_of_range: OplogIndex,
         end_of_range: OplogIndex,
-    ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, String> {
+    ) -> anyhow::Result<Option<Vec<(OplogIndex, OplogEntry)>>> {
         let entries = self.entries.read().await;
         // Find the first chunk whose last index is >= end_of_range
         let last_idx = entries.keys().find(|k| **k >= end_of_range);
@@ -362,14 +363,14 @@ impl BlobOplogArchive {
             .with("blob_oplog", "read")
             .get(
                 BlobStorageNamespace::CompressedOplog {
-                    project_id: self.owned_worker_id.project_id(),
+                    environment_id: self.owned_worker_id.environment_id(),
                     component_id: self.owned_worker_id.component_id(),
                     level: self.level,
                 },
                 &self.oplog_index_to_path(*last_idx),
             )
             .await?
-            .ok_or_else(|| format!("compressed chunk for {last_idx} not found"))?;
+            .ok_or_else(|| anyhow!("compressed chunk for {last_idx} not found"))?;
 
         let entries = chunk.decompress()?;
         let mut cache = self.cache.write().await;
@@ -469,7 +470,7 @@ impl OplogArchive for BlobOplogArchive {
                 .with("blob_oplog", "append")
                 .put(
                     BlobStorageNamespace::CompressedOplog {
-                        project_id: self.owned_worker_id.project_id(),
+                        environment_id: self.owned_worker_id.environment_id(),
                         component_id: self.owned_worker_id.component_id(),
                         level: self.level,
                     },

@@ -50,6 +50,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision, PluginPrior
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::{OplogProcessorPluginSpec};
 use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
+use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -79,6 +80,7 @@ type WorkerKey = (EnvironmentId, String, String);
 
 #[derive(Debug, Clone)]
 struct RunningPlugin {
+    pub account_id: AccountId,
     pub owned_worker_id: OwnedWorkerId,
     pub configuration: BTreeMap<String, String>,
     pub component_version: ComponentRevision,

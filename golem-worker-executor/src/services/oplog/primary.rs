@@ -148,7 +148,8 @@ impl PrimaryOplogService {
                         },
                         Path::new(&format!("{}/{}", hex::encode(md5_hash), payload_id.0)),
                     )
-                    .await?
+                    .await
+                    .map_err(|e| format!("Failed downloading oplog data from the blob store {e}"))?
                     .ok_or(format!("Payload not found (worker: {owned_worker_id}, payload_id: {payload_id}, md5 hash: {md5_hash:02X?})"))
             }
         }
