@@ -55,22 +55,22 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Packaging all binaries with cargo-nextest
-        run: cargo nextest -v archive --archive-file target/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+        run: cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
         timeout-minutes: 5
 
       - name: Extract archive
         run: |
-          mkdir target/golem-binaries
-          tar --zstd -xvf target/golem-binaries.tar.zst -C target/golem-binaries 
+          mkdir tmp/golem-binaries
+          tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
         timeout-minutes: 2
 
 #      - name: Move archive to sticky disk
-#        run: mv target/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
+#        run: mv tmp/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
 
       - name: Save packaged binaries to cache
         uses: actions/cache/save@v4
         with:
-          path: target/golem-binaries
+          path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
 
   check-clippy-and-format:
@@ -117,11 +117,11 @@ jobs:
 #        uses: actions/download-artifact@v4
 #        with:
 #          name: all-bins-including-tests
-#          path: target/golem-binaries.tar.zst
+#          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
-          path: target/golem-binaries
+          path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
 #      - name: Mount binary store
 #        uses: useblacksmith/stickydisk@v1
@@ -130,7 +130,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
 
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
@@ -166,11 +166,11 @@ jobs:
 #        uses: actions/download-artifact@v4
 #        with:
 #          name: all-bins-including-tests
-#          path: target/golem-binaries.tar.zst
+#          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
-          path: target/golem-binaries
+          path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
 #      - name: Mount binary store
 #        uses: useblacksmith/stickydisk@v1
@@ -179,7 +179,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -228,11 +228,11 @@ jobs:
 #        uses: actions/download-artifact@v4
 #        with:
 #          name: all-bins-including-tests
-#          path: target/golem-binaries.tar.zst
+#          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
-          path: target/golem-binaries
+          path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
 #      - name: Mount binary store
 #        uses: useblacksmith/stickydisk@v1
@@ -241,7 +241,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -318,11 +318,11 @@ jobs:
 #        uses: actions/download-artifact@v4
 #        with:
 #          name: all-bins-including-tests
-#          path: target/golem-binaries.tar.zst
+#          path: tmp/golem-binaries.tar.zst
       - name: Restore packaged binaries to cache
         uses: actions/cache/restore@v4
         with:
-          path: target/golem-binaries
+          path: tmp/golem-binaries
           key: golem-binaries-${{ github.run_id }}
 #      - name: Mount binary store
 #        uses: useblacksmith/stickydisk@v1
@@ -331,7 +331,7 @@ jobs:
 #          path: ~/golem-binaries-cache
 
       - name: Apply binary archive
-        run: cargo-test-r reuse-nextest-archive --archive-file target/golem-binaries
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
 
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
