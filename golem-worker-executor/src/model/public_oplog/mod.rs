@@ -64,11 +64,11 @@ use golem_common::model::{
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
-use golem_wasm_ast::analysis::analysed_type::{
+use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
 };
-use golem_wasm_ast::analysis::{AnalysedFunctionParameter, AnalysedType};
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
+use golem_wasm::analysis::{AnalysedFunctionParameter, AnalysedType};
+use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType, WitValue};
 use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -350,7 +350,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let payload_bytes = oplog_service
                     .download_payload(owned_worker_id, &request)
                     .await?;
-                let proto_params: Vec<golem_wasm_rpc::protobuf::Val> =
+                let proto_params: Vec<golem_wasm::protobuf::Val> =
                     core_try_deserialize(&payload_bytes)?.unwrap_or_default();
                 let params = proto_params
                     .into_iter()

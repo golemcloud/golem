@@ -638,7 +638,7 @@ mod desugar_tests {
     use crate::{
         ComponentDependency, ComponentDependencyKey, Expr, RibCompiler, RibCompilerConfig,
     };
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedType, TypeU32, TypeU64,
     };
     use std::ops::Deref;

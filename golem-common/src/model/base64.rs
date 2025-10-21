@@ -18,17 +18,12 @@ use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::{BorrowDecode, Decode, Encode};
-#[cfg(feature = "poem")]
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef};
-#[cfg(feature = "poem")]
 use poem_openapi::types::ToJSON;
-#[cfg(feature = "poem")]
 use poem_openapi::types::{ParseError, ParseFromJSON, ParseFromParameter, ParseResult, Type};
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-#[cfg(feature = "poem")]
 use serde_json::Value;
-#[cfg(feature = "poem")]
 use std::borrow::Cow;
 use std::ops::{Deref, DerefMut};
 
@@ -50,7 +45,6 @@ impl DerefMut for Base64 {
     }
 }
 
-#[cfg(feature = "poem")]
 impl Type for Base64 {
     const IS_REQUIRED: bool = true;
 
@@ -81,7 +75,6 @@ impl Type for Base64 {
     }
 }
 
-#[cfg(feature = "poem")]
 impl ParseFromJSON for Base64 {
     fn parse_from_json(value: Option<Value>) -> ParseResult<Self> {
         let value = value.unwrap_or_default();
@@ -93,14 +86,12 @@ impl ParseFromJSON for Base64 {
     }
 }
 
-#[cfg(feature = "poem")]
 impl ParseFromParameter for Base64 {
     fn parse_from_parameter(value: &str) -> ParseResult<Self> {
         Ok(Self(STANDARD.decode(value)?))
     }
 }
 
-#[cfg(feature = "poem")]
 impl ToJSON for Base64 {
     fn to_json(&self) -> Option<Value> {
         let b64 = STANDARD.encode(&self.0);

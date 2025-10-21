@@ -23,9 +23,10 @@ use bincode::{Decode, Encode};
 use range_set_blaze::RangeSetBlaze;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Eq, PartialEq, Encode, Decode, Serialize, Deserialize)]
-#[cfg_attr(feature = "poem", derive(poem_openapi::Object))]
-#[cfg_attr(feature = "poem", oai(rename_all = "camelCase"))]
+#[derive(
+    Clone, Debug, Eq, PartialEq, Encode, Decode, Serialize, Deserialize, poem_openapi::Object,
+)]
+#[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct OplogRegion {
     pub start: OplogIndex,
@@ -250,7 +251,6 @@ impl Display for DeletedRegions {
     }
 }
 
-#[cfg(feature = "protobuf")]
 pub mod protobuf {
     use crate::model::regions::OplogRegion;
     use crate::model::OplogIndex;

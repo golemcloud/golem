@@ -65,8 +65,8 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
-use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::protobuf::Val;
+use golem_wasm::ValueAndType;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -725,7 +725,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Option<Val>, WorkerExecutorError> {
         let result = self.invoke_and_await_worker_internal_typed(request).await?;
         let value = result
-            .map(golem_wasm_rpc::Value::try_from)
+            .map(golem_wasm::Value::try_from)
             .transpose()
             .map_err(|e| WorkerExecutorError::unknown(e.to_string()))?
             .map(|value| value.into());

@@ -17,57 +17,23 @@ use std::convert::Infallible;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-#[cfg(feature = "base-model")]
 pub mod base_model;
-
-#[cfg(feature = "tokio")]
 pub mod cache;
-
-#[cfg(feature = "protobuf")]
 pub mod client;
-
-#[cfg(feature = "config")]
 pub mod config;
-
-#[cfg(feature = "protobuf")]
 pub mod grpc;
-
-#[cfg(feature = "poem")]
 pub mod json_yaml;
-
-#[cfg(feature = "observability")]
 pub mod metrics;
-
-#[cfg(feature = "model")]
 pub mod model;
-
-#[cfg(any(feature = "model", feature = "base-model"))]
 pub mod newtype;
-
-#[cfg(feature = "tokio")]
 pub mod one_shot;
-
-#[cfg(feature = "redis")]
-pub mod redis;
-
-#[cfg(feature = "sql")]
-pub mod repo;
-
-#[cfg(feature = "tokio")]
-pub mod retriable_error;
-
-#[cfg(feature = "tokio")]
-pub mod retries;
-
-#[cfg(feature = "serialization")]
-pub mod serialization;
-
 pub mod read_only_lock;
-
-#[cfg(feature = "observability")]
+pub mod redis;
+pub mod repo;
+pub mod retriable_error;
+pub mod retries;
+pub mod serialization;
 pub mod tracing;
-
-#[cfg(feature = "model")]
 pub mod virtual_exports;
 
 #[cfg(test)]

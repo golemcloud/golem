@@ -24,7 +24,6 @@ pub trait IsRetriableError {
     fn as_loggable(&self) -> Option<String>;
 }
 
-#[cfg(feature = "protobuf")]
 impl IsRetriableError for tonic::Status {
     fn is_retriable(&self) -> bool {
         use tonic::Code;

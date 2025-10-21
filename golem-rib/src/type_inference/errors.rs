@@ -15,7 +15,7 @@
 use crate::rib_source_span::SourceSpan;
 use crate::type_inference::type_hint::{GetTypeHint, TypeHint};
 use crate::{InferredType, Path, PathElem};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::AnalysedType;
 
 #[derive(Debug, Clone)]
 pub struct AmbiguousTypeError {

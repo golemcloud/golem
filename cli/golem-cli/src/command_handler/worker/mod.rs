@@ -62,9 +62,9 @@ use golem_client::model::{InvokeResult, PublicOplogEntry, ScanCursor, UpdateReco
 use golem_common::model::agent::AgentId;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WasiConfigVars;
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::json::OptionallyValueAndTypeJson;
-use golem_wasm_rpc::{parse_value_and_type, ValueAndType};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::json::OptionallyValueAndTypeJson;
+use golem_wasm::{parse_value_and_type, ValueAndType};
 use inquire::Confirm;
 use itertools::{EitherOrBoth, Itertools};
 use rib::ParsedFunctionSite;

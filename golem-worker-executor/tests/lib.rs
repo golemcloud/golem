@@ -30,7 +30,7 @@ use golem_test_framework::components::worker_executor::provided::ProvidedWorkerE
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
+use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -52,7 +52,6 @@ pub mod http;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
-pub mod measure_test_component_mem;
 pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;

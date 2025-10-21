@@ -20,8 +20,8 @@ use crate::model::agent::{
     NamedElementValue, NamedElementValues, RegisteredAgentType, TextDescriptor, TextReference,
     TextSource, TextType, Url,
 };
-use golem_wasm_ast::analysis::AnalysedType;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::analysis::AnalysedType;
+use golem_wasm::{Value, ValueAndType};
 
 impl From<super::bindings::golem::agent::common::AgentConstructor> for AgentConstructor {
     fn from(value: crate::model::agent::bindings::golem::agent::common::AgentConstructor) -> Self {

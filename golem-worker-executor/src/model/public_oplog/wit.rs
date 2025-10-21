@@ -31,7 +31,7 @@ use golem_common::model::public_oplog::{
     WriteRemoteBatchedParameters, WriteRemoteTransactionParameters,
 };
 use golem_common::model::Timestamp;
-use golem_wasm_rpc::WitValue;
+use golem_wasm::WitValue;
 
 impl From<PublicOplogEntry> for oplog::OplogEntry {
     fn from(value: PublicOplogEntry) -> Self {
