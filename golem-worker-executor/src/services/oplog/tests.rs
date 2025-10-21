@@ -16,12 +16,10 @@ use std::collections::HashSet;
 use std::sync::RwLock;
 use std::time::Instant;
 use test_r::{test, test_dep};
-
 use assert2::check;
 use nonempty_collections::nev;
 use tracing::{debug, info};
 use uuid::Uuid;
-
 use golem_common::config::RedisConfig;
 use golem_common::model::oplog::{LogLevel, SpanData, WorkerError};
 use golem_common::model::regions::OplogRegion;
@@ -274,13 +272,13 @@ pub fn rounded(entry: OplogEntry) -> OplogEntry {
         OplogEntry::Restart { timestamp } => OplogEntry::Restart {
             timestamp: rounded_ts(timestamp),
         },
-        OplogEntry::ActivatePlugin { timestamp, plugin } => OplogEntry::ActivatePlugin {
+        OplogEntry::ActivatePlugin { timestamp, plugin_priority } => OplogEntry::ActivatePlugin {
             timestamp: rounded_ts(timestamp),
-            plugin,
+            plugin_priority,
         },
-        OplogEntry::DeactivatePlugin { timestamp, plugin } => OplogEntry::DeactivatePlugin {
+        OplogEntry::DeactivatePlugin { timestamp, plugin_priority } => OplogEntry::DeactivatePlugin {
             timestamp: rounded_ts(timestamp),
-            plugin,
+            plugin_priority,
         },
         OplogEntry::Revert {
             timestamp,
@@ -402,14 +400,8 @@ async fn open_add_and_read_back(_tracing: &Tracing) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -475,14 +467,8 @@ async fn open_add_and_read_back_ephemeral(_tracing: &Tracing) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Ephemeral),
         )
         .await;
@@ -535,14 +521,8 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -578,7 +558,7 @@ async fn entries_with_small_payload(_tracing: &Tracing) {
     );
 
     let desc = oplog
-        .create_snapshot_based_update_description(11, &[1, 2, 3])
+        .create_snapshot_based_update_description(ComponentRevision(11), &[1, 2, 3])
         .await
         .unwrap();
     let entry4 = rounded(OplogEntry::PendingUpdate {
@@ -656,14 +636,8 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -704,7 +678,7 @@ async fn entries_with_large_payload(_tracing: &Tracing) {
     );
 
     let desc = oplog
-        .create_snapshot_based_update_description(11, &large_payload4)
+        .create_snapshot_based_update_description(ComponentRevision(11), &large_payload4)
         .await
         .unwrap();
     let entry4 = rounded(OplogEntry::PendingUpdate {
@@ -852,14 +826,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -887,14 +855,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
             .open(
                 &owned_worker_id,
                 primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -920,14 +882,8 @@ async fn multilayer_transfers_entries_after_limit_reached(
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1002,14 +958,8 @@ async fn read_from_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -1037,14 +987,8 @@ async fn read_from_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1118,7 +1062,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
             component_id: ComponentId(Uuid::new_v4()),
             worker_name: "test".to_string(),
         },
-        component_version: 1,
+        component_version: ComponentRevision(1),
         args: vec![],
         env: vec![],
         wasi_config_vars: BTreeMap::new(),
@@ -1134,14 +1078,8 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
         .create(
             &owned_worker_id,
             create_entry.clone(),
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -1295,14 +1233,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1323,14 +1255,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1350,14 +1276,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1388,14 +1308,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1416,14 +1330,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1443,14 +1351,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await
@@ -1571,14 +1473,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;
@@ -1616,14 +1512,8 @@ async fn empty_layer_gets_deleted_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1709,14 +1599,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await;
@@ -1738,14 +1622,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1774,14 +1652,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
             .open(
                 &owned_worker_id,
                 last_oplog_index,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await;
@@ -1796,14 +1668,8 @@ async fn scheduled_archive_impl(use_blob: bool) {
         .open(
             &owned_worker_id,
             primary_oplog_service.get_last_index(&owned_worker_id).await,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await
@@ -1860,7 +1726,7 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
         };
         let create_entry = OplogEntry::create(
             worker_id.clone(),
-            1,
+            ComponentRevision(1),
             Vec::new(),
             Vec::new(),
             BTreeMap::new(),
@@ -1877,14 +1743,8 @@ async fn multilayer_scan_for_component(_tracing: &Tracing) {
             .create(
                 &owned_worker_id,
                 create_entry,
-<<<<<<< HEAD
                 WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-                WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
                 default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
                 default_execution_status(ComponentType::Durable),
             )
             .await;
