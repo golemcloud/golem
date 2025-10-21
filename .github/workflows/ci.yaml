@@ -101,7 +101,7 @@ jobs:
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
 
-  checks:
+  unit-tests-and-checks:
     env:
       CARGO_BUILD_JOBS: 10
     runs-on: blacksmith-8vcpu-ubuntu-2204
@@ -144,49 +144,10 @@ jobs:
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
-
       - name: Check openapi is up to date
         run: cargo make --profile ci check-openapi
       - name: Check configs are up to date
         run: cargo make --profile ci check-configs
-
-  unit-tests:
-    env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-8vcpu-ubuntu-2204
-    needs: build-and-store
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 1
-      - name: Setup Rust
-        run: rustup update stable --no-self-update && rustup default stable
-      - uses: davidB/rust-cargo-make@v1
-
-      - name: Install cargo-test-r
-        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
-#      - name: Restore binary archive
-#        uses: actions/download-artifact@v4
-#        with:
-#          name: all-bins-including-tests
-#          path: tmp/golem-binaries.tar.zst
-      - name: Restore packaged binaries to cache
-        uses: actions/cache/restore@v4
-        with:
-          path: tmp/golem-binaries
-          key: golem-binaries-${{ github.run_id }}
-#      - name: Mount binary store
-#        uses: useblacksmith/stickydisk@v1
-#        with:
-#          key: golem-binaries-${{ github.run_id }}
-#          path: ~/golem-binaries-cache
-
-      - name: Apply binary archive
-        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
-
-      - name: Purge v8 from cache
-        run: cargo make --profile ci clear-v8
       - name: Unit tests
         run: cargo make --profile ci unit-tests
       - name: Publish Test Report
@@ -194,12 +155,15 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          summary: true
           summary-report: true
           failed-report: true
           slowest-report: true
           github-report: true
           pull-request-report: true
           update-comment: true
+          flaky-report: true
+          collapse-large-reports: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -212,11 +176,9 @@ jobs:
       fail-fast: false
       matrix:
         group:
-          - name: untagged
-          - name: rdbms-service
+          - name: misc
           - name: group1
           - name: group2
-          - name: group3
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout
@@ -264,12 +226,15 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          summary: true
           summary-report: true
           failed-report: true
           slowest-report: true
           github-report: true
           pull-request-report: true
           update-comment: true
+          flaky-report: true
+          collapse-large-reports: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -283,15 +248,11 @@ jobs:
       matrix:
         group:
           - name: integration-tests-group1
-            description: "Full integration tests"
+            description: "IT #1"
           - name: integration-tests-group2
-            description: "Component service integration tests"
+            description: "IT #2"
           - name: integration-tests-group3
-            description: "Worker service integration tests"
-          - name: integration-tests-group4
-            description: "Base service integration tests"
-          - name: integration-tests-group5
-            description: "Sharding tests"
+            description: "IT #3"
           - name: api-tests
             description: "API tests"
           - name: cli-integration-tests-group1
@@ -300,8 +261,6 @@ jobs:
             description: "CLI tests #2"
           - name: cli-integration-tests-group3
             description: "CLI tests #3"
-          - name: cli-integration-tests-group4
-            description: "CLI tests #4"
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -366,12 +325,15 @@ jobs:
         if: always()
         with:
           report-path: "**/target/ctrf-*.json"
+          summary: true
           summary-report: true
           failed-report: true
           slowest-report: true
           github-report: true
           pull-request-report: true
           update-comment: true
+          flaky-report: true
+          collapse-large-reports: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -380,8 +342,7 @@ jobs:
 #    needs:
 #      - worker-tests
 #      - it
-#      - checks
-#      - unit-tests
+#      - unit-tests-and-checks
 #    if: always()
 #    steps:
 #      - name: Delete sticky disk
@@ -725,9 +686,8 @@ jobs:
 
   publish:
     needs:
-      - checks
       - check-clippy-and-format
-      - unit-tests
+      - unit-tests-and-checks
       - wasm-rpc-stub
       - worker-tests
       - it
