@@ -12,11 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentId, PluginInstallationId};
+use crate::model::account::AccountId;
+use crate::model::component::ComponentId;
 use crate::model::{IdempotencyKey, PromiseId, WorkerId};
-use golem_api_grpc::proto::golem::common;
+use golem_api_grpc::proto::golem::common::AccountId as ProtoAccountId;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
+
+pub fn proto_account_id_string(account_id: &Option<ProtoAccountId>) -> Option<String> {
+    (*account_id)
+        .and_then(|v| TryInto::<AccountId>::try_into(v).ok())
+        .map(|v| v.to_string())
+}
 
 pub fn proto_component_id_string(component_id: &Option<component::ComponentId>) -> Option<String> {
     (*component_id)
@@ -43,14 +50,6 @@ pub fn proto_promise_id_string(promise_id: &Option<worker::PromiseId>) -> Option
     promise_id
         .clone()
         .and_then(|v| TryInto::<PromiseId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
-pub fn proto_plugin_installation_id_string(
-    component_id: &Option<common::PluginInstallationId>,
-) -> Option<String> {
-    (*component_id)
-        .and_then(|v| TryInto::<PluginInstallationId>::try_into(v).ok())
         .map(|v| v.to_string())
 }
 

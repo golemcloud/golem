@@ -21,6 +21,7 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::model::component::ComponentId;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
@@ -72,17 +73,17 @@ pub enum ComponentError {
     #[error("Plugin not found in the environment for id: {0}")]
     EnvironmentPluginNotFound(EnvironmentPluginGrantId),
     #[error("Referenced plugin installation with priority {0} not found")]
-    PluginInstallationNotFound(i32),
+    PluginInstallationNotFound(PluginPriority),
     #[error("Multiple plugins with same priority {0}")]
-    ConflictingPluginPriority(i32),
+    ConflictingPluginPriority(PluginPriority),
     #[error("Failed to componse component with plugin with priority {plugin_priority}")]
     PluginCompositionFailed {
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         cause: anyhow::Error,
     },
     #[error("Component transformer plugin with priority {plugin_priority} failed with: {reason}")]
     ComponentTransformerPluginFailed {
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         reason: TransformationFailedReason,
     },
     #[error(transparent)]

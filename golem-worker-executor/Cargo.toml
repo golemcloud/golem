@@ -21,6 +21,11 @@ path = "src/server.rs"
 harness = false
 test = false
 
+# [[test]]
+# name = "integration"
+# path = "tests/lib.rs"
+# harness = false
+
 [features]
 
 [dependencies]
@@ -108,8 +113,3 @@ redis = { workspace = true }
 serde_json = { workspace = true }
 test-r = { workspace = true }
 system-interface = { workspace = true }
-
-[[test]]
-name = "integration"
-path = "tests/lib.rs"
-harness = false

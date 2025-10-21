@@ -22,7 +22,7 @@ use golem_api_grpc::proto::golem::component::v1::ComponentError;
 use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
@@ -149,7 +149,7 @@ impl CompileWorker {
 
     async fn compile_component(
         &self,
-        component_with_version: &ComponentWithVersion,
+        component_with_version: &ComponentIdAndRevision,
         environment_id: &EnvironmentId,
     ) -> Result<Component, CompilationError> {
         let engine = self.engine.clone();
@@ -227,7 +227,7 @@ async fn download_via_grpc(
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
-    component_version: u64,
+    component_version: ComponentRevision,
 ) -> Result<Vec<u8>, CompilationError> {
     with_retries(
         "components",
@@ -248,7 +248,7 @@ async fn download_via_grpc(
                         let request = authorised_grpc_request(
                             DownloadComponentRequest {
                                 component_id: Some(component_id.clone().into()),
-                                version: Some(component_version),
+                                version: Some(component_version.0),
                             },
                             &access_token,
                         );

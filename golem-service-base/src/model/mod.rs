@@ -14,6 +14,7 @@
 
 pub mod auth;
 pub mod component;
+pub mod plugin_registration;
 
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::OplogEntryWithIndex;

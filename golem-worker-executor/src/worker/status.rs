@@ -1,6 +1,7 @@
 use crate::services::{HasConfig, HasOplogService};
 use async_recursion::async_recursion;
-use golem_common::base_model::{OplogIndex, PluginInstallationId};
+use golem_common::base_model::OplogIndex;
+use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{
     OplogEntry, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
@@ -508,18 +509,18 @@ fn calculate_update_fields(
     initial_pending_updates: VecDeque<TimestampedUpdateDescription>,
     initial_failed_updates: Vec<FailedUpdateRecord>,
     initial_successful_updates: Vec<SuccessfulUpdateRecord>,
-    initial_version: u64,
+    initial_version: ComponentRevision,
     initial_component_size: u64,
-    initial_component_version_for_replay: u64,
+    initial_component_version_for_replay: ComponentRevision,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     VecDeque<TimestampedUpdateDescription>,
     Vec<FailedUpdateRecord>,
     Vec<SuccessfulUpdateRecord>,
+    ComponentRevision,
     u64,
-    u64,
-    u64,
+    ComponentRevision,
 ) {
     let mut pending_updates = initial_pending_updates;
     let mut failed_updates = initial_failed_updates;
@@ -714,10 +715,10 @@ fn collect_resources(
 }
 
 fn calculate_active_plugins(
-    initial: HashSet<PluginInstallationId>,
+    initial: HashSet<PluginPriority>,
     deleted_regions: &DeletedRegions,
     entries: &BTreeMap<OplogIndex, OplogEntry>,
-) -> HashSet<PluginInstallationId> {
+) -> HashSet<PluginPriority> {
     let mut result = initial;
     for (idx, entry) in entries {
         // Skipping entries in deleted regions as they are not applied during replay
@@ -726,11 +727,15 @@ fn calculate_active_plugins(
         }
 
         match entry {
-            OplogEntry::ActivatePlugin { plugin, .. } => {
-                result.insert(plugin.clone());
+            OplogEntry::ActivatePlugin {
+                plugin_priority, ..
+            } => {
+                result.insert(*plugin_priority);
             }
-            OplogEntry::DeactivatePlugin { plugin, .. } => {
-                result.remove(plugin);
+            OplogEntry::DeactivatePlugin {
+                plugin_priority, ..
+            } => {
+                result.remove(plugin_priority);
             }
             OplogEntry::SuccessfulUpdate {
                 new_active_plugins, ..
@@ -771,6 +776,9 @@ mod test {
     use bincode::Encode;
     use bytes::Bytes;
     use golem_common::base_model::OplogIndex;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::{
         DurableFunctionType, OplogEntry, OplogPayload, TimestampedUpdateDescription,
@@ -778,8 +786,7 @@ mod test {
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
     use golem_common::model::{
-        AccountId, ComponentId, ComponentVersion, FailedUpdateRecord, IdempotencyKey,
-        OwnedWorkerId, PluginInstallationId, ProjectId, RetryConfig, ScanCursor,
+        FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, ScanCursor,
         SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
@@ -855,7 +862,9 @@ mod test {
     #[test]
     async fn single_auto_update_for_running() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: 2 };
+        let update1 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(2),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", &0, k1.clone())
@@ -873,8 +882,12 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: 2 };
-        let update2 = UpdateDescription::Automatic { target_version: 3 };
+        let update1 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(2),
+        };
+        let update2 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(3),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", &0, k1.clone())
@@ -897,7 +910,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_version: ComponentRevision(2),
             payload: OplogPayload::Inline(vec![]),
         };
 
@@ -905,7 +918,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |status| status.total_linear_memory_size = 200)
@@ -922,7 +937,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_version: ComponentRevision(2),
             payload: OplogPayload::Inline(vec![]),
         };
 
@@ -930,7 +945,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |_| {})
@@ -947,7 +964,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update2 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_version: ComponentRevision(2),
             payload: OplogPayload::Inline(vec![]),
         };
 
@@ -955,7 +972,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .failed_update(update2)
             .exported_function_invoked("c", &0, k2.clone())
             .exported_function_completed(&'y', k2)
@@ -967,8 +986,12 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump_and_revert() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: 2 };
-        let update2 = UpdateDescription::Automatic { target_version: 3 };
+        let update1 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(2),
+        };
+        let update2 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(3),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", &0, k1.clone())
@@ -992,7 +1015,7 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_version: ComponentRevision(2),
             payload: OplogPayload::Inline(vec![]),
         };
 
@@ -1000,7 +1023,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |_| {})
@@ -1018,11 +1043,11 @@ mod test {
         let k1 = IdempotencyKey::fresh();
         let k2 = IdempotencyKey::fresh();
         let update1 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_version: ComponentRevision(2),
             payload: OplogPayload::Inline(vec![]),
         };
         let update2 = UpdateDescription::SnapshotBased {
-            target_version: 2,
+            target_version: ComponentRevision(2),
             payload: OplogPayload::Inline(vec![]),
         };
 
@@ -1030,13 +1055,17 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .exported_function_invoked("c", &0, k2.clone())
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: 2 })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .exported_function_completed(&'y', k2)
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
@@ -1100,9 +1129,9 @@ mod test {
 
     #[test]
     async fn non_existing_oplog() {
-        let project_id = ProjectId::new_v4();
+        let environment_id = EnvironmentId::new_v4();
         let owned_worker_id = OwnedWorkerId::new(
-            &project_id,
+            &environment_id,
             &WorkerId {
                 component_id: ComponentId::new_v4(),
                 worker_name: "test-worker".to_string(),
@@ -1127,7 +1156,7 @@ mod test {
         pub fn new(
             account_id: AccountId,
             owned_worker_id: OwnedWorkerId,
-            component_version: ComponentVersion,
+            component_version: ComponentRevision,
         ) -> Self {
             let status = WorkerStatusRecord {
                 component_version,
@@ -1145,7 +1174,7 @@ mod test {
                         vec![],
                         vec![],
                         BTreeMap::new(),
-                        owned_worker_id.project_id(),
+                        owned_worker_id.environment_id(),
                         account_id.clone(),
                         None,
                         100,
@@ -1382,7 +1411,7 @@ mod test {
             self,
             update_description: UpdateDescription,
             new_component_size: u64,
-            new_active_plugins: &HashSet<PluginInstallationId>,
+            new_active_plugins: &HashSet<PluginPriority>,
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
             self.add(
@@ -1490,19 +1519,21 @@ mod test {
     }
 
     impl TestCase {
-        pub fn builder(initial_component_version: ComponentVersion) -> TestCaseBuilder {
-            let project_id = ProjectId::new_v4();
-            let account_id = AccountId {
-                value: "test-account".to_string(),
-            };
+        pub fn builder(initial_component_version: u64) -> TestCaseBuilder {
+            let environment_id = EnvironmentId::new_v4();
+            let account_id = AccountId::new_v4();
             let owned_worker_id = OwnedWorkerId::new(
-                &project_id,
+                &environment_id,
                 &WorkerId {
                     component_id: ComponentId::new_v4(),
                     worker_name: "test-worker".to_string(),
                 },
             );
-            TestCaseBuilder::new(account_id, owned_worker_id, initial_component_version)
+            TestCaseBuilder::new(
+                account_id,
+                owned_worker_id,
+                ComponentRevision(initial_component_version),
+            )
         }
     }
 
@@ -1566,7 +1597,7 @@ mod test {
 
         async fn scan_for_component(
             &self,
-            _project_id: &ProjectId,
+            _environment_id: &EnvironmentId,
             _component_id: &ComponentId,
             _cursor: ScanCursor,
             _count: u64,

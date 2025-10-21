@@ -18,7 +18,7 @@ use async_trait::async_trait;
 use golem_api_grpc::proto::golem::project::v1::cloud_project_service_client::CloudProjectServiceClient;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::{AccountId, ProjectId, RetryConfig};
+use golem_common::model::{RetryConfig};
 use golem_common::retries::with_retries;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::Uri;
@@ -28,6 +28,7 @@ use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use uuid::Uuid;
+use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait ProjectService: Send + Sync {
@@ -57,7 +58,7 @@ pub fn configured(config: &ProjectServiceConfig) -> Arc<dyn ProjectService> {
         )),
         ProjectServiceConfig::Disabled(config) => Arc::new(ProjectServiceDisabled {
             account_id: config.account_id.clone(),
-            project_id: config.project_id.clone(),
+            environment_id: config.environment_id.clone(),
             project_name: config.project_name.clone(),
         }),
     }
@@ -115,14 +116,14 @@ impl ProjectServiceGrpc {
         let retry_config = self.retry_config.clone();
         let access_token = self.access_token;
 
-        fn get_account(project: &GrpcProject) -> AccountId {
+        fn get_account(project: &GrpcProject) -> Result<AccountId, String> {
             project
                 .data
                 .clone()
                 .expect("did not receive account data")
                 .owner_account_id
                 .expect("failed to receive project owner_account_id")
-                .into()
+                .try_into()
         }
 
         let account_id = account_id.clone();
@@ -159,14 +160,18 @@ impl ProjectServiceGrpc {
                         .expect("Didn't receive expected field result")
                     {
                         get_projects_response::Result::Success(payload) => {
-                            let project_id = payload
-                                .data
-                                .into_iter()
-                                // TODO: Push account filter to the server
-                                .find(|p| get_account(p) == *account_id)
-                                .map(|c| c.id.expect("didn't receive expected project_id"));
-                            Ok(project_id
-                                .map(|c| c.try_into().expect("failed to convert project_id")))
+                            let project_id = {
+                                let mut project_id = None;
+                                for p in payload.data {
+                                    let acc = get_account(&p)?;
+                                    if acc == *account_id {
+                                        project_id = Some(p.id.expect("didn't receive expected project_id"));
+                                        break;
+                                    }
+                                }
+                                project_id
+                            };
+                            Ok(project_id.map(|c| c.try_into().expect("failed to convert project_id")))
                         }
                         get_projects_response::Result::Error(err) => Err(GrpcError::Domain(err))?,
                     }

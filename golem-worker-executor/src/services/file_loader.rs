@@ -15,7 +15,8 @@
 use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
-use golem_common::model::{InitialComponentFileKey, ProjectId};
+use golem_common::model::component::InitialComponentFileKey;
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::collections::HashMap;
@@ -70,11 +71,11 @@ impl FileLoader {
     /// The file will only be valid until the token is dropped.
     pub async fn get_read_only_to(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<FileUseToken, WorkerExecutorError> {
-        self.get_read_only_to_impl(project_id, key, target)
+        self.get_read_only_to_impl(environment_id, key, target)
             .await
             .map_err(|e| {
                 WorkerExecutorError::initial_file_download_failed(
@@ -87,11 +88,11 @@ impl FileLoader {
     /// Read-write files are copied to target.
     pub async fn get_read_write_to(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<(), WorkerExecutorError> {
-        self.get_read_write_to_impl(project_id, key, target)
+        self.get_read_write_to_impl(environment_id, key, target)
             .await
             .map_err(|e| {
                 WorkerExecutorError::initial_file_download_failed(
@@ -103,7 +104,7 @@ impl FileLoader {
 
     async fn get_read_only_to_impl(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<FileUseToken, anyhow::Error> {
@@ -111,7 +112,7 @@ impl FileLoader {
             tokio::fs::create_dir_all(parent).await?;
         };
 
-        let cache_entry = self.get_or_add_cache_entry(project_id, key).await?;
+        let cache_entry = self.get_or_add_cache_entry(environment_id, key).await?;
 
         // peek at the cache entry. It's fine to not hold the lock here.
         // as long as we keep a ref to the cache entry, the file will not be deleted
@@ -138,7 +139,7 @@ impl FileLoader {
 
     async fn get_read_write_to_impl(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
         target: &PathBuf,
     ) -> Result<(), anyhow::Error> {
@@ -178,13 +179,14 @@ impl FileLoader {
         }
 
         // alternative, download the file directly to the target
-        self.download_file_to_path(project_id, target, key).await?;
+        self.download_file_to_path(environment_id, target, key)
+            .await?;
         Ok(())
     }
 
     async fn get_or_add_cache_entry(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         key: &InitialComponentFileKey,
     ) -> Result<Arc<CacheEntry>, anyhow::Error> {
         let cache_entry;
@@ -221,7 +223,7 @@ impl FileLoader {
                 let path = self.cache_dir.path().join(counter.to_string());
 
                 match self
-                    .download_file_to_path_as_read_only(project_id, &path, key)
+                    .download_file_to_path_as_read_only(environment_id, &path, key)
                     .await
                 {
                     Ok(()) => {
@@ -244,18 +246,19 @@ impl FileLoader {
 
     async fn download_file_to_path_as_read_only(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         path: &Path,
         key: &InitialComponentFileKey,
     ) -> Result<(), anyhow::Error> {
-        self.download_file_to_path(project_id, path, key).await?;
+        self.download_file_to_path(environment_id, path, key)
+            .await?;
         self.set_path_read_only(path).await?;
         Ok(())
     }
 
     async fn download_file_to_path(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         path: &Path,
         key: &InitialComponentFileKey,
     ) -> Result<(), anyhow::Error> {
@@ -263,7 +266,7 @@ impl FileLoader {
 
         let mut data = self
             .initial_component_files_service
-            .get(project_id, key)
+            .get(environment_id, key)
             .await
             .map_err(|e| anyhow!(e))?
             .ok_or_else(|| anyhow!("File not found"))?;

@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
@@ -130,6 +132,8 @@ pub struct Component {
     pub id: ComponentId,
     pub revision: ComponentRevision,
     pub environment_id: EnvironmentId,
+    pub application_id: ApplicationId,
+    pub account_id: AccountId,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
@@ -175,6 +179,8 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             id: value.id,
             revision: value.revision,
             environment_id: value.environment_id,
+            application_id: value.application_id,
+            account_id: value.account_id,
             component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,

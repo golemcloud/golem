@@ -79,7 +79,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
             .create_environment_plugin_grant(
                 &shared_env.id.0,
                 &EnvironmentPluginGrantCreation {
-                    plugin_id: plugin.id.clone(),
+                    plugin_registration_id: plugin.id.clone(),
                 },
             )
             .await;
@@ -95,7 +95,7 @@ async fn can_grant_plugin_to_shared_env(deps: &EnvBasedTestDependencies) -> anyh
         .create_environment_plugin_grant(
             &shared_env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_id: plugin.id.clone(),
+                plugin_registration_id: plugin.id.clone(),
             },
         )
         .await?;
@@ -223,7 +223,7 @@ async fn fail_with_404_when_sharing_plugin_to_env_you_are_not_member_of(
             .create_environment_plugin_grant(
                 &unrelated_env.id.0,
                 &EnvironmentPluginGrantCreation {
-                    plugin_id: plugin.id.clone(),
+                    plugin_registration_id: plugin.id.clone(),
                 },
             )
             .await;
@@ -286,7 +286,7 @@ async fn member_of_env_cannot_see_plugin_or_plugin_component(
         .create_environment_plugin_grant(
             &shared_env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_id: plugin.id.clone(),
+                plugin_registration_id: plugin.id.clone(),
             },
         )
         .await?;

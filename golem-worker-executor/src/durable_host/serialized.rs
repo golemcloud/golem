@@ -649,8 +649,9 @@ mod tests {
         SerializableDateTime, SerializableError, SerializableIpAddress, SerializableIpAddresses,
         SerializableStreamError,
     };
+    use golem_common::model::component::{ComponentId, ComponentRevision};
     use golem_common::model::oplog::{OplogIndex, WorkerError};
-    use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
+    use golem_common::model::{PromiseId, ShardId, WorkerId};
     use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
     use proptest::collection::vec;
     use proptest::prelude::*;
@@ -784,8 +785,8 @@ mod tests {
             workerid_strat().prop_map(|worker_id| WorkerExecutorError::WorkerNotFound { worker_id }),
             (workerid_strat(), ".*").prop_map(|(worker_id, details)| WorkerExecutorError::WorkerCreationFailed { worker_id, details }),
             (workerid_strat(), ".*").prop_map(|(worker_id, reason)| WorkerExecutorError::FailedToResumeWorker { worker_id, reason: Box::new(WorkerExecutorError::unknown(reason)) }),
-            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| WorkerExecutorError::ComponentDownloadFailed { component_id, component_version, reason }),
-            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| WorkerExecutorError::ComponentParseFailed { component_id, component_version, reason }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| WorkerExecutorError::ComponentDownloadFailed { component_id, component_version: ComponentRevision(component_version), reason }),
+            (componentid_strat(), any::<u64>(), ".*").prop_map(|(component_id, component_version, reason)| WorkerExecutorError::ComponentParseFailed { component_id, component_version:  ComponentRevision(component_version), reason }),
             (componentid_strat(), ".*").prop_map(|(component_id, reason)| WorkerExecutorError::GetLatestVersionOfComponentFailed { component_id, reason }),
             promiseid_strat().prop_map(|promise_id| WorkerExecutorError::PromiseNotFound { promise_id }),
             promiseid_strat().prop_map(|promise_id| WorkerExecutorError::PromiseDropped { promise_id }),

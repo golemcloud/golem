@@ -30,6 +30,7 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::{EnvironmentRole, TokenSecret};
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentId,
@@ -445,7 +446,7 @@ impl<'a, Deps: TestDependencies> StoreComponentBuilder<'a, Deps> {
     ) -> Self {
         self.plugins.push(PluginInstallation {
             environment_plugin_grant_id: environment_plugin_id.clone(),
-            priority,
+            priority: PluginPriority(priority),
             parameters,
         });
         self

@@ -7457,6 +7457,8 @@ components:
       - id
       - revision
       - environmentId
+      - applicationId
+      - accountId
       - componentName
       - componentSize
       - metadata
@@ -7474,6 +7476,12 @@ components:
           type: integer
           format: uint64
         environmentId:
+          type: string
+          format: uuid
+        applicationId:
+          type: string
+          format: uuid
+        accountId:
           type: string
           format: uuid
         componentName:
@@ -7985,7 +7993,7 @@ components:
       required:
       - id
       - environmentId
-      - pluginId
+      - pluginRegistrationId
       properties:
         id:
           type: string
@@ -7993,16 +8001,16 @@ components:
         environmentId:
           type: string
           format: uuid
-        pluginId:
+        pluginRegistrationId:
           type: string
           format: uuid
     EnvironmentPluginGrantCreation:
       type: object
       title: EnvironmentPluginGrantCreation
       required:
-      - pluginId
+      - pluginRegistrationId
       properties:
-        pluginId:
+        pluginRegistrationId:
           type: string
           format: uuid
     EnvironmentRole:
@@ -8181,16 +8189,19 @@ components:
       type: object
       title: InstalledPlugin
       required:
-      - pluginId
+      - pluginRegistrationId
       - priority
       - parameters
       properties:
-        pluginId:
+        pluginRegistrationId:
           type: string
           format: uuid
         priority:
           type: integer
           format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
         parameters:
           type: object
           additionalProperties:
@@ -8500,6 +8511,9 @@ components:
         priority:
           type: integer
           format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
           description: Plugins will be applied in order of increasing priority
         parameters:
           type: object
@@ -8562,10 +8576,16 @@ components:
         pluginPriority:
           type: integer
           format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
           description: Priority will be used to identify the plugin to update
         newPriority:
           type: integer
           format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
         newParameters:
           type: object
           additionalProperties:
@@ -8685,6 +8705,9 @@ components:
         pluginPriority:
           type: integer
           format: int32
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
           description: Priority will be used to identify the plugin to delete
     ProducerField:
       type: object

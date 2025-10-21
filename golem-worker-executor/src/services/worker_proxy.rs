@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::grpc::authorised_grpc_request;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -27,12 +26,12 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    ComponentVersion, IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId,
-};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::authorised_grpc_request;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::{Value, ValueAndType, WitValue};
 use http::Uri;
@@ -84,7 +83,7 @@ pub trait WorkerProxy: Send + Sync {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError>;
 
@@ -407,7 +406,7 @@ impl WorkerProxy for RemoteWorkerProxy {
     async fn update(
         &self,
         owned_worker_id: &OwnedWorkerId,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         mode: UpdateMode,
     ) -> Result<(), WorkerProxyError> {
         debug!("Updating remote worker to version {target_version} in {mode:?} mode");
@@ -418,7 +417,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                 Box::pin(client.update_worker(authorised_grpc_request(
                     UpdateWorkerRequest {
                         worker_id: Some(owned_worker_id.worker_id().into()),
-                        target_version,
+                        target_version: target_version.0,
                         mode: mode as i32,
                     },
                     &self.access_token,

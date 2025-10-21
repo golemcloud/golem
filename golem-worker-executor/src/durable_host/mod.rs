@@ -51,8 +51,7 @@ use crate::services::file_loader::{FileLoader, FileUseToken};
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{CommitLevel, Oplog, OplogOps, OplogService};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::rpc::Rpc;
@@ -62,9 +61,7 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplog, HasProjectService, HasWorker,
-};
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
@@ -83,7 +80,13 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType,
+    InitialComponentFile, PluginPriority,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -93,13 +96,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::{AccountId, PluginInstallationId, ProjectId, TransactionId};
+use golem_common::model::TransactionId;
 use golem_common::model::{
-    ComponentFilePath, ComponentFilePermissions, ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails, ComponentId, ComponentType, ComponentVersion,
-    GetFileSystemNodeResult, IdempotencyKey, InitialComponentFile, OwnedWorkerId, ScanCursor,
-    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -165,9 +166,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         worker_config: WorkerConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -199,7 +199,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let files = prepare_filesystem(
             &file_loader,
-            &owned_worker_id.project_id,
+            &owned_worker_id.environment_id,
             temp_dir.path(),
             &component_metadata.files,
         )
@@ -267,7 +267,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 RwLock::new(compute_read_only_paths(&files)),
                 TRwLock::new(files),
                 file_loader,
-                project_service,
                 worker_config.created_by.clone(),
                 worker_config.initial_wasi_config_vars,
                 wasi_config_vars,
@@ -344,7 +343,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         self.state.agent_id.clone()
     }
 
-    pub fn component_metadata(&self) -> &golem_service_base::model::Component {
+    pub fn component_metadata(&self) -> &golem_common::model::component::ComponentDto {
         &self.state.component_metadata
     }
 
@@ -1087,7 +1086,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         component_metadata
                                             .installed_plugins
                                             .into_iter()
-                                            .map(|installation| installation.id),
+                                            .map(|installation| installation.priority),
                                     ),
                                 )
                                 .await;
@@ -1175,7 +1174,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     component_metadata
                                         .installed_plugins
                                         .into_iter()
-                                        .map(|installation| installation.id),
+                                        .map(|installation| installation.priority),
                                 ),
                             )
                             .await;
@@ -1195,11 +1194,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
     pub async fn update_state_to_new_component_version(
         &mut self,
-        new_version: ComponentVersion,
+        new_version: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
         let current_metadata = &self.state.component_metadata;
 
-        if new_version <= current_metadata.versioned_component_id.version {
+        if new_version <= current_metadata.revision {
             debug!("Update {new_version} was already applied, skipping");
             return Ok(());
         };
@@ -1213,7 +1212,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         update_filesystem(
             &mut current_files,
             &self.state.file_loader,
-            &self.owned_worker_id.project_id,
+            &self.owned_worker_id.environment_id,
             self.temp_dir.path(),
             &new_metadata.files,
         )
@@ -1568,7 +1567,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) {
         let entry = OplogEntry::failed_update(target_version, details.clone());
@@ -1585,7 +1584,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         &self,
         update: &UpdateDescription,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
         let target_version = *update.target_version();
         info!("Worker update to {} finished successfully", target_version);
@@ -2180,11 +2179,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _project_id: &ProjectId,
-        _last_known_limits: &CurrentResourceLimits,
+        this: &T,
+        account_id: &AccountId,
+        last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        Ok(())
+        Ctx::record_last_known_limits(this, account_id, last_known_limits).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(
@@ -2602,7 +2601,7 @@ struct PrivateDurableWorkerState {
     rdbms_service: Arc<dyn RdbmsService>,
     component_service: Arc<dyn ComponentService>,
     agent_types_service: Arc<dyn AgentTypesService>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     config: Arc<GolemConfig>,
     owned_worker_id: OwnedWorkerId,
     created_by: AccountId,
@@ -2622,7 +2621,7 @@ struct PrivateDurableWorkerState {
 
     snapshotting_mode: Option<PersistenceLevel>,
 
-    component_metadata: golem_service_base::model::Component,
+    component_metadata: golem_common::model::component::ComponentDto,
 
     total_linear_memory_size: u64,
 
@@ -2637,7 +2636,6 @@ struct PrivateDurableWorkerState {
     files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
     file_loader: Arc<FileLoader>,
 
-    project_service: Arc<dyn ProjectService>,
     shard_service: Arc<dyn ShardService>,
 
     /// The initial config vars that the worker was configured with
@@ -2682,20 +2680,19 @@ impl PrivateDurableWorkerState {
         rdbms_service: Arc<dyn RdbmsService>,
         component_service: Arc<dyn ComponentService>,
         agent_types_service: Arc<dyn AgentTypesService>,
-        plugins: Arc<dyn Plugins>,
+        plugin_service: Arc<dyn PluginsService>,
         config: Arc<GolemConfig>,
         owned_worker_id: OwnedWorkerId,
         rpc: Arc<dyn Rpc>,
         worker_proxy: Arc<dyn WorkerProxy>,
         deleted_regions: DeletedRegions,
         last_oplog_index: OplogIndex,
-        component_metadata: golem_service_base::model::Component,
+        component_metadata: golem_common::model::component::ComponentDto,
         total_linear_memory_size: u64,
         worker_fork: Arc<dyn WorkerForkService>,
         read_only_paths: RwLock<HashSet<PathBuf>>,
         files: TRwLock<HashMap<PathBuf, IFSWorkerFile>>,
         file_loader: Arc<FileLoader>,
-        project_service: Arc<dyn ProjectService>,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -2725,7 +2722,7 @@ impl PrivateDurableWorkerState {
             rdbms_service,
             component_service,
             agent_types_service,
-            plugins,
+            plugins: plugin_service,
             config,
             owned_worker_id,
             current_idempotency_key: None,
@@ -2749,7 +2746,6 @@ impl PrivateDurableWorkerState {
             read_only_paths,
             files,
             file_loader,
-            project_service,
             created_by,
             initial_wasi_config_vars,
             wasi_config_vars: RwLock::new(wasi_config_vars),
@@ -2797,7 +2793,7 @@ impl PrivateDurableWorkerState {
                 when,
                 ScheduledAction::CompletePromise {
                     account_id: self.created_by.clone(),
-                    project_id: self.owned_worker_id.project_id(),
+                    environment_id: self.owned_worker_id.environment_id(),
                     promise_id,
                 },
             )
@@ -2829,7 +2825,7 @@ impl PrivateDurableWorkerState {
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), WorkerExecutorError> {
         self.worker_enumeration_service
             .get(
-                &self.owned_worker_id.project_id,
+                &self.owned_worker_id.environment_id,
                 component_id,
                 filter,
                 cursor,
@@ -2884,14 +2880,8 @@ impl HasConfig for PrivateDurableWorkerState {
 }
 
 impl HasPlugins for PrivateDurableWorkerState {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
-    }
-}
-
-impl HasProjectService for PrivateDurableWorkerState {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
     }
 }
 
@@ -3025,7 +3015,7 @@ enum IFSWorkerFile {
 
 async fn prepare_filesystem(
     file_loader: &Arc<FileLoader>,
-    project_id: &ProjectId,
+    environment_id: &EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<HashMap<PathBuf, IFSWorkerFile>, WorkerExecutorError> {
@@ -3039,7 +3029,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadOnly => {
                     debug!("Loading read-only file {}", path.display());
                     let token = file_loader
-                        .get_read_only_to(project_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>((
                         path,
@@ -3052,7 +3042,7 @@ async fn prepare_filesystem(
                 ComponentFilePermissions::ReadWrite => {
                     debug!("Loading read-write file {}", path.display());
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok((path, IFSWorkerFile::Rw))
                 }
@@ -3065,7 +3055,7 @@ async fn prepare_filesystem(
 async fn update_filesystem(
     current_state: &mut HashMap<PathBuf, IFSWorkerFile>,
     file_loader: &Arc<FileLoader>,
-    project_id: &ProjectId,
+    environment_id: &EnvironmentId,
     root: &Path,
     files: &[InitialComponentFile],
 ) -> Result<(), WorkerExecutorError> {
@@ -3128,7 +3118,7 @@ async fn update_filesystem(
                     };
 
                     let token = file_loader
-                        .get_read_only_to(project_id, &file.key, &path)
+                        .get_read_only_to(environment_id, &file.key, &path)
                         .await?;
 
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
@@ -3145,7 +3135,7 @@ async fn update_filesystem(
                             }
                         )?;
                         let token = file_loader
-                            .get_read_only_to(project_id, &file.key, &path)
+                            .get_read_only_to(environment_id, &file.key, &path)
                             .await?;
                         Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Ro { file, _token: token } })
                     }
@@ -3183,7 +3173,7 @@ async fn update_filesystem(
                     }
 
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }
@@ -3196,7 +3186,7 @@ async fn update_filesystem(
                         }
                     )?;
                     file_loader
-                        .get_read_write_to(project_id, &file.key, &path)
+                        .get_read_write_to(environment_id, &file.key, &path)
                         .await?;
                     Ok::<_, WorkerExecutorError>(UpdateFileSystemResult::Replace { path, value: IFSWorkerFile::Rw })
                 }

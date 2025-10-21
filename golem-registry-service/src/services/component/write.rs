@@ -17,7 +17,6 @@ use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller
 use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
-use crate::model::plugin_registration::{AppPluginSpec, LibraryPluginSpec, PluginSpec};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
@@ -33,6 +32,7 @@ use crate::services::run_cpu_bound_work;
 use anyhow::{Context, anyhow};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::EnvironmentAction;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentType, ComponentUpdate, InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
@@ -42,6 +42,9 @@ use golem_common::model::component::{ComponentId, PluginInstallation};
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
+use golem_service_base::model::plugin_registration::{
+    AppPluginSpec, LibraryPluginSpec, PluginSpec,
+};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -186,7 +189,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         account_usage.ack();
 
@@ -207,31 +210,33 @@ impl ComponentWriteService {
     ) -> Result<Component, ComponentError> {
         let new_wasm: Option<Arc<[u8]>> = new_wasm.map(Arc::from);
 
-        let component: Component = self
+        let component_record = self
             .component_repo
             .get_staged_by_id(&component_id.0)
             .await?
-            .ok_or(ComponentError::NotFound)?
-            .try_into()?;
+            .ok_or(ComponentError::NotFound)?;
 
-        // Fast path. If the current revision does not match we will reject it later anyway
-        if component.revision != component_update.current_revision {
-            Err(ComponentError::InvalidCurrentRevision)?
-        };
+        let environment_id = EnvironmentId(component_record.environment_id);
 
         let environment = self
             .environment_service
-            .get_and_authorize(
-                &component.environment_id,
-                EnvironmentAction::UpdateComponent,
-                auth,
-            )
+            .get_and_authorize(&environment_id, EnvironmentAction::UpdateComponent, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,
                 EnvironmentError::Unauthorized(inner) => ComponentError::Unauthorized(inner),
                 other => other.into(),
             })?;
+
+        let component = component_record.try_into_model(
+            environment.application_id.clone(),
+            environment.owner_account_id.clone(),
+        )?;
+
+        // Fast path. If the current revision does not match we will reject it later anyway
+        if component.revision != component_update.current_revision {
+            Err(ComponentError::InvalidCurrentRevision)?
+        };
 
         let environment_id = component.environment_id.clone();
         let component_id = component.id.clone();
@@ -315,7 +320,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into()?;
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         if let Some(mut account_usage) = account_usage {
             account_usage.ack();
@@ -468,7 +473,7 @@ impl ComponentWriteService {
             };
 
             result.push(InstalledPlugin {
-                plugin_id: plugin.plugin_id,
+                plugin_registration_id: plugin.plugin_registration_id,
                 parameters: plugin_installation.parameters,
                 priority: plugin_installation.priority,
             });
@@ -552,7 +557,7 @@ impl ComponentWriteService {
                     };
 
                     updated.push(InstalledPlugin {
-                        plugin_id: plugin.plugin_id,
+                        plugin_registration_id: plugin.plugin_registration_id,
                         parameters: inner.parameters,
                         priority: inner.priority,
                     });
@@ -617,14 +622,14 @@ impl ComponentWriteService {
         for installation in installed_plugins {
             let plugin = self
                 .plugin_registration_service
-                .get_plugin(&installation.plugin_id, &auth)
+                .get_plugin(&installation.plugin_registration_id, true, &auth)
                 .await?;
 
             match plugin.spec {
                 PluginSpec::ComponentTransformer(spec) => {
                     let span = info_span!("component transformation",
                         component_id = %component.component_id,
-                        plugin_id = %installation.plugin_id,
+                        plugin_registration_id = %installation.plugin_registration_id,
                         plugin_priority = %installation.priority,
                     );
 
@@ -642,7 +647,7 @@ impl ComponentWriteService {
                 PluginSpec::Library(spec) => {
                     let span = info_span!("library plugin",
                         component_id = %component.component_id,
-                        plugin_id = %installation.plugin_id,
+                        plugin_registration_id = %installation.plugin_registration_id,
                         plugin_priority = %installation.priority,
                     );
                     data = self
@@ -658,7 +663,7 @@ impl ComponentWriteService {
                 PluginSpec::App(spec) => {
                     let span = info_span!("app plugin",
                         component_id = %component.component_id,
-                        plugin_id = %installation.plugin_id,
+                        plugin_registration_id = %installation.plugin_registration_id,
                         plugin_priority = %installation.priority,
                     );
                     data = self
@@ -676,7 +681,7 @@ impl ComponentWriteService {
     async fn apply_component_transformer_plugin(
         &self,
         mut component: NewComponentRevision,
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         data: Arc<[u8]>,
         url: String,
         parameters: &BTreeMap<String, String>,
@@ -729,7 +734,7 @@ impl ComponentWriteService {
         &self,
         data: Arc<[u8]>,
         plugin_owner: &AccountId,
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         plugin_spec: &LibraryPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
         let plug_bytes = self
@@ -756,7 +761,7 @@ impl ComponentWriteService {
         &self,
         data: Arc<[u8]>,
         plugin_owner: &AccountId,
-        plugin_priority: i32,
+        plugin_priority: PluginPriority,
         plugin_spec: &AppPluginSpec,
     ) -> Result<Arc<[u8]>, ComponentError> {
         let socket_bytes = self

@@ -17,6 +17,8 @@ use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
 use super::plugin_registration::PluginRegistrationId;
+use crate::model::account::AccountId;
+use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -24,6 +26,7 @@ use crate::{
 };
 use bincode::{Decode, Encode};
 use derive_more::Display;
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -38,11 +41,6 @@ newtype_uuid!(
     golem_api_grpc::proto::golem::component::ComponentId
 );
 
-newtype_uuid!(
-    PluginInstallationId,
-    golem_api_grpc::proto::golem::common::PluginInstallationId
-);
-
 declare_revision!(ComponentRevision);
 
 declare_transparent_newtypes! {
@@ -53,6 +51,11 @@ declare_transparent_newtypes! {
     /// All files with the same content will have the same key.
     #[derive(Display, Eq, Hash)]
     pub struct InitialComponentFileKey(pub String);
+
+    /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+    /// There can only be a single plugin with a given priority installed to a component.
+    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, Encode, Decode, IntoValue)]
+    pub struct PluginPriority(pub i32);
 }
 
 impl TryFrom<&str> for ComponentName {
@@ -122,6 +125,8 @@ declare_structs! {
         pub id: ComponentId,
         pub revision: ComponentRevision,
         pub environment_id: EnvironmentId,
+        pub application_id: ApplicationId,
+        pub account_id: AccountId,
         pub component_name: ComponentName,
         pub component_size: u64,
         pub metadata: ComponentMetadata,
@@ -140,28 +145,28 @@ declare_structs! {
     }
 
     pub struct InstalledPlugin {
-        pub plugin_id: PluginRegistrationId,
-        pub priority: i32,
+        pub plugin_registration_id: PluginRegistrationId,
+        pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
     }
 
     pub struct PluginInstallation {
         pub environment_plugin_grant_id: EnvironmentPluginGrantId,
         /// Plugins will be applied in order of increasing priority
-        pub priority: i32,
+        pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
     }
 
     pub struct PluginInstallationUpdate {
         /// Priority will be used to identify the plugin to update
-        pub plugin_priority: i32,
-        pub new_priority: Option<i32>,
+        pub plugin_priority: PluginPriority,
+        pub new_priority: Option<PluginPriority>,
         pub new_parameters: Option<BTreeMap<String, String>>,
     }
 
     pub struct PluginUninstallation {
         /// Priority will be used to identify the plugin to delete
-        pub plugin_priority: i32
+        pub plugin_priority: PluginPriority
     }
 
     pub struct InitialComponentFile {
@@ -336,6 +341,134 @@ impl From<ComponentId> for golem_wasm::ComponentId {
                 high_bits,
                 low_bits,
             },
+        }
+    }
+}
+
+mod protobuf {
+    use super::{ComponentDto, InstalledPlugin};
+    use super::{ComponentName, ComponentRevision, ComponentType, PluginPriority};
+    use applying::Apply;
+    use std::collections::BTreeMap;
+    use std::time::SystemTime;
+
+    impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
+        fn from(value: InstalledPlugin) -> Self {
+            Self {
+                plugin_registration_id: Some(value.plugin_registration_id.into()),
+                priority: value.priority.0,
+                parameters: value.parameters.into_iter().collect(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for InstalledPlugin {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::PluginInstallation,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                plugin_registration_id: value
+                    .plugin_registration_id
+                    .ok_or("Missing plugin_registration_id")?
+                    .try_into()?,
+                priority: PluginPriority(value.priority),
+                parameters: value.parameters.into_iter().collect(),
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::Component> for ComponentDto {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::Component,
+        ) -> Result<Self, Self::Error> {
+            let id = value
+                .component_id
+                .ok_or("Missing component id")?
+                .try_into()
+                .map_err(|e| format!("Invalid component id: {}", e))?;
+
+            let revision = ComponentRevision(value.revision);
+
+            let environment_id = value
+                .environment_id
+                .ok_or("Missing environment id")?
+                .try_into()
+                .map_err(|e| format!("Invalid environment id: {}", e))?;
+
+            let application_id = value
+                .application_id
+                .ok_or("Missing application id")?
+                .try_into()
+                .map_err(|e| format!("Invalid application id: {}", e))?;
+
+            let account_id = value
+                .account_id
+                .ok_or("Missing account id")?
+                .try_into()
+                .map_err(|e| format!("Invalid account id: {}", e))?;
+
+            let component_name = ComponentName(value.component_name);
+            let component_size = value.component_size;
+            let metadata = value
+                .metadata
+                .ok_or("Missing metadata")?
+                .try_into()
+                .map_err(|e| format!("Invalid metadata: {}", e))?;
+
+            let created_at = value
+                .created_at
+                .ok_or("missing created_at")?
+                .apply(SystemTime::try_from)
+                .map_err(|_| "Failed to convert timestamp".to_string())?
+                .into();
+
+            let component_type = value
+                .component_type
+                .ok_or("missing component type")?
+                .apply(ComponentType::from_repr)
+                .ok_or("Invalid component type")?;
+
+            let files = value
+                .files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let installed_plugins = value
+                .installed_plugins
+                .into_iter()
+                .map(|p| p.try_into())
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
+
+            let wasm_hash = value
+                .wasm_hash_bytes
+                .into_iter()
+                .map(|b| b as u8)
+                .collect::<Vec<_>>()
+                .apply(|bs| blake3::Hash::from_slice(&bs))
+                .map_err(|e| format!("Invalid wasm hash bytes: {e}"))?
+                .apply(crate::model::diff::Hash::from);
+
+            Ok(Self {
+                id,
+                revision,
+                environment_id,
+                application_id,
+                account_id,
+                component_name,
+                component_size,
+                metadata,
+                created_at,
+                component_type,
+                files,
+                installed_plugins,
+                env,
+                wasm_hash,
+            })
         }
     }
 }

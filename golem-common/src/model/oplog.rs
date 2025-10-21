@@ -12,14 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::component::PluginPriority;
 use super::environment::EnvironmentId;
 pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
 use crate::model::{
-    AccountId, ComponentRevision, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId,
-    WorkerId, WorkerInvocation,
+    AccountId, ComponentRevision, IdempotencyKey, Timestamp, TransactionId, WorkerId,
+    WorkerInvocation,
 };
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
@@ -415,25 +416,25 @@ pub enum OplogEntry {
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
-        initial_active_plugins: HashSet<PluginInstallationId>,
+        initial_active_plugins: HashSet<PluginPriority>,
         wasi_config_vars: BTreeMap<String, String>,
     },
     /// Activates a plugin for the worker
     ActivatePlugin {
         timestamp: Timestamp,
-        plugin: PluginInstallationId,
+        plugin_priority: PluginPriority,
     },
     /// Deactivates a plugin for the worker
     DeactivatePlugin {
         timestamp: Timestamp,
-        plugin: PluginInstallationId,
+        plugin_priority: PluginPriority,
     },
     /// An update was successfully applied
     SuccessfulUpdate {
         timestamp: Timestamp,
         target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     },
     /// Similar to `Jump` but caused by an external revert request. TODO: Golem 2.0 should probably merge with Jump
     Revert {
@@ -523,7 +524,7 @@ impl OplogEntry {
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
-        initial_active_plugins: HashSet<PluginInstallationId>,
+        initial_active_plugins: HashSet<PluginPriority>,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
@@ -630,7 +631,7 @@ impl OplogEntry {
     pub fn successful_update(
         target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp: Timestamp::now_utc(),
@@ -686,17 +687,17 @@ impl OplogEntry {
         }
     }
 
-    pub fn activate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+    pub fn activate_plugin(plugin_priority: PluginPriority) -> OplogEntry {
         OplogEntry::ActivatePlugin {
             timestamp: Timestamp::now_utc(),
-            plugin,
+            plugin_priority,
         }
     }
 
-    pub fn deactivate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+    pub fn deactivate_plugin(plugin_priority: PluginPriority) -> OplogEntry {
         OplogEntry::DeactivatePlugin {
             timestamp: Timestamp::now_utc(),
-            plugin,
+            plugin_priority,
         }
     }
 

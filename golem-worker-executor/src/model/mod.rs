@@ -15,15 +15,15 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{ComponentRevision, ComponentType};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::{
-    AccountId, ComponentType, OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
-};
+use golem_common::model::{OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
@@ -64,7 +64,7 @@ pub struct WorkerConfig {
     pub env: Vec<(String, String)>,
     pub deleted_regions: DeletedRegions,
     pub total_linear_memory_size: u64,
-    pub component_version_for_replay: u64,
+    pub component_version_for_replay: ComponentRevision,
     pub created_by: AccountId,
     pub initial_wasi_config_vars: BTreeMap<String, String>,
 }
@@ -75,7 +75,7 @@ impl WorkerConfig {
         worker_env: Vec<(String, String)>,
         deleted_regions: DeletedRegions,
         total_linear_memory_size: u64,
-        component_version_for_replay: u64,
+        component_version_for_replay: ComponentRevision,
         created_by: AccountId,
         initial_wasi_config_vars: BTreeMap<String, String>,
     ) -> WorkerConfig {
@@ -94,7 +94,7 @@ impl WorkerConfig {
         worker_env: &mut Vec<(String, String)>,
         worker_id: &WorkerId,
         agent_id: &Option<AgentId>,
-        target_component_version: u64,
+        target_component_version: ComponentRevision,
     ) {
         let worker_name = worker_id.worker_name.clone();
         let component_id = &worker_id.component_id;
@@ -633,7 +633,7 @@ impl Debug for InvocationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_common::model::ComponentId;
+    use golem_common::model::component::ComponentId;
     use test_r::test;
     use tracing::info;
     use uuid::Uuid;

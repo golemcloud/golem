@@ -17,7 +17,11 @@ pub trait PluginRepo: Send + Sync {
 
     async fn delete(&self, plugin_id: &Uuid, actor: &Uuid) -> RepoResult<Option<PluginRecord>>;
 
-    async fn get_by_id(&self, plugin_id: &Uuid) -> RepoResult<Option<PluginRecord>>;
+    async fn get_by_id(
+        &self,
+        plugin_id: &Uuid,
+        include_deleted: bool,
+    ) -> RepoResult<Option<PluginRecord>>;
 
     async fn get_by_name_and_version(
         &self,
@@ -67,9 +71,13 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
             .await
     }
 
-    async fn get_by_id(&self, plugin_id: &Uuid) -> RepoResult<Option<PluginRecord>> {
+    async fn get_by_id(
+        &self,
+        plugin_id: &Uuid,
+        include_deleted: bool,
+    ) -> RepoResult<Option<PluginRecord>> {
         self.repo
-            .get_by_id(plugin_id)
+            .get_by_id(plugin_id, include_deleted)
             .instrument(Self::span_id(plugin_id))
             .await
     }
@@ -191,7 +199,11 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_id(&self, plugin_id: &Uuid) -> RepoResult<Option<PluginRecord>> {
+    async fn get_by_id(
+        &self,
+        plugin_id: &Uuid,
+        include_deleted: bool,
+    ) -> RepoResult<Option<PluginRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -208,10 +220,13 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         ON p.account_id = a.account_id
                     WHERE
                         p.plugin_id = $1
-                        AND a.deleted_at IS NULL
-                        AND p.deleted_at IS NULL
+                        AND (
+                            $2
+                            OR (a.deleted_at IS NULL AND p.deleted_at IS NULL)
+                        )
                 "#})
-                .bind(plugin_id),
+                .bind(plugin_id)
+                .bind(include_deleted),
             )
             .await
     }

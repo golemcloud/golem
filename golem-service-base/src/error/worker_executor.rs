@@ -142,12 +142,12 @@ impl WorkerExecutorError {
 
     pub fn component_download_failed(
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: impl Into<String>,
     ) -> Self {
         Self::ComponentDownloadFailed {
             component_id,
-            component_version: ComponentRevision(component_version),
+            component_version,
             reason: reason.into(),
         }
     }

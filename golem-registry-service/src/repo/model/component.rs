@@ -18,6 +18,8 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
     InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
@@ -466,43 +468,47 @@ pub struct ComponentExtRevisionRecord {
     pub revision: ComponentRevisionRecord,
 }
 
-impl TryFrom<ComponentExtRevisionRecord> for Component {
-    type Error = RepoError;
-
-    fn try_from(value: ComponentExtRevisionRecord) -> Result<Self, Self::Error> {
-        Ok(Self {
-            id: ComponentId(value.revision.component_id),
-            revision: ComponentRevision(value.revision.revision_id as u64),
-            environment_id: EnvironmentId(value.environment_id),
-            component_name: ComponentName(value.name),
-            component_size: value.revision.size as u64,
-            metadata: value.revision.metadata.into(),
-            created_at: value.revision.audit.created_at.into(),
-            component_type: ComponentType::from_repr(value.revision.component_type)
+impl ComponentExtRevisionRecord {
+    pub fn try_into_model(
+        self,
+        application_id: ApplicationId,
+        account_id: AccountId,
+    ) -> Result<Component, RepoError> {
+        Ok(Component {
+            id: ComponentId(self.revision.component_id),
+            revision: ComponentRevision(self.revision.revision_id as u64),
+            environment_id: EnvironmentId(self.environment_id),
+            application_id,
+            account_id,
+            component_name: ComponentName(self.name),
+            component_size: self.revision.size as u64,
+            metadata: self.revision.metadata.into(),
+            created_at: self.revision.audit.created_at.into(),
+            component_type: ComponentType::from_repr(self.revision.component_type)
                 .ok_or(anyhow!("Failed converting component type"))?,
-            files: value
+            files: self
                 .revision
                 .files
                 .into_iter()
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
-            installed_plugins: value
+            installed_plugins: self
                 .revision
                 .plugins
                 .into_iter()
                 .map(|p| p.into())
                 .collect(),
-            env: value.revision.env.0,
-            object_store_key: value.revision.object_store_key,
-            wasm_hash: blake3::Hash::from(value.revision.binary_hash).into(),
-            original_files: value
+            env: self.revision.env.0,
+            object_store_key: self.revision.object_store_key,
+            wasm_hash: blake3::Hash::from(self.revision.binary_hash).into(),
+            original_files: self
                 .revision
                 .original_files
                 .into_iter()
                 .map(|f| f.try_into())
                 .collect::<Result<_, _>>()?,
-            original_env: value.revision.original_env.0,
-            transformed_object_store_key: value.revision.transformed_object_store_key,
+            original_env: self.revision.original_env.0,
+            transformed_object_store_key: self.revision.transformed_object_store_key,
         })
     }
 }
@@ -593,11 +599,11 @@ impl ComponentPluginInstallationRecord {
         Self {
             component_id,
             revision_id: 0,
-            plugin_id: plugin_installation.plugin_id.0,
+            plugin_id: plugin_installation.plugin_registration_id.0,
             plugin_name: "".to_string(),
             plugin_version: "".to_string(),
             audit: RevisionAuditFields::new(actor.0),
-            priority: plugin_installation.priority,
+            priority: plugin_installation.priority.0,
             parameters: Json::from(
                 plugin_installation
                     .parameters
@@ -611,8 +617,8 @@ impl ComponentPluginInstallationRecord {
 impl From<ComponentPluginInstallationRecord> for InstalledPlugin {
     fn from(value: ComponentPluginInstallationRecord) -> Self {
         Self {
-            plugin_id: PluginRegistrationId(value.plugin_id),
-            priority: value.priority,
+            plugin_registration_id: PluginRegistrationId(value.plugin_id),
+            priority: PluginPriority(value.priority),
             parameters: value.parameters.0,
         }
     }

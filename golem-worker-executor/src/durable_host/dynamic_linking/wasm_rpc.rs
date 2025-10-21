@@ -16,9 +16,10 @@ use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayl
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
+use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
+use golem_common::model::{OwnedWorkerId, WorkerId};
 use golem_wasm::analysis::analysed_type::str;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
@@ -937,7 +938,9 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
         .component_service()
         .resolve_component(
             component_name.to_string(),
-            store.data().component_metadata().owner.clone(),
+            store.data().component_metadata().environment_id.clone(),
+            store.data().component_metadata().application_id.clone(),
+            store.data().component_metadata().account_id.clone(),
         )
         .await?;
 
@@ -947,7 +950,7 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
             worker_name,
         };
         let remote_worker_id = OwnedWorkerId::new(
-            &store.data().owned_worker_id().project_id,
+            &store.data().owned_worker_id().environment_id,
             &remote_worker_id,
         );
         Ok(remote_worker_id)
@@ -998,7 +1001,7 @@ fn resolve_worker_id<Ctx: WorkerCtx>(
     let remote_worker_id = decode_worker_id(worker_id.clone()).ok_or_else(|| anyhow!("Missing or invalid worker id parameter. Expected to get a worker-id value as a custom constructor parameter, got {worker_id:?}"))?;
 
     let remote_worker_id = OwnedWorkerId::new(
-        &store.data().owned_worker_id().project_id,
+        &store.data().owned_worker_id().environment_id,
         &remote_worker_id,
     );
     Ok(remote_worker_id)

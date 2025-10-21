@@ -28,7 +28,7 @@ use crate::model::oplog::{
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
 use crate::model::{
-    AccountId, Empty, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId, WorkerId,
+    AccountId, Empty, IdempotencyKey, PluginPriority, Timestamp, TransactionId, WorkerId,
 };
 use golem_wasm::analysis::analysed_type::{field, list, option, record, str};
 use golem_wasm::analysis::{AnalysedType, NameOptionTypePair};
@@ -217,7 +217,7 @@ pub enum PublicWorkerInvocation {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct PluginInstallationDescription {
-    pub installation_id: PluginInstallationId,
+    pub plugin_priority: PluginPriority,
     pub plugin_name: String,
     pub plugin_version: String,
     pub registered: bool,

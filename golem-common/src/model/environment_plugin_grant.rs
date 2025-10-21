@@ -16,18 +16,21 @@ use super::environment::EnvironmentId;
 use super::plugin_registration::PluginRegistrationId;
 use crate::{declare_structs, newtype_uuid};
 
-newtype_uuid!(EnvironmentPluginGrantId);
+newtype_uuid!(
+    EnvironmentPluginGrantId,
+    golem_api_grpc::proto::golem::component::EnvironmentPluginGrantId
+);
 
 declare_structs! {
     pub struct EnvironmentPluginGrant {
         pub id: EnvironmentPluginGrantId,
         pub environment_id: EnvironmentId,
-        pub plugin_id: PluginRegistrationId,
+        pub plugin_registration_id: PluginRegistrationId,
 
         // As other member of the environment can not get the referenced plugin directly, we should include the plugin here
     }
 
     pub struct EnvironmentPluginGrantCreation {
-        pub plugin_id: PluginRegistrationId,
+        pub plugin_registration_id: PluginRegistrationId,
     }
 }

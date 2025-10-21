@@ -20,7 +20,7 @@ use golem_common::model::base64::Base64;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
-    PluginInstallationUpdate, PluginUninstallation,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
@@ -111,7 +111,7 @@ async fn create_component_with_plugins_and_update_installations(
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_id: library_plugin.id.clone(),
+                plugin_registration_id: library_plugin.id.clone(),
             },
         )
         .await?;
@@ -127,7 +127,7 @@ async fn create_component_with_plugins_and_update_installations(
     assert!(component.installed_plugins.len() == 1);
 
     let installed_plugin = &component.installed_plugins[0];
-    assert!(installed_plugin.priority == 0);
+    assert!(installed_plugin.priority.0 == 0);
     assert!(installed_plugin.parameters == plugin_parameters);
 
     // update priority of plugin
@@ -144,7 +144,7 @@ async fn create_component_with_plugins_and_update_installations(
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Update(PluginInstallationUpdate {
                     plugin_priority: installed_plugin.priority,
-                    new_priority: Some(1),
+                    new_priority: Some(PluginPriority(1)),
                     new_parameters: None,
                 })],
             },
@@ -156,7 +156,7 @@ async fn create_component_with_plugins_and_update_installations(
     assert!(component_v2.installed_plugins.len() == 1);
 
     let installed_plugin = &component_v2.installed_plugins[0];
-    assert!(installed_plugin.priority == 1);
+    assert!(installed_plugin.priority.0 == 1);
     assert!(installed_plugin.parameters == plugin_parameters);
 
     // update priority of plugin
@@ -217,7 +217,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_id: library_plugin.id.clone(),
+                plugin_registration_id: library_plugin.id.clone(),
             },
         )
         .await?;
@@ -242,7 +242,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
                 agent_types: None,
                 plugin_updates: vec![PluginInstallationAction::Install(PluginInstallation {
                     environment_plugin_grant_id: library_plugin_grant.id.clone(),
-                    priority: 0,
+                    priority: PluginPriority(0),
                     parameters: plugin_parameters.clone(),
                 })],
             },
@@ -255,7 +255,7 @@ async fn update_component_with_plugin(deps: &EnvBasedTestDependencies) -> anyhow
 
     {
         let installed_plugin = &updated_component.installed_plugins[0];
-        assert!(installed_plugin.priority == 0);
+        assert!(installed_plugin.priority.0 == 0);
         assert!(installed_plugin.parameters == plugin_parameters);
     }
 
@@ -335,7 +335,7 @@ async fn install_component_transformer_plugin(
         .create_environment_plugin_grant(
             &env.id.0,
             &EnvironmentPluginGrantCreation {
-                plugin_id: component_transformer_plugin.id.clone(),
+                plugin_registration_id: component_transformer_plugin.id.clone(),
             },
         )
         .await?;
@@ -351,7 +351,7 @@ async fn install_component_transformer_plugin(
 
     assert!(component.installed_plugins.len() == 1);
     let installed_plugin = &component.installed_plugins[0];
-    assert!(installed_plugin.priority == 0);
+    assert!(installed_plugin.priority.0 == 0);
 
     assert!(
         component.env

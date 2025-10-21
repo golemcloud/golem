@@ -15,7 +15,6 @@
 use crate::model::public_oplog::{PublicOplogEntry, PublicUpdateDescription};
 use crate::preview2::golem_api_1_x::oplog;
 use crate::preview2::wasi::clocks::wall_clock::Datetime;
-use golem_common::base_model::ProjectId;
 use golem_common::model::public_oplog::{
     ActivatePluginParameters, BeginRemoteTransactionParameters, CancelInvocationParameters,
     ChangePersistenceLevelParameters, ChangeRetryPolicyParameters, CreateParameters,
@@ -43,7 +42,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 args,
                 env,
                 created_by,
-                project_id,
+                environment_id,
                 parent,
                 component_size,
                 initial_total_linear_memory_size,
@@ -52,13 +51,11 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
-                component_version,
+                component_version: component_version.0,
                 args,
                 env: env.into_iter().collect(),
-                created_by: oplog::AccountId {
-                    value: created_by.value,
-                },
-                project_id: project_id.into(),
+                created_by: created_by.into(),
+                environment_id: environment_id.into(),
                 parent: parent.map(|id| id.into()),
                 component_size,
                 initial_total_linear_memory_size,
@@ -176,7 +173,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 description,
             }) => Self::PendingUpdate(oplog::PendingUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_version: target_version.0,
                 update_description: description.into(),
             }),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParameters {
@@ -186,7 +183,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 new_active_plugins,
             }) => Self::SuccessfulUpdate(oplog::SuccessfulUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_version: target_version.0,
                 new_component_size,
                 new_active_plugins: new_active_plugins.into_iter().map(|pr| pr.into()).collect(),
             }),
@@ -196,7 +193,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 details,
             }) => Self::FailedUpdate(oplog::FailedUpdateParameters {
                 timestamp: timestamp.into(),
-                target_version,
+                target_version: target_version.0,
                 details,
             }),
             PublicOplogEntry::GrowMemory(GrowMemoryParameters { timestamp, delta }) => {
@@ -418,7 +415,7 @@ impl From<PublicWorkerInvocation> for oplog::AgentInvocation {
                 idempotency_key: idempotency_key.value,
             }),
             PublicWorkerInvocation::ManualUpdate(ManualUpdateParameters { target_version }) => {
-                Self::ManualUpdate(target_version)
+                Self::ManualUpdate(target_version.0)
             }
         }
     }
@@ -439,7 +436,6 @@ impl From<PublicRetryConfig> for oplog::RetryPolicy {
 impl From<PluginInstallationDescription> for oplog::PluginInstallationDescription {
     fn from(value: PluginInstallationDescription) -> Self {
         Self {
-            installation_id: value.installation_id.0.into(),
             name: value.plugin_name,
             version: value.plugin_version,
             parameters: value.parameters.into_iter().collect(),
@@ -478,14 +474,6 @@ impl From<PublicAttributeValue> for oplog::AttributeValue {
     fn from(value: PublicAttributeValue) -> Self {
         match value {
             PublicAttributeValue::String(StringAttributeValue { value }) => Self::String(value),
-        }
-    }
-}
-
-impl From<ProjectId> for oplog::ProjectId {
-    fn from(value: ProjectId) -> Self {
-        Self {
-            uuid: value.0.into(),
         }
     }
 }

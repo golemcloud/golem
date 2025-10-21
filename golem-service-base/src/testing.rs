@@ -14,6 +14,7 @@
 
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::application::ApplicationId;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -29,10 +30,11 @@ use std::collections::{BTreeMap, HashMap};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileSystemComponentMetadata {
-    pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
     pub version: ComponentRevision,
+    pub environment_id: EnvironmentId,
+    pub application_id: ApplicationId,
+    pub account_id: AccountId,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
@@ -52,9 +54,11 @@ pub struct LocalFileSystemComponentMetadata {
 impl From<LocalFileSystemComponentMetadata> for ComponentDto {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
-            environment_id: value.environment_id,
             id: value.component_id,
             revision: value.version,
+            environment_id: value.environment_id,
+            application_id: value.application_id,
+            account_id: value.account_id,
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(

@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package golem.limit.v1;
 
+import "golem/common/uuid.proto";
+
 message BatchUpdateResourceLimits {
   map<string, int64> updates = 1;
 }
