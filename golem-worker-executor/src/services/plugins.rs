@@ -247,7 +247,7 @@ mod grpc {
     };
     use golem_common::client::{GrpcClient, GrpcClientConfig};
     use golem_common::model::RetryConfig;
-    use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
+    use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin, PluginPriority};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use http::Uri;
     use std::time::Duration;
@@ -320,7 +320,7 @@ mod grpc {
             &self,
             component_id: &ComponentId,
             component_version: ComponentRevision,
-            plugin_priority: i32
+            plugin_priority: PluginPriority
         ) -> Result<PluginRegistration, WorkerExecutorError> {
             let response = self
                 .components_client

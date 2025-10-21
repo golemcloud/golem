@@ -1618,7 +1618,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             component_size: latest_status.component_size,
             total_linear_memory_size: latest_status.total_linear_memory_size,
             owned_resources,
-            active_plugins: active_plugins.into_iter().map(|id| id.into()).collect(),
+            active_plugins: active_plugins.into_iter().map(|id| id.0).collect(),
             skipped_regions: latest_status
                 .skipped_regions
                 .into_regions()

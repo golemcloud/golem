@@ -3355,6 +3355,7 @@ name = "golem-common"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "applying",
  "assert2",
  "async-trait",
  "base64 0.22.1",

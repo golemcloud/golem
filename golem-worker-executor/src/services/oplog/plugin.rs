@@ -140,6 +140,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             worker_id: worker_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
+                            account_id: plugin_component.account_id,
                             owned_worker_id: owned_worker_id.clone(),
                             configuration: installation.parameters.clone(),
                             component_version: plugin_component_version,

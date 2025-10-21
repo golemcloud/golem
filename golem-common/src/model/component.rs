@@ -143,7 +143,7 @@ declare_structs! {
     }
 
     pub struct InstalledPlugin {
-        pub plugin_id: PluginRegistrationId,
+        pub plugin_registration_id: PluginRegistrationId,
         pub priority: PluginPriority,
         pub parameters: BTreeMap<String, String>,
     }
@@ -339,6 +339,118 @@ impl From<ComponentId> for golem_wasm::ComponentId {
                 high_bits,
                 low_bits,
             },
+        }
+    }
+}
+
+mod protobuf {
+    use super::{ComponentDto, InstalledPlugin};
+    use super::{ComponentFilePath, ComponentName, ComponentRevision, ComponentType, PluginPriority, InitialComponentFile, InitialComponentFileKey, PluginInstallation};
+    use std::time::SystemTime;
+    use applying::Apply;
+    use std::collections::BTreeMap;
+
+    impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
+        fn from(value: InstalledPlugin) -> Self {
+            Self {
+                plugin_registration_id: Some(value.plugin_registration_id.into()),
+                priority: value.priority.0,
+                parameters: value.parameters.into_iter().collect(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for InstalledPlugin {
+        type Error = String;
+        fn try_from(value: golem_api_grpc::proto::golem::component::PluginInstallation) -> Result<Self, Self::Error> {
+            Ok(Self {
+                plugin_registration_id: value.plugin_registration_id.ok_or("Missing plugin_registration_id")?.try_into()?,
+                priority: PluginPriority(value.priority),
+                parameters: value.parameters.into_iter().collect(),
+            })
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::component::Component> for ComponentDto {
+        type Error = String;
+        fn try_from(value: golem_api_grpc::proto::golem::component::Component) -> Result<Self, Self::Error> {
+            let id = value
+                .component_id
+                .ok_or("Missing component id")?
+                .try_into()
+                .map_err(|e| format!("Invalid component id: {}", e))?;
+
+            let revision = ComponentRevision(value.revision);
+
+            let account_id = value
+                .account_id
+                .ok_or("Missing account id")?
+                .try_into()
+                .map_err(|e| format!("Invalid account id: {}", e))?;
+
+            let environment_id = value
+                .environment_id
+                .ok_or("Missing environment id")?
+                .try_into()
+                .map_err(|e| format!("Invalid environment id: {}", e))?;
+
+            let component_name = ComponentName(value.component_name);
+            let component_size = value.component_size;
+            let metadata = value
+                .metadata
+                .ok_or("Missing metadata")?
+                .try_into()
+                .map_err(|e| format!("Invalid metadata: {}", e))?;
+
+            let created_at = value
+                .created_at
+                .ok_or("missing created_at")?
+                .apply(SystemTime::try_from)
+                .map_err(|_| "Failed to convert timestamp".to_string())?
+                .into();
+
+            let component_type = value.component_type.ok_or("missing component type")?.apply(ComponentType::from_repr).ok_or("Invalid component type")?;
+
+            let files = value
+                .files
+                .into_iter()
+                .map(|f| f.try_into())
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let installed_plugins = value
+                .installed_plugins
+                .into_iter()
+                .map(|p| p.try_into())
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let env = value
+                .env
+                .into_iter()
+                .collect::<BTreeMap<_, _>>();
+
+            let wasm_hash = value.wasm_hash_bytes
+                .into_iter()
+                .map(|b| b as u8)
+                .collect::<Vec<_>>()
+                .apply(|bs| blake3::Hash::from_slice(&bs))
+                .map_err(|e| format!("Invalid wasm hash bytes: {e}"))?
+                .apply(crate::model::diff::Hash::from);
+
+            Ok(Self {
+                id,
+                revision,
+                account_id,
+                environment_id,
+                component_name,
+                component_size,
+                metadata,
+                created_at,
+                component_type,
+                files,
+                installed_plugins,
+                env,
+                wasm_hash,
+            })
         }
     }
 }

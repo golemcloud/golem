@@ -74,7 +74,7 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
             .proto_account_id()
             .clone()
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
-            .into())
+            .try_into()?)
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {

@@ -259,15 +259,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 initial_active_plugins,
                 wasi_config_vars,
             } => {
-                let project_owner = projects
-                    .get_project_owner(&project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
                 let mut initial_plugins = BTreeSet::new();
                 for installation_id in initial_active_plugins {
                     let (installation, definition) = plugins
                         .get(
-                            &project_owner,
                             &worker_id.component_id,
                             component_version,
                             &installation_id,
@@ -557,18 +552,13 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 new_component_size,
                 new_active_plugins,
             } => {
-                let project_owner = projects
-                    .get_project_owner(&owned_worker_id.project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
                 let mut new_plugins = BTreeSet::new();
                 for installation_id in new_active_plugins {
                     let (installation, definition) = plugins
                         .get(
-                            &project_owner,
                             &owned_worker_id.worker_id.component_id,
                             target_version,
-                            &installation_id,
+                            installation_id,
                         )
                         .await
                         .map_err(|err| err.to_string())?;
@@ -638,17 +628,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(TimestampParameter { timestamp }))
             }
-            OplogEntry::ActivatePlugin { timestamp, plugin } => {
-                let project_owner = projects
-                    .get_project_owner(&owned_worker_id.project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
+            OplogEntry::ActivatePlugin { timestamp, plugin_priority } => {
                 let (installation, definition) = plugins
                     .get(
-                        &project_owner,
                         &owned_worker_id.worker_id.component_id,
                         component_version,
-                        &plugin,
+                        &plugin_priority,
                     )
                     .await
                     .map_err(|err| err.to_string())?;
@@ -661,17 +646,12 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     plugin: desc,
                 }))
             }
-            OplogEntry::DeactivatePlugin { timestamp, plugin } => {
-                let project_owner = projects
-                    .get_project_owner(&owned_worker_id.project_id)
-                    .await
-                    .map_err(|err| err.to_string())?;
+            OplogEntry::DeactivatePlugin { timestamp, plugin_priority } => {
                 let (installation, definition) = plugins
                     .get(
-                        &project_owner,
                         &owned_worker_id.worker_id.component_id,
                         component_version,
-                        &plugin,
+                        plugin_priority,
                     )
                     .await
                     .map_err(|err| err.to_string())?;
