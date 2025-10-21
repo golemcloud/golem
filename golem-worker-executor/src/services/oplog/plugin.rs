@@ -47,7 +47,7 @@ use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::plugin_registration::{OplogProcessorPluginSpec, PluginRegistrationDto, PluginSpecDto};
 
@@ -56,7 +56,7 @@ pub trait OplogProcessorPlugin: Send + Sync {
     async fn send(
         &self,
         worker_metadata: WorkerMetadata,
-        plugin_installation_id: &PluginInstallationId,
+        plugin_priority: PluginPriority,
         initial_oplog_index: OplogIndex,
         entries: Vec<PublicOplogEntry>,
     ) -> Result<(), WorkerExecutorError>;
@@ -81,7 +81,7 @@ type WorkerKey = (EnvironmentId, String, String);
 struct RunningPlugin {
     pub account_id: AccountId,
     pub owned_worker_id: OwnedWorkerId,
-    pub configuration: HashMap<String, String>,
+    pub configuration: BTreeMap<String, String>,
     pub component_version: ComponentRevision,
 }
 
@@ -106,7 +106,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_installation_id: &PluginInstallationId,
+        plugin_priority: &PluginPriority,
     ) -> Result<RunningPlugin, WorkerExecutorError> {
         let project_owner = self.project_service.get_project_owner(project_id).await?;
         let (installation, definition) = self
@@ -115,7 +115,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                 &project_owner,
                 component_id,
                 component_version,
-                plugin_installation_id,
+                plugin_priority,
             )
             .await?;
 
@@ -221,7 +221,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
     async fn send(
         &self,
         worker_metadata: WorkerMetadata,
-        plugin_installation_id: &PluginInstallationId,
+        plugin_priority: PluginPriority,
         initial_oplog_index: OplogIndex,
         entries: Vec<PublicOplogEntry>,
     ) -> Result<(), WorkerExecutorError> {
@@ -230,7 +230,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 &worker_metadata.environment_id,
                 &worker_metadata.worker_id.component_id,
                 worker_metadata.last_known_status.component_version,
-                plugin_installation_id,
+                plugin_priority,
             )
             .await?;
 

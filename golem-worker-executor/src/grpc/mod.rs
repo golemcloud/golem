@@ -1519,7 +1519,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.deactivate_plugin(plugin_installation_id).await?;
+                worker.deactivate_plugin(plugin_priority).await?;
                 Ok(())
             } else {
                 Err(WorkerExecutorError::invalid_request(
@@ -1554,7 +1554,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for pending_update in &latest_status.pending_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(pending_update.timestamp.into()),
-                target_version: *pending_update.description.target_version(),
+                target_version: pending_update.description.target_version().0,
                 update: Some(golem::worker::update_record::Update::Pending(
                     golem::worker::PendingUpdate {},
                 )),
@@ -1563,7 +1563,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for successful_update in &latest_status.successful_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(successful_update.timestamp.into()),
-                target_version: successful_update.target_version,
+                target_version: successful_update.target_version.0,
                 update: Some(golem::worker::update_record::Update::Successful(
                     golem::worker::SuccessfulUpdate {},
                 )),
@@ -2590,7 +2590,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "deactivate_plugin",
             worker_id = proto_worker_id_string(&request.worker_id),
-            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id)
+            plugin_priority = request.plugin_priority
         );
 
         let result = self

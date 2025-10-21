@@ -45,9 +45,9 @@ use golem_common::model::invocation_context::{
 };
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OplogIndex, OwnedWorkerId, PluginInstallationId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord
+    GetFileSystemNodeResult, IdempotencyKey, OplogIndex, OwnedWorkerId, WorkerId, WorkerStatusRecord
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_wasm::wasmtime::ResourceStore;
@@ -329,7 +329,7 @@ pub trait UpdateManagement {
         &self,
         update: &UpdateDescription,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     );
 }
 

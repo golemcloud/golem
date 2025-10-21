@@ -16,7 +16,7 @@ use super::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::plugin_registration::{PluginRegistrationDto, PluginRegistrationId};
-use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
+use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin, PluginPriority};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -43,7 +43,7 @@ pub trait PluginsService: Send + Sync {
         &self,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: i32
+        plugin_priority: PluginPriority
     ) -> Result<(InstalledPlugin, PluginRegistration), WorkerExecutorError> {
         let plugin_installation = self
             .get_plugin_installation(component_id, component_version, plugin_priority)
@@ -56,7 +56,7 @@ pub trait PluginsService: Send + Sync {
         &self,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: i32
+        plugin_priority: PluginPriority
     ) -> Result<InstalledPlugin, WorkerExecutorError>;
 
     async fn get_plugin_definition(
