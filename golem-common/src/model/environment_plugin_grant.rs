@@ -22,12 +22,12 @@ declare_structs! {
     pub struct EnvironmentPluginGrant {
         pub id: EnvironmentPluginGrantId,
         pub environment_id: EnvironmentId,
-        pub plugin_id: PluginRegistrationId,
+        pub plugin_registration_id: PluginRegistrationId,
 
         // As other member of the environment can not get the referenced plugin directly, we should include the plugin here
     }
 
     pub struct EnvironmentPluginGrantCreation {
-        pub plugin_id: PluginRegistrationId,
+        pub plugin_registration_id: PluginRegistrationId,
     }
 }

@@ -48,7 +48,7 @@ impl EnvironmentPluginGrantRecord {
         Self {
             environment_plugin_grant_id: model.id.0,
             environment_id: model.environment_id.0,
-            plugin_id: model.plugin_id.0,
+            plugin_id: model.plugin_registration_id.0,
             audit,
         }
     }
@@ -59,7 +59,7 @@ impl From<EnvironmentPluginGrantRecord> for EnvironmentPluginGrant {
         Self {
             id: EnvironmentPluginGrantId(value.environment_plugin_grant_id),
             environment_id: EnvironmentId(value.environment_id),
-            plugin_id: PluginRegistrationId(value.plugin_id),
+            plugin_registration_id: PluginRegistrationId(value.plugin_id),
         }
     }
 }
