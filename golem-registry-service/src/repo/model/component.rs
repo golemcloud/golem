@@ -40,6 +40,7 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
+use golem_common::model::application::ApplicationId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentRepoError {
@@ -468,12 +469,13 @@ pub struct ComponentExtRevisionRecord {
 }
 
 impl ComponentExtRevisionRecord {
-    pub fn try_into_model(self, account_id: AccountId) -> Result<Component, RepoError> {
+    pub fn try_into_model(self, application_id: ApplicationId, account_id: AccountId) -> Result<Component, RepoError> {
         Ok(Component {
             id: ComponentId(self.revision.component_id),
             revision: ComponentRevision(self.revision.revision_id as u64),
-            account_id,
             environment_id: EnvironmentId(self.environment_id),
+            application_id,
+            account_id,
             component_name: ComponentName(self.name),
             component_size: self.revision.size as u64,
             metadata: self.revision.metadata.into(),

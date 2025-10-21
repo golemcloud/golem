@@ -25,14 +25,16 @@ use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
+use golem_common::model::application::ApplicationId;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileSystemComponentMetadata {
-    pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
     pub component_id: ComponentId,
     pub version: ComponentRevision,
+    pub environment_id: EnvironmentId,
+    pub application_id: ApplicationId,
+    pub account_id: AccountId,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
@@ -54,8 +56,9 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
         Self {
             id: value.component_id,
             revision: value.version,
-            account_id: value.account_id,
             environment_id: value.environment_id,
+            application_id: value.application_id,
+            account_id: value.account_id,
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(

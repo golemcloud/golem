@@ -22,6 +22,7 @@ use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
 };
+use crate::model::application::ApplicationId;
 use bincode::{Decode, Encode};
 use derive_more::Display;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -123,8 +124,9 @@ declare_structs! {
     pub struct ComponentDto {
         pub id: ComponentId,
         pub revision: ComponentRevision,
-        pub account_id: AccountId,
         pub environment_id: EnvironmentId,
+        pub application_id: ApplicationId,
+        pub account_id: AccountId,
         pub component_name: ComponentName,
         pub component_size: u64,
         pub metadata: ComponentMetadata,
@@ -382,17 +384,23 @@ mod protobuf {
 
             let revision = ComponentRevision(value.revision);
 
-            let account_id = value
-                .account_id
-                .ok_or("Missing account id")?
-                .try_into()
-                .map_err(|e| format!("Invalid account id: {}", e))?;
-
             let environment_id = value
                 .environment_id
                 .ok_or("Missing environment id")?
                 .try_into()
                 .map_err(|e| format!("Invalid environment id: {}", e))?;
+
+            let application_id = value
+                .application_id
+                .ok_or("Missing application id")?
+                .try_into()
+                .map_err(|e| format!("Invalid application id: {}", e))?;
+
+            let account_id = value
+                .account_id
+                .ok_or("Missing account id")?
+                .try_into()
+                .map_err(|e| format!("Invalid account id: {}", e))?;
 
             let component_name = ComponentName(value.component_name);
             let component_size = value.component_size;
@@ -439,8 +447,9 @@ mod protobuf {
             Ok(Self {
                 id,
                 revision,
-                account_id,
                 environment_id,
+                application_id,
+                account_id,
                 component_name,
                 component_size,
                 metadata,

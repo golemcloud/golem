@@ -79,7 +79,7 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        Ok(record.try_into_model(environment.owner_account_id)?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn get_component_revision(
@@ -109,7 +109,7 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        Ok(record.try_into_model(environment.owner_account_id)?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn list_staged_components(
@@ -134,7 +134,7 @@ impl ComponentService {
             .list_staged(&environment_id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.owner_account_id.clone()))
+            .map(|r| r.try_into_model(environment.application_id.clone(), environment.owner_account_id.clone()))
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -171,7 +171,7 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        Ok(record.try_into_model(environment.owner_account_id)?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn list_deployed_components(
@@ -202,7 +202,7 @@ impl ComponentService {
             .list_by_deployment(&environment_id.0, deployment_revision_id.0 as i64)
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.owner_account_id.clone()))
+            .map(|r| r.try_into_model(environment.application_id.clone(), environment.owner_account_id.clone()))
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -245,7 +245,7 @@ impl ComponentService {
                 other => other.into(),
             })?;
 
-        Ok(record.try_into_model(environment.owner_account_id)?)
+        Ok(record.try_into_model(environment.application_id,  environment.owner_account_id)?)
     }
 
     pub async fn download_component_wasm(

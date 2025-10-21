@@ -4,6 +4,7 @@ package golem.component;
 
 import "golem/common/account_id.proto";
 import "golem/common/environment.proto";
+import "golem/common/application.proto";
 import "golem/component/component_files.proto";
 import "golem/component/component_metadata.proto";
 import "golem/component/component_type.proto";
@@ -25,4 +26,5 @@ message Component {
   golem.common.AccountId account_id = 11;
   map<string, string> env = 12;
   repeated uint32 wasm_hash_bytes = 13;
+  golem.common.ApplicationId application_id = 14;
 }

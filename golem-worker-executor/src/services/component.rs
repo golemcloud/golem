@@ -31,6 +31,7 @@ use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevisio
 use super::plugins::PluginsService;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -54,6 +55,7 @@ pub trait ComponentService: Send + Sync {
         &self,
         component_reference: String,
         resolving_environment: EnvironmentId,
+        resolving_application: ApplicationId,
         resolving_account: AccountId
     ) -> Result<Option<ComponentId>, WorkerExecutorError>;
 

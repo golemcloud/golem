@@ -187,7 +187,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(environment.owner_account_id)?;
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         account_usage.ack();
 
@@ -230,7 +230,7 @@ impl ComponentWriteService {
                 other => other.into(),
             })?;
 
-        let component = component_record.try_into_model(environment.owner_account_id.clone())?;
+        let component = component_record.try_into_model(environment.application_id.clone(), environment.owner_account_id.clone())?;
 
         // Fast path. If the current revision does not match we will reject it later anyway
         if component.revision != component_update.current_revision {
@@ -319,7 +319,7 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(environment.owner_account_id)?;
+            .try_into_model(environment.application_id, environment.owner_account_id)?;
 
         if let Some(mut account_usage) = account_usage {
             account_usage.ack();

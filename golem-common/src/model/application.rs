@@ -16,7 +16,10 @@ use crate::model::account::AccountId;
 use crate::{declare_revision, declare_structs, declare_transparent_newtypes, newtype_uuid};
 use std::str::FromStr;
 
-newtype_uuid!(ApplicationId);
+newtype_uuid!(
+    ApplicationId,
+    golem_api_grpc::proto::golem::common::ApplicationId
+);
 
 declare_revision!(ApplicationRevision);
 
