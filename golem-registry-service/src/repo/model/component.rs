@@ -29,7 +29,8 @@ use golem_common::model::component_metadata::{
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::plugin_registration::{PluginPriority, PluginRegistrationId};
+use golem_common::model::component::PluginPriority;
+use golem_common::model::plugin_registration::{PluginRegistrationId};
 use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;

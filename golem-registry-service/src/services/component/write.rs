@@ -50,7 +50,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::{Instrument, debug, info, info_span};
-use golem_common::model::plugin_registration::PluginPriority;
+use golem_common::model::component::PluginPriority;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,

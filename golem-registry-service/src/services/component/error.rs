@@ -27,7 +27,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
-use golem_common::model::plugin_registration::PluginPriority;
+use golem_common::model::component::PluginPriority;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {

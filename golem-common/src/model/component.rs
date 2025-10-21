@@ -16,7 +16,7 @@ use super::agent::AgentType;
 use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
-use super::plugin_registration::{PluginRegistrationId, PluginPriority};
+use super::plugin_registration::{PluginRegistrationId};
 use crate::model::component_metadata::ComponentMetadata;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -53,6 +53,11 @@ declare_transparent_newtypes! {
     /// All files with the same content will have the same key.
     #[derive(Display, Eq, Hash)]
     pub struct InitialComponentFileKey(pub String);
+
+    /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+    /// There can only be a single plugin with a given priority installed to a component.
+    #[derive(Copy, PartialOrd, Eq, Ord, derive_more::Display)]
+    pub struct PluginPriority(pub i32);
 }
 
 impl TryFrom<&str> for ComponentName {
