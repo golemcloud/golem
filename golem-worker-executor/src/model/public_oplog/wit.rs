@@ -54,9 +54,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
                 component_version: component_version.0,
                 args,
                 env: env.into_iter().collect(),
-                created_by: oplog::AccountId {
-                    value: created_by.0,
-                },
+                created_by: created_by.into(),
                 environment_id: environment_id.into(),
                 parent: parent.map(|id| id.into()),
                 component_size,
@@ -438,7 +436,6 @@ impl From<PublicRetryConfig> for oplog::RetryPolicy {
 impl From<PluginInstallationDescription> for oplog::PluginInstallationDescription {
     fn from(value: PluginInstallationDescription) -> Self {
         Self {
-            installation_id: value.installation_id.0.into(),
             name: value.plugin_name,
             version: value.plugin_version,
             parameters: value.parameters.into_iter().collect(),

@@ -30,7 +30,6 @@ interface oplog {
     }
 
     record plugin-installation-description {
-        installation-id: uuid,
         name: string,
         version: string,
         parameters: list<tuple<string, string>>

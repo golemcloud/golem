@@ -33,6 +33,7 @@ pub struct PluginRegistration {
     pub icon: Vec<u8>,
     pub homepage: String,
     pub spec: PluginSpec,
+    pub deleted: bool
 }
 
 impl From<PluginRegistration> for PluginRegistrationDto {
@@ -155,6 +156,7 @@ mod protobuf {
                 icon: value.icon,
                 homepage: value.homepage,
                 spec: value.specs.ok_or("Missing plugin specs")?.try_into()?,
+                deleted: value.deleted
             })
         }
     }
