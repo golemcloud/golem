@@ -938,7 +938,9 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
         .component_service()
         .resolve_component(
             component_name.to_string(),
-            store.data().component_metadata().owner.clone(),
+            store.data().component_metadata().environment_id.clone(),
+            store.data().component_metadata().application_id.clone(),
+            store.data().component_metadata().account_id.clone()
         )
         .await?;
 

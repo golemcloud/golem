@@ -648,7 +648,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 .component_service
                 .resolve_component(
                     component_slug.clone(),
-                    self.state.component_metadata.id.clone(),
+                    self.state.component_metadata.environment_id.clone(),
+                    self.state.component_metadata.application_id.clone(),
+                    self.state.component_metadata.account_id.clone()
                 )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
@@ -1016,7 +1018,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .component_service
             .resolve_component(
                 component_slug.clone(),
-                self.state.component_metadata.owner.clone(),
+                self.state.component_metadata.environment_id.clone(),
+                self.state.component_metadata.application_id.clone(),
+                self.state.component_metadata.account_id.clone()
             )
             .await?;
 

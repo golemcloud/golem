@@ -768,7 +768,6 @@ mod grpc {
                     let access_token = self.access_token;
                     let retry_config = self.retry_config.clone();
                     let component_id = component_id.clone();
-                    let plugins_service = self.plugins_service.clone();
                     self.component_metadata_cache
                         .get_or_insert_simple(
                             &ComponentKey {
@@ -828,27 +827,18 @@ mod grpc {
                 WorkerExecutorError::invalid_request(format!("Invalid component reference: {e}"))
             })?;
 
-            let account_id = component_slug
-                .account_id
-                .clone()
-                .unwrap_or(resolving_account);
-
-            let project_id = if let Some(project_name) = component_slug.project_name {
-                self.project_service
-                    .resolve_project(&account_id, &project_name)
-                    .await?
-                    .ok_or(WorkerExecutorError::invalid_request(format!(
-                        "Failed to resolve project: {project_name}"
-                    )))?
-            } else {
-                resolving_component.project_id
+            if component_slug.environment_name.is_some() {
+                // TODO: Fix me
+                todo!("Resolving environments is not implemented")
             };
+
+            let environment_id = resolving_environment;
 
             let component_name = component_slug.component_name;
 
             self.resolved_component_cache
-                .get_or_insert_simple(&(project_id.clone(), component_name.clone()), || {
-                    Box::pin(self.resolve_component_remotely(&project_id, &component_name))
+                .get_or_insert_simple(&(environment_id.clone(), component_name.clone()), || {
+                    Box::pin(self.resolve_component_remotely(&environment_id, &component_name))
                 })
                 .await
         }
@@ -1050,8 +1040,9 @@ mod grpc {
 
     #[derive(Debug, PartialEq, Eq, Hash, Clone)]
     pub struct ComponentSlug {
-        account_id: Option<AccountId>,
-        project_name: Option<String>,
+        account_email: Option<String>,
+        application_name: Option<String>,
+        environment_name: Option<String>,
         component_name: String,
     }
 
@@ -1062,21 +1053,18 @@ mod grpc {
                 Err("Empty component references are not allowed")?;
             };
 
-            if str.contains(" ") {
-                Err("No spaces allowed in component reference")?;
-            };
-
             let mut parts = str.split("/").collect::<Vec<_>>();
 
-            if parts.is_empty() || parts.len() > 3 {
+            if parts.is_empty() || parts.len() > 4 {
                 Err("Unexpected number of \"/\"-delimited parts in component reference")?
             };
 
             parts.reverse();
 
             Ok(ComponentSlug {
-                account_id: parts.get(2).map(|s| Uuid::parse_str(s).map_err(|e| format!("Failed parsing uuid portion: {e}"))).transpose()?.map(AccountId),
-                project_name: parts.get(1).map(|s| s.to_string()),
+                account_email: parts.get(3).map(|s| s.to_string()),
+                application_name: parts.get(2).map(|s| s.to_string()),
+                environment_name: parts.get(1).map(|s| s.to_string()),
                 component_name: parts[0].to_string(), // safe due to the check above
             })
         }
@@ -1084,9 +1072,7 @@ mod grpc {
 
     #[cfg(test)]
     mod tests {
-        use uuid::uuid;
         use super::ComponentSlug;
-        use golem_common::model::account::AccountId;
         use test_r::test;
 
         #[test]
@@ -1095,34 +1081,51 @@ mod grpc {
             assert_eq!(
                 res,
                 Ok(ComponentSlug {
-                    account_id: None,
-                    project_name: None,
+                    account_email: None,
+                    application_name: None,
+                    environment_name: None,
                     component_name: "foobar".to_string()
                 })
             )
         }
 
         #[test]
-        fn parse_project_component() {
+        fn parse_environment_component() {
             let res = ComponentSlug::parse("bar/foobar");
             assert_eq!(
                 res,
                 Ok(ComponentSlug {
-                    account_id: None,
-                    project_name: Some("bar".to_string()),
+                    account_email: None,
+                    application_name: None,
+                    environment_name: Some("bar".to_string()),
                     component_name: "foobar".to_string()
                 })
             )
         }
 
         #[test]
-        fn parse_account_project_component() {
-            let res = ComponentSlug::parse("e4a2fd79-6fc2-436b-9b4a-ed322150e334/bar/foobar");
+        fn parse_application_environment_component() {
+            let res = ComponentSlug::parse("foo/bar/foobar");
             assert_eq!(
                 res,
                 Ok(ComponentSlug {
-                    account_id: Some(AccountId(uuid!("e4a2fd79-6fc2-436b-9b4a-ed322150e334"))),
-                    project_name: Some("bar".to_string()),
+                    account_email: None,
+                    application_name: Some("foo".to_string()),
+                    environment_name: Some("bar".to_string()),
+                    component_name: "foobar".to_string()
+                })
+            )
+        }
+
+        #[test]
+        fn parse_account_application_environment_component() {
+            let res = ComponentSlug::parse("foo@golem.cloud/foo/bar/foobar");
+            assert_eq!(
+                res,
+                Ok(ComponentSlug {
+                    account_email: Some("foo@golem.cloud".to_string()),
+                    application_name: Some("foo".to_string()),
+                    environment_name: Some("bar".to_string()),
                     component_name: "foobar".to_string()
                 })
             )
@@ -1130,7 +1133,7 @@ mod grpc {
 
         #[test]
         fn reject_longer() {
-            let res = ComponentSlug::parse("foo/baz/bar/foobar");
+            let res = ComponentSlug::parse("toolong/foo@golem.cloud/foo/bar/foobar");
             assert!(res.is_err())
         }
 
@@ -1141,8 +1144,14 @@ mod grpc {
         }
 
         #[test]
-        fn reject_spaces() {
-            let res = ComponentSlug::parse("baz/bar baz/foobar");
+        fn reject_empty_group_1() {
+            let res = ComponentSlug::parse("foo/");
+            assert!(res.is_err())
+        }
+
+        #[test]
+        fn reject_empty_group_2() {
+            let res = ComponentSlug::parse("/foo");
             assert!(res.is_err())
         }
     }
