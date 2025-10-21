@@ -15,9 +15,6 @@
 use super::account::{AccountError, AccountService};
 use super::component::{ComponentError, ComponentService};
 use crate::model::auth::{AuthCtx, AuthorizationError};
-use golem_service_base::model::plugin_registration::{
-    AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
-};
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::PluginRecord;
 use crate::repo::plugin::PluginRepo;
@@ -27,6 +24,9 @@ use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::plugin_registration::{
+    AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
+};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::repo::RepoError;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -160,7 +160,7 @@ impl PluginRegistrationService {
             icon: data.icon.0,
             homepage: data.homepage,
             spec,
-            deleted: false
+            deleted: false,
         };
 
         let audit = ImmutableAuditFields::new(auth.account_id.0);

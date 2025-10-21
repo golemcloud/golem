@@ -96,7 +96,10 @@ impl SqliteKeyValueStorage {
             KeyValueStorageNamespace::Worker => "worker".to_string(),
             KeyValueStorageNamespace::Promise => "promise".to_string(),
             KeyValueStorageNamespace::Schedule => "schedule".to_string(),
-            KeyValueStorageNamespace::UserDefined { environment_id, bucket } => {
+            KeyValueStorageNamespace::UserDefined {
+                environment_id,
+                bucket,
+            } => {
                 format!("user-defined:{environment_id}:{bucket}")
             }
         }

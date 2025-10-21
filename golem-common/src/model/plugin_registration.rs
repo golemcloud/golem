@@ -19,7 +19,10 @@ use super::ComponentId;
 use crate::model::Empty;
 use crate::{declare_structs, declare_transparent_newtypes, declare_unions, newtype_uuid};
 
-newtype_uuid!(PluginRegistrationId, golem_api_grpc::proto::golem::component::PluginRegistrationId);
+newtype_uuid!(
+    PluginRegistrationId,
+    golem_api_grpc::proto::golem::component::PluginRegistrationId
+);
 
 declare_transparent_newtypes! {
     pub struct PluginWasmFileKey(pub String);
@@ -77,7 +80,9 @@ mod protobuf {
         fn from(value: ComponentTransformerPluginSpec) -> Self {
             Self {
                 provided_wit_package: value.provided_wit_package,
-                json_schema: value.json_schema.map(|js| serde_json::to_string(&js).expect("Failed to serialize json schema")),
+                json_schema: value
+                    .json_schema
+                    .map(|js| serde_json::to_string(&js).expect("Failed to serialize json schema")),
                 validate_url: value.validate_url,
                 transform_url: value.transform_url,
             }
@@ -94,7 +99,11 @@ mod protobuf {
         ) -> Result<Self, Self::Error> {
             Ok(Self {
                 provided_wit_package: value.provided_wit_package,
-                json_schema: value.json_schema.map(|s| serde_json::from_str(&s)).transpose().map_err(|e| format!("Failed parsing json schema: {e}"))?,
+                json_schema: value
+                    .json_schema
+                    .map(|s| serde_json::from_str(&s))
+                    .transpose()
+                    .map_err(|e| format!("Failed parsing json schema: {e}"))?,
                 validate_url: value.validate_url,
                 transform_url: value.transform_url,
             })

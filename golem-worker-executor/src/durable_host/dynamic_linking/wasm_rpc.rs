@@ -16,6 +16,7 @@ use crate::durable_host::wasm_rpc::{create_rpc_connection_span, WasmRpcEntryPayl
 use crate::services::rpc::{RpcDemand, RpcError};
 use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
+use golem_common::model::component::{ComponentId, ComponentType};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::{OwnedWorkerId, WorkerId};
@@ -35,7 +36,6 @@ use wasmtime::component::types::{ComponentInstance, ComponentItem};
 use wasmtime::component::{LinkerInstance, Resource, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, Engine, StoreContextMut};
 use wasmtime_wasi::IoView;
-use golem_common::model::component::{ComponentId, ComponentType};
 
 pub fn dynamic_wasm_rpc_link<
     Ctx: WorkerCtx
@@ -940,7 +940,7 @@ async fn resolve_default_worker_id<Ctx: WorkerCtx>(
             component_name.to_string(),
             store.data().component_metadata().environment_id.clone(),
             store.data().component_metadata().application_id.clone(),
-            store.data().component_metadata().account_id.clone()
+            store.data().component_metadata().account_id.clone(),
         )
         .await?;
 

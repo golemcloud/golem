@@ -17,10 +17,11 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::WorkerId;
-use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
@@ -31,7 +32,6 @@ use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;
-use golem_common::model::component::ComponentDto;
 
 pub trait CanStartWorker {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError>;
@@ -70,8 +70,7 @@ trait ProtobufInvocationDetails {
 
 impl<T: ProtobufInvocationDetails> CanStartWorker for T {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError> {
-        (*self
-            .proto_account_id())
+        (*self.proto_account_id())
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
             .try_into()
             .map_err(|e| WorkerExecutorError::unknown(format!("Invalid account id from grpc: {e}")))
@@ -83,7 +82,9 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError> {
         (*self.proto_environment_id())
-            .ok_or(WorkerExecutorError::invalid_request("environment_id not found"))?
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)
     }

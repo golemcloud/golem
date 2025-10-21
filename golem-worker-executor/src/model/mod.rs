@@ -15,17 +15,15 @@
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
 use futures::Stream;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{ComponentRevision, ComponentType};
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId, TraceId,
 };
 use golem_common::model::oplog::{PersistenceLevel, WorkerError};
 use golem_common::model::regions::DeletedRegions;
-use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentRevision, ComponentType};
-use golem_common::model::{
-    OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId,
-};
+use golem_common::model::{OplogIndex, ShardAssignment, ShardId, Timestamp, WorkerId};
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };

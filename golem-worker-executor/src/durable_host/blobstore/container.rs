@@ -83,7 +83,13 @@ impl<Ctx: WorkerCtx> HostContainer for DurableWorkerCtx<Ctx> {
             let result = self
                 .state
                 .blob_store_service
-                .get_data(environment_id, container_name.clone(), name.clone(), start, end)
+                .get_data(
+                    environment_id,
+                    container_name.clone(),
+                    name.clone(),
+                    start,
+                    end,
+                )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
             durability

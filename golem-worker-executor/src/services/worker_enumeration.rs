@@ -6,11 +6,9 @@ use crate::services::{HasConfig, HasOplogService, HasWorkerService};
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::{
-    ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus,
-};
 use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{ScanCursor, WorkerFilter, WorkerMetadata, WorkerStatus};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use tracing::{info, Instrument};

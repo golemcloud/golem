@@ -41,6 +41,7 @@ use async_trait::async_trait;
 use bincode::Decode;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::agent::{AgentId, DataValue, RegisteredAgentType};
+use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
 use golem_common::model::lucene::Query;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, SpanData, UpdateDescription};
 use golem_common::model::public_oplog::{
@@ -60,6 +61,7 @@ use golem_common::model::public_oplog::{
 use golem_common::model::{Empty, OwnedWorkerId, PromiseId, WorkerId, WorkerInvocation};
 use golem_common::serialization::try_deserialize as core_try_deserialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::plugin_registration::PluginRegistration;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::analysis::analysed_type::{
     case, field, list, option, record, result, result_err, str, u64, unit_case, variant,
@@ -70,8 +72,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::Arc;
 use uuid::Uuid;
-use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin};
-use golem_service_base::model::plugin_registration::PluginRegistration;
 
 pub struct PublicOplogChunk {
     pub entries: Vec<PublicOplogEntry>,
@@ -263,17 +263,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 let mut initial_plugins = BTreeSet::new();
                 for installation_id in initial_active_plugins {
                     let (installation, registration) = plugins
-                        .get(
-                            &worker_id.component_id,
-                            component_version,
-                            installation_id,
-                        )
+                        .get(&worker_id.component_id, component_version, installation_id)
                         .await
                         .map_err(|err| err.to_string())?;
-                    let desc = make_plugin_installation_description(
-                        registration,
-                        installation,
-                    );
+                    let desc = make_plugin_installation_description(registration, installation);
                     initial_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::Create(CreateParameters {
@@ -564,10 +557,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                         .await
                         .map_err(|err| err.to_string())?;
 
-                    let desc = make_plugin_installation_description(
-                        definition,
-                        registration,
-                    );
+                    let desc = make_plugin_installation_description(definition, registration);
                     new_plugins.insert(desc);
                 }
                 Ok(PublicOplogEntry::SuccessfulUpdate(
@@ -629,7 +619,10 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             OplogEntry::Restart { timestamp } => {
                 Ok(PublicOplogEntry::Restart(TimestampParameter { timestamp }))
             }
-            OplogEntry::ActivatePlugin { timestamp, plugin_priority } => {
+            OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_priority,
+            } => {
                 let (registration, definition) = plugins
                     .get(
                         &owned_worker_id.worker_id.component_id,
@@ -638,16 +631,16 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let desc = make_plugin_installation_description(
-                    definition,
-                    registration,
-                );
+                let desc = make_plugin_installation_description(definition, registration);
                 Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParameters {
                     timestamp,
                     plugin: desc,
                 }))
             }
-            OplogEntry::DeactivatePlugin { timestamp, plugin_priority } => {
+            OplogEntry::DeactivatePlugin {
+                timestamp,
+                plugin_priority,
+            } => {
                 let (registration, definition) = plugins
                     .get(
                         &owned_worker_id.worker_id.component_id,
@@ -656,10 +649,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     )
                     .await
                     .map_err(|err| err.to_string())?;
-                let desc = make_plugin_installation_description(
-                    definition,
-                    registration,
-                );
+                let desc = make_plugin_installation_description(definition, registration);
                 Ok(PublicOplogEntry::DeactivatePlugin(
                     DeactivatePluginParameters {
                         timestamp,
@@ -1896,13 +1886,13 @@ fn encode_span_data(spans: &[SpanData]) -> Vec<Vec<PublicSpanData>> {
 
 fn make_plugin_installation_description(
     registration: PluginRegistration,
-    installation: InstalledPlugin
+    installation: InstalledPlugin,
 ) -> PluginInstallationDescription {
     PluginInstallationDescription {
         plugin_priority: installation.priority,
         plugin_name: registration.name,
         plugin_version: registration.version,
         registered: !registration.deleted,
-        parameters: installation.parameters
+        parameters: installation.parameters,
     }
 }

@@ -16,6 +16,7 @@ use anyhow::anyhow;
 use async_lock::Mutex;
 use futures::TryStreamExt;
 use golem_common::model::component::InitialComponentFileKey;
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use std::collections::HashMap;
@@ -26,7 +27,6 @@ use std::{path::PathBuf, sync::Arc};
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt;
 use tracing::debug;
-use golem_common::model::environment::EnvironmentId;
 
 // Opaque token for read-only files. This is used to ensure that the file is not deleted while it is in use.
 // Make sure to not drop this token until you are done with the file.
@@ -179,7 +179,8 @@ impl FileLoader {
         }
 
         // alternative, download the file directly to the target
-        self.download_file_to_path(environment_id, target, key).await?;
+        self.download_file_to_path(environment_id, target, key)
+            .await?;
         Ok(())
     }
 
@@ -249,7 +250,8 @@ impl FileLoader {
         path: &Path,
         key: &InitialComponentFileKey,
     ) -> Result<(), anyhow::Error> {
-        self.download_file_to_path(environment_id, path, key).await?;
+        self.download_file_to_path(environment_id, path, key)
+            .await?;
         self.set_path_read_only(path).await?;
         Ok(())
     }

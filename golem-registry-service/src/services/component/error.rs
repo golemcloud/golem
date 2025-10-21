@@ -21,13 +21,13 @@ use crate::services::environment::EnvironmentError;
 use crate::services::environment_plugin_grant::EnvironmentPluginGrantError;
 use crate::services::plugin_registration::PluginRegistrationError;
 use golem_common::model::component::ComponentId;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{ComponentFilePath, InitialComponentFileKey};
 use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;
-use golem_common::model::component::PluginPriority;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentError {

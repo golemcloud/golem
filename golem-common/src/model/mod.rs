@@ -46,7 +46,7 @@ pub mod worker;
 
 pub use crate::base_model::*;
 
-use self::component::{ComponentId};
+use self::component::ComponentId;
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginPriority};
 use self::environment::EnvironmentId;
 use crate::model::account::AccountId;

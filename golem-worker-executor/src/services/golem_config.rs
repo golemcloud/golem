@@ -18,10 +18,13 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::{RetryConfig};
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -29,9 +32,6 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use url::Url;
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 
 /// The shared global Golem executor configuration
 #[derive(Clone, Debug, Serialize, Deserialize)]

@@ -27,9 +27,9 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
+use golem_common::model::account::AccountId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, ScheduleId, ScheduledAction};
-use golem_common::model::account::AccountId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::Value;
 use std::ops::{Add, Deref};
@@ -246,7 +246,8 @@ impl SchedulerServiceDefault {
                     promise_id,
                     environment_id,
                 } => {
-                    let owned_worker_id = OwnedWorkerId::new(&environment_id, &promise_id.worker_id);
+                    let owned_worker_id =
+                        OwnedWorkerId::new(&environment_id, &promise_id.worker_id);
 
                     let result = self
                         .promise_service
@@ -463,13 +464,14 @@ mod tests {
     use async_trait::async_trait;
     use bincode::Encode;
     use chrono::DateTime;
-    use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::oplog::OplogIndex;
-    use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId,
-        ScheduledAction, ShardId, WorkerId,
-    };
     use golem_common::model::account::AccountId;
     use golem_common::model::component::ComponentId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::OplogIndex;
+    use golem_common::model::{
+        IdempotencyKey, OwnedWorkerId, PromiseId, ScheduledAction, ShardId, WorkerId,
+    };
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use golem_wasm::Value;
@@ -479,7 +481,6 @@ mod tests {
     use std::time::Duration;
     use test_r::test;
     use uuid::Uuid;
-    use golem_common::model::environment::EnvironmentId;
 
     struct SchedulerWorkerAccessMock;
 

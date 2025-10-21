@@ -27,15 +27,20 @@ use async_lock::{RwLock, RwLockUpgradableReadGuard};
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::plugin_registration::OplogProcessorPluginSpec;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId,
-    ScanCursor, ShardId, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId, WorkerId, WorkerMetadata,
+    WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 use golem_wasm::{IntoValue, Value};
 use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -46,11 +51,6 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
-use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::plugin_registration::{OplogProcessorPluginSpec};
-use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
-use golem_common::model::account::AccountId;
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -73,7 +73,7 @@ pub struct PerExecutorOplogProcessorPlugin<Ctx: WorkerCtx> {
     component_service: Arc<dyn ComponentService>,
     shard_service: Arc<dyn ShardService>,
     worker_activator: Arc<dyn WorkerActivator<Ctx>>,
-    plugins: Arc<dyn PluginsService>
+    plugins: Arc<dyn PluginsService>,
 }
 
 type WorkerKey = (EnvironmentId, String, String);
@@ -98,7 +98,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
             component_service,
             shard_service,
             worker_activator,
-            plugins
+            plugins,
         }
     }
 
@@ -111,11 +111,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     ) -> Result<RunningPlugin, WorkerExecutorError> {
         let (installation, definition) = self
             .plugins
-            .get(
-                component_id,
-                component_version,
-                plugin_priority,
-            )
+            .get(component_id, component_version, plugin_priority)
             .await?;
 
         let workers = self.workers.upgradable_read().await;
@@ -134,7 +130,10 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                         let (plugin_component_id, plugin_component_version) =
                             Self::get_oplog_processor_component_id(&definition)?;
                         let worker_id = self.generate_worker_id_for(&plugin_component_id).await?;
-                        let plugin_component = self.component_service.get_metadata(&plugin_component_id, Some(plugin_component_version)).await?;
+                        let plugin_component = self
+                            .component_service
+                            .get_metadata(&plugin_component_id, Some(plugin_component_version))
+                            .await?;
                         let owned_worker_id = OwnedWorkerId {
                             environment_id: environment_id.clone(),
                             worker_id: worker_id.clone(),
@@ -331,7 +330,7 @@ impl<Ctx: WorkerCtx> Clone for PerExecutorOplogProcessorPlugin<Ctx> {
             component_service: self.component_service.clone(),
             shard_service: self.shard_service.clone(),
             worker_activator: self.worker_activator.clone(),
-            plugins: self.plugins.clone()
+            plugins: self.plugins.clone(),
         }
     }
 }
@@ -403,7 +402,7 @@ impl CreateOplogConstructor {
             plugins,
             initial_worker_metadata,
             last_known_status,
-            execution_status
+            execution_status,
         }
     }
 }
@@ -453,7 +452,7 @@ pub struct ForwardingOplogService {
 
     oplog_plugins: Arc<dyn OplogProcessorPlugin>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn PluginsService>
+    plugins: Arc<dyn PluginsService>,
 }
 
 impl ForwardingOplogService {
@@ -461,7 +460,7 @@ impl ForwardingOplogService {
         inner: Arc<dyn OplogService>,
         oplog_plugins: Arc<dyn OplogProcessorPlugin>,
         components: Arc<dyn ComponentService>,
-        plugins: Arc<dyn PluginsService>
+        plugins: Arc<dyn PluginsService>,
     ) -> Self {
         Self {
             inner,
@@ -502,7 +501,7 @@ impl OplogService for ForwardingOplogService {
                     self.plugins.clone(),
                     initial_worker_metadata,
                     last_known_status,
-                    execution_status
+                    execution_status,
                 ),
             )
             .await
@@ -529,7 +528,7 @@ impl OplogService for ForwardingOplogService {
                     self.plugins.clone(),
                     initial_worker_metadata,
                     last_known_status,
-                    execution_status
+                    execution_status,
                 ),
             )
             .await
@@ -617,7 +616,7 @@ impl ForwardingOplog {
             last_oplog_idx,
             oplog_service,
             components,
-            plugins
+            plugins,
         }));
 
         let timer = tokio::spawn({
@@ -722,7 +721,7 @@ struct ForwardingOplogState {
     last_oplog_idx: OplogIndex,
     oplog_service: Arc<dyn OplogService>,
     components: Arc<dyn ComponentService>,
-    plugins: Arc<dyn PluginsService>
+    plugins: Arc<dyn PluginsService>,
 }
 
 impl ForwardingOplogState {

@@ -19,9 +19,9 @@ use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, Indexed
 use async_mutex::Mutex;
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PayloadId};
 use golem_common::model::{
     OwnedWorkerId, ScanCursor, WorkerId, WorkerMetadata, WorkerStatusRecord,
 };

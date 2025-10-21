@@ -18,7 +18,9 @@ use assert2::assert;
 use golem_client::api::RegistryServiceClient;
 use golem_common::model::base64::Base64;
 use golem_common::model::component::{
-    ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority, PluginUninstallation
+    ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
+    ComponentName, ComponentUpdate, PluginInstallation, PluginInstallationAction,
+    PluginInstallationUpdate, PluginPriority, PluginUninstallation,
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{

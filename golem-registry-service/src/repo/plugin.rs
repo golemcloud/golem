@@ -17,7 +17,11 @@ pub trait PluginRepo: Send + Sync {
 
     async fn delete(&self, plugin_id: &Uuid, actor: &Uuid) -> RepoResult<Option<PluginRecord>>;
 
-    async fn get_by_id(&self, plugin_id: &Uuid, include_deleted: bool) -> RepoResult<Option<PluginRecord>>;
+    async fn get_by_id(
+        &self,
+        plugin_id: &Uuid,
+        include_deleted: bool,
+    ) -> RepoResult<Option<PluginRecord>>;
 
     async fn get_by_name_and_version(
         &self,
@@ -67,7 +71,11 @@ impl<Repo: PluginRepo> PluginRepo for LoggedPluginRepo<Repo> {
             .await
     }
 
-    async fn get_by_id(&self, plugin_id: &Uuid, include_deleted: bool) -> RepoResult<Option<PluginRecord>> {
+    async fn get_by_id(
+        &self,
+        plugin_id: &Uuid,
+        include_deleted: bool,
+    ) -> RepoResult<Option<PluginRecord>> {
         self.repo
             .get_by_id(plugin_id, include_deleted)
             .instrument(Self::span_id(plugin_id))
@@ -191,7 +199,11 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
             .await
     }
 
-    async fn get_by_id(&self, plugin_id: &Uuid, include_deleted: bool) -> RepoResult<Option<PluginRecord>> {
+    async fn get_by_id(
+        &self,
+        plugin_id: &Uuid,
+        include_deleted: bool,
+    ) -> RepoResult<Option<PluginRecord>> {
         self.with_ro("get_by_id")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
@@ -214,7 +226,7 @@ impl PluginRepo for DbPluginRepo<PostgresPool> {
                         )
                 "#})
                 .bind(plugin_id)
-                .bind(include_deleted)
+                .bind(include_deleted),
             )
             .await
     }

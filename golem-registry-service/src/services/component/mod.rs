@@ -66,18 +66,19 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::NotFound)?;
 
-        let environment = self.environment_service
-            .get_and_authorize(
-                &EnvironmentId(record.environment_id).clone(),
-                EnvironmentAction::ViewComponent,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_)
-                | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                other => other.into(),
-            })?;
+        let environment =
+            self.environment_service
+                .get_and_authorize(
+                    &EnvironmentId(record.environment_id).clone(),
+                    EnvironmentAction::ViewComponent,
+                    auth,
+                )
+                .await
+                .map_err(|err| match err {
+                    EnvironmentError::EnvironmentNotFound(_)
+                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                    other => other.into(),
+                })?;
 
         Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
@@ -96,18 +97,19 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::NotFound)?;
 
-        let environment = self.environment_service
-            .get_and_authorize(
-                &EnvironmentId(record.environment_id),
-                EnvironmentAction::ViewComponent,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_)
-                | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                other => other.into(),
-            })?;
+        let environment =
+            self.environment_service
+                .get_and_authorize(
+                    &EnvironmentId(record.environment_id),
+                    EnvironmentAction::ViewComponent,
+                    auth,
+                )
+                .await
+                .map_err(|err| match err {
+                    EnvironmentError::EnvironmentNotFound(_)
+                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                    other => other.into(),
+                })?;
 
         Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
@@ -119,22 +121,27 @@ impl ComponentService {
     ) -> Result<Vec<Component>, ComponentError> {
         info!(environment_id = %environment_id, "Get staged components");
 
-        let environment = self.environment_service
-            .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_) | EnvironmentError::Unauthorized(_) => {
-                    ComponentError::NotFound
-                }
-                other => other.into(),
-            })?;
+        let environment =
+            self.environment_service
+                .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
+                .await
+                .map_err(|err| match err {
+                    EnvironmentError::EnvironmentNotFound(_)
+                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                    other => other.into(),
+                })?;
 
         let result = self
             .component_repo
             .list_staged(&environment_id.0)
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id.clone(), environment.owner_account_id.clone()))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id.clone(),
+                    environment.owner_account_id.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -158,18 +165,19 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::NotFound)?;
 
-        let environment = self.environment_service
-            .get_and_authorize(
-                &EnvironmentId(record.environment_id),
-                EnvironmentAction::ViewComponent,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_)
-                | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                other => other.into(),
-            })?;
+        let environment =
+            self.environment_service
+                .get_and_authorize(
+                    &EnvironmentId(record.environment_id),
+                    EnvironmentAction::ViewComponent,
+                    auth,
+                )
+                .await
+                .map_err(|err| match err {
+                    EnvironmentError::EnvironmentNotFound(_)
+                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                    other => other.into(),
+                })?;
 
         Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
@@ -186,7 +194,8 @@ impl ComponentService {
             "Get deployed components"
         );
 
-        let environment = self.environment_service
+        let environment = self
+            .environment_service
             .get_and_authorize(environment_id, EnvironmentAction::ViewComponent, auth)
             .await
             .map_err(|err| match err {
@@ -202,7 +211,12 @@ impl ComponentService {
             .list_by_deployment(&environment_id.0, deployment_revision_id.0 as i64)
             .await?
             .into_iter()
-            .map(|r| r.try_into_model(environment.application_id.clone(), environment.owner_account_id.clone()))
+            .map(|r| {
+                r.try_into_model(
+                    environment.application_id.clone(),
+                    environment.owner_account_id.clone(),
+                )
+            })
             .collect::<Result<_, _>>()?;
 
         Ok(result)
@@ -232,20 +246,21 @@ impl ComponentService {
             .await?
             .ok_or(ComponentError::NotFound)?;
 
-        let environment = self.environment_service
-            .get_and_authorize(
-                &EnvironmentId(record.environment_id),
-                EnvironmentAction::ViewComponent,
-                auth,
-            )
-            .await
-            .map_err(|err| match err {
-                EnvironmentError::EnvironmentNotFound(_)
-                | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
-                other => other.into(),
-            })?;
+        let environment =
+            self.environment_service
+                .get_and_authorize(
+                    &EnvironmentId(record.environment_id),
+                    EnvironmentAction::ViewComponent,
+                    auth,
+                )
+                .await
+                .map_err(|err| match err {
+                    EnvironmentError::EnvironmentNotFound(_)
+                    | EnvironmentError::Unauthorized(_) => ComponentError::NotFound,
+                    other => other.into(),
+                })?;
 
-        Ok(record.try_into_model(environment.application_id,  environment.owner_account_id)?)
+        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
     }
 
     pub async fn download_component_wasm(

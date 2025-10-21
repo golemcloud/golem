@@ -30,6 +30,7 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
 use golem_common::model::auth::{EnvironmentRole, TokenSecret};
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
     ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentId,
@@ -50,7 +51,6 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
-use golem_common::model::component::PluginPriority;
 
 #[derive(Clone)]
 pub struct TestDependenciesDsl<Deps> {

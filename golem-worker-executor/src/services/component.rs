@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::golem_config::{
-    ComponentCacheConfig, ComponentServiceConfig,
-};
-use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
+use super::golem_config::{ComponentCacheConfig, ComponentServiceConfig};
 use crate::metrics::component::record_compilation_time;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,10 +29,6 @@ use tracing::info;
 use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -55,7 +53,7 @@ pub trait ComponentService: Send + Sync {
         component_reference: String,
         resolving_environment: EnvironmentId,
         resolving_application: ApplicationId,
-        resolving_account: AccountId
+        resolving_account: AccountId,
     ) -> Result<Option<ComponentId>, WorkerExecutorError>;
 
     /// Returns all the component metadata the implementation has cached.
@@ -67,9 +65,10 @@ pub fn configured(
     config: &ComponentServiceConfig,
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
-    blob_storage: Arc<dyn BlobStorage>
+    blob_storage: Arc<dyn BlobStorage>,
 ) -> Arc<dyn ComponentService> {
-    let compiled_component_service = golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
+    let compiled_component_service =
+        golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
     match config {
         ComponentServiceConfig::Grpc(config) => {
             info!("Using component API at {}", config.url());
@@ -86,7 +85,7 @@ pub fn configured(
                 config.retries.clone(),
                 config.connect_timeout,
                 compiled_component_service,
-                config.max_component_size
+                config.max_component_size,
             ))
         }
         ComponentServiceConfig::Local(config) => {
@@ -127,14 +126,17 @@ mod filesystem {
     use super::record_compilation_time;
     use super::ComponentKey;
     use super::ComponentService;
-    use golem_service_base::service::compiled_component::CompiledComponentService;
     use async_lock::{RwLock, Semaphore};
     use async_trait::async_trait;
     use golem_common::cache::Cache;
     use golem_common::cache::SimpleCache;
-    use golem_common::model::component::{ComponentDto};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::ComponentDto;
     use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::service::compiled_component::CompiledComponentService;
     use golem_service_base::testing::LocalFileSystemComponentMetadata;
     use std::collections::{HashMap, HashSet};
     use std::path::{Path, PathBuf};
@@ -144,9 +146,6 @@ mod filesystem {
     use tracing::{debug, warn, Instrument};
     use wasmtime::component::Component;
     use wasmtime::Engine;
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::account::AccountId;
-    use golem_common::model::application::ApplicationId;
 
     pub struct ComponentServiceLocalFileSystem {
         root: PathBuf,
@@ -314,7 +313,12 @@ mod filesystem {
                                 );
 
                                 let result = compiled_component_service
-                                    .put(environment_id, &component_id, component_version, &component)
+                                    .put(
+                                        environment_id,
+                                        &component_id,
+                                        component_version,
+                                        &component,
+                                    )
                                     .await;
 
                                 match result {
@@ -395,8 +399,7 @@ mod filesystem {
             engine: &Engine,
             component_id: &ComponentId,
             component_version: ComponentRevision,
-        ) -> Result<(Component, ComponentDto), WorkerExecutorError>
-        {
+        ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
             let key = ComponentKey {
                 component_id: component_id.clone(),
                 component_version,
@@ -444,7 +447,7 @@ mod filesystem {
             component_reference: String,
             _resolving_environment: EnvironmentId,
             _resolving_application: ApplicationId,
-            _resolving_account: AccountId
+            _resolving_account: AccountId,
         ) -> Result<Option<ComponentId>, WorkerExecutorError> {
             Ok(self
                 .index
@@ -489,9 +492,7 @@ mod filesystem {
 
 mod grpc {
     use super::{create_component_cache, ComponentKey, ComponentService};
-    use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
     use crate::metrics::component::record_compilation_time;
-    use golem_service_base::service::compiled_component::CompiledComponentService;
     use async_trait::async_trait;
     use futures::TryStreamExt;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -503,9 +504,15 @@ mod grpc {
     use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
     use golem_common::client::{GrpcClient, GrpcClientConfig};
     use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
-    use golem_common::model::{RetryConfig};
+    use golem_common::model::account::AccountId;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::RetryConfig;
     use golem_common::retries::with_retries;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
+    use golem_service_base::service::compiled_component::CompiledComponentService;
     use http::Uri;
     use prost::Message;
     use std::future::Future;
@@ -518,15 +525,10 @@ mod grpc {
     use uuid::Uuid;
     use wasmtime::component::Component;
     use wasmtime::Engine;
-    use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::account::AccountId;
-    use golem_common::model::application::ApplicationId;
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-        component_metadata_cache:
-            Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
+        component_metadata_cache: Cache<ComponentKey, (), ComponentDto, WorkerExecutorError>,
         resolved_component_cache:
             Cache<(EnvironmentId, String), (), Option<ComponentId>, WorkerExecutorError>,
         access_token: Uuid,
@@ -546,7 +548,7 @@ mod grpc {
             retry_config: RetryConfig,
             connect_timeout: Duration,
             compiled_component_service: Arc<dyn CompiledComponentService>,
-            max_component_size: usize
+            max_component_size: usize,
         ) -> Self {
             Self {
                 component_cache: create_component_cache(max_component_capacity, time_to_idle),
@@ -574,7 +576,7 @@ mod grpc {
                         retries_on_unavailable: retry_config.clone(),
                         connect_timeout,
                     },
-                )
+                ),
             }
         }
 
@@ -623,7 +625,10 @@ mod grpc {
                                 .expect("Didn't receive expected field result")
                             {
                                 get_components_response::Result::Success(payload) => {
-                                    let component_id = payload.components.first().map(|c| c.component_id.unwrap().try_into().unwrap());
+                                    let component_id = payload
+                                        .components
+                                        .first()
+                                        .map(|c| c.component_id.unwrap().try_into().unwrap());
                                     Ok(component_id)
                                 }
                                 get_components_response::Result::Error(err) => {
@@ -649,8 +654,7 @@ mod grpc {
             engine: &Engine,
             component_id: &ComponentId,
             component_version: ComponentRevision,
-        ) -> Result<(Component, ComponentDto), WorkerExecutorError>
-        {
+        ) -> Result<(Component, ComponentDto), WorkerExecutorError> {
             let key = ComponentKey {
                 component_id: component_id.clone(),
                 component_version,
@@ -816,7 +820,7 @@ mod grpc {
             component_reference: String,
             resolving_environment: EnvironmentId,
             _resolving_application: ApplicationId,
-            _resolving_account: AccountId
+            _resolving_account: AccountId,
         ) -> Result<Option<ComponentId>, WorkerExecutorError> {
             let component_slug = ComponentSlug::parse(&component_reference).map_err(|e| {
                 WorkerExecutorError::invalid_request(format!("Invalid component reference: {e}"))

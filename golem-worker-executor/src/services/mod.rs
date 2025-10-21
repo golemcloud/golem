@@ -37,13 +37,13 @@ pub mod worker_event;
 pub mod worker_fork;
 pub mod worker_proxy;
 
-use crate::services::worker_activator::WorkerActivator;
-use std::sync::Arc;
 use crate::services::agent_types::AgentTypesService;
 use crate::services::events::Events;
 use crate::services::plugins::PluginsService;
+use crate::services::worker_activator::WorkerActivator;
 use crate::workerctx::WorkerCtx;
 use file_loader::FileLoader;
+use std::sync::Arc;
 use tokio::runtime::Handle;
 
 #[derive(Clone)]

@@ -36,11 +36,11 @@ use bincode::de::Decoder;
 use bincode::enc::Encoder;
 use bincode::error::{DecodeError, EncodeError};
 use bincode::Decode;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::component::{ComponentId, ComponentRevision};
-use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::model::{IdempotencyKey, OplogIndex, PromiseId, RetryConfig};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::sync::Arc;
 use std::time::Duration;
@@ -650,7 +650,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                     component_slug.clone(),
                     self.state.component_metadata.environment_id.clone(),
                     self.state.component_metadata.application_id.clone(),
-                    self.state.component_metadata.account_id.clone()
+                    self.state.component_metadata.account_id.clone(),
                 )
                 .await;
             durability.try_trigger_retry(self, &result).await?;
@@ -1020,7 +1020,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 component_slug.clone(),
                 self.state.component_metadata.environment_id.clone(),
                 self.state.component_metadata.application_id.clone(),
-                self.state.component_metadata.account_id.clone()
+                self.state.component_metadata.account_id.clone(),
             )
             .await?;
 

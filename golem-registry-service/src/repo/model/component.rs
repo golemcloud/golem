@@ -18,6 +18,8 @@ use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
     InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
@@ -29,8 +31,7 @@ use golem_common::model::component_metadata::{
 use golem_common::model::deployment::DeploymentPlanComponentEntry;
 use golem_common::model::diff::{self, Hash, Hashable};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::component::PluginPriority;
-use golem_common::model::plugin_registration::{PluginRegistrationId};
+use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::repo::RepoError;
 use sqlx::encode::IsNull;
 use sqlx::error::BoxDynError;
@@ -40,7 +41,6 @@ use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
-use golem_common::model::application::ApplicationId;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentRepoError {
@@ -469,7 +469,11 @@ pub struct ComponentExtRevisionRecord {
 }
 
 impl ComponentExtRevisionRecord {
-    pub fn try_into_model(self, application_id: ApplicationId, account_id: AccountId) -> Result<Component, RepoError> {
+    pub fn try_into_model(
+        self,
+        application_id: ApplicationId,
+        account_id: AccountId,
+    ) -> Result<Component, RepoError> {
         Ok(Component {
             id: ComponentId(self.revision.component_id),
             revision: ComponentRevision(self.revision.revision_id as u64),

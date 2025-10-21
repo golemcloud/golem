@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::grpc::authorised_grpc_request;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
@@ -27,13 +26,12 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_api_grpc::proto::golem::worker::{CompleteParameters, InvokeParameters, UpdateMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::component::ComponentRevision;
-use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId,
-};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, PromiseId, RetryConfig, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::authorised_grpc_request;
 use golem_service_base::model::RevertWorkerTarget;
 use golem_wasm::{Value, ValueAndType, WitValue};
 use http::Uri;

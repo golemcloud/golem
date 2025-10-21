@@ -24,7 +24,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
-use crate::services::plugins::{PluginsService};
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -61,23 +61,20 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> Arc<dyn PluginsService> {
+    fn create_plugins(&self, golem_config: &GolemConfig) -> Arc<dyn PluginsService> {
         crate::services::plugins::configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage>
+        blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
-            blob_storage
+            blob_storage,
         )
     }
 

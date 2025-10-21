@@ -17,7 +17,6 @@ use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller
 use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
-use golem_service_base::model::plugin_registration::{AppPluginSpec, LibraryPluginSpec, PluginSpec};
 use crate::repo::component::ComponentRepo;
 use crate::repo::model::component::{ComponentRepoError, ComponentRevisionRecord};
 use crate::services::account_usage::{AccountUsage, AccountUsageService};
@@ -33,6 +32,7 @@ use crate::services::run_cpu_bound_work;
 use anyhow::{Context, anyhow};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::EnvironmentAction;
+use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
     ComponentType, ComponentUpdate, InitialComponentFile, InitialComponentFileKey, InstalledPlugin,
@@ -42,6 +42,9 @@ use golem_common::model::component::{ComponentId, PluginInstallation};
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
+use golem_service_base::model::plugin_registration::{
+    AppPluginSpec, LibraryPluginSpec, PluginSpec,
+};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -50,7 +53,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 use tracing::{Instrument, debug, info, info_span};
-use golem_common::model::component::PluginPriority;
 
 pub struct ComponentWriteService {
     component_repo: Arc<dyn ComponentRepo>,
@@ -218,11 +220,7 @@ impl ComponentWriteService {
 
         let environment = self
             .environment_service
-            .get_and_authorize(
-                &environment_id,
-                EnvironmentAction::UpdateComponent,
-                auth,
-            )
+            .get_and_authorize(&environment_id, EnvironmentAction::UpdateComponent, auth)
             .await
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => ComponentError::NotFound,
@@ -230,7 +228,10 @@ impl ComponentWriteService {
                 other => other.into(),
             })?;
 
-        let component = component_record.try_into_model(environment.application_id.clone(), environment.owner_account_id.clone())?;
+        let component = component_record.try_into_model(
+            environment.application_id.clone(),
+            environment.owner_account_id.clone(),
+        )?;
 
         // Fast path. If the current revision does not match we will reject it later anyway
         if component.revision != component_update.current_revision {

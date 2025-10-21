@@ -22,11 +22,10 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use async_trait::async_trait;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::component::ComponentType;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use std::sync::Arc;
 use tracing::debug;

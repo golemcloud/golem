@@ -1,6 +1,7 @@
 use crate::services::{HasConfig, HasOplogService};
 use async_recursion::async_recursion;
-use golem_common::base_model::{OplogIndex};
+use golem_common::base_model::OplogIndex;
+use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::oplog::{
     OplogEntry, TimestampedUpdateDescription, UpdateDescription, WorkerError, WorkerResourceId,
 };
@@ -11,7 +12,6 @@ use golem_common::model::{
     WorkerStatusRecord,
 };
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use golem_common::model::component::{ComponentRevision, PluginPriority};
 
 /// Like calculate_last_known_status, but assumes that the oplog exists and has at least a Create entry in it.
 pub async fn calculate_last_known_status_for_existing_worker<T>(
@@ -727,10 +727,14 @@ fn calculate_active_plugins(
         }
 
         match entry {
-            OplogEntry::ActivatePlugin { plugin_priority, .. } => {
+            OplogEntry::ActivatePlugin {
+                plugin_priority, ..
+            } => {
                 result.insert(*plugin_priority);
             }
-            OplogEntry::DeactivatePlugin { plugin_priority, .. } => {
+            OplogEntry::DeactivatePlugin {
+                plugin_priority, ..
+            } => {
                 result.remove(plugin_priority);
             }
             OplogEntry::SuccessfulUpdate {
@@ -772,17 +776,17 @@ mod test {
     use bincode::Encode;
     use bytes::Bytes;
     use golem_common::base_model::OplogIndex;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::invocation_context::{InvocationContextStack, TraceId};
     use golem_common::model::oplog::{
         DurableFunctionType, OplogEntry, OplogPayload, TimestampedUpdateDescription,
         UpdateDescription,
     };
     use golem_common::model::regions::{DeletedRegions, OplogRegion};
-    use golem_common::model::environment::EnvironmentId;
-    use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
     use golem_common::model::{
-        FailedUpdateRecord, IdempotencyKey,
-        OwnedWorkerId, RetryConfig, ScanCursor,
+        FailedUpdateRecord, IdempotencyKey, OwnedWorkerId, RetryConfig, ScanCursor,
         SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
         WorkerMetadata, WorkerStatus, WorkerStatusRecord,
     };
@@ -794,7 +798,6 @@ mod test {
     use std::collections::{BTreeMap, HashMap, HashSet};
     use std::sync::Arc;
     use test_r::test;
-    use golem_common::model::account::AccountId;
 
     #[test]
     async fn empty() {
@@ -859,7 +862,9 @@ mod test {
     #[test]
     async fn single_auto_update_for_running() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: ComponentRevision(2) };
+        let update1 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(2),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", &0, k1.clone())
@@ -877,8 +882,12 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: ComponentRevision(2) };
-        let update2 = UpdateDescription::Automatic { target_version: ComponentRevision(3) };
+        let update1 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(2),
+        };
+        let update2 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(3),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", &0, k1.clone())
@@ -909,7 +918,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: ComponentRevision(2)})
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |status| status.total_linear_memory_size = 200)
@@ -934,7 +945,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: ComponentRevision(2) })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |_| {})
@@ -959,7 +972,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: ComponentRevision(2) })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .failed_update(update2)
             .exported_function_invoked("c", &0, k2.clone())
             .exported_function_completed(&'y', k2)
@@ -971,8 +986,12 @@ mod test {
     #[test]
     async fn auto_update_for_running_with_jump_and_revert() {
         let k1 = IdempotencyKey::fresh();
-        let update1 = UpdateDescription::Automatic { target_version: ComponentRevision(2) };
-        let update2 = UpdateDescription::Automatic { target_version: ComponentRevision(3) };
+        let update1 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(2),
+        };
+        let update2 = UpdateDescription::Automatic {
+            target_version: ComponentRevision(3),
+        };
 
         let test_case = TestCase::builder(1)
             .exported_function_invoked("a", &0, k1.clone())
@@ -1004,7 +1023,9 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: ComponentRevision(2) })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |_| {})
@@ -1034,13 +1055,17 @@ mod test {
             .exported_function_invoked("a", &0, k1.clone())
             .grow_memory(10)
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: ComponentRevision(2) })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .imported_function_invoked("b", &0, &1, DurableFunctionType::ReadLocal)
             .exported_function_completed(&'x', k1)
             .pending_update(&update1, |_| {})
             .failed_update(update1)
             .exported_function_invoked("c", &0, k2.clone())
-            .pending_invocation(WorkerInvocation::ManualUpdate { target_version: ComponentRevision(2) })
+            .pending_invocation(WorkerInvocation::ManualUpdate {
+                target_version: ComponentRevision(2),
+            })
             .exported_function_completed(&'y', k2)
             .pending_update(&update2, |_| {})
             .successful_update(update2, 2000, &HashSet::new())
@@ -1504,7 +1529,11 @@ mod test {
                     worker_name: "test-worker".to_string(),
                 },
             );
-            TestCaseBuilder::new(account_id, owned_worker_id, ComponentRevision(initial_component_version))
+            TestCaseBuilder::new(
+                account_id,
+                owned_worker_id,
+                ComponentRevision(initial_component_version),
+            )
         }
     }
 

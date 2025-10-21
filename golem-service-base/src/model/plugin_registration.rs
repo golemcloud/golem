@@ -33,7 +33,7 @@ pub struct PluginRegistration {
     pub icon: Vec<u8>,
     pub homepage: String,
     pub spec: PluginSpec,
-    pub deleted: bool
+    pub deleted: bool,
 }
 
 impl From<PluginRegistration> for PluginRegistrationDto {
@@ -83,9 +83,7 @@ impl From<PluginSpec> for PluginSpecDto {
 mod protobuf {
     use super::*;
 
-    impl TryFrom<golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition>
-        for PluginSpec
-    {
+    impl TryFrom<golem_api_grpc::proto::golem::component::PluginTypeSpecificDefinition> for PluginSpec {
         type Error = String;
 
         fn try_from(
@@ -100,9 +98,7 @@ mod protobuf {
         }
     }
 
-    impl From<LibraryPluginSpec>
-        for golem_api_grpc::proto::golem::component::LibraryPluginDefinition
-    {
+    impl From<LibraryPluginSpec> for golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
         fn from(value: LibraryPluginSpec) -> Self {
             golem_api_grpc::proto::golem::component::LibraryPluginDefinition {
                 blob_storage_key: value.blob_storage_key.0,
@@ -146,7 +142,9 @@ mod protobuf {
 
     impl TryFrom<golem_api_grpc::proto::golem::component::PluginRegistration> for PluginRegistration {
         type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::component::PluginRegistration) -> Result<Self, Self::Error> {
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::PluginRegistration,
+        ) -> Result<Self, Self::Error> {
             Ok(Self {
                 id: value.id.ok_or("Missing plugin id")?.try_into()?,
                 account_id: value.account_id.ok_or("Missing account id")?.try_into()?,
@@ -156,7 +154,7 @@ mod protobuf {
                 icon: value.icon,
                 homepage: value.homepage,
                 spec: value.specs.ok_or("Missing plugin specs")?.try_into()?,
-                deleted: value.deleted
+                deleted: value.deleted,
             })
         }
     }

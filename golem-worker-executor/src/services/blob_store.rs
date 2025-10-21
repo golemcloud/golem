@@ -12,19 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, ExistsResult};
 use golem_wasm_derive::IntoValue;
-use golem_common::model::environment::EnvironmentId;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Interface for storing blobs in a persistent storage.
 #[async_trait]
 pub trait BlobStoreService: Send + Sync {
-    async fn clear(&self, environment_id: EnvironmentId, container_name: String) -> anyhow::Result<()>;
+    async fn clear(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> anyhow::Result<()>;
 
     async fn container_exists(
         &self,
@@ -132,7 +136,11 @@ impl DefaultBlobStoreService {
 
 #[async_trait]
 impl BlobStoreService for DefaultBlobStoreService {
-    async fn clear(&self, environment_id: EnvironmentId, container_name: String) -> anyhow::Result<()> {
+    async fn clear(
+        &self,
+        environment_id: EnvironmentId,
+        container_name: String,
+    ) -> anyhow::Result<()> {
         self.blob_storage
             .delete_dir(
                 "blob_store",
@@ -424,14 +432,14 @@ pub struct ObjectMetadata {
 
 #[cfg(test)]
 mod tests {
-    use test_r::test;
+    use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use std::path::Path;
     use std::sync::Arc;
     use tempfile::TempDir;
-    use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
-    use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
-    use golem_common::model::environment::EnvironmentId;
+    use test_r::test;
 
     async fn test_container_exists(blob_store: &impl BlobStoreService) {
         let environment_id = EnvironmentId::new_v4();

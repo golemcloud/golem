@@ -133,15 +133,15 @@ mod grpc {
     };
     use golem_common::client::{GrpcClient, GrpcClientConfig};
     use golem_common::model::agent::RegisteredAgentType;
-    use golem_common::model::{RetryConfig};
-    use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::RetryConfig;
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::grpc::authorised_grpc_request;
     use http::Uri;
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
-    use golem_service_base::grpc::authorised_grpc_request;
 
     #[derive(Clone)]
     pub struct AgentTypesServiceGrpc {
@@ -265,8 +265,8 @@ mod local {
     use crate::services::agent_types::AgentTypesService;
     use crate::services::component::ComponentService;
     use async_trait::async_trait;
-    use golem_common::model::environment::EnvironmentId;
     use golem_common::model::agent::RegisteredAgentType;
+    use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Arc;
 

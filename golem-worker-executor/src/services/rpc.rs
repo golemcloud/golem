@@ -28,18 +28,18 @@ use crate::services::{
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
-    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use golem_common::model::account::AccountId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
-use golem_common::model::account::AccountId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{ValueAndType, WitValue};
 use golem_wasm_derive::IntoValue;

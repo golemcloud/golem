@@ -16,15 +16,17 @@ use super::agent::AgentType;
 use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
-use super::plugin_registration::{PluginRegistrationId};
+use super::plugin_registration::PluginRegistrationId;
+use crate::model::account::AccountId;
+use crate::model::application::ApplicationId;
 use crate::model::component_metadata::ComponentMetadata;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
     newtype_uuid,
 };
-use crate::model::application::ApplicationId;
 use bincode::{Decode, Encode};
 use derive_more::Display;
+use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -33,8 +35,6 @@ use std::str::FromStr;
 use strum_macros::FromRepr;
 use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
-use golem_wasm_derive::IntoValue;
-use crate::model::account::AccountId;
 
 newtype_uuid!(
     ComponentId,
@@ -348,9 +348,9 @@ impl From<ComponentId> for golem_wasm::ComponentId {
 mod protobuf {
     use super::{ComponentDto, InstalledPlugin};
     use super::{ComponentName, ComponentRevision, ComponentType, PluginPriority};
-    use std::time::SystemTime;
     use applying::Apply;
     use std::collections::BTreeMap;
+    use std::time::SystemTime;
 
     impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
         fn from(value: InstalledPlugin) -> Self {
@@ -364,9 +364,14 @@ mod protobuf {
 
     impl TryFrom<golem_api_grpc::proto::golem::component::PluginInstallation> for InstalledPlugin {
         type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::component::PluginInstallation) -> Result<Self, Self::Error> {
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::PluginInstallation,
+        ) -> Result<Self, Self::Error> {
             Ok(Self {
-                plugin_registration_id: value.plugin_registration_id.ok_or("Missing plugin_registration_id")?.try_into()?,
+                plugin_registration_id: value
+                    .plugin_registration_id
+                    .ok_or("Missing plugin_registration_id")?
+                    .try_into()?,
                 priority: PluginPriority(value.priority),
                 parameters: value.parameters.into_iter().collect(),
             })
@@ -375,7 +380,9 @@ mod protobuf {
 
     impl TryFrom<golem_api_grpc::proto::golem::component::Component> for ComponentDto {
         type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::component::Component) -> Result<Self, Self::Error> {
+        fn try_from(
+            value: golem_api_grpc::proto::golem::component::Component,
+        ) -> Result<Self, Self::Error> {
             let id = value
                 .component_id
                 .ok_or("Missing component id")?
@@ -417,7 +424,11 @@ mod protobuf {
                 .map_err(|_| "Failed to convert timestamp".to_string())?
                 .into();
 
-            let component_type = value.component_type.ok_or("missing component type")?.apply(ComponentType::from_repr).ok_or("Invalid component type")?;
+            let component_type = value
+                .component_type
+                .ok_or("missing component type")?
+                .apply(ComponentType::from_repr)
+                .ok_or("Invalid component type")?;
 
             let files = value
                 .files
@@ -431,12 +442,10 @@ mod protobuf {
                 .map(|p| p.try_into())
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let env = value
-                .env
-                .into_iter()
-                .collect::<BTreeMap<_, _>>();
+            let env = value.env.into_iter().collect::<BTreeMap<_, _>>();
 
-            let wasm_hash = value.wasm_hash_bytes
+            let wasm_hash = value
+                .wasm_hash_bytes
                 .into_iter()
                 .map(|b| b as u8)
                 .collect::<Vec<_>>()

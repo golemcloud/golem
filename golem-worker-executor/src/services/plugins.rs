@@ -15,12 +15,14 @@
 use super::golem_config::PluginServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
-use golem_common::model::plugin_registration::{PluginRegistrationId};
-use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin, PluginPriority};
+use golem_common::model::component::{
+    ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
+};
+use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::plugin_registration::PluginRegistration;
 use std::sync::Arc;
 use uuid::Uuid;
-use golem_service_base::model::plugin_registration::PluginRegistration;
 
 #[async_trait]
 pub trait PluginsService: Send + Sync {
@@ -30,12 +32,14 @@ pub trait PluginsService: Send + Sync {
         &self,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: PluginPriority
+        plugin_priority: PluginPriority,
     ) -> Result<(InstalledPlugin, PluginRegistration), WorkerExecutorError> {
         let plugin_installation = self
             .get_plugin_installation(component_id, component_version, plugin_priority)
             .await?;
-        let plugin_definition = self.get_plugin_definition(&plugin_installation.plugin_registration_id).await?;
+        let plugin_definition = self
+            .get_plugin_definition(&plugin_installation.plugin_registration_id)
+            .await?;
         Ok((plugin_installation, plugin_definition))
     }
 
@@ -43,12 +47,12 @@ pub trait PluginsService: Send + Sync {
         &self,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: PluginPriority
+        plugin_priority: PluginPriority,
     ) -> Result<InstalledPlugin, WorkerExecutorError>;
 
     async fn get_plugin_definition(
         &self,
-        plugin_id: &PluginRegistrationId
+        plugin_id: &PluginRegistrationId,
     ) -> Result<PluginRegistration, WorkerExecutorError>;
 }
 
@@ -77,11 +81,7 @@ pub fn configured(config: &PluginServiceConfig) -> Arc<dyn PluginsService> {
 pub struct CachedPlugins<Inner: PluginsService> {
     inner: Inner,
     cached_plugin_installations: Cache<
-        (
-            ComponentId,
-            ComponentRevision,
-            PluginPriority,
-        ),
+        (ComponentId, ComponentRevision, PluginPriority),
         (),
         InstalledPlugin,
         WorkerExecutorError,
@@ -145,24 +145,16 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
         &self,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: PluginPriority
+        plugin_priority: PluginPriority,
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
-        let key = (
-            component_id.clone(),
-            component_version,
-            plugin_priority,
-        );
+        let key = (component_id.clone(), component_version, plugin_priority);
         let inner = self.inner.clone();
         let component_id = component_id.clone();
         self.cached_plugin_installations
             .get_or_insert_simple(&key, || {
                 Box::pin(async move {
                     inner
-                        .get_plugin_installation(
-                            &component_id,
-                            component_version,
-                            plugin_priority,
-                        )
+                        .get_plugin_installation(&component_id, component_version, plugin_priority)
                         .await
                 })
             })
@@ -171,18 +163,12 @@ impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<I
 
     async fn get_plugin_definition(
         &self,
-        plugin_id: &PluginRegistrationId
+        plugin_id: &PluginRegistrationId,
     ) -> Result<PluginRegistration, WorkerExecutorError> {
         let inner = self.inner.clone();
         self.cached_plugin_definitions
             .get_or_insert_simple(plugin_id, || {
-                Box::pin(async move {
-                    inner
-                        .get_plugin_definition(
-                            plugin_id
-                        )
-                        .await
-                })
+                Box::pin(async move { inner.get_plugin_definition(plugin_id).await })
             })
             .await
     }
@@ -207,22 +193,21 @@ impl PluginsService for PluginsUnavailable {
         &self,
         _component_id: &ComponentId,
         _component_version: ComponentRevision,
-        _plugin_priority: PluginPriority
+        _plugin_priority: PluginPriority,
     ) -> Result<InstalledPlugin, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
     }
 
     async fn get_plugin_definition(
         &self,
-        _plugin_id: &PluginRegistrationId
+        _plugin_id: &PluginRegistrationId,
     ) -> Result<PluginRegistration, WorkerExecutorError> {
         Err(WorkerExecutorError::runtime("Not available"))
     }
 }
 
 mod grpc {
-    use golem_service_base::grpc::authorised_grpc_request;
-    use crate::services::plugins::{PluginsService};
+    use crate::services::plugins::PluginsService;
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
     use golem_api_grpc::proto::golem::component::v1::plugin_service_client::PluginServiceClient;
@@ -233,16 +218,19 @@ mod grpc {
         get_plugin_registration_by_id_response, GetPluginRegistrationByIdRequest,
     };
     use golem_common::client::{GrpcClient, GrpcClientConfig};
+    use golem_common::model::component::{
+        ComponentId, ComponentRevision, InstalledPlugin, PluginPriority,
+    };
+    use golem_common::model::plugin_registration::PluginRegistrationId;
     use golem_common::model::RetryConfig;
-    use golem_common::model::component::{ComponentId, ComponentRevision, InstalledPlugin, PluginPriority};
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::grpc::authorised_grpc_request;
+    use golem_service_base::model::plugin_registration::PluginRegistration;
     use http::Uri;
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
-    use golem_common::model::plugin_registration::PluginRegistrationId;
-    use golem_service_base::model::plugin_registration::PluginRegistration;
 
     #[derive(Clone)]
     pub struct PluginsGrpc {
@@ -296,7 +284,7 @@ mod grpc {
             &self,
             component_id: &ComponentId,
             component_version: ComponentRevision,
-            plugin_priority: PluginPriority
+            plugin_priority: PluginPriority,
         ) -> Result<InstalledPlugin, WorkerExecutorError> {
             let response = self
                 .components_client
@@ -344,7 +332,7 @@ mod grpc {
 
         async fn get_plugin_definition(
             &self,
-            plugin_id: &PluginRegistrationId
+            plugin_id: &PluginRegistrationId,
         ) -> Result<PluginRegistration, WorkerExecutorError> {
             let response = self
                 .plugins_client
@@ -367,12 +355,14 @@ mod grpc {
 
             match response.result {
                 None => Err(WorkerExecutorError::runtime("Empty response"))?,
-                Some(get_plugin_registration_by_id_response::Result::Success(response)) => Ok(response
-                    .plugin
-                    .ok_or("Missing plugin field")
-                    .map_err(WorkerExecutorError::runtime)?
-                    .try_into()
-                    .map_err(WorkerExecutorError::runtime)?),
+                Some(get_plugin_registration_by_id_response::Result::Success(response)) => {
+                    Ok(response
+                        .plugin
+                        .ok_or("Missing plugin field")
+                        .map_err(WorkerExecutorError::runtime)?
+                        .try_into()
+                        .map_err(WorkerExecutorError::runtime)?)
+                }
                 Some(get_plugin_registration_by_id_response::Result::Error(error)) => {
                     Err(WorkerExecutorError::runtime(format!("{error:?}")))?
                 }

@@ -15,19 +15,19 @@
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use evicting_cache_map::EvictingCacheMap;
-use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use anyhow::anyhow;
 
 #[derive(Debug)]
 pub struct CompressedOplogArchiveService {

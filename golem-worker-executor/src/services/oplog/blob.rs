@@ -14,13 +14,14 @@
 
 use crate::services::oplog::multilayer::OplogArchive;
 use crate::services::oplog::{CompressedOplogChunk, OplogArchiveService};
+use anyhow::anyhow;
 use async_lock::RwLockUpgradableReadGuard;
 use async_trait::async_trait;
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::component::ComponentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
@@ -29,7 +30,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use anyhow::anyhow;
 
 /// An oplog archive implementation that uses the configured blob storage to store compressed
 /// chunks of the oplog.

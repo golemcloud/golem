@@ -16,15 +16,15 @@ use crate::services::HasAll;
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{OwnedWorkerId, WorkerId};
-use golem_common::model::account::AccountId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::marker::PhantomData;
 use std::sync::{Arc, Mutex};
 use tracing::{error, warn};
-use golem_common::model::component::ComponentRevision;
 
 /// Service for activating workers in the background
 #[async_trait]

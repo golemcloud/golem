@@ -17,13 +17,13 @@ use crate::durable_host::dynamic_linking::wasm_rpc::dynamic_wasm_rpc_link;
 use crate::durable_host::DurableWorkerCtx;
 use crate::workerctx::{DynamicLinking, WorkerCtx};
 use async_trait::async_trait;
+use golem_common::model::component::ComponentDto;
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_wasm::golem_rpc_0_2_x::types::HostFutureInvokeResult;
 use golem_wasm::HostWasmRpc;
 use wasmtime::component::types::ComponentItem;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
-use golem_common::model::component::ComponentDto;
 
 mod mock;
 mod wasm_rpc;

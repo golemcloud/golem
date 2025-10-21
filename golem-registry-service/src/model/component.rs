@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
+use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
@@ -25,8 +27,6 @@ use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::{Display, Formatter};
-use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {

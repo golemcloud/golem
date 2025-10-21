@@ -61,9 +61,7 @@ use crate::services::worker::WorkerService;
 use crate::services::worker_event::WorkerEventService;
 use crate::services::worker_fork::WorkerForkService;
 use crate::services::worker_proxy::WorkerProxy;
-use crate::services::{
-    worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker,
-};
+use crate::services::{worker_enumeration, HasAll, HasConfig, HasOplog, HasWorker};
 use crate::services::{HasOplogService, HasPlugins};
 use crate::wasi_host;
 use crate::worker::invocation::{invoke_observed_and_traced, InvokeResult};
@@ -82,7 +80,13 @@ pub use durability::*;
 use futures::future::try_join_all;
 use futures::TryFutureExt;
 use futures::TryStreamExt;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{
+    ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType,
+    InitialComponentFile, PluginPriority,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextSpan, InvocationContextStack, SpanId,
 };
@@ -92,15 +96,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
-use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType, InitialComponentFile, PluginPriority};
-use golem_common::model::{TransactionId};
+use golem_common::model::TransactionId;
 use golem_common::model::{
-    ComponentFileSystemNode,
-    ComponentFileSystemNodeDetails,
-    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, ScanCursor,
-    ScheduledAction, Timestamp, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    ComponentFileSystemNode, ComponentFileSystemNodeDetails, GetFileSystemNodeResult,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, ScheduledAction, Timestamp, WorkerFilter, WorkerId,
+    WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -129,7 +129,6 @@ use wasmtime_wasi_http::types::{
     default_send_request, HostFutureIncomingResponse, OutgoingRequestConfig,
 };
 use wasmtime_wasi_http::{HttpResult, WasiHttpCtx, WasiHttpImpl, WasiHttpView};
-use golem_common::model::environment::EnvironmentId;
 
 /// Partial implementation of the WorkerCtx interfaces for adding durable execution to workers.
 pub struct DurableWorkerCtx<Ctx: WorkerCtx> {

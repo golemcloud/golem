@@ -31,10 +31,9 @@ use crate::services::{
     scheduler, shard_manager, worker, worker_activator, worker_enumeration, HasActiveWorkers,
     HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig, HasEvents,
     HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin, HasOplogService,
-    HasPlugins, HasPromiseService, HasResourceLimits, HasRpc,
-    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
-    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
-    HasWorkerProxy, HasWorkerService,
+    HasPlugins, HasPromiseService, HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService,
+    HasSchedulerService, HasShardManagerService, HasShardService, HasWasmtimeEngine,
+    HasWorkerActivator, HasWorkerEnumerationService, HasWorkerProxy, HasWorkerService,
 };
 use crate::services::{rdbms, HasOplog, HasRdbmsService, HasWorkerForkService};
 use crate::worker::Worker;
@@ -44,8 +43,8 @@ use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{DurableFunctionType, OplogIndex, OplogIndexRange};
-use golem_common::model::{Timestamp, WorkerMetadata};
 use golem_common::model::{OwnedWorkerId, WorkerId};
+use golem_common::model::{Timestamp, WorkerMetadata};
 use golem_common::read_only_lock;
 use golem_common::serialization::serialize;
 use golem_service_base::error::worker_executor::WorkerExecutorError;

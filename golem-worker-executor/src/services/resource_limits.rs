@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::grpc::{is_grpc_retriable, GrpcError};
 use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
@@ -28,6 +27,7 @@ use golem_common::model::account::AccountId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::grpc::{is_grpc_retriable, GrpcError};
 use http::Uri;
 use prost::Message;
 use std::cmp::{max, min};
@@ -101,7 +101,10 @@ impl ResourceLimitsGrpc {
         updates: HashMap<AccountId, i64>,
     ) -> Result<(), WorkerExecutorError> {
         let body = BatchUpdateResourceLimits {
-            updates: updates.into_iter().map(|(k, v)| (k.0.to_string(), v)).collect(),
+            updates: updates
+                .into_iter()
+                .map(|(k, v)| (k.0.to_string(), v))
+                .collect(),
         };
         with_retries(
             "resource_limits",

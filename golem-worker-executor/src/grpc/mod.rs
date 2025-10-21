@@ -25,9 +25,8 @@ use crate::services::worker_activator::{DefaultWorkerActivator, LazyWorkerActiva
 use crate::services::worker_event::WorkerEventReceiver;
 use crate::services::{
     All, HasActiveWorkers, HasAll, HasComponentService, HasEvents, HasOplogService, HasPlugins,
-    HasPromiseService, HasRunningWorkerEnumerationService,
-    HasShardManagerService, HasShardService, HasWorkerEnumerationService, HasWorkerService,
-    UsesAllDeps,
+    HasPromiseService, HasRunningWorkerEnumerationService, HasShardManagerService, HasShardService,
+    HasWorkerEnumerationService, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
@@ -50,17 +49,21 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
-    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string, proto_worker_id_string
+    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
+    proto_promise_id_string, proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{
+    ComponentFilePath, ComponentId, ComponentType, PluginPriority,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::component::{ComponentFilePath, ComponentId, ComponentType, PluginPriority};
-use golem_common::model::account::AccountId;
 use golem_common::model::{
-    GetFileSystemNodeResult,
-    IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
+    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, ScanCursor, ShardId,
     TimestampedWorkerInvocation, WorkerEvent, WorkerFilter, WorkerId, WorkerInvocation,
     WorkerMetadata, WorkerStatus,
 };
@@ -81,8 +84,6 @@ use tonic::{Request, Response, Status};
 use tracing::info_span;
 use tracing::{debug, info, warn, Instrument};
 use wasmtime::Error;
-use golem_common::model::component::ComponentRevision;
-use golem_common::model::environment::EnvironmentId;
 
 /// This is the implementation of the Worker Executor gRPC API
 pub struct WorkerExecutorImpl<
@@ -209,8 +210,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         if let Some(limits) = request.account_limits {
-            Ctx::record_last_known_limits(self, &account_id, &limits.into())
-                .await?;
+            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
         let component_version: ComponentRevision = ComponentRevision(request.component_version);
@@ -356,7 +356,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .account_id
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
 
-        let account_id: AccountId = account_id_proto.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))?;
+        let account_id: AccountId = account_id_proto.try_into().map_err(|e| {
+            WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
+        })?;
 
         let environment_id_proto = request
             .environment_id
@@ -1075,7 +1077,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.enqueue_manual_update(ComponentRevision(request.target_version)).await?;
+                worker
+                    .enqueue_manual_update(ComponentRevision(request.target_version))
+                    .await?;
             }
         }
 
@@ -2673,9 +2677,12 @@ fn extract_owned_worker_id<T>(
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
 
-    let environment_id = get_environment_id(request)
-        .as_ref()
-        .ok_or(WorkerExecutorError::invalid_request("environment_id not found"))?;
+    let environment_id =
+        get_environment_id(request)
+            .as_ref()
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?;
     let environment_id: EnvironmentId = (*environment_id)
         .try_into()
         .map_err(WorkerExecutorError::invalid_request)?;
@@ -2690,5 +2697,7 @@ fn extract_account_id<T>(
     let account_id = get_account_id(request)
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
-    (*account_id).try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))
+    (*account_id)
+        .try_into()
+        .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))
 }

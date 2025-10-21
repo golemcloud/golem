@@ -13,12 +13,13 @@
 // limitations under the License.
 
 use crate::services::oplog::{Oplog, OplogOps, OplogService};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     AtomicOplogIndex, LogLevel, OplogEntry, OplogIndex, PersistenceLevel,
 };
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
-use golem_common::model::{ IdempotencyKey, OwnedWorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{Value, ValueAndType};
 use metrohash::MetroHash128;
@@ -28,7 +29,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::debug;
-use golem_common::model::component::ComponentRevision;
 
 #[derive(Debug, Clone)]
 pub enum ReplayEvent {

@@ -19,15 +19,15 @@ pub use blob::BlobOplogArchiveService;
 use bytes::Bytes;
 pub use compressed::{CompressedOplogArchive, CompressedOplogArchiveService, CompressedOplogChunk};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, OplogEntry, OplogIndex, OplogPayload, UpdateDescription,
 };
-use golem_common::model::component::{ComponentId,  ComponentRevision};
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp,
-    WorkerId, WorkerMetadata, WorkerStatusRecord,
+    IdempotencyKey, OwnedWorkerId, ScanCursor, Timestamp, WorkerId, WorkerMetadata,
+    WorkerStatusRecord,
 };
 use golem_common::read_only_lock;
 use golem_common::serialization::{serialize, try_deserialize};

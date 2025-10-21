@@ -28,26 +28,26 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    UsesAllDeps,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::account::AccountId;
-use golem_common::model::{RetryConfig};
-use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPriority};
+use golem_common::model::RetryConfig;
 use golem_common::model::{
-    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
+    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -70,7 +70,6 @@ use tracing::{debug, info, span, warn, Instrument, Level};
 use uuid::Uuid;
 use wasmtime::component::Instance;
 use wasmtime::{Store, UpdateDeadline};
-use golem_common::model::component::ComponentRevision;
 
 /// Represents worker that may be running or suspended.
 ///

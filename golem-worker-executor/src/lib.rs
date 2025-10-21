@@ -45,7 +45,7 @@ use crate::services::oplog::{
     BlobOplogArchiveService, CompressedOplogArchiveService, MultiLayerOplogService,
     OplogArchiveService, OplogService, PrimaryOplogService,
 };
-use crate::services::plugins::{PluginsService};
+use crate::services::plugins::PluginsService;
 use crate::services::promise::{DefaultPromiseService, PromiseService};
 use crate::services::scheduler::{SchedulerService, SchedulerServiceDefault};
 use crate::services::shard::{ShardService, ShardServiceDefault};
@@ -160,15 +160,12 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(grpc_port)
     }
 
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> Arc<dyn PluginsService>;
+    fn create_plugins(&self, golem_config: &GolemConfig) -> Arc<dyn PluginsService>;
 
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage>
+        blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -377,10 +374,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
     let file_loader = Arc::new(FileLoader::new(initial_files_service.clone())?);
     let plugins = bootstrap.create_plugins(&golem_config);
 
-    let component_service = bootstrap.create_component_service(
-        &golem_config,
-        blob_storage.clone()
-    );
+    let component_service = bootstrap.create_component_service(&golem_config, blob_storage.clone());
 
     let agent_type_service = services::agent_types::configured(
         &golem_config.agent_types_service,
@@ -484,14 +478,14 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
         component_service.clone(),
         shard_service.clone(),
         lazy_worker_activator.clone(),
-        plugins.clone()
+        plugins.clone(),
     ));
 
     let oplog_service: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
         base_oplog_service,
         oplog_processor_plugin.clone(),
         component_service.clone(),
-        plugins.clone()
+        plugins.clone(),
     ));
 
     let worker_service = Arc::new(DefaultWorkerService::new(
