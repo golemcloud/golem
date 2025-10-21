@@ -24,7 +24,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
 };
 use golem_common::grpc::proto_component_id_string;
 use golem_common::metrics::api::ApiErrorDetails;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::recorded_grpc_api_request;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -105,7 +105,7 @@ impl CompileGrpcService {
         sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), ComponentCompilationError> {
         let component_id = make_component_id(request.component_id)?;
-        let component_version = request.component_version;
+        let component_version = ComponentRevision(request.component_version);
         let environment_id = make_environment_id(request.environment_id)?;
         self.service
             .enqueue_compilation(component_id, component_version, environment_id, sender)

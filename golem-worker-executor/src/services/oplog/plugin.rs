@@ -46,10 +46,10 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::Instrument;
 use uuid::Uuid;
-use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::plugin_registration::{OplogProcessorPluginSpec, PluginRegistrationDto, PluginSpecDto};
+use golem_common::model::plugin_registration::{OplogProcessorPluginSpec};
+use golem_service_base::model::plugin_registration::{PluginRegistration, PluginSpec};
 
 #[async_trait]
 pub trait OplogProcessorPlugin: Send + Sync {
@@ -79,7 +79,6 @@ type WorkerKey = (EnvironmentId, String, String);
 
 #[derive(Debug, Clone)]
 struct RunningPlugin {
-    pub account_id: AccountId,
     pub owned_worker_id: OwnedWorkerId,
     pub configuration: BTreeMap<String, String>,
     pub component_version: ComponentRevision,
@@ -106,13 +105,11 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
         component_version: ComponentRevision,
-        plugin_priority: &PluginPriority,
+        plugin_priority: PluginPriority,
     ) -> Result<RunningPlugin, WorkerExecutorError> {
-        let project_owner = self.project_service.get_project_owner(project_id).await?;
         let (installation, definition) = self
             .plugins
             .get(
-                &project_owner,
                 component_id,
                 component_version,
                 plugin_priority,
@@ -140,7 +137,6 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                             worker_id: worker_id.clone(),
                         };
                         let running_plugin = RunningPlugin {
-                            account_id: project_owner,
                             owned_worker_id: owned_worker_id.clone(),
                             configuration: installation.parameters.clone(),
                             component_version: plugin_component_version,
@@ -168,10 +164,10 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
     }
 
     fn get_oplog_processor_component_id(
-        definition: &PluginRegistrationDto,
+        definition: &PluginRegistration,
     ) -> Result<(ComponentId, ComponentRevision), WorkerExecutorError> {
         match &definition.spec {
-            PluginSpecDto::OplogProcessor(OplogProcessorPluginSpec {
+            PluginSpec::OplogProcessor(OplogProcessorPluginSpec {
                 component_id,
                 component_revision,
             }) => Ok((component_id.clone(), *component_revision)),
@@ -795,7 +791,7 @@ impl ForwardingOplogState {
             self.oplog_plugins
                 .send(
                     metadata.clone(),
-                    installation_id,
+                    *installation_id,
                     initial_oplog_index,
                     public_entries.clone(),
                 )

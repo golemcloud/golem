@@ -15,7 +15,7 @@
 use super::*;
 use crate::config::{CompileWorkerConfig, ComponentServiceConfig, StaticComponentServiceConfig};
 use crate::model::*;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
@@ -55,7 +55,7 @@ impl ComponentCompilationService {
     pub async fn enqueue_compilation(
         &self,
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         environment_id: EnvironmentId,
         sender: Option<StaticComponentServiceConfig>,
     ) -> Result<(), CompilationError> {
@@ -65,7 +65,7 @@ impl ComponentCompilationService {
             "Enqueueing compilation for component",
         );
         let request = CompilationRequest {
-            component: ComponentWithVersion {
+            component: ComponentIdAndRevision {
                 id: component_id,
                 version: component_version,
             },

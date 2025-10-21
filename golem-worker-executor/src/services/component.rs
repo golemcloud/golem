@@ -415,7 +415,7 @@ mod filesystem {
                 .get_component_from_path(
                     &wasm_path,
                     engine,
-                    &metadata.project_id,
+                    &metadata.environment_id,
                     component_id,
                     component_version,
                 )
@@ -671,7 +671,7 @@ mod grpc {
             let metadata = self
                 .get_metadata(component_id, Some(component_version))
                 .await?;
-            let project_id_clone = metadata.owner.project_id.clone();
+            let environment_id_clone = metadata.environment_id.clone();
 
             let component = self
                 .component_cache
@@ -679,7 +679,7 @@ mod grpc {
                     Box::pin(async move {
                         let result = compiled_component_service
                             .get(
-                                &project_id_clone,
+                                &environment_id_clone,
                                 &component_id_clone,
                                 component_version,
                                 &engine,
@@ -733,7 +733,7 @@ mod grpc {
 
                                 let result = compiled_component_service
                                     .put(
-                                        &project_id_clone,
+                                        &environment_id_clone,
                                         &component_id_clone,
                                         component_version,
                                         &component,
@@ -901,7 +901,7 @@ mod grpc {
                             let request = authorised_grpc_request(
                                 DownloadComponentRequest {
                                     component_id: Some(component_id.clone().into()),
-                                    version: Some(component_version),
+                                    version: Some(component_version.0),
                                 },
                                 access_token,
                             );
@@ -964,7 +964,7 @@ mod grpc {
                                 let request = authorised_grpc_request(
                                     GetVersionedComponentRequest {
                                         component_id: Some(component_id.clone().into()),
-                                        version: component_version,
+                                        version: component_version.0,
                                     },
                                     access_token,
                                 );
