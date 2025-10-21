@@ -38,11 +38,6 @@ newtype_uuid!(
     golem_api_grpc::proto::golem::component::ComponentId
 );
 
-newtype_uuid!(
-    PluginInstallationId,
-    golem_api_grpc::proto::golem::common::PluginInstallationId
-);
-
 declare_revision!(ComponentRevision);
 
 declare_transparent_newtypes! {

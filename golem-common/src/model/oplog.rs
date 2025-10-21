@@ -18,7 +18,7 @@ use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, Sp
 use crate::model::regions::OplogRegion;
 use crate::model::RetryConfig;
 use crate::model::{
-    AccountId, ComponentRevision, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId,
+    AccountId, ComponentRevision, IdempotencyKey, Timestamp, TransactionId,
     WorkerId, WorkerInvocation,
 };
 use bincode::de::read::Reader;
@@ -422,12 +422,12 @@ pub enum OplogEntry {
     /// Activates a plugin for the worker
     ActivatePlugin {
         timestamp: Timestamp,
-        plugin: PluginInstallationId,
+        plugin_priority: PluginPriority,
     },
     /// Deactivates a plugin for the worker
     DeactivatePlugin {
         timestamp: Timestamp,
-        plugin: PluginInstallationId,
+        plugin_priority: PluginPriority,
     },
     /// An update was successfully applied
     SuccessfulUpdate {
@@ -687,17 +687,17 @@ impl OplogEntry {
         }
     }
 
-    pub fn activate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+    pub fn activate_plugin(plugin_priority: PluginPriority) -> OplogEntry {
         OplogEntry::ActivatePlugin {
             timestamp: Timestamp::now_utc(),
-            plugin,
+            plugin_priority,
         }
     }
 
-    pub fn deactivate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+    pub fn deactivate_plugin(plugin_priority: PluginPriority) -> OplogEntry {
         OplogEntry::DeactivatePlugin {
             timestamp: Timestamp::now_utc(),
-            plugin,
+            plugin_priority,
         }
     }
 

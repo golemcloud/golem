@@ -44,7 +44,7 @@ use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::account::AccountId;
 use golem_common::model::{RetryConfig};
-use golem_common::model::component::{ComponentFilePath, ComponentType, PluginInstallationId};
+use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPriority, PluginPriority};
 use golem_common::model::{
     GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
     TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
@@ -946,7 +946,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn activate_plugin(
         &self,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -956,7 +956,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.add_and_commit_oplog(OplogEntry::activate_plugin(plugin_installation_id))
+        self.add_and_commit_oplog(OplogEntry::activate_plugin(plugin_priority))
             .await;
 
         drop(instance_guard);
@@ -965,7 +965,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn deactivate_plugin(
         &self,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -975,7 +975,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.add_and_commit_oplog(OplogEntry::deactivate_plugin(plugin_installation_id))
+        self.add_and_commit_oplog(OplogEntry::deactivate_plugin(plugin_priority))
             .await;
 
         drop(instance_guard);
