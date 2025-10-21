@@ -21,7 +21,7 @@ env:
 jobs:
   build-and-store:
     env:
-      CARGO_BUILD_JOBS: 10
+      CARGO_BUILD_JOBS: 20
     runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
       - name: Checkout
@@ -135,7 +135,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          find target/nextest-archive/target/debug -maxdepth 1 -type f | xargs mv -t target/debug/          
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/          
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -344,7 +344,7 @@ jobs:
       - name: Copy required binaries to target # TODO: this should be encoded in the makefile
         run: |
           mkdir -pv target/debug
-          find target/nextest-archive/target/debug -maxdepth 1 -type f | xargs mv -t target/debug/
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8

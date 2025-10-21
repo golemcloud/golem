@@ -345,6 +345,10 @@ wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branc
 
 [profile.dev]
 panic = "abort"
+
+[profile.dev-ci]
+inherits = "dev"
+incremental = false
 strip = "debuginfo"
 
 [profile.release]
