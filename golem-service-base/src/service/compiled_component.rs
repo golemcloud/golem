@@ -16,7 +16,7 @@ use crate::error::worker_executor::WorkerExecutorError;
 use crate::storage::blob::{BlobStorage, BlobStorageNamespace};
 use async_trait::async_trait;
 use golem_common::SafeDisplay;
-use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -33,14 +33,14 @@ pub trait CompiledComponentService: Send + Sync {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError>;
     async fn put(
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError>;
 }
@@ -106,7 +106,7 @@ impl DefaultCompiledComponentService {
         Self { blob_storage }
     }
 
-    fn key(component_id: &ComponentId, component_version: u64) -> PathBuf {
+    fn key(component_id: &ComponentId, component_version: ComponentRevision) -> PathBuf {
         Path::new(&component_id.to_string()).join(format!("{component_version}.cwasm"))
     }
 }
@@ -117,7 +117,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
         match self
@@ -167,7 +167,7 @@ impl CompiledComponentService for DefaultCompiledComponentService {
         &self,
         environment_id: &EnvironmentId,
         component_id: &ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         component: &Component,
     ) -> Result<(), WorkerExecutorError> {
         let bytes = component
@@ -214,7 +214,7 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
         &self,
         _environment_id: &EnvironmentId,
         _component_id: &ComponentId,
-        _component_version: u64,
+        _component_version: ComponentRevision,
         _engine: &Engine,
     ) -> Result<Option<Component>, WorkerExecutorError> {
         Ok(None)
@@ -224,7 +224,7 @@ impl CompiledComponentService for CompiledComponentServiceDisabled {
         &self,
         _environment_id: &EnvironmentId,
         _component_id: &ComponentId,
-        _component_version: u64,
+        _component_version: ComponentRevision,
         _component: &Component,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())

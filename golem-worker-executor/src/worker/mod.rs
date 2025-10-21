@@ -162,7 +162,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -220,7 +220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
@@ -1515,7 +1515,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     active_plugins: component
                         .installed_plugins
                         .iter()
-                        .map(|i| i.id.clone())
+                        .map(|i| i.priority.clone())
                         .collect(),
                     ..Default::default()
                 };
@@ -1525,7 +1525,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
-                    project_id: owned_worker_id.project_id(),
+                    environment_id: owned_worker_id.environment_id(),
                     created_by: account_id.clone(),
                     created_at,
                     parent,
@@ -1541,7 +1541,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.wasi_config_vars.clone(),
-                    initial_worker_metadata.project_id.clone(),
+                    initial_worker_metadata.environment_id.clone(),
                     initial_worker_metadata.created_by.clone(),
                     initial_worker_metadata.parent.clone(),
                     initial_worker_metadata.last_known_status.component_size,
@@ -1687,7 +1687,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 fn merge_worker_env_with_component_env(
     worker_env: Option<Vec<(String, String)>>,
-    component_env: HashMap<String, String>,
+    component_env: BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut seen_keys = HashSet::new();
     let mut result = Vec::new();
@@ -1929,7 +1929,7 @@ impl RunningWorker {
             &mut worker_env,
             &parent.owned_worker_id.worker_id,
             &parent.agent_id,
-            component_metadata.versioned_component_id.version,
+            component_metadata.revision,
         );
 
         let component_version_for_replay = worker_metadata

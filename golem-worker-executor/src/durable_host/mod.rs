@@ -1087,7 +1087,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                         component_metadata
                                             .installed_plugins
                                             .into_iter()
-                                            .map(|installation| installation.id),
+                                            .map(|installation| installation.priority),
                                     ),
                                 )
                                 .await;
@@ -1175,7 +1175,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                     component_metadata
                                         .installed_plugins
                                         .into_iter()
-                                        .map(|installation| installation.id),
+                                        .map(|installation| installation.priority),
                                 ),
                             )
                             .await;

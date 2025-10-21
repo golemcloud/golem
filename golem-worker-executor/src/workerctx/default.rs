@@ -48,7 +48,7 @@ use anyhow::{anyhow, Error};
 use async_trait::async_trait;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::base_model::{OplogIndex};
 use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
@@ -397,7 +397,7 @@ impl UpdateManagement for Context {
         &self,
         update: &UpdateDescription,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
         self.durable_ctx
             .on_worker_update_succeeded(update, new_component_size, new_active_plugins)

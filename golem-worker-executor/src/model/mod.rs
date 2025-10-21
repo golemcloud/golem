@@ -96,7 +96,7 @@ impl WorkerConfig {
         worker_env: &mut Vec<(String, String)>,
         worker_id: &WorkerId,
         agent_id: &Option<AgentId>,
-        target_component_version: u64,
+        target_component_version: ComponentRevision,
     ) {
         let worker_name = worker_id.worker_name.clone();
         let component_id = &worker_id.component_id;

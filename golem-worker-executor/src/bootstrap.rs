@@ -64,9 +64,8 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (Arc<dyn PluginsService>, Arc<dyn PluginsService>) {
-        let plugins = crate::services::plugins::configured(&golem_config.plugin_service);
-        (plugins.clone(), plugins)
+    ) -> Arc<dyn PluginsService> {
+        crate::services::plugins::configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(

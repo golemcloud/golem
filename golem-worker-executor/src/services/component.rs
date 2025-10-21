@@ -465,7 +465,7 @@ mod filesystem {
     struct ComponentMetadataIndex {
         processed_files: HashSet<String>,
         metadata: HashMap<ComponentKey, LocalFileSystemComponentMetadata>,
-        latest_versions: HashMap<ComponentId, u64>,
+        latest_versions: HashMap<ComponentId, ComponentRevision>,
         id_by_name: HashMap<String, ComponentId>,
     }
 
