@@ -122,25 +122,6 @@ impl<Inner: PluginsService> CachedPlugins<Inner> {
 
 #[async_trait]
 impl<Inner: PluginsService + Clone + 'static> PluginsService for CachedPlugins<Inner> {
-    // async fn observe_plugin_installation(
-    //     &self,
-    //     component_id: &ComponentId,
-    //     component_version: ComponentRevision,
-    //     plugin_priority: &i32,
-    // ) -> Result<(), WorkerExecutorError> {
-    //     let key = (
-    //         component_id.clone(),
-    //         component_version,
-    //         plugin_priority,
-    //     );
-    //     let installation = plugin_installation.clone();
-    //     let _ = self
-    //         .cached_plugin_installations
-    //         .get_or_insert_simple(&key, || Box::pin(async move { Ok(installation) }))
-    //         .await;
-    //     Ok(())
-    // }
-
     async fn get_plugin_installation(
         &self,
         component_id: &ComponentId,
@@ -179,16 +160,6 @@ pub struct PluginsUnavailable;
 
 #[async_trait]
 impl PluginsService for PluginsUnavailable {
-    // async fn observe_plugin_installation(
-    //     &self,
-    //     _account_id: &AccountId,
-    //     _component_id: &ComponentId,
-    //     _component_version: ComponentRevision,
-    //     _plugin_installation: &PluginInstallation,
-    // ) -> Result<(), WorkerExecutorError> {
-    //     Ok(())
-    // }
-
     async fn get_plugin_installation(
         &self,
         _component_id: &ComponentId,
