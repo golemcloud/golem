@@ -18,10 +18,13 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::{AccountId, ProjectId, RetryConfig};
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
@@ -294,28 +297,6 @@ impl SafeDisplay for PluginServiceLocalConfig {
         format!("root: {:?}", self.root)
     }
 }
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum CompiledComponentServiceConfig {
-    Enabled(CompiledComponentServiceEnabledConfig),
-    Disabled(CompiledComponentServiceDisabledConfig),
-}
-
-impl SafeDisplay for CompiledComponentServiceConfig {
-    fn to_safe_string(&self) -> String {
-        match self {
-            CompiledComponentServiceConfig::Enabled(_) => "enabled".to_string(),
-            CompiledComponentServiceConfig::Disabled(_) => "disabled".to_string(),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompiledComponentServiceEnabledConfig {}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CompiledComponentServiceDisabledConfig {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "config")]
@@ -919,7 +900,7 @@ impl SafeDisplay for ProjectServiceGrpcConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectServiceDisabledConfig {
     pub account_id: AccountId,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub project_name: String,
 }
 
@@ -927,7 +908,7 @@ impl SafeDisplay for ProjectServiceDisabledConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "account_id: {}", self.account_id);
-        let _ = writeln!(&mut result, "project id: {}", self.project_id);
+        let _ = writeln!(&mut result, "environment_id id: {}", self.environment_id);
         let _ = writeln!(&mut result, "project name: {}", self.project_name);
         result
     }
@@ -1173,22 +1154,6 @@ impl Default for PluginServiceGrpcConfig {
             plugin_cache_size: 1024,
             connect_timeout: Duration::from_secs(10),
         }
-    }
-}
-
-impl Default for CompiledComponentServiceConfig {
-    fn default() -> Self {
-        Self::enabled()
-    }
-}
-
-impl CompiledComponentServiceConfig {
-    pub fn enabled() -> Self {
-        Self::Enabled(CompiledComponentServiceEnabledConfig {})
-    }
-
-    pub fn disabled() -> Self {
-        Self::Disabled(CompiledComponentServiceDisabledConfig {})
     }
 }
 

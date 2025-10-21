@@ -28,25 +28,26 @@ use crate::services::worker_event::{WorkerEventService, WorkerEventServiceDefaul
 use crate::services::{
     All, HasActiveWorkers, HasAgentTypesService, HasAll, HasBlobStoreService, HasComponentService,
     HasConfig, HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplog,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasSchedulerService, HasShardService, HasWasmtimeEngine,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
-    UsesAllDeps,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasSchedulerService, HasShardService, HasWasmtimeEngine, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService, UsesAllDeps,
 };
 use crate::worker::invocation_loop::InvocationLoop;
 use crate::worker::status::calculate_last_known_status;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use futures::channel::oneshot;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::component::{ComponentFilePath, ComponentType, PluginPriority};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, UpdateDescription};
 use golem_common::model::regions::OplogRegion;
-use golem_common::model::{AccountId, RetryConfig};
-use golem_common::model::{ComponentFilePath, ComponentType, PluginInstallationId};
+use golem_common::model::RetryConfig;
 use golem_common::model::{
-    ComponentVersion, GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp,
-    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, Timestamp, TimestampedWorkerInvocation,
+    WorkerId, WorkerInvocation, WorkerMetadata, WorkerStatusRecord,
 };
 use golem_common::one_shot::OneShotEvent;
 use golem_common::read_only_lock;
@@ -130,7 +131,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_revision: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -145,7 +146,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 worker_args,
                 worker_env,
                 worker_wasi_config_vars,
-                component_version,
+                component_revision,
                 parent,
                 invocation_context_stack,
             )
@@ -160,7 +161,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Arc<Self>, WorkerExecutorError>
@@ -218,7 +219,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_config: Option<BTreeMap<String, String>>,
-        component_version: Option<u64>,
+        component_version: Option<ComponentRevision>,
         parent: Option<WorkerId>,
         invocation_context_stack: &InvocationContextStack,
     ) -> Result<Self, WorkerExecutorError> {
@@ -629,7 +630,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// triggers a restart immediately.
     pub async fn enqueue_manual_update(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
     ) -> Result<(), WorkerExecutorError> {
         self.enqueue_worker_invocation(WorkerInvocation::ManualUpdate { target_version })
             .await
@@ -944,7 +945,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn activate_plugin(
         &self,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -954,7 +955,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.add_and_commit_oplog(OplogEntry::activate_plugin(plugin_installation_id))
+        self.add_and_commit_oplog(OplogEntry::activate_plugin(plugin_priority))
             .await;
 
         drop(instance_guard);
@@ -963,7 +964,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub async fn deactivate_plugin(
         &self,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
     ) -> Result<(), WorkerExecutorError> {
         let instance_guard = self.lock_non_stopping_worker().await;
 
@@ -973,7 +974,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ));
         };
 
-        self.add_and_commit_oplog(OplogEntry::deactivate_plugin(plugin_installation_id))
+        self.add_and_commit_oplog(OplogEntry::deactivate_plugin(plugin_priority))
             .await;
 
         drop(instance_guard);
@@ -1390,7 +1391,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         this: &T,
         account_id: &AccountId,
         owned_worker_id: &OwnedWorkerId,
-        component_version: Option<ComponentVersion>,
+        component_revision: Option<ComponentRevision>,
         worker_args: Option<Vec<String>>,
         worker_env: Option<Vec<(String, String)>>,
         worker_wasi_config_vars: Option<BTreeMap<String, String>>,
@@ -1467,7 +1468,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 // Create and initialize a new worker.
                 let component = this
                     .component_service()
-                    .get_metadata(&component_id, component_version)
+                    .get_metadata(&component_id, component_revision)
                     .await?;
 
                 let agent_id = if component.metadata.is_agent() {
@@ -1494,15 +1495,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &mut worker_env,
                     &owned_worker_id.worker_id,
                     &agent_id,
-                    component.versioned_component_id.version,
+                    component.revision,
                 );
 
                 let created_at = Timestamp::now_utc();
 
                 // Note: Keep this in sync with the logic in crate::services::worker::WorkerService::get
                 let initial_status = WorkerStatusRecord {
-                    component_version: component.versioned_component_id.version,
-                    component_version_for_replay: component.versioned_component_id.version,
+                    component_version: component.revision,
+                    component_version_for_replay: component.revision,
                     component_size: component.component_size,
                     total_linear_memory_size: component
                         .metadata
@@ -1513,7 +1514,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     active_plugins: component
                         .installed_plugins
                         .iter()
-                        .map(|i| i.id.clone())
+                        .map(|i| i.priority)
                         .collect(),
                     ..Default::default()
                 };
@@ -1523,7 +1524,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     args: worker_args.unwrap_or_default(),
                     env: worker_env,
                     wasi_config_vars: worker_wasi_config_vars.unwrap_or_default(),
-                    project_id: owned_worker_id.project_id(),
+                    environment_id: owned_worker_id.environment_id(),
                     created_by: account_id.clone(),
                     created_at,
                     parent,
@@ -1539,7 +1540,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     initial_worker_metadata.args.clone(),
                     initial_worker_metadata.env.clone(),
                     initial_worker_metadata.wasi_config_vars.clone(),
-                    initial_worker_metadata.project_id.clone(),
+                    initial_worker_metadata.environment_id.clone(),
                     initial_worker_metadata.created_by.clone(),
                     initial_worker_metadata.parent.clone(),
                     initial_worker_metadata.last_known_status.component_size,
@@ -1685,7 +1686,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
 fn merge_worker_env_with_component_env(
     worker_env: Option<Vec<(String, String)>>,
-    component_env: HashMap<String, String>,
+    component_env: BTreeMap<String, String>,
 ) -> Vec<(String, String)> {
     let mut seen_keys = HashSet::new();
     let mut result = Vec::new();
@@ -1927,7 +1928,7 @@ impl RunningWorker {
             &mut worker_env,
             &parent.owned_worker_id.worker_id,
             &parent.agent_id,
-            component_metadata.versioned_component_id.version,
+            component_metadata.revision,
         );
 
         let component_version_for_replay = worker_metadata
@@ -1946,7 +1947,7 @@ impl RunningWorker {
 
         let context = Ctx::create(
             worker_metadata.created_by.clone(),
-            OwnedWorkerId::new(&worker_metadata.project_id, &worker_metadata.worker_id),
+            OwnedWorkerId::new(&worker_metadata.environment_id, &worker_metadata.worker_id),
             parent.agent_id.clone(),
             parent.promise_service(),
             parent.worker_service(),
@@ -1979,7 +1980,6 @@ impl RunningWorker {
             parent.plugins(),
             parent.worker_fork_service(),
             parent.resource_limits(),
-            parent.project_service(),
             parent.agent_types(),
             parent.shard_service(),
             pending_update,

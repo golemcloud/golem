@@ -12,19 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::model::environment::ResolvedEnvironmentIdentity;
 use crate::model::wave::function_wave_compatible;
-use crate::model::ComponentName;
-use crate::model::ProjectId;
+use crate::model::worker::WorkerName;
 use anyhow::{anyhow, bail};
 use chrono::{DateTime, Utc};
-use golem_client::model::{
-    AnalysedType, ComponentMetadata, ComponentType, InitialComponentFile, VersionedComponentId,
-};
+use golem_client::model::AnalysedType;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::component::{ComponentName, ComponentType, InitialComponentFile};
 use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, ComponentModelElementSchema, DataSchema, ElementSchema,
 };
-use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::trim_date::TrimDateTime;
 use golem_wasm::analysis::wave::DisplayNamedFunc;
 use golem_wasm::analysis::{
@@ -65,27 +66,58 @@ impl From<Uuid> for ComponentSelection<'_> {
     }
 }
 
+pub enum ComponentVersionSelection<'a> {
+    ByWorkerName(&'a WorkerName),
+    ByExplicitVersion(u64),
+}
+
+impl<'a> From<&'a WorkerName> for ComponentVersionSelection<'a> {
+    fn from(value: &'a WorkerName) -> Self {
+        Self::ByWorkerName(value)
+    }
+}
+
+impl From<u64> for ComponentVersionSelection<'_> {
+    fn from(value: u64) -> Self {
+        Self::ByExplicitVersion(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ComponentNameMatchKind {
+    AppCurrentDir,
+    App,
+    Unknown,
+}
+
+pub struct SelectedComponents {
+    pub environment: Option<ResolvedEnvironmentIdentity>,
+    pub component_names: Vec<ComponentName>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Component {
-    pub versioned_component_id: VersionedComponentId,
+    pub component_id: ComponentId,
+    pub revision: ComponentRevision,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub component_type: ComponentType,
     pub metadata: ComponentMetadata,
-    pub project_id: Option<ProjectId>,
+    pub environment_id: Option<EnvironmentId>,
     pub created_at: Option<DateTime<Utc>>,
     pub files: Vec<InitialComponentFile>,
     pub env: BTreeMap<String, String>,
 }
 
-impl From<golem_client::model::Component> for Component {
-    fn from(value: golem_client::model::Component) -> Self {
+impl From<golem_client::model::ComponentDto> for Component {
+    fn from(value: golem_client::model::ComponentDto) -> Self {
         Component {
-            versioned_component_id: value.versioned_component_id,
-            component_name: value.component_name.into(),
+            component_id: value.id,
+            revision: value.revision,
+            component_name: value.component_name,
             component_size: value.component_size,
             metadata: value.metadata,
-            project_id: Some(ProjectId(value.project_id)),
+            environment_id: Some(value.environment_id),
             created_at: Some(value.created_at),
             component_type: value.component_type,
             files: value.files,
@@ -152,7 +184,7 @@ impl ComponentUpsertResult {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Debug, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ComponentView {
     #[serde(skip)]
@@ -161,14 +193,14 @@ pub struct ComponentView {
     pub show_exports_for_rib: bool,
 
     pub component_name: ComponentName,
-    pub component_id: Uuid,
+    pub component_id: ComponentId,
     pub component_type: ComponentType,
-    pub component_version: u64,
+    pub component_version: Option<String>,
+    pub component_revision: u64,
     pub component_size: u64,
     pub created_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
-    pub project_id: Option<ProjectId>,
+    pub environment_id: Option<EnvironmentId>,
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentType>,
     pub dynamic_linking: BTreeMap<String, BTreeMap<String, String>>,
@@ -220,12 +252,13 @@ impl ComponentView {
             show_sensitive,
             show_exports_for_rib,
             component_name: value.component_name,
-            component_id: value.versioned_component_id.component_id,
+            component_id: value.component_id,
             component_type: value.component_type,
-            component_version: value.versioned_component_id.version,
+            component_version: value.metadata.root_package_version().clone(),
+            component_revision: value.revision.0,
             component_size: value.component_size,
             created_at: value.created_at,
-            project_id: value.project_id,
+            environment_id: value.environment_id,
             exports,
             agent_types: value.metadata.agent_types().to_vec(),
             dynamic_linking: value

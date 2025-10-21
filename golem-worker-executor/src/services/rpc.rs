@@ -19,8 +19,7 @@ use std::sync::Arc;
 use super::file_loader::FileLoader;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::resource_limits::ResourceLimits;
 use crate::services::shard::ShardService;
 use crate::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -29,17 +28,18 @@ use crate::services::{
     rdbms, scheduler, shard_manager, worker, worker_activator, worker_enumeration, worker_fork,
     HasActiveWorkers, HasAgentTypesService, HasBlobStoreService, HasComponentService, HasConfig,
     HasEvents, HasExtraDeps, HasFileLoader, HasKeyValueService, HasOplogProcessorPlugin,
-    HasOplogService, HasPlugins, HasProjectService, HasPromiseService, HasRdbmsService,
-    HasResourceLimits, HasRpc, HasRunningWorkerEnumerationService, HasSchedulerService,
-    HasShardManagerService, HasShardService, HasWasmtimeEngine, HasWorkerActivator,
-    HasWorkerEnumerationService, HasWorkerForkService, HasWorkerProxy, HasWorkerService,
+    HasOplogService, HasPlugins, HasPromiseService, HasRdbmsService, HasResourceLimits, HasRpc,
+    HasRunningWorkerEnumerationService, HasSchedulerService, HasShardManagerService,
+    HasShardService, HasWasmtimeEngine, HasWorkerActivator, HasWorkerEnumerationService,
+    HasWorkerForkService, HasWorkerProxy, HasWorkerService,
 };
 use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
+use golem_common::model::account::AccountId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, IdempotencyKey, OwnedWorkerId, WorkerId};
+use golem_common::model::{IdempotencyKey, OwnedWorkerId, WorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_wasm::{ValueAndType, WitValue};
 use golem_wasm_derive::IntoValue;
@@ -322,10 +322,9 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
     events: Arc<Events>,
     file_loader: Arc<FileLoader>,
-    plugins: Arc<dyn Plugins>,
+    plugins: Arc<dyn PluginsService>,
     oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
     resource_limits: Arc<dyn ResourceLimits>,
-    project_service: Arc<dyn ProjectService>,
     agent_types_service: Arc<dyn agent_types::AgentTypesService>,
     extra_deps: Ctx::ExtraDeps,
 }
@@ -358,7 +357,6 @@ impl<Ctx: WorkerCtx> Clone for DirectWorkerInvocationRpc<Ctx> {
             plugins: self.plugins.clone(),
             oplog_processor_plugin: self.oplog_processor_plugin.clone(),
             resource_limits: self.resource_limits.clone(),
-            project_service: self.project_service.clone(),
             agent_types_service: self.agent_types_service.clone(),
             extra_deps: self.extra_deps.clone(),
         }
@@ -508,7 +506,7 @@ impl<Ctx: WorkerCtx> HasFileLoader for DirectWorkerInvocationRpc<Ctx> {
 }
 
 impl<Ctx: WorkerCtx> HasPlugins for DirectWorkerInvocationRpc<Ctx> {
-    fn plugins(&self) -> Arc<dyn Plugins> {
+    fn plugins(&self) -> Arc<dyn PluginsService> {
         self.plugins.clone()
     }
 }
@@ -528,12 +526,6 @@ impl<Ctx: WorkerCtx> HasRdbmsService for DirectWorkerInvocationRpc<Ctx> {
 impl<Ctx: WorkerCtx> HasResourceLimits for DirectWorkerInvocationRpc<Ctx> {
     fn resource_limits(&self) -> Arc<dyn ResourceLimits> {
         self.resource_limits.clone()
-    }
-}
-
-impl<Ctx: WorkerCtx> HasProjectService for DirectWorkerInvocationRpc<Ctx> {
-    fn project_service(&self) -> Arc<dyn ProjectService> {
-        self.project_service.clone()
     }
 }
 
@@ -565,10 +557,9 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         worker_activator: Arc<dyn worker_activator::WorkerActivator<Ctx>>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn agent_types::AgentTypesService>,
         extra_deps: Ctx::ExtraDeps,
     ) -> Self {
@@ -598,7 +589,6 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             plugins,
             oplog_processor_plugin,
             resource_limits,
-            project_service,
             agent_types_service,
             extra_deps,
         }

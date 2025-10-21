@@ -14,13 +14,12 @@
 
 pub mod auth;
 pub mod limit;
-pub mod plugin;
-pub mod project;
+// pub mod plugin;
 
-use golem_common::config::{ConfigExample, HasConfigExamples};
-use golem_common::model::auth::TokenSecret;
-use golem_common::model::RetryConfig;
 use golem_common::SafeDisplay;
+use golem_common::config::{ConfigExample, HasConfigExamples};
+use golem_common::model::RetryConfig;
+use golem_common::model::auth::TokenSecret;
 use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;

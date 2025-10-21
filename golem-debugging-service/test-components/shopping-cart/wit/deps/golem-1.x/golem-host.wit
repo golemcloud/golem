@@ -22,7 +22,12 @@ interface host {
 
     /// Represents a Golem Cloud account
     record account-id {
-        value: string
+        uuid: uuid
+    }
+
+    /// Represents a Golem environment
+    record environment-id {
+      uuid: uuid,
     }
 
     /// Represents a Golem project

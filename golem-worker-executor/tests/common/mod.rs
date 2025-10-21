@@ -620,7 +620,7 @@ impl WorkerCtx for TestWorkerCtx {
         worker_config: WorkerConfig,
         execution_status: Arc<RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
         project_service: Arc<dyn ProjectService>,
@@ -939,7 +939,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
+    ) -> (Arc<dyn PluginsService>, Arc<dyn PluginsObservations>) {
         let plugins =
             golem_worker_executor::services::plugins::configured(&golem_config.plugin_service);
         (plugins.clone(), plugins)
@@ -985,7 +985,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,

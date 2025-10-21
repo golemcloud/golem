@@ -15,11 +15,14 @@
 use crate::services::oplog::multilayer::{OplogArchive, OplogArchiveService};
 use crate::services::oplog::PrimaryOplogService;
 use crate::storage::indexed::{IndexedStorage, IndexedStorageLabelledApi, IndexedStorageNamespace};
+use anyhow::anyhow;
 use async_trait::async_trait;
 use bincode::{Decode, Encode};
 use evicting_cache_map::EvictingCacheMap;
+use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::model::{ComponentId, OwnedWorkerId, ProjectId, ScanCursor, WorkerId};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerId};
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
@@ -94,7 +97,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
 
     async fn scan_for_component(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -119,7 +122,7 @@ impl OplogArchiveService for CompressedOplogArchiveService {
             keys.into_iter()
                 .map(|key| OwnedWorkerId {
                     worker_id: PrimaryOplogService::get_worker_id_from_key(&key, component_id),
-                    project_id: project_id.clone(),
+                    environment_id: environment_id.clone(),
                 })
                 .collect(),
         ))
@@ -179,7 +182,7 @@ impl CompressedOplogArchive {
         &self,
         beginning_of_range: OplogIndex,
         end_of_range: OplogIndex,
-    ) -> Result<Option<Vec<(OplogIndex, OplogEntry)>>, String> {
+    ) -> anyhow::Result<Option<Vec<(OplogIndex, OplogEntry)>>> {
         let (last_idx_in_chunk, chunk) = if let Some((last_idx_in_chunk, chunk)) = self
             .indexed_storage
             .with_entity("compressed_oplog", "read", "compressed_entry")
@@ -188,7 +191,8 @@ impl CompressedOplogArchive {
                 &self.key,
                 end_of_range.into(),
             )
-            .await?
+            .await
+            .map_err(|e| anyhow!(e))?
         {
             (last_idx_in_chunk, chunk)
         } else {
@@ -386,10 +390,10 @@ impl CompressedOplogChunk {
         })
     }
 
-    pub fn decompress(&self) -> Result<Vec<OplogEntry>, String> {
+    pub fn decompress(&self) -> anyhow::Result<Vec<OplogEntry>> {
         let uncompressed_data = zstd::decode_all(&*self.compressed_data)
-            .map_err(|err| format!("failed to decompress oplog chunk: {err}"))?;
+            .map_err(|err| anyhow!("failed to decompress oplog chunk: {err}"))?;
         deserialize(&uncompressed_data)
-            .map_err(|err| format!("failed to deserialize oplog chunk: {err}"))
+            .map_err(|err| anyhow!("failed to deserialize oplog chunk: {err}"))
     }
 }

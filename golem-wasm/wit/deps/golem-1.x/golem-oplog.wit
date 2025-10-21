@@ -5,7 +5,7 @@ interface oplog {
     use wasi:clocks/wall-clock@0.2.3.{datetime};
     use golem:rpc/types@0.2.2.{wit-value};
 
-    use host.{account-id, component-version, oplog-index, persistence-level, project-id, retry-policy, uuid, agent-id};
+    use host.{account-id, component-version, oplog-index, persistence-level, environment-id, retry-policy, uuid, agent-id};
     use context.{attribute, attribute-value, span-id, trace-id};
 
     variant wrapped-function-type {
@@ -30,7 +30,6 @@ interface oplog {
     }
 
     record plugin-installation-description {
-        installation-id: uuid,
         name: string,
         version: string,
         parameters: list<tuple<string, string>>
@@ -43,7 +42,7 @@ interface oplog {
         args: list<string>,
         env: list<tuple<string, string>>,
         created-by: account-id,
-        project-id: project-id,
+        environment-id: environment-id,
         parent: option<agent-id>,
         component-size: u64,
         initial-total-linear-memory-size: u64,

@@ -14,10 +14,11 @@
 
 use bincode::{Decode, Encode};
 use golem_api_grpc::proto::golem;
-use golem_common::metrics::api::TraceErrorKind;
-use golem_common::model::oplog::WorkerError;
-use golem_common::model::{ComponentId, PromiseId, ShardId, WorkerId};
 use golem_common::SafeDisplay;
+use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::oplog::WorkerError;
+use golem_common::model::{PromiseId, ShardId, WorkerId};
 use golem_wasm::wasmtime::EncodingError;
 use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Serialize};
@@ -47,12 +48,12 @@ pub enum WorkerExecutorError {
     },
     ComponentDownloadFailed {
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: String,
     },
     ComponentParseFailed {
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: String,
     },
     GetLatestVersionOfComponentFailed {
@@ -141,7 +142,7 @@ impl WorkerExecutorError {
 
     pub fn component_download_failed(
         component_id: ComponentId,
-        component_version: u64,
+        component_version: ComponentRevision,
         reason: impl Into<String>,
     ) -> Self {
         Self::ComponentDownloadFailed {
@@ -343,7 +344,7 @@ impl Error for WorkerExecutorError {
     }
 }
 
-impl TraceErrorKind for WorkerExecutorError {
+impl ApiErrorDetails for WorkerExecutorError {
     fn trace_error_kind(&self) -> &'static str {
         match self {
             Self::InvalidRequest { .. } => "InvalidRequest",
@@ -404,6 +405,10 @@ impl TraceErrorKind for WorkerExecutorError {
             | Self::ShardingNotReady
             | Self::FileSystemError { .. } => false,
         }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        todo!()
     }
 }
 
@@ -516,7 +521,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::ComponentDownloadFailed(
                         golem::worker::v1::ComponentDownloadFailed {
                             component_id: Some(component_id.into()),
-                            component_version,
+                            component_version: component_version.0,
                             reason,
                         },
                     ),
@@ -531,7 +536,7 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                     golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
                         golem::worker::v1::ComponentParseFailed {
                             component_id: Some(component_id.into()),
-                            component_version,
+                            component_version: component_version.0,
                             reason,
                         },
                     ),
@@ -745,7 +750,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: component_download_failed.component_version,
+                component_version: ComponentRevision(component_download_failed.component_version),
                 reason: component_download_failed.reason,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::ComponentParseFailed(
@@ -755,7 +760,7 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     .component_id
                     .ok_or("Missing component_id")?
                     .try_into()?,
-                component_version: component_parse_failed.component_version,
+                component_version: ComponentRevision(component_parse_failed.component_version),
                 reason: component_parse_failed.reason,
             }),
             Some(

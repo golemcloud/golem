@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::config::{CompileWorkerConfig, StaticComponentServiceConfig};
+use crate::metrics::record_compilation_time;
 use crate::model::*;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
@@ -21,14 +22,14 @@ use golem_api_grpc::proto::golem::component::v1::ComponentError;
 use golem_api_grpc::proto::golem::component::v1::DownloadComponentRequest;
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
-use golem_common::model::{ComponentId, ProjectId};
 use golem_common::retries::with_retries;
-use golem_worker_executor::grpc::authorised_grpc_request;
-use golem_worker_executor::grpc::is_grpc_retriable;
-use golem_worker_executor::grpc::GrpcError;
-use golem_worker_executor::metrics::component::record_compilation_time;
-use golem_worker_executor::services::compiled_component::CompiledComponentService;
+use golem_service_base::grpc::authorised_grpc_request;
+use golem_service_base::grpc::is_grpc_retriable;
+use golem_service_base::grpc::GrpcError;
+use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::{mpsc, Mutex};
@@ -86,7 +87,7 @@ impl CompileWorker {
                     }
 
                     let result = worker
-                        .compile_component(&request.component, &request.project_id)
+                        .compile_component(&request.component, &request.environment_id)
                         .await;
                     match result {
                         Err(error) => {
@@ -102,7 +103,7 @@ impl CompileWorker {
                                 .send(CompiledComponent {
                                     component_and_version: request.component,
                                     component,
-                                    project_id: request.project_id,
+                                    environment_id: request.environment_id,
                                 })
                                 .await;
 
@@ -148,8 +149,8 @@ impl CompileWorker {
 
     async fn compile_component(
         &self,
-        component_with_version: &ComponentWithVersion,
-        project_id: &ProjectId,
+        component_with_version: &ComponentIdAndRevision,
+        environment_id: &EnvironmentId,
     ) -> Result<Component, CompilationError> {
         let engine = self.engine.clone();
 
@@ -157,7 +158,7 @@ impl CompileWorker {
         let result = self
             .compiled_component_service
             .get(
-                project_id,
+                environment_id,
                 &component_with_version.id,
                 component_with_version.version,
                 &engine,
@@ -226,7 +227,7 @@ async fn download_via_grpc(
     access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
-    component_version: u64,
+    component_version: ComponentRevision,
 ) -> Result<Vec<u8>, CompilationError> {
     with_retries(
         "components",
@@ -247,7 +248,7 @@ async fn download_via_grpc(
                         let request = authorised_grpc_request(
                             DownloadComponentRequest {
                                 component_id: Some(component_id.clone().into()),
-                                version: Some(component_version),
+                                version: Some(component_version.0),
                             },
                             &access_token,
                         );

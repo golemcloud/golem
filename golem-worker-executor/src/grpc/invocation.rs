@@ -17,10 +17,13 @@ use crate::worker::Worker;
 use crate::workerctx::WorkerCtx;
 use golem_api_grpc::proto::golem::common::ResourceLimits as GrpcResourceLimits;
 use golem_common::base_model::WorkerId;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AccountId, ComponentVersion, IdempotencyKey, ProjectId, WorkerMetadata};
+use golem_common::model::{IdempotencyKey, WorkerMetadata};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::Component;
 use golem_wasm::analysis::{AnalysedExport, AnalysedFunction, AnalysedFunctionParameter};
 use golem_wasm::json::ValueAndTypeJsonExtensions;
 use golem_wasm::protobuf::Val;
@@ -33,7 +36,7 @@ use tracing::warn;
 pub trait CanStartWorker {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
-    fn project_id(&self) -> Result<ProjectId, WorkerExecutorError>;
+    fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
     fn args(&self) -> Option<Vec<String>>;
     fn env(&self) -> Option<Vec<(String, String)>>;
@@ -59,7 +62,7 @@ trait ProtobufInvocationDetails {
     fn proto_account_limits(&self)
         -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits>;
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId>;
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId>;
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId>;
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
@@ -67,20 +70,21 @@ trait ProtobufInvocationDetails {
 
 impl<T: ProtobufInvocationDetails> CanStartWorker for T {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError> {
-        Ok(self
-            .proto_account_id()
-            .clone()
+        (*self.proto_account_id())
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
-            .into())
+            .try_into()
+            .map_err(|e| WorkerExecutorError::unknown(format!("Invalid account id from grpc: {e}")))
     }
 
     fn account_limits(&self) -> Option<GrpcResourceLimits> {
         *self.proto_account_limits()
     }
 
-    fn project_id(&self) -> Result<ProjectId, WorkerExecutorError> {
-        (*self.proto_project_id())
-            .ok_or(WorkerExecutorError::invalid_request("project_id not found"))?
+    fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError> {
+        (*self.proto_environment_id())
+            .ok_or(WorkerExecutorError::invalid_request(
+                "environment_id not found",
+            ))?
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)
     }
@@ -145,8 +149,8 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -173,8 +177,8 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -201,8 +205,8 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -229,8 +233,8 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -257,8 +261,8 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -306,8 +310,8 @@ impl ProtobufInvocationDetails
         &self.worker_id
     }
 
-    fn proto_project_id(&self) -> &Option<golem_api_grpc::proto::golem::common::ProjectId> {
-        &self.project_id
+    fn proto_environment_id(&self) -> &Option<golem_api_grpc::proto::golem::common::EnvironmentId> {
+        &self.environment_id
     }
 
     fn proto_invocation_context(
@@ -387,7 +391,7 @@ impl GrpcInvokeRequest
 }
 
 /// Assumes what component version a worker will execute the next enqueued invocation with
-fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersion {
+fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentRevision {
     let mut version = metadata.last_known_status.component_version;
     for pending_update in &metadata.last_known_status.pending_updates {
         // Assuming this update will succeed
@@ -397,7 +401,7 @@ fn assume_future_component_version(metadata: &WorkerMetadata) -> ComponentVersio
 }
 
 fn resolve_function<'t>(
-    component: &'t Component,
+    component: &'t ComponentDto,
     function: &str,
 ) -> Result<(&'t AnalysedFunction, ParsedFunctionName), WorkerExecutorError> {
     let parsed =
@@ -417,7 +421,7 @@ fn resolve_function<'t>(
             }
             AnalysedExport::Function(ref f @ AnalysedFunction { name, .. }) => {
                 if parsed.site() == &ParsedFunctionSite::Global
-                    && &parsed.function().function_name() == name
+                    && parsed.function().function_name() == *name
                 {
                     functions.push(f);
                 }

@@ -1,18 +1,18 @@
 name: "Desktop CI"
 
-on:
-  pull_request:
-    paths:
-    - "cli/desktop-app/**"
-    - ".github/workflows/desktop-ci.yaml"
-  push:
-    branches:
-    - main
-    tags:
-    - "v*.*.*"
-    paths:
-    - "cli/desktop-app/**"
-    - ".github/workflows/desktop-ci.yaml"
+#on:
+#  pull_request:
+#    paths:
+#    - "cli/desktop-app/**"
+#    - ".github/workflows/desktop-ci.yaml"
+#  push:
+#    branches:
+#    - main
+#    tags:
+#    - "v*.*.*"
+#    paths:
+#    - "cli/desktop-app/**"
+#    - ".github/workflows/desktop-ci.yaml"
 
 jobs:
   build-tauri:

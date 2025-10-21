@@ -15,7 +15,7 @@
 use crate::model::agent::wit_naming::ToWitNaming;
 use crate::model::agent::{AgentConstructor, AgentMethod, AgentType};
 use crate::model::base64::Base64;
-use crate::model::ComponentType;
+use crate::model::component::ComponentType;
 use crate::{virtual_exports, SafeDisplay};
 use bincode::de::BorrowDecoder;
 use bincode::enc::Encoder;
@@ -1153,6 +1153,7 @@ fn add_virtual_exports(exports: &mut Vec<AnalysedExport>) {
 
 mod protobuf {
     use crate::model::base64::Base64;
+    use crate::model::component::ComponentType;
     use crate::model::component_metadata::{
         ComponentMetadata, ComponentMetadataInnerData, DynamicLinkedInstance, DynamicLinkedWasmRpc,
         LinearMemory, ProducerField, Producers, VersionedName, WasmRpcTarget,
@@ -1405,7 +1406,8 @@ mod protobuf {
             Ok(Self {
                 interface_name: value.interface_name,
                 component_name: value.component_name,
-                component_type: value.component_type.try_into()?,
+                component_type: ComponentType::from_repr(value.component_type)
+                    .ok_or("Invalid component type".to_string())?,
             })
         }
     }

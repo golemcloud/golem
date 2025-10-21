@@ -26,8 +26,7 @@ use crate::services::file_loader::FileLoader;
 use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::{Oplog, OplogService};
-use crate::services::plugins::Plugins;
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rdbms::RdbmsService;
 use crate::services::resource_limits::ResourceLimits;
@@ -47,15 +46,18 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use golem_common::base_model::{OplogIndex, ProjectId};
+use golem_common::base_model::OplogIndex;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentId;
+use golem_common::model::component::{
+    ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority,
+};
 use golem_common::model::invocation_context::{
     self, AttributeValue, InvocationContextStack, SpanId,
 };
 use golem_common::model::oplog::{TimestampedUpdateDescription, UpdateDescription};
 use golem_common::model::{
-    AccountId, ComponentFilePath, ComponentVersion, GetFileSystemNodeResult, IdempotencyKey,
-    OwnedWorkerId, PluginInstallationId, WorkerId, WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey, OwnedWorkerId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
@@ -336,12 +338,11 @@ impl ExternalOperations<Context> for Context {
 
     async fn record_last_known_limits<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        project_id: &ProjectId,
+        account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        let project_owner = this.project_service().get_project_owner(project_id).await?;
         this.resource_limits()
-            .update_last_known_limits(&project_owner, last_known_limits)
+            .update_last_known_limits(account_id, last_known_limits)
             .await
     }
 
@@ -383,7 +384,7 @@ impl UpdateManagement for Context {
 
     async fn on_worker_update_failed(
         &self,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     ) {
         self.durable_ctx
@@ -395,7 +396,7 @@ impl UpdateManagement for Context {
         &self,
         update: &UpdateDescription,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
         self.durable_ctx
             .on_worker_update_succeeded(update, new_component_size, new_active_plugins)
@@ -530,7 +531,7 @@ impl DynamicLinking<Context> for Context {
         engine: &Engine,
         linker: &mut Linker<Context>,
         component: &Component,
-        component_metadata: &golem_service_base::model::Component,
+        component_metadata: &ComponentDto,
     ) -> anyhow::Result<()> {
         self.durable_ctx
             .link(engine, linker, component, component_metadata)
@@ -625,10 +626,9 @@ impl WorkerCtx for Context {
         worker_config: WorkerConfig,
         execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -656,7 +656,6 @@ impl WorkerCtx for Context {
             file_loader,
             plugins,
             worker_fork,
-            project_service,
             agent_types_service,
             shard_service,
             pending_update,
@@ -697,7 +696,7 @@ impl WorkerCtx for Context {
         self.durable_ctx.created_by()
     }
 
-    fn component_metadata(&self) -> &golem_service_base::model::Component {
+    fn component_metadata(&self) -> &ComponentDto {
         self.durable_ctx.component_metadata()
     }
 

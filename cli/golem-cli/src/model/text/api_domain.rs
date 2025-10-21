@@ -34,8 +34,8 @@ impl MessageWithFields for ApiDomainNewView {
 
         fields
             .fmt_field("Domain name", &self.0.domain_name, format_main_id)
-            .fmt_field("Project ID", &self.0.project_id, format_id)
-            .fmt_field_option("Created at", &self.0.created_at, |d| d.to_string())
+            .fmt_field("Environment ID", &self.0.environment_id, format_id)
+            .fmt_field("Created at", &self.0.created_at, |d| d.to_string())
             .fmt_field_optional(
                 "Name servers",
                 &self.0.name_servers,
@@ -51,8 +51,8 @@ impl MessageWithFields for ApiDomainNewView {
 struct ApiDomainTableView {
     #[table(title = "Domain")]
     pub domain_name: String,
-    #[table(title = "Project")]
-    pub project_id: Uuid,
+    #[table(title = "Environment ID")]
+    pub environment_id: Uuid,
     #[table(title = "Servers")]
     pub name_servers: String,
 }
@@ -61,7 +61,7 @@ impl From<&ApiDomain> for ApiDomainTableView {
     fn from(value: &ApiDomain) -> Self {
         ApiDomainTableView {
             domain_name: value.domain_name.to_string(),
-            project_id: value.project_id,
+            environment_id: value.environment_id,
             name_servers: value.name_servers.join("\n"),
         }
     }

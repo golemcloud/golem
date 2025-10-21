@@ -16,8 +16,8 @@ use crate::log::{logln, LogColorize};
 use crate::model::deploy::TryUpdateAllWorkersResult;
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text::fmt::*;
-use crate::model::{
-    ComponentName, WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
+use crate::model::worker::{
+    WorkerMetadata, WorkerMetadataView, WorkerName, WorkersMetadataResponseView,
 };
 use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
@@ -26,6 +26,7 @@ use cli_table::{format::Justify, Table};
 use colored::Colorize;
 use golem_client::model::{PublicOplogEntry, UpdateRecord};
 use golem_common::model::agent::{BinaryReference, DataValue, ElementValue, TextReference};
+use golem_common::model::component::ComponentName;
 use golem_common::model::public_oplog::{
     PluginInstallationDescription, PublicAttributeValue, PublicUpdateDescription,
     PublicWorkerInvocation, StringAttributeValue,

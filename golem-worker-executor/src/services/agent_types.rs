@@ -17,7 +17,7 @@ use crate::services::golem_config::AgentTypesServiceConfig;
 use async_trait::async_trait;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::RegisteredAgentType;
-use golem_common::model::ProjectId;
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,11 +27,11 @@ use uuid::Uuid;
 pub trait AgentTypesService: Send + Sync {
     async fn get_all(
         &self,
-        owner_project: &ProjectId,
+        owner_environment: &EnvironmentId,
     ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError>;
     async fn get(
         &self,
-        owner_project: &ProjectId,
+        owner_environment: &EnvironmentId,
         name: &str,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError>;
 }
@@ -65,7 +65,7 @@ pub fn configured(
 struct CachedAgentTypes {
     inner: Arc<dyn AgentTypesService>,
     cached_registered_agent_types:
-        Cache<(ProjectId, String), (), RegisteredAgentType, Option<WorkerExecutorError>>,
+        Cache<(EnvironmentId, String), (), RegisteredAgentType, Option<WorkerExecutorError>>,
 }
 
 impl CachedAgentTypes {
@@ -89,25 +89,25 @@ impl CachedAgentTypes {
 impl AgentTypesService for CachedAgentTypes {
     async fn get_all(
         &self,
-        owner_project: &ProjectId,
+        owner_environment: &EnvironmentId,
     ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
         // Full agent discovery is not cached
-        self.inner.get_all(owner_project).await
+        self.inner.get_all(owner_environment).await
     }
 
     async fn get(
         &self,
-        owner_project: &ProjectId,
+        owner_environment: &EnvironmentId,
         name: &str,
     ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
         // Getting a particular agent type is cached with a short TTL because
         // it is used in RPC to find the invocation target
-        let key = (owner_project.clone(), name.to_string());
+        let key = (owner_environment.clone(), name.to_string());
         let result = self
             .cached_registered_agent_types
             .get_or_insert_simple(&key, || {
                 Box::pin(async move {
-                    match self.inner.get(owner_project, name).await {
+                    match self.inner.get(owner_environment, name).await {
                         Ok(Some(r)) => Ok(r),
                         Ok(None) => Err(None),
                         Err(err) => Err(Some(err)),
@@ -124,7 +124,6 @@ impl AgentTypesService for CachedAgentTypes {
 }
 
 mod grpc {
-    use crate::grpc::authorised_grpc_request;
     use crate::services::agent_types::AgentTypesService;
     use async_trait::async_trait;
     use golem_api_grpc::proto::golem::component::v1::agent_types_service_client::AgentTypesServiceClient;
@@ -134,8 +133,10 @@ mod grpc {
     };
     use golem_common::client::{GrpcClient, GrpcClientConfig};
     use golem_common::model::agent::RegisteredAgentType;
-    use golem_common::model::{ProjectId, RetryConfig};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::RetryConfig;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
+    use golem_service_base::grpc::authorised_grpc_request;
     use http::Uri;
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
@@ -179,14 +180,14 @@ mod grpc {
     impl AgentTypesService for AgentTypesServiceGrpc {
         async fn get_all(
             &self,
-            owner_project: &ProjectId,
+            owner_environment: &EnvironmentId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             let response = self
                 .agent_types_client
                 .call("get_all_agent_types", move |client| {
                     let request = authorised_grpc_request(
                         GetAllRequest {
-                            project_id: Some(owner_project.clone().into()),
+                            environment_id: Some(owner_environment.clone().into()),
                         },
                         &self.access_token,
                     );
@@ -219,7 +220,7 @@ mod grpc {
 
         async fn get(
             &self,
-            owner_project: &ProjectId,
+            owner_environment: &EnvironmentId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
             let response = self
@@ -227,7 +228,7 @@ mod grpc {
                 .call("get_agent_type", move |client| {
                     let request = authorised_grpc_request(
                         GetRequest {
-                            project_id: Some(owner_project.clone().into()),
+                            environment_id: Some(owner_environment.clone().into()),
                             agent_type: name.to_string(),
                         },
                         &self.access_token,
@@ -264,8 +265,8 @@ mod local {
     use crate::services::agent_types::AgentTypesService;
     use crate::services::component::ComponentService;
     use async_trait::async_trait;
-    use golem_common::base_model::ProjectId;
     use golem_common::model::agent::RegisteredAgentType;
+    use golem_common::model::environment::EnvironmentId;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use std::sync::Arc;
 
@@ -283,14 +284,14 @@ mod local {
     impl AgentTypesService for AgentTypesServiceLocal {
         async fn get_all(
             &self,
-            owner_project: &ProjectId,
+            owner_environment: &EnvironmentId,
         ) -> Result<Vec<RegisteredAgentType>, WorkerExecutorError> {
             Ok(self
                 .component_service
                 .all_cached_metadata()
                 .await
                 .iter()
-                .filter(|component| &component.owner.project_id == owner_project)
+                .filter(|component| component.environment_id == *owner_environment)
                 .flat_map(|component| {
                     component
                         .metadata
@@ -298,7 +299,7 @@ mod local {
                         .iter()
                         .map(|agent_type| RegisteredAgentType {
                             agent_type: agent_type.clone(),
-                            implemented_by: component.versioned_component_id.component_id.clone(),
+                            implemented_by: component.id.clone(),
                         })
                         .collect::<Vec<_>>()
                 })
@@ -307,11 +308,11 @@ mod local {
 
         async fn get(
             &self,
-            owner_project: &ProjectId,
+            owner_environment: &EnvironmentId,
             name: &str,
         ) -> Result<Option<RegisteredAgentType>, WorkerExecutorError> {
             Ok(self
-                .get_all(owner_project)
+                .get_all(owner_environment)
                 .await?
                 .iter()
                 .find(|r| r.agent_type.type_name == name)

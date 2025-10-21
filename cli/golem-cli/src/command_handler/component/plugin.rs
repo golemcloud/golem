@@ -19,14 +19,10 @@ use crate::error::service::AnyhowMapServiceError;
 use crate::error::NonSuccessfulExit;
 use crate::log::{log_action, log_error_action, log_warn_action, LogIndent};
 use crate::model::text::fmt::log_warn;
-use crate::model::ComponentName;
 use anyhow::bail;
-use golem_client::api::ComponentClient;
-use golem_client::model::{
-    PluginInstallation, PluginInstallationCreation, PluginInstallationUpdate,
-};
 use golem_common::base_model::PluginInstallationId;
 use std::sync::Arc;
+use golem_common::model::component::ComponentName;
 
 pub struct ComponentPluginCommandHandler {
     ctx: Arc<Context>,

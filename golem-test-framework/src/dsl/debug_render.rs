@@ -50,8 +50,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             for plugin in &params.initial_active_plugins {
                 let _ = writeln!(
                     result,
-                    "{pad}  - installation id: {}",
-                    &plugin.installation_id
+                    "{pad}  - plugin priority: {}",
+                    &plugin.plugin_priority
                 );
                 let inner_pad = format!("{pad}    ");
                 log_plugin_description(&mut result, &inner_pad, plugin);
@@ -228,8 +228,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             for plugin in &params.new_active_plugins {
                 let _ = writeln!(
                     result,
-                    "{pad}  - installation id: {}",
-                    &plugin.installation_id,
+                    "{pad}  - plugin priority: {}",
+                    &plugin.plugin_priority,
                 );
                 let inner_pad = format!("{pad}    ");
                 log_plugin_description(&mut result, &inner_pad, plugin);
@@ -273,8 +273,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(
                 result,
-                "{pad}installation id:   {}",
-                &params.plugin.installation_id,
+                "{pad}plugin priority:   {}",
+                &params.plugin.plugin_priority,
             );
             log_plugin_description(&mut result, pad, &params.plugin);
         }
@@ -283,8 +283,8 @@ pub fn debug_render_oplog_entry(entry: &PublicOplogEntry) -> String {
             let _ = writeln!(result, "{pad}at:                {}", &params.timestamp);
             let _ = writeln!(
                 result,
-                "{pad}installation id:   {}",
-                &params.plugin.installation_id,
+                "{pad}plugin priority:   {}",
+                &params.plugin.plugin_priority,
             );
             log_plugin_description(&mut result, pad, &params.plugin);
         }

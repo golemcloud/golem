@@ -22,10 +22,10 @@ use crate::storage::keyvalue::{
 };
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use async_trait::async_trait;
+use golem_common::model::component::ComponentType;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
 use golem_common::model::{
-    ComponentType, OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus,
-    WorkerStatusRecord,
+    OwnedWorkerId, ShardId, WorkerId, WorkerMetadata, WorkerStatus, WorkerStatusRecord,
 };
 use std::sync::Arc;
 use tracing::debug;
@@ -133,7 +133,7 @@ impl WorkerService for DefaultWorkerService {
                     component_version,
                     args,
                     env,
-                    project_id,
+                    environment_id,
                     created_by,
                     timestamp,
                     parent,
@@ -148,7 +148,7 @@ impl WorkerService for DefaultWorkerService {
                     args,
                     env,
                     wasi_config_vars,
-                    project_id,
+                    environment_id,
                     created_by,
                     created_at: timestamp,
                     parent,

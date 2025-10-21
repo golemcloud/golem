@@ -12,28 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use std::collections::HashMap;
-
-use golem_wasm::analysis::AnalysedExport;
-use serde::{Deserialize, Serialize};
-
-use crate::model::{Component, ComponentName};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
-use golem_common::model::component::{ComponentOwner, VersionedComponentId};
+use golem_common::model::application::ApplicationId;
+use golem_common::model::component::ComponentDto;
+use golem_common::model::component::ComponentId;
+use golem_common::model::component::{ComponentName, ComponentRevision};
+use golem_common::model::component::{ComponentType, InitialComponentFile};
 use golem_common::model::component_metadata::{
     ComponentMetadata, DynamicLinkedInstance, LinearMemory,
 };
-use golem_common::model::{
-    AccountId, ComponentId, ComponentType, ComponentVersion, InitialComponentFile, ProjectId,
-};
+use golem_common::model::environment::EnvironmentId;
+use golem_wasm::analysis::AnalysedExport;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalFileSystemComponentMetadata {
-    pub account_id: AccountId,
-    pub project_id: ProjectId,
     pub component_id: ComponentId,
-    pub version: ComponentVersion,
+    pub version: ComponentRevision,
+    pub environment_id: EnvironmentId,
+    pub application_id: ApplicationId,
+    pub account_id: AccountId,
     pub size: u64,
     pub memories: Vec<LinearMemory>,
     pub exports: Vec<AnalysedExport>,
@@ -41,30 +42,23 @@ pub struct LocalFileSystemComponentMetadata {
     pub files: Vec<InitialComponentFile>,
     pub component_name: String,
     pub wasm_filename: String,
-
-    #[serde(default)]
     pub dynamic_linking: HashMap<String, DynamicLinkedInstance>,
-
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-
+    pub env: BTreeMap<String, String>,
+    pub wasm_hash: golem_common::model::diff::Hash,
     pub agent_types: Vec<AgentType>,
 
     pub root_package_name: Option<String>,
     pub root_package_version: Option<String>,
 }
 
-impl From<LocalFileSystemComponentMetadata> for Component {
+impl From<LocalFileSystemComponentMetadata> for ComponentDto {
     fn from(value: LocalFileSystemComponentMetadata) -> Self {
         Self {
-            owner: ComponentOwner {
-                account_id: value.account_id,
-                project_id: value.project_id,
-            },
-            versioned_component_id: VersionedComponentId {
-                component_id: value.component_id,
-                version: value.version,
-            },
+            id: value.component_id,
+            revision: value.version,
+            environment_id: value.environment_id,
+            application_id: value.application_id,
+            account_id: value.account_id,
             component_name: ComponentName(value.component_name),
             component_size: value.size,
             metadata: ComponentMetadata::from_parts(
@@ -80,6 +74,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
             files: value.files,
             installed_plugins: vec![],
             env: value.env,
+            wasm_hash: value.wasm_hash,
         }
     }
 }

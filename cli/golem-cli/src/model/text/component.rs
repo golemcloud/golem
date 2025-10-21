@@ -14,17 +14,19 @@
 
 use crate::model::component::ComponentView;
 use crate::model::text::fmt::*;
-use crate::model::ComponentName;
 use cli_table::{format::Justify, Table};
 
+use golem_common::model::component::ComponentName;
 use serde::{Deserialize, Serialize};
 
 #[derive(Table)]
 struct ComponentTableView {
     #[table(title = "Name")]
     pub component_name: ComponentName,
+    #[table(title = "Revision", justify = "Justify::Right")]
+    pub component_revision: u64,
     #[table(title = "Version", justify = "Justify::Right")]
-    pub component_version: u64,
+    pub component_version: String,
     #[table(title = "Size", justify = "Justify::Right")]
     pub component_size: u64,
     #[table(title = "Exports count", justify = "Justify::Right")]
@@ -35,7 +37,8 @@ impl From<&ComponentView> for ComponentTableView {
     fn from(value: &ComponentView) -> Self {
         Self {
             component_name: value.component_name.clone(),
-            component_version: value.component_version,
+            component_revision: value.component_revision,
+            component_version: value.component_version.clone().unwrap_or_default(),
             component_size: value.component_size,
             n_exports: value.exports.len(),
         }
@@ -55,8 +58,9 @@ fn component_view_fields(view: &ComponentView) -> Vec<(String, String)> {
         .fmt_field("Component name", &view.component_name, format_main_id)
         .fmt_field("Component ID", &view.component_id, format_id)
         .fmt_field("Component type", &view.component_type, |t| t.to_string())
-        .fmt_field("Component version", &view.component_version, format_id)
-        .fmt_field_option("Project ID", &view.project_id, format_id)
+        .fmt_field("Component revision", &view.component_revision, format_id)
+        .fmt_field_option("Component version", &view.component_version, format_id)
+        .fmt_field_option("Environment ID", &view.environment_id, format_id)
         .fmt_field("Component size", &view.component_size, format_binary_size)
         .fmt_field_option("Created at", &view.created_at, |d| d.to_string())
         .fmt_field_optional("Environment", &view.env, !&view.env.is_empty(), |env| {
@@ -101,9 +105,9 @@ pub struct ComponentUpdateView(pub ComponentView);
 impl MessageWithFields for ComponentUpdateView {
     fn message(&self) -> String {
         format!(
-            "Updated component {} to version {}",
+            "Updated component {} to revision {}",
             format_message_highlight(&self.0.component_name),
-            format_message_highlight(&self.0.component_version),
+            format_message_highlight(&self.0.component_revision),
         )
     }
 
@@ -134,9 +138,9 @@ pub struct ComponentReplStartedView(pub ComponentView);
 impl MessageWithFields for ComponentReplStartedView {
     fn message(&self) -> String {
         format!(
-            "Started Rib REPL for component {} using version {}",
+            "Started Rib REPL for component {} using revision {}",
             format_message_highlight(&self.0.component_name),
-            format_message_highlight(&self.0.component_version),
+            format_message_highlight(&self.0.component_revision),
         )
     }
 

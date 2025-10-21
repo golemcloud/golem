@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::component::PluginPriority;
+use super::environment::EnvironmentId;
 pub use crate::base_model::OplogIndex;
 use crate::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId, TraceId};
 use crate::model::regions::OplogRegion;
+use crate::model::RetryConfig;
 use crate::model::{
-    AccountId, ComponentVersion, IdempotencyKey, PluginInstallationId, Timestamp, TransactionId,
-    WorkerId, WorkerInvocation,
+    AccountId, ComponentRevision, IdempotencyKey, Timestamp, TransactionId, WorkerId,
+    WorkerInvocation,
 };
-use crate::model::{ProjectId, RetryConfig};
 use bincode::de::read::Reader;
 use bincode::de::{BorrowDecoder, Decoder};
 use bincode::enc::write::Writer;
@@ -368,7 +370,7 @@ pub enum OplogEntry {
     /// An update failed to be applied
     FailedUpdate {
         timestamp: Timestamp,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         details: Option<String>,
     },
     /// Increased total linear memory size
@@ -406,33 +408,33 @@ pub enum OplogEntry {
     Create {
         timestamp: Timestamp,
         worker_id: WorkerId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         args: Vec<String>,
         env: Vec<(String, String)>,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
-        initial_active_plugins: HashSet<PluginInstallationId>,
+        initial_active_plugins: HashSet<PluginPriority>,
         wasi_config_vars: BTreeMap<String, String>,
     },
     /// Activates a plugin for the worker
     ActivatePlugin {
         timestamp: Timestamp,
-        plugin: PluginInstallationId,
+        plugin_priority: PluginPriority,
     },
     /// Deactivates a plugin for the worker
     DeactivatePlugin {
         timestamp: Timestamp,
-        plugin: PluginInstallationId,
+        plugin_priority: PluginPriority,
     },
     /// An update was successfully applied
     SuccessfulUpdate {
         timestamp: Timestamp,
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     },
     /// Similar to `Jump` but caused by an external revert request. TODO: Golem 2.0 should probably merge with Jump
     Revert {
@@ -513,16 +515,16 @@ pub enum OplogEntry {
 impl OplogEntry {
     pub fn create(
         worker_id: WorkerId,
-        component_version: ComponentVersion,
+        component_version: ComponentRevision,
         args: Vec<String>,
         env: Vec<(String, String)>,
         wasi_config_vars: BTreeMap<String, String>,
-        project_id: ProjectId,
+        environment_id: EnvironmentId,
         created_by: AccountId,
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
-        initial_active_plugins: HashSet<PluginInstallationId>,
+        initial_active_plugins: HashSet<PluginPriority>,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
@@ -530,7 +532,7 @@ impl OplogEntry {
             component_version,
             args,
             env,
-            project_id,
+            environment_id,
             created_by,
             parent,
             component_size,
@@ -627,9 +629,9 @@ impl OplogEntry {
     }
 
     pub fn successful_update(
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp: Timestamp::now_utc(),
@@ -639,7 +641,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn failed_update(target_version: ComponentVersion, details: Option<String>) -> OplogEntry {
+    pub fn failed_update(target_version: ComponentRevision, details: Option<String>) -> OplogEntry {
         OplogEntry::FailedUpdate {
             timestamp: Timestamp::now_utc(),
             target_version,
@@ -685,17 +687,17 @@ impl OplogEntry {
         }
     }
 
-    pub fn activate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+    pub fn activate_plugin(plugin_priority: PluginPriority) -> OplogEntry {
         OplogEntry::ActivatePlugin {
             timestamp: Timestamp::now_utc(),
-            plugin,
+            plugin_priority,
         }
     }
 
-    pub fn deactivate_plugin(plugin: PluginInstallationId) -> OplogEntry {
+    pub fn deactivate_plugin(plugin_priority: PluginPriority) -> OplogEntry {
         OplogEntry::DeactivatePlugin {
             timestamp: Timestamp::now_utc(),
-            plugin,
+            plugin_priority,
         }
     }
 
@@ -957,7 +959,7 @@ impl OplogEntry {
         }
     }
 
-    pub fn specifies_component_version(&self) -> Option<ComponentVersion> {
+    pub fn specifies_component_version(&self) -> Option<ComponentRevision> {
         match self {
             OplogEntry::Create {
                 component_version, ..
@@ -974,7 +976,7 @@ impl OplogEntry {
                 component_version,
                 args,
                 env,
-                project_id,
+                environment_id,
                 created_by,
                 parent,
                 component_size,
@@ -988,7 +990,7 @@ impl OplogEntry {
                 component_version: *component_version,
                 args: args.clone(),
                 env: env.clone(),
-                project_id: project_id.clone(),
+                environment_id: environment_id.clone(),
                 created_by: created_by.clone(),
                 parent: parent.clone(),
                 component_size: *component_size,
@@ -1005,17 +1007,17 @@ impl OplogEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum UpdateDescription {
     /// Automatic update by replaying the oplog on the new version
-    Automatic { target_version: ComponentVersion },
+    Automatic { target_version: ComponentRevision },
 
     /// Custom update by loading a given snapshot on the new version
     SnapshotBased {
-        target_version: ComponentVersion,
+        target_version: ComponentRevision,
         payload: OplogPayload,
     },
 }
 
 impl UpdateDescription {
-    pub fn target_version(&self) -> &ComponentVersion {
+    pub fn target_version(&self) -> &ComponentRevision {
         match self {
             UpdateDescription::Automatic { target_version } => target_version,
             UpdateDescription::SnapshotBased { target_version, .. } => target_version,

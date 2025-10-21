@@ -23,33 +23,24 @@ use crate::error::{ContextInitHintError, HintError, NonSuccessfulExit};
 use crate::log::{log_action, set_log_output, LogColorize, LogOutput, Output};
 use crate::model::app::{AppBuildStep, ApplicationSourceMode};
 use crate::model::app::{ApplicationConfig, BuildProfileName as AppBuildProfileName};
-use crate::model::text::fmt::log_error;
-use crate::model::{app_raw, Format, ProjectReference};
-use crate::model::{AccountDetails, AccountId, PluginReference};
+use crate::model::environment::EnvironmentReference;
+use crate::model::format::Format;
+use crate::model::{app_raw, AccountDetails, PluginReference};
 use crate::wasm_rpc_stubgen::stub::RustDependencyOverride;
-use anyhow::{anyhow, bail, Context as AnyhowContext};
+use anyhow::{anyhow, bail};
 use colored::control::SHOULD_COLORIZE;
 use futures_util::future::BoxFuture;
-use golem_client::api::AgentTypesClientLive as AgentTypesClientCloud;
-use golem_client::api::ApiCertificateClientLive as ApiCertificateClientCloud;
-use golem_client::api::ApiDefinitionClientLive as ApiDefinitionClientCloud;
-use golem_client::api::ApiDeploymentClientLive as ApiDeploymentClientCloud;
-use golem_client::api::ApiDomainClientLive as ApiDomainClientCloud;
-use golem_client::api::ApiSecurityClientLive as ApiSecurityClientCloud;
-use golem_client::api::ComponentClientLive as ComponentClientCloud;
-use golem_client::api::GrantClientLive as GrantClientCloud;
-use golem_client::api::HealthCheckClientLive;
-use golem_client::api::LimitsClientLive as LimitsClientCloud;
-use golem_client::api::LoginClientLive as LoginClientCloud;
-use golem_client::api::PluginClientLive as PluginClientCloud;
-use golem_client::api::ProjectClientLive as ProjectClientCloud;
-use golem_client::api::ProjectGrantClientLive as ProjectGrantClientCloud;
-use golem_client::api::ProjectPolicyClientLive as ProjectPolicyClientCloud;
-use golem_client::api::TokenClientLive as TokenClientCloud;
-use golem_client::api::WorkerClientLive as WorkerClientCloud;
-use golem_client::api::{AccountClient, AccountSummaryClientLive as AccountSummaryClientCloud};
-use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive};
+use golem_client::api::{
+    AccountClientLive, AccountSummaryClientLive, AgentTypesClientLive, ApiCertificateClientLive,
+    ApiDefinitionClientLive, ApiDeploymentClientLive, ApiDomainClientLive, ApiSecurityClientLive,
+    ApplicationClientLive, ComponentClientLive, EnvironmentClientLive, GrantClientLive,
+    HealthCheckClientLive, LimitsClientLive, LoginClientLive, PluginClientLive, TokenClientLive,
+    WorkerClientLive,
+};
 use golem_client::{Context as ContextCloud, Security};
+use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationName;
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_rib_repl::ReplComponentDependencies;
 use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
@@ -58,7 +49,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::Arc;
 use tracing::{debug, enabled, Level};
 use url::Url;
@@ -79,7 +69,7 @@ pub struct Context {
     app_context_config: ApplicationContextConfig,
     http_batch_size: u64,
     auth_token_override: Option<Uuid>,
-    project: Option<ProjectReference>,
+    environment: Option<EnvironmentReference>,
     client_config: ClientConfig,
     yes: bool,
     show_sensitive: bool,
@@ -142,7 +132,7 @@ impl Context {
 
         let (available_profile_names, profile, manifest_profile) = load_merged_profiles(
             &config_dir,
-            app_context_config.requested_profile_name.as_ref(),
+            todo!(), // TODO: atomic: app_context_config.requested_profile_name.as_ref(),
             manifest_profiles,
         )?;
 
@@ -178,19 +168,24 @@ impl Context {
             }
         }
 
-        let project = match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
-            Some(project) => Some(
-                ProjectReference::from_str(project.as_str())
-                    .map_err(|err| anyhow!("{}", err))
-                    .with_context(|| {
-                        anyhow!(
-                            "Failed to parse project for manifest profile {}",
-                            profile.name.0.log_color_highlight()
-                        )
-                    })?,
-            ),
-            None => None,
-        };
+        let environment: Option<EnvironmentReference> =
+            match manifest_profile.as_ref().and_then(|m| m.project.as_ref()) {
+                Some(_project) => {
+                    // TODO: atomic deployment: it should also handle global flags!
+                    /*Some(
+                    ProjectReference::from_str(project.as_str())
+                        .map_err(|err| anyhow!("{}", err))
+                        .with_context(|| {
+                            anyhow!(
+                                "Failed to parse project for manifest profile {}",
+                                profile.name.0.log_color_highlight()
+                            )
+                        })?,
+                    )*/
+                    todo!()
+                }
+                None => None,
+            };
 
         let format = format.unwrap_or(profile.profile.config.default_format);
 
@@ -225,7 +220,7 @@ impl Context {
             app_context_config,
             http_batch_size: http_batch_size.unwrap_or(50),
             auth_token_override: auth_token,
-            project,
+            environment,
             yes,
             dev_mode,
             show_sensitive,
@@ -310,9 +305,21 @@ impl Context {
         self.app_context_config.build_profile.as_ref()
     }
 
+    // TODO: atomic: env
+    /*
     pub fn profile_project(&self) -> Option<&ProjectReference> {
         self.log_selected_profile_once();
         self.project.as_ref()
+    }
+    */
+
+    pub fn application_name(&self) -> Option<ApplicationName> {
+        // TODO: atomic
+        todo!()
+    }
+
+    pub fn default_environment(&self) -> Option<&EnvironmentReference> {
+        self.environment.as_ref()
     }
 
     pub fn http_batch_size(&self) -> u64 {
@@ -380,11 +387,11 @@ impl Context {
     }
 
     pub async fn account_id(&self) -> anyhow::Result<AccountId> {
-        Ok(self.golem_clients().await?.account_id())
+        Ok(self.golem_clients().await?.account_id().clone())
     }
 
-    pub async fn auth_token(&self) -> anyhow::Result<String> {
-        Ok(self.golem_clients().await?.auth_token())
+    pub async fn auth_token(&self) -> anyhow::Result<TokenSecret> {
+        Ok(self.golem_clients().await?.auth_token().clone())
     }
 
     pub async fn app_context_lock(
@@ -495,8 +502,10 @@ impl Context {
 
     pub async fn select_account_by_email_or_error(
         &self,
-        email: &str,
+        _email: &str,
     ) -> anyhow::Result<AccountDetails> {
+        // TODO: atomic
+        /*
         let mut result = self
             .golem_clients()
             .await?
@@ -510,7 +519,8 @@ impl Context {
         } else {
             log_error("referenced account could not be found");
             bail!(NonSuccessfulExit)
-        }
+        }*/
+        todo!()
     }
 
     pub async fn resolve_plugin_reference(
@@ -538,24 +548,28 @@ impl Context {
         }
     }
 
+    // TODO: atomic: naming
     fn log_selected_profile_once(&self) {
         self.selected_profile_logging.get_or_init(|| {
+            // TODO: atomic
+            /*
             if !self.help_mode {
                 log_action(
                     "Selected",
                     format!(
                         "profile: {}{}",
-                        self.profile_name.0.log_color_highlight(),
-                        self.project
+                        profile.name.0.log_color_highlight(),
+                        environment
                             .as_ref()
-                            .map(|project| format!(
-                                ", project: {}",
-                                project.to_string().log_color_highlight()
+                            .map(|environment| format!(
+                                ", environment: {}",
+                                environment.to_string().log_color_highlight()
                             ))
                             .unwrap_or_default()
                     ),
                 );
             }
+            */
         });
     }
 
@@ -581,26 +595,25 @@ impl Context {
 pub struct GolemClients {
     authentication: Authentication,
 
-    pub account: AccountClientCloud,
-    pub account_summary: AccountSummaryClientCloud,
-    pub agent_types: AgentTypesClientCloud,
-    pub api_certificate: ApiCertificateClientCloud,
-    pub api_definition: ApiDefinitionClientCloud,
-    pub api_deployment: ApiDeploymentClientCloud,
-    pub api_domain: ApiDomainClientCloud,
-    pub api_security: ApiSecurityClientCloud,
-    pub component: ComponentClientCloud,
+    pub account: AccountClientLive,
+    pub account_summary: AccountSummaryClientLive,
+    pub agent_types: AgentTypesClientLive,
+    pub api_certificate: ApiCertificateClientLive,
+    pub api_definition: ApiDefinitionClientLive,
+    pub api_deployment: ApiDeploymentClientLive,
+    pub api_domain: ApiDomainClientLive,
+    pub api_security: ApiSecurityClientLive,
+    pub application: ApplicationClientLive,
+    pub component: ComponentClientLive,
     pub component_healthcheck: HealthCheckClientLive,
-    pub grant: GrantClientCloud,
-    pub limits: LimitsClientCloud,
-    pub login: LoginClientCloud,
-    pub plugin: PluginClientCloud,
-    pub project: ProjectClientCloud,
-    pub project_grant: ProjectGrantClientCloud,
-    pub project_policy: ProjectPolicyClientCloud,
-    pub token: TokenClientCloud,
-    pub worker: WorkerClientCloud,
-    pub worker_invoke: WorkerClientCloud,
+    pub environment: EnvironmentClientLive,
+    pub grant: GrantClientLive,
+    pub limits: LimitsClientLive,
+    pub login: LoginClientLive,
+    pub plugin: PluginClientLive,
+    pub token: TokenClientLive,
+    pub worker: WorkerClientLive,
+    pub worker_invoke: WorkerClientLive,
 }
 
 impl GolemClients {
@@ -619,7 +632,7 @@ impl GolemClients {
         let auth = Auth::new(LoginClientLive {
             context: ContextCloud {
                 client: service_http_client.clone(),
-                base_url: config.cloud_url.clone(),
+                base_url: config.registry_url.clone(),
                 security_token: Security::Empty,
             },
         });
@@ -628,17 +641,17 @@ impl GolemClients {
             .authenticate(token_override, auth_config, config_dir, profile_name)
             .await?;
 
-        let security_token = Security::Bearer(authentication.0.secret.value.to_string());
+        let security_token = Security::Bearer(authentication.0.secret.0.to_string());
 
-        let component_context = || ContextCloud {
+        let registry_context = || ContextCloud {
             client: service_http_client.clone(),
-            base_url: config.component_url.clone(),
+            base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
 
-        let component_healthcheck_context = || ContextCloud {
+        let registry_healthcheck_context = || ContextCloud {
             client: healthcheck_http_client,
-            base_url: config.component_url.clone(),
+            base_url: config.registry_url.clone(),
             security_token: Security::Empty,
         };
 
@@ -654,94 +667,85 @@ impl GolemClients {
             security_token: security_token.clone(),
         };
 
-        let cloud_context = || ContextCloud {
-            client: service_http_client.clone(),
-            base_url: config.cloud_url.clone(),
-            security_token: security_token.clone(),
-        };
-
         let login_context = || ContextCloud {
             client: service_http_client.clone(),
-            base_url: config.cloud_url.clone(),
+            base_url: config.registry_url.clone(),
             security_token: security_token.clone(),
         };
 
         Ok(GolemClients {
             authentication,
-            account: AccountClientCloud {
-                context: cloud_context(),
+            account: AccountClientLive {
+                context: registry_context(),
             },
-            account_summary: AccountSummaryClientCloud {
-                context: worker_context(),
+            account_summary: AccountSummaryClientLive {
+                context: registry_context(),
             },
-            agent_types: AgentTypesClientCloud {
-                context: component_context(),
+            agent_types: AgentTypesClientLive {
+                context: registry_context(),
             },
-            api_certificate: ApiCertificateClientCloud {
-                context: worker_context(),
+            api_certificate: ApiCertificateClientLive {
+                context: registry_context(),
             },
-            api_definition: ApiDefinitionClientCloud {
-                context: worker_context(),
+            api_definition: ApiDefinitionClientLive {
+                context: registry_context(),
             },
-            api_deployment: ApiDeploymentClientCloud {
-                context: worker_context(),
+            api_deployment: ApiDeploymentClientLive {
+                context: registry_context(),
             },
-            api_domain: ApiDomainClientCloud {
-                context: worker_context(),
+            api_domain: ApiDomainClientLive {
+                context: registry_context(),
             },
-            api_security: ApiSecurityClientCloud {
-                context: worker_context(),
+            api_security: ApiSecurityClientLive {
+                context: registry_context(),
             },
-            component: ComponentClientCloud {
-                context: component_context(),
+            application: ApplicationClientLive {
+                context: registry_context(),
+            },
+            component: ComponentClientLive {
+                context: registry_context(),
             },
             component_healthcheck: HealthCheckClientLive {
-                context: component_healthcheck_context(),
+                context: registry_healthcheck_context(),
             },
-            grant: GrantClientCloud {
-                context: cloud_context(),
+            environment: EnvironmentClientLive {
+                context: registry_context(),
             },
-            limits: LimitsClientCloud {
+            grant: GrantClientLive {
+                context: registry_context(),
+            },
+            limits: LimitsClientLive {
                 context: worker_context(),
             },
-            login: LoginClientCloud {
+            login: LoginClientLive {
                 context: login_context(),
             },
-            plugin: PluginClientCloud {
-                context: component_context(),
+            plugin: PluginClientLive {
+                context: registry_context(),
             },
-            project: ProjectClientCloud {
-                context: cloud_context(),
+            token: TokenClientLive {
+                context: registry_context(),
             },
-            project_grant: ProjectGrantClientCloud {
-                context: cloud_context(),
-            },
-            project_policy: ProjectPolicyClientCloud {
-                context: cloud_context(),
-            },
-            token: TokenClientCloud {
-                context: cloud_context(),
-            },
-            worker: WorkerClientCloud {
+            worker: WorkerClientLive {
                 context: worker_context(),
             },
-            worker_invoke: WorkerClientCloud {
+            worker_invoke: WorkerClientLive {
                 context: worker_invoke_context(),
             },
         })
     }
 
-    pub fn account_id(&self) -> AccountId {
+    pub fn account_id(&self) -> &AccountId {
         self.authentication.account_id()
     }
 
-    pub fn auth_token(&self) -> String {
-        self.authentication.0.secret.value.to_string()
+    pub fn auth_token(&self) -> &TokenSecret {
+        &self.authentication.0.secret
     }
 }
 
 struct ApplicationContextConfig {
-    requested_profile_name: Option<ProfileName>,
+    requested_environment: Option<EnvironmentReference>,
     build_profile: Option<AppBuildProfileName>,
     app_manifest_path: Option<PathBuf>,
     disable_app_manifest_discovery: bool,
@@ -753,15 +757,7 @@ struct ApplicationContextConfig {
 impl ApplicationContextConfig {
     pub fn new(global_flags: GolemCliGlobalFlags) -> Self {
         Self {
-            requested_profile_name: {
-                if global_flags.local {
-                    Some(ProfileName::local())
-                } else if global_flags.cloud {
-                    Some(ProfileName::cloud())
-                } else {
-                    global_flags.profile.clone()
-                }
-            },
+            requested_environment: global_flags.environment,
             build_profile: global_flags.build_profile.map(|bp| bp.0.into()),
             app_manifest_path: global_flags.app_manifest_path,
             disable_app_manifest_discovery: global_flags.disable_app_manifest_discovery,

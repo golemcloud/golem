@@ -22,11 +22,10 @@ use crate::services::oplog::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::component::{ComponentId, ComponentType};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{
-    ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
-    WorkerStatusRecord,
-};
+use golem_common::model::{OwnedWorkerId, ScanCursor, WorkerMetadata, WorkerStatusRecord};
 use golem_common::read_only_lock;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use nonempty_collections::NEVec;
@@ -61,7 +60,7 @@ pub trait OplogArchiveService: Debug + Send + Sync {
 
     async fn scan_for_component(
         &self,
-        account_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -417,7 +416,7 @@ impl OplogService for MultiLayerOplogService {
 
     async fn scan_for_component(
         &self,
-        project_id: &ProjectId,
+        environment_id: &EnvironmentId,
         component_id: &ComponentId,
         cursor: ScanCursor,
         count: u64,
@@ -426,7 +425,7 @@ impl OplogService for MultiLayerOplogService {
             0 => {
                 let (new_cursor, unfiltered_ids) = self
                     .primary
-                    .scan_for_component(project_id, component_id, cursor, count)
+                    .scan_for_component(environment_id, component_id, cursor, count)
                     .await?;
 
                 let ids = self
@@ -449,7 +448,7 @@ impl OplogService for MultiLayerOplogService {
             }
             layer if layer <= self.lower.len().get() => {
                 let (new_cursor, unfiltered_ids) = self.lower[layer - 1]
-                    .scan_for_component(project_id, component_id, cursor, count)
+                    .scan_for_component(environment_id, component_id, cursor, count)
                     .await?;
                 let ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, layer)

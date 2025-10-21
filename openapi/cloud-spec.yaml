@@ -2872,7 +2872,6 @@ components:
       - storageLimit
       - monthlyGasLimit
       - monthlyUploadLimit
-      - maxMemoryPerWorker
       properties:
         projectLimit:
           type: integer
@@ -2892,9 +2891,6 @@ components:
         monthlyUploadLimit:
           type: integer
           format: int32
-        maxMemoryPerWorker:
-          type: integer
-          format: int64
     PluginInstallation:
       type: object
       title: PluginInstallation

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::log::LogColorize;
-use crate::model::api::to_method_pattern;
+use crate::model::api::to_route_method;
 use crate::model::app::HttpApiDefinitionName;
 use crate::model::app_raw::{
     HttpApiDefinition, HttpApiDefinitionBindingType, HttpApiDefinitionRoute,
@@ -22,15 +22,12 @@ use crate::model::component::Component;
 use crate::model::deploy_diff::{DiffSerialize, ToYamlValueWithoutNulls};
 use crate::model::text::fmt::format_rib_source_for_error;
 use anyhow::anyhow;
-use golem_client::model::{
-    GatewayBindingComponent, GatewayBindingData, GatewayBindingType, HttpApiDefinitionRequest,
-    HttpApiDefinitionResponseData, RouteRequestData,
-};
+use golem_client::model::CreateHttpApiDefinitionRequest;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct DiffableHttpApiDefinition(pub HttpApiDefinitionRequest);
+pub struct DiffableHttpApiDefinition(pub HttpApiDefinition);
 
 impl DiffableHttpApiDefinition {
     pub fn from_server(api_definition: HttpApiDefinitionResponseData) -> anyhow::Result<Self> {
@@ -70,7 +67,7 @@ impl DiffableHttpApiDefinition {
         api_definition: &HttpApiDefinition,
         latest_component_versions: &BTreeMap<String, Component>,
     ) -> anyhow::Result<Self> {
-        let mut manifest_api_def = Self(HttpApiDefinitionRequest {
+        let mut manifest_api_def = Self(CreateHttpApiDefinitionRequest {
             id: name.to_string(),
             version: api_definition.version.clone(),
             security: None, // TODO: check that this is not needed anymore
@@ -108,7 +105,7 @@ fn normalize_http_api_route(
     route: &HttpApiDefinitionRoute,
 ) -> anyhow::Result<RouteRequestData> {
     Ok(RouteRequestData {
-        method: to_method_pattern(&route.method)?,
+        method: to_route_method(&route.method)?,
         path: normalize_http_api_binding_path(&route.path),
         binding: GatewayBindingData {
             binding_type: Some(

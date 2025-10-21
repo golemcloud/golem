@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package golem.common;
+
+import "golem/common/uuid.proto";
+
+message ApplicationId {
+  UUID value = 1;
+}

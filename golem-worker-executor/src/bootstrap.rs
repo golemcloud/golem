@@ -24,8 +24,7 @@ use crate::services::golem_config::GolemConfig;
 use crate::services::key_value::KeyValueService;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
 use crate::services::oplog::OplogService;
-use crate::services::plugins::{Plugins, PluginsObservations};
-use crate::services::projects::ProjectService;
+use crate::services::plugins::PluginsService;
 use crate::services::promise::PromiseService;
 use crate::services::rpc::{DirectWorkerInvocationRpc, RemoteInvocationRpc};
 use crate::services::scheduler::SchedulerService;
@@ -62,28 +61,20 @@ impl Bootstrap<Context> for ServerBootstrap {
         Arc::new(ActiveWorkers::<Context>::new(&golem_config.memory))
     }
 
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> (Arc<dyn Plugins>, Arc<dyn PluginsObservations>) {
-        let plugins = crate::services::plugins::configured(&golem_config.plugin_service);
-        (plugins.clone(), plugins)
+    fn create_plugins(&self, golem_config: &GolemConfig) -> Arc<dyn PluginsService> {
+        crate::services::plugins::configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
-        plugin_observations: Arc<dyn PluginsObservations>,
-        project_service: Arc<dyn ProjectService>,
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
             blob_storage,
-            plugin_observations,
-            project_service,
         )
     }
 
@@ -110,9 +101,8 @@ impl Bootstrap<Context> for ServerBootstrap {
         worker_proxy: Arc<dyn WorkerProxy>,
         events: Arc<Events>,
         file_loader: Arc<FileLoader>,
-        plugins: Arc<dyn Plugins>,
+        plugins: Arc<dyn PluginsService>,
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
-        project_service: Arc<dyn ProjectService>,
         agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Context>> {
         let resource_limits = resource_limits::configured(&golem_config.resource_limits);
@@ -148,7 +138,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            project_service.clone(),
             agent_type_service.clone(),
             additional_deps.clone(),
         ));
@@ -182,7 +171,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits.clone(),
-            project_service.clone(),
             agent_type_service.clone(),
             additional_deps.clone(),
         ));
@@ -215,7 +203,6 @@ impl Bootstrap<Context> for ServerBootstrap {
             plugins.clone(),
             oplog_processor_plugin.clone(),
             resource_limits,
-            project_service,
             additional_deps,
         ))
     }

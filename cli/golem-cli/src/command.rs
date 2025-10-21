@@ -16,12 +16,18 @@ use crate::command::api::ApiSubcommand;
 use crate::command::app::AppSubcommand;
 use crate::command::cloud::CloudSubcommand;
 use crate::command::component::ComponentSubcommand;
-use crate::command::plugin::PluginSubcommand;
+use crate::command::environment::EnvironmentSubcommand;
 use crate::command::profile::ProfileSubcommand;
+#[cfg(feature = "server-commands")]
+use crate::command::server::ServerSubcommand;
+use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
 use crate::command::worker::AgentSubcommand;
-use crate::config::{BuildProfileName, ProfileName};
+use crate::config::BuildProfileName;
+use crate::error::ShowClapHelpTarget;
 use crate::log::LogColorize;
-use crate::model::{Format, WorkerName};
+use crate::model::environment::EnvironmentReference;
+use crate::model::format::Format;
+use crate::model::worker::WorkerName;
 use crate::{command_name, version};
 use anyhow::{anyhow, bail, Context as AnyhowContext};
 use chrono::{DateTime, Utc};
@@ -35,11 +41,6 @@ use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
 use std::path::PathBuf;
 use uuid::Uuid;
-
-#[cfg(feature = "server-commands")]
-use crate::command::server::ServerSubcommand;
-use crate::command::shared_args::{ComponentOptionalComponentName, DeployArgs};
-use crate::error::ShowClapHelpTarget;
 
 /// Golem Command Line Interface
 #[derive(Debug, Parser)]
@@ -93,33 +94,31 @@ impl Verbosity {
 #[derive(Debug, Clone, Default, Args)]
 pub struct GolemCliGlobalFlags {
     /// Output format, defaults to text, unless specified by the selected profile
-    #[arg(long, short, global = true, display_order = 101)]
+    #[arg(long, short = 'F', global = true, display_order = 101)]
     pub format: Option<Format>,
 
-    /// Select Golem profile by name
-    #[arg(long, short, global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
-    pub profile: Option<ProfileName>,
+    /// Select Golem environment by name
+    #[arg(long, short = 'E', global = true, conflicts_with_all = ["local", "cloud"], display_order = 102)]
+    pub environment: Option<EnvironmentReference>,
 
-    /// Select builtin "local" profile, to use services provided by the "golem server" command
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "cloud"], display_order = 103
-    )]
+    /// Select the builtin "local" server
+    #[arg(long, short = 'L', global = true, conflicts_with_all = ["environment", "cloud"], display_order = 103)]
     pub local: bool,
 
-    /// Select builtin "cloud" profile to use Golem Cloud
-    #[arg(long, short, global = true, conflicts_with_all = ["profile", "local"], display_order = 104
-    )]
+    /// Select the builtin "cloud" server
+    #[arg(long, short = 'C', global = true, conflicts_with_all = ["environment", "local"], display_order = 104)]
     pub cloud: bool,
 
     /// Custom path to the root application manifest (golem.yaml)
-    #[arg(long, short, global = true, display_order = 105)]
+    #[arg(long, short = 'A', global = true, display_order = 105)]
     pub app_manifest_path: Option<PathBuf>,
 
     /// Disable automatic searching for application manifests
-    #[arg(long, short = 'A', global = true, display_order = 106)]
+    #[arg(long, short = 'X', global = true, display_order = 106)]
     pub disable_app_manifest_discovery: bool,
 
     /// Select build profile
-    #[arg(long, short, global = true, display_order = 107)]
+    #[arg(long, short = 'B', global = true, display_order = 107)]
     pub build_profile: Option<BuildProfileName>,
 
     /// Custom path to the config directory (defaults to $HOME/.golem)
@@ -127,7 +126,7 @@ pub struct GolemCliGlobalFlags {
     pub config_dir: Option<PathBuf>,
 
     /// Automatically answer "yes" to any interactive confirm questions
-    #[arg(long, short, global = true, display_order = 109)]
+    #[arg(long, short = 'Y', global = true, display_order = 109)]
     pub yes: bool,
 
     /// Disables filtering of potentially sensitive use values in text mode (e.g. component environment variable values)
@@ -166,10 +165,14 @@ pub struct GolemCliGlobalFlags {
 }
 
 impl GolemCliGlobalFlags {
-    pub fn with_env_overrides(mut self) -> GolemCliGlobalFlags {
-        if self.profile.is_none() {
-            if let Ok(profile) = std::env::var("GOLEM_PROFILE") {
-                self.profile = Some(profile.into());
+    pub fn with_env_overrides(mut self) -> anyhow::Result<GolemCliGlobalFlags> {
+        if self.environment.is_none() {
+            if let Ok(environment) = std::env::var("GOLEM_ENVIRONMENT") {
+                self.environment = Some(
+                    EnvironmentReference::try_from(environment)
+                        .map_err(|err| anyhow!(err))
+                        .context("Failed to parse GOLEM_ENVIRONMENT environment variable")?,
+                );
             }
         }
 
@@ -214,20 +217,17 @@ impl GolemCliGlobalFlags {
         }
 
         if let Ok(batch_size) = std::env::var("GOLEM_HTTP_BATCH_SIZE") {
-            self.http_batch_size = Some(
-                batch_size
-                    .parse()
-                    .with_context(|| format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}"))
-                    .unwrap(),
-            )
+            self.http_batch_size =
+                Some(batch_size.parse().with_context(|| {
+                    format!("Failed to parse GOLEM_HTTP_BATCH_SIZE: {batch_size}")
+                })?)
         }
 
         if let Ok(auth_token) = std::env::var("GOLEM_AUTH_TOKEN") {
             self.auth_token = Some(
                 auth_token
                     .parse()
-                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")
-                    .unwrap(),
+                    .context("Failed to parse GOLEM_AUTH_TOKEN, expected uuid")?,
             );
         }
 
@@ -245,7 +245,7 @@ impl GolemCliGlobalFlags {
                 .unwrap_or_default()
         }
 
-        self
+        Ok(self)
     }
 
     pub fn config_dir(&self) -> PathBuf {
@@ -272,7 +272,7 @@ pub struct GolemCliFallbackCommand {
 }
 
 impl GolemCliFallbackCommand {
-    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> Self
+    fn try_parse_from<I, T>(args: I, with_env_overrides: bool) -> anyhow::Result<Self>
     where
         I: IntoIterator<Item = T>,
         T: Into<OsString> + Clone,
@@ -291,10 +291,11 @@ impl GolemCliFallbackCommand {
         });
 
         if with_env_overrides {
-            cmd.global_flags = cmd.global_flags.with_env_overrides();
+            // TODO: atomic
+            cmd.global_flags = cmd.global_flags.with_env_overrides()?;
         }
 
-        cmd
+        Ok(cmd)
     }
 }
 
@@ -315,13 +316,31 @@ impl GolemCliCommand {
         match GolemCliCommand::try_parse_from(&args) {
             Ok(mut command) => {
                 if with_env_overrides {
-                    command.global_flags = command.global_flags.with_env_overrides()
+                    match command.global_flags.with_env_overrides() {
+                        Ok(global_flags) => {
+                            command.global_flags = global_flags;
+                        }
+                        Err(err) => {
+                            return GolemCliCommandParseResult::Error {
+                                error: clap::Error::raw(ErrorKind::InvalidValue, err),
+                                fallback_command: Default::default(),
+                            }
+                        }
+                    }
                 }
                 GolemCliCommandParseResult::FullMatch(command)
             }
             Err(error) => {
                 let fallback_command =
-                    GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides);
+                    match GolemCliFallbackCommand::try_parse_from(&args, with_env_overrides) {
+                        Ok(fallback_command) => fallback_command,
+                        Err(err) => {
+                            return GolemCliCommandParseResult::Error {
+                                error: clap::Error::raw(ErrorKind::InvalidValue, err),
+                                fallback_command: Default::default(),
+                            }
+                        }
+                    };
 
                 let partial_match = match error.kind() {
                     ErrorKind::DisplayHelp => {
@@ -511,7 +530,12 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: AppSubcommand,
     },
-    /// Build, deploy and manage components
+    /// Manage environments
+    Environment {
+        #[clap(subcommand)]
+        subcommand: EnvironmentSubcommand,
+    },
+    /// Manage components
     Component {
         #[clap(subcommand)]
         subcommand: ComponentSubcommand,
@@ -526,11 +550,13 @@ pub enum GolemCliSubcommand {
         #[clap(subcommand)]
         subcommand: ApiSubcommand,
     },
-    /// Manage plugins
+    // TODO: atomic /// Manage plugins
+    /*
     Plugin {
         #[clap(subcommand)]
         subcommand: PluginSubcommand,
     },
+    */
     /// Manage global CLI profiles
     Profile {
         #[clap(subcommand)]
@@ -574,9 +600,10 @@ pub enum GolemCliSubcommand {
 
 pub mod shared_args {
     use crate::model::app::AppBuildStep;
-    use crate::model::{AccountId, PluginReference};
-    use crate::model::{AgentUpdateMode, ComponentName, ProjectName, ProjectReference, WorkerName};
+    use crate::model::worker::{AgentUpdateMode, WorkerName};
     use clap::Args;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::component::ComponentName;
     use golem_templates::model::GuestLanguage;
 
     pub type ComponentTemplateName = String;
@@ -676,10 +703,10 @@ pub mod shared_args {
     #[derive(Debug, Args)]
     pub struct StreamArgs {
         /// Hide log levels in stream output
-        #[clap(long, short = 'L')]
+        #[clap(long)]
         pub stream_no_log_level: bool,
         /// Hide timestamp in stream output
-        #[clap(long, short = 'T')]
+        #[clap(long)]
         pub stream_no_timestamp: bool,
         /// Only show entries coming from the agent, no output about invocation markers and stream status
         #[clap(long)]
@@ -751,33 +778,14 @@ pub mod shared_args {
     }
 
     #[derive(Debug, Args)]
-    pub struct ProjectArg {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Project, accepted formats:
-        ///   - <PROJECT_NAME>
-        ///   - <ACCOUNT_EMAIL>/<PROJECT_NAME>
-        #[arg(verbatim_doc_comment)]
-        pub project: ProjectReference,
-    }
-
-    #[derive(Debug, Args)]
-    pub struct ProjectOptionalFlagArg {
-        // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
-        /// Project, accepted formats:
-        ///   - <PROJECT_NAME>
-        ///   - <ACCOUNT_EMAIL>/<PROJECT_NAME>
-        #[arg(verbatim_doc_comment, long)]
-        pub project: Option<ProjectReference>,
-    }
-
-    #[derive(Debug, Args)]
     pub struct AccountIdOptionalArg {
         /// Account ID
         #[arg(long)]
         pub account_id: Option<AccountId>,
     }
 
-    #[derive(Debug, Args)]
+    // TODO: atomic
+    /*#[derive(Debug, Args)]
     pub struct PluginArg {
         // DO NOT ADD EMPTY LINES TO THE DOC COMMENT
         /// Plugin, accepted formats:
@@ -808,20 +816,20 @@ pub mod shared_args {
             self.global
                 || (self.account.is_none() && self.project.is_none() && self.component.is_none())
         }
-    }
+    }*/
 }
 
 pub mod app {
     use crate::command::shared_args::{
         AppOptionalComponentNames, BuildArgs, DeployArgs, ForceBuildArg,
     };
-    use crate::model::AgentUpdateMode;
+    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_templates::model::GuestLanguage;
 
     #[derive(Debug, Subcommand)]
     pub enum AppSubcommand {
-        /// Create new application
+        /// Create a new application
         New {
             /// Application folder name where the new application should be created
             application_name: Option<String>,
@@ -835,10 +843,8 @@ pub mod app {
             #[command(flatten)]
             build: BuildArgs,
         },
-        /// Deploy all or selected components and HTTP APIs in the application, includes building
+        /// Deploy application
         Deploy {
-            #[command(flatten)]
-            component_name: AppOptionalComponentNames,
             #[command(flatten)]
             force_build: ForceBuildArg,
             #[command(flatten)]
@@ -878,15 +884,23 @@ pub mod app {
     }
 }
 
+pub mod environment {
+    use clap::Subcommand;
+
+    #[derive(Debug, Subcommand)]
+    pub enum EnvironmentSubcommand {}
+}
+
 pub mod component {
     use crate::command::component::plugin::ComponentPluginSubcommand;
     use crate::command::shared_args::{
         BuildArgs, ComponentOptionalComponentName, ComponentOptionalComponentNames,
-        ComponentTemplateName, DeployArgs, ForceBuildArg,
+        ComponentTemplateName,
     };
     use crate::model::app::DependencyType;
-    use crate::model::{AgentUpdateMode, ComponentName};
+    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
+    use golem_common::model::component::ComponentName;
     use golem_templates::model::PackageName;
     use std::path::PathBuf;
     use url::Url;
@@ -911,15 +925,6 @@ pub mod component {
             component_name: ComponentOptionalComponentNames,
             #[command(flatten)]
             build: BuildArgs,
-        },
-        /// Deploy component(s) and dependent HTTP APIs based on the current directory or by selection
-        Deploy {
-            #[command(flatten)]
-            component_name: ComponentOptionalComponentNames,
-            #[command(flatten)]
-            force_build: ForceBuildArg,
-            #[command(flatten)]
-            deploy_args: DeployArgs,
         },
         /// Clean component(s) based on the current directory or by selection
         Clean {
@@ -988,7 +993,6 @@ pub mod component {
         use crate::command::parse_key_val;
         use crate::command::shared_args::ComponentOptionalComponentName;
         use clap::Subcommand;
-        use golem_common::base_model::PluginInstallationId;
 
         #[derive(Debug, Subcommand)]
         pub enum ComponentPluginSubcommand {
@@ -1021,9 +1025,9 @@ pub mod component {
                 /// The component to update the plugin for
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
-                /// Installation id of the plugin to update
+                /// Priority of the plugin to update
                 #[arg(long)]
-                installation_id: PluginInstallationId,
+                plugin_to_update: i32,
                 /// Updated priority of the plugin - largest priority is applied first
                 #[arg(long)]
                 priority: i32,
@@ -1036,9 +1040,9 @@ pub mod component {
                 /// The component to uninstall the plugin from
                 #[command(flatten)]
                 component_name: ComponentOptionalComponentName,
-                /// Installation id of the plugin to uninstall
+                /// Priority of the plugin to update
                 #[arg(long)]
-                installation_id: PluginInstallationId,
+                plugin_to_update: i32,
             },
         }
     }
@@ -1051,9 +1055,10 @@ pub mod worker {
         AgentIdArgs, ComponentOptionalComponentName, DeployArgs, NewWorkerArgument,
         OptionalAgentTypeName, StreamArgs, WorkerFunctionArgument, WorkerFunctionName,
     };
-    use crate::model::{AgentUpdateMode, IdempotencyKey};
+    use crate::model::worker::AgentUpdateMode;
     use clap::Subcommand;
     use golem_client::model::ScanCursor;
+    use golem_common::model::IdempotencyKey;
 
     #[derive(Debug, Subcommand)]
     pub enum AgentSubcommand {
@@ -1079,7 +1084,7 @@ pub mod worker {
             /// Only trigger invocation and do not wait for it
             #[clap(long, short)]
             trigger: bool,
-            /// Set idempotency key for the call, use "-" for an auto generated key
+            /// Set idempotency key for the call, use "-" for an auto-generated key
             #[clap(long, short)]
             idempotency_key: Option<IdempotencyKey>,
             #[clap(long, short)]
@@ -1220,16 +1225,10 @@ pub mod api {
     use crate::command::api::definition::ApiDefinitionSubcommand;
     use crate::command::api::deployment::ApiDeploymentSubcommand;
     use crate::command::api::security_scheme::ApiSecuritySchemeSubcommand;
-    use crate::command::shared_args::DeployArgs;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum ApiSubcommand {
-        /// Deploy API Definitions and Deployments
-        Deploy {
-            #[command(flatten)]
-            deploy_args: DeployArgs,
-        },
         /// Manage API definitions
         Definition {
             #[clap(subcommand)]
@@ -1253,25 +1252,14 @@ pub mod api {
     }
 
     pub mod definition {
-        use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
         use crate::model::api::{ApiDefinitionId, ApiDefinitionVersion};
-        use crate::model::app::HttpApiDefinitionName;
         use crate::model::OpenApiDefinitionOutputFormat;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDefinitionSubcommand {
-            /// Deploy API Definitions and required components
-            Deploy {
-                /// API definition to deploy, if not specified, all definitions are deployed
-                http_api_definition_name: Option<HttpApiDefinitionName>,
-                #[command(flatten)]
-                deploy_args: DeployArgs,
-            },
             /// Retrieves metadata about an existing API definition
             Get {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
                 /// API definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
@@ -1281,32 +1269,19 @@ pub mod api {
             },
             /// Lists all API definitions
             List {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
                 /// API definition id to get all versions. Optional.
                 #[arg(short, long)]
                 id: Option<ApiDefinitionId>,
             },
-            /// Deletes an existing API definition
-            Delete {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
-                /// API definition id
-                #[arg(short, long)]
-                id: ApiDefinitionId,
-                /// Version of the api definition
-                #[arg(long)]
-                version: ApiDefinitionVersion,
-            },
             /// Exports an api definition in OpenAPI format
             Export {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
+                // TODO: atomic: should be name based, with app context
                 /// Api definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
+                // TODO: atomic: why this version is needed?
                 /// Version of the api definition
-                #[arg(short = 'V', long)]
+                #[arg(long)]
                 version: ApiDefinitionVersion,
                 /// Output format (json or yaml)
                 #[arg(long = "def-format", default_value = "yaml", name = "def-format")]
@@ -1317,63 +1292,42 @@ pub mod api {
             },
             /// Opens Swagger UI for an API definition
             Swagger {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
+                // TODO: atomic: should be name based, with app context
                 /// Api definition id
                 #[arg(short, long)]
                 id: ApiDefinitionId,
+                // TODO: atomic: why this version is needed?
                 /// Version of the api definition
-                #[arg(short = 'V', long)]
+                #[arg(long)]
                 version: ApiDefinitionVersion,
                 /// Port to open Swagger UI on (defaults to 9007)
-                #[arg(short = 'P', long, default_value_t = 9007)]
+                #[arg(long, short, default_value_t = 9007)]
                 port: u16,
             },
         }
     }
 
     pub mod deployment {
-        use crate::command::shared_args::{DeployArgs, ProjectOptionalFlagArg};
         use crate::model::api::ApiDefinitionId;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
         pub enum ApiDeploymentSubcommand {
-            /// Deploy API Deployments
-            Deploy {
-                /// Host or site to deploy, if not defined, all deployments will be deployed
-                host_or_site: Option<String>,
-                #[command(flatten)]
-                deploy_args: DeployArgs,
-            },
             /// Get API deployment
             Get {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
                 /// Deployment site
                 #[arg(value_name = "subdomain.host")]
                 site: String,
             },
             /// List API deployment for API definition
             List {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
                 /// API definition id
                 definition: Option<ApiDefinitionId>,
-            },
-            /// Delete api deployment
-            Delete {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
-                /// Deployment site
-                #[arg(value_name = "subdomain.host")]
-                site: String,
             },
         }
     }
 
     pub mod security_scheme {
-        use crate::command::shared_args::ProjectOptionalFlagArg;
         use crate::model::api::IdentityProviderType;
         use clap::Subcommand;
 
@@ -1381,8 +1335,6 @@ pub mod api {
         pub enum ApiSecuritySchemeSubcommand {
             /// Create API Security Scheme
             Create {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
                 /// Security Scheme ID
                 security_scheme_id: String,
                 /// Security Scheme provider (Google, Facebook, Gitlab, Microsoft)
@@ -1404,8 +1356,6 @@ pub mod api {
 
             /// Get API security
             Get {
-                #[command(flatten)]
-                project: ProjectOptionalFlagArg,
                 /// Security Scheme ID
                 security_scheme_id: String,
             },
@@ -1432,27 +1382,19 @@ pub mod api {
         }
 
         pub mod domain {
-            use crate::command::shared_args::ProjectArg;
             use clap::Subcommand;
 
             #[derive(Debug, Subcommand)]
             pub enum ApiDomainSubcommand {
                 /// Retrieves metadata about an existing domain
-                Get {
-                    #[clap(flatten)]
-                    project: ProjectArg,
-                },
+                Get {},
                 /// Add new domain
                 New {
-                    #[clap(flatten)]
-                    project: ProjectArg,
                     /// Domain name
                     domain_name: String,
                 },
                 /// Delete an existing domain
                 Delete {
-                    #[clap(flatten)]
-                    project: ProjectArg,
                     /// Domain name
                     domain_name: String,
                 },
@@ -1460,7 +1402,6 @@ pub mod api {
         }
 
         pub mod certificate {
-            use crate::command::shared_args::ProjectArg;
             use crate::model::PathBufOrStdin;
             use clap::Subcommand;
             use uuid::Uuid;
@@ -1469,15 +1410,11 @@ pub mod api {
             pub enum ApiCertificateSubcommand {
                 /// Retrieves metadata about an existing certificate
                 Get {
-                    #[clap(flatten)]
-                    project: ProjectArg,
                     /// Certificate ID
                     certificate_id: Option<Uuid>,
                 },
                 /// Create new certificate
                 New {
-                    #[clap(flatten)]
-                    project: ProjectArg,
                     /// Domain name
                     #[arg(short, long)]
                     domain_name: String,
@@ -1491,8 +1428,6 @@ pub mod api {
                 /// Delete an existing certificate
                 #[command()]
                 Delete {
-                    #[clap(flatten)]
-                    project: ProjectArg,
                     /// Certificate ID
                     certificate_id: Uuid,
                 },
@@ -1502,8 +1437,8 @@ pub mod api {
 }
 
 pub mod plugin {
-    use super::shared_args::PluginArg;
-    use crate::command::shared_args::PluginScopeArgs;
+    // TODO: atomic
+    /*
     use crate::model::PathBufOrStdin;
     use clap::Subcommand;
 
@@ -1533,12 +1468,13 @@ pub mod plugin {
             plugin: PluginArg,
         },
     }
+    */
 }
 
 pub mod profile {
     use crate::command::profile::config::ProfileConfigSubcommand;
     use crate::config::ProfileName;
-    use crate::model::Format;
+    use crate::model::format::Format;
     use clap::Subcommand;
     use url::Url;
     use uuid::Uuid;
@@ -1546,7 +1482,7 @@ pub mod profile {
     #[allow(clippy::large_enum_variant)]
     #[derive(Debug, Subcommand)]
     pub enum ProfileSubcommand {
-        /// Create new global profile, call without <PROFILE_NAME> for interactive setup
+        /// Create a new global profile, call without <PROFILE_NAME> for interactive setup
         New {
             /// Name of the newly created profile
             name: Option<ProfileName>,
@@ -1604,7 +1540,7 @@ pub mod profile {
     }
 
     pub mod config {
-        use crate::model::Format;
+        use crate::model::format::Format;
         use clap::Subcommand;
 
         #[derive(Debug, Subcommand)]
@@ -1620,17 +1556,19 @@ pub mod profile {
 
 pub mod cloud {
     use crate::command::cloud::account::AccountSubcommand;
-    use crate::command::cloud::project::ProjectSubcommand;
     use crate::command::cloud::token::TokenSubcommand;
     use clap::Subcommand;
 
     #[derive(Debug, Subcommand)]
     pub enum CloudSubcommand {
+        // TODO: atomic
+        /*
         /// Manage Cloud Projects
         Project {
             #[clap(subcommand)]
             subcommand: ProjectSubcommand,
         },
+        */
         /// Manage Cloud Account
         Account {
             #[clap(subcommand)]
@@ -1645,9 +1583,9 @@ pub mod cloud {
 
     pub mod token {
         use crate::command::parse_instant;
-        use crate::model::TokenId;
         use chrono::{DateTime, Utc};
         use clap::Subcommand;
+        use golem_common::model::auth::TokenId;
 
         #[derive(Debug, Subcommand)]
         pub enum TokenSubcommand {
@@ -1709,7 +1647,6 @@ pub mod cloud {
 
         pub mod grant {
             use crate::command::shared_args::AccountIdOptionalArg;
-            use crate::model::Role;
             use clap::Subcommand;
 
             #[derive(Subcommand, Debug)]
@@ -1723,20 +1660,20 @@ pub mod cloud {
                 New {
                     #[command(flatten)]
                     account_id: AccountIdOptionalArg,
-                    /// The role to be granted
-                    role: Role,
+                    // TODO: atomic role: Role, /// The role to be granted
                 },
                 /// Remove a role from the account
                 Delete {
                     #[command(flatten)]
                     account_id: AccountIdOptionalArg,
-                    /// The role to be deleted
-                    role: Role,
+                    // TODO: atomic role: Role, /// The role to be deleted
                 },
             }
         }
     }
 
+    // TODO: atomic
+    /*
     pub mod project {
         use crate::command::cloud::project::plugin::ProjectPluginSubcommand;
         use crate::command::cloud::project::policy::PolicySubcommand;
@@ -1873,6 +1810,7 @@ pub mod cloud {
             }
         }
     }
+    */
 }
 
 pub mod server {
