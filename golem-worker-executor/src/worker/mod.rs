@@ -1515,7 +1515,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     active_plugins: component
                         .installed_plugins
                         .iter()
-                        .map(|i| i.priority.clone())
+                        .map(|i| i.priority)
                         .collect(),
                     ..Default::default()
                 };

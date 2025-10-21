@@ -46,7 +46,6 @@ use crate::workerctx::{
 };
 use anyhow::{anyhow, Error};
 use async_trait::async_trait;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentRevision, PluginPriority};
 use golem_common::base_model::{OplogIndex};
@@ -342,7 +341,7 @@ impl ExternalOperations<Context> for Context {
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         this.resource_limits()
-            .update_last_known_limits(&account_id, last_known_limits)
+            .update_last_known_limits(account_id, last_known_limits)
             .await
     }
 

@@ -347,7 +347,7 @@ impl From<ComponentId> for golem_wasm::ComponentId {
 
 mod protobuf {
     use super::{ComponentDto, InstalledPlugin};
-    use super::{ComponentFilePath, ComponentName, ComponentRevision, ComponentType, PluginPriority, InitialComponentFile, InitialComponentFileKey, PluginInstallation};
+    use super::{ComponentName, ComponentRevision, ComponentType, PluginPriority};
     use std::time::SystemTime;
     use applying::Apply;
     use std::collections::BTreeMap;

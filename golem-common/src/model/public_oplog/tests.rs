@@ -72,9 +72,7 @@ fn create_serialization_poem_serde_equivalence() {
         component_size: 100_000_000,
         initial_total_linear_memory_size: 200_000_000,
         initial_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
-            installation_id: PluginPriority(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
+            plugin_priority: PluginPriority(0),
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),
@@ -361,9 +359,7 @@ fn successful_update_serialization_poem_serde_equivalence() {
         target_version: ComponentRevision(1),
         new_component_size: 100_000_000,
         new_active_plugins: BTreeSet::from_iter(vec![PluginInstallationDescription {
-            installation_id: PluginPriority(
-                Uuid::parse_str("13A5C8D4-F05E-4E23-B982-F4D413E181CB").unwrap(),
-            ),
+            plugin_priority: PluginPriority(0),
             plugin_name: "plugin1".to_string(),
             plugin_version: "1".to_string(),
             parameters: BTreeMap::new(),

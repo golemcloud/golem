@@ -70,9 +70,8 @@ trait ProtobufInvocationDetails {
 
 impl<T: ProtobufInvocationDetails> CanStartWorker for T {
     fn account_id(&self) -> Result<AccountId, WorkerExecutorError> {
-        self
-            .proto_account_id()
-            .clone()
+        (*self
+            .proto_account_id())
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
             .try_into()
             .map_err(|e| WorkerExecutorError::unknown(format!("Invalid account id from grpc: {e}")))

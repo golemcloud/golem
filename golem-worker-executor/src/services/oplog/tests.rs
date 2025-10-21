@@ -1265,14 +1265,8 @@ async fn write_after_archive_impl(use_blob: bool, reopen: Reopen) {
         .open(
             &owned_worker_id,
             last_oplog_index,
-<<<<<<< HEAD
             WorkerMetadata::default(worker_id.clone(), account_id.clone(), environment_id.clone()),
-||||||| a819578bd
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
-=======
-            WorkerMetadata::default(worker_id.clone(), account_id.clone(), project_id.clone()),
             default_last_known_status(),
->>>>>>> origin/main-atomic-deployment
             default_execution_status(ComponentType::Durable),
         )
         .await;

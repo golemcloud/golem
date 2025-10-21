@@ -354,7 +354,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<ForkWorkerResponse, WorkerExecutorError> {
         let account_id_proto = request
             .account_id
-            .clone()
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
 
         let account_id: AccountId = account_id_proto.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))?;
@@ -2691,5 +2690,5 @@ fn extract_account_id<T>(
     let account_id = get_account_id(request)
         .as_ref()
         .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
-    account_id.clone().try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))
+    (*account_id).try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))
 }

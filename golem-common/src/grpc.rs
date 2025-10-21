@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::component::{ComponentId, PluginPriority};
+use crate::model::component::ComponentId;
 use crate::model::{IdempotencyKey, PromiseId, WorkerId};
-use golem_api_grpc::proto::golem::common;
 use golem_api_grpc::proto::golem::component;
 use golem_api_grpc::proto::golem::worker;
 use golem_api_grpc::proto::golem::common::{AccountId as ProtoAccountId};

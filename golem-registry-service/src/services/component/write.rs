@@ -214,7 +214,7 @@ impl ComponentWriteService {
             .await?
             .ok_or(ComponentError::NotFound)?;
 
-        let environment_id = EnvironmentId(component_record.environment_id.clone());
+        let environment_id = EnvironmentId(component_record.environment_id);
 
         let environment = self
             .environment_service

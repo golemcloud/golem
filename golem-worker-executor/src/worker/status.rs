@@ -728,7 +728,7 @@ fn calculate_active_plugins(
 
         match entry {
             OplogEntry::ActivatePlugin { plugin_priority, .. } => {
-                result.insert(plugin_priority.clone());
+                result.insert(*plugin_priority);
             }
             OplogEntry::DeactivatePlugin { plugin_priority, .. } => {
                 result.remove(plugin_priority);

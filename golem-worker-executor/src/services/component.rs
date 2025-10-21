@@ -28,7 +28,6 @@ use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
-use super::plugins::PluginsService;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
