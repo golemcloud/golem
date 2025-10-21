@@ -371,7 +371,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
-        environment_id: &EnvironmentId,
+        account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError>;
 

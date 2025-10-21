@@ -68,8 +68,7 @@ pub fn configured(
     config: &ComponentServiceConfig,
     cache_config: &ComponentCacheConfig,
     compiled_config: &CompiledComponentServiceConfig,
-    blob_storage: Arc<dyn BlobStorage>,
-    plugins_service: Arc<dyn PluginsService>
+    blob_storage: Arc<dyn BlobStorage>
 ) -> Arc<dyn ComponentService> {
     let compiled_component_service = golem_service_base::service::compiled_component::configured(compiled_config, blob_storage);
     match config {
@@ -88,8 +87,7 @@ pub fn configured(
                 config.retries.clone(),
                 config.connect_timeout,
                 compiled_component_service,
-                config.max_component_size,
-                plugins_service
+                config.max_component_size
             ))
         }
         ComponentServiceConfig::Local(config) => {
@@ -524,7 +522,6 @@ mod grpc {
     use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::account::AccountId;
-    use crate::services::plugins::PluginsService;
     use golem_common::model::application::ApplicationId;
 
     pub struct ComponentServiceGrpc {
@@ -537,7 +534,6 @@ mod grpc {
         retry_config: RetryConfig,
         compiled_component_service: Arc<dyn CompiledComponentService>,
         component_client: GrpcClient<ComponentServiceClient<Channel>>,
-        plugins_service: Arc<dyn PluginsService>,
     }
 
     impl ComponentServiceGrpc {
@@ -551,8 +547,7 @@ mod grpc {
             retry_config: RetryConfig,
             connect_timeout: Duration,
             compiled_component_service: Arc<dyn CompiledComponentService>,
-            max_component_size: usize,
-            plugins_service: Arc<dyn PluginsService>,
+            max_component_size: usize
         ) -> Self {
             Self {
                 component_cache: create_component_cache(max_component_capacity, time_to_idle),
@@ -580,8 +575,7 @@ mod grpc {
                         retries_on_unavailable: retry_config.clone(),
                         connect_timeout,
                     },
-                ),
-                plugins_service
+                )
             }
         }
 

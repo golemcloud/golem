@@ -160,7 +160,6 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         Ok(grpc_port)
     }
 
-    #[allow(clippy::type_complexity)]
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
@@ -169,8 +168,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage>,
-        plugin_observations: Arc<dyn PluginsService>,
+        blob_storage: Arc<dyn BlobStorage>
     ) -> Arc<dyn ComponentService>;
 
     /// Allows customizing the `All` service.
@@ -381,8 +379,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let component_service = bootstrap.create_component_service(
         &golem_config,
-        blob_storage.clone(),
-        plugins.clone()
+        blob_storage.clone()
     );
 
     let agent_type_service = services::agent_types::configured(

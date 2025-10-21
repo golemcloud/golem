@@ -71,15 +71,13 @@ impl Bootstrap<Context> for ServerBootstrap {
     fn create_component_service(
         &self,
         golem_config: &GolemConfig,
-        blob_storage: Arc<dyn BlobStorage>,
-        plugins: Arc<dyn PluginsService>,
+        blob_storage: Arc<dyn BlobStorage>
     ) -> Arc<dyn ComponentService> {
         crate::services::component::configured(
             &golem_config.component_service,
             &golem_config.component_cache,
             &golem_config.compiled_component_service,
-            blob_storage,
-            plugins,
+            blob_storage
         )
     }
 

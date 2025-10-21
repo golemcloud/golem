@@ -2180,11 +2180,11 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
     }
 
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _environment_id: &EnvironmentId,
-        _last_known_limits: &CurrentResourceLimits,
+        this: &T,
+        account_id: &AccountId,
+        last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        Ok(())
+        Ctx::record_last_known_limits(this, account_id, last_known_limits).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Ctx> + Send + Sync + 'static>(

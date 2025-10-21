@@ -209,7 +209,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
         if let Some(limits) = request.account_limits {
-            Ctx::record_last_known_limits(self, &owned_worker_id.environment_id, &limits.into())
+            Ctx::record_last_known_limits(self, &account_id, &limits.into())
                 .await?;
         }
 
@@ -734,7 +734,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &project_id, &limits.into()).await?;
+            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
         let invocation_context = request
@@ -1076,7 +1076,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.enqueue_manual_update(ComponentRevision(request.target_version)).await;
+                worker.enqueue_manual_update(ComponentRevision(request.target_version)).await?;
             }
         }
 

@@ -338,12 +338,11 @@ impl ExternalOperations<Context> for Context {
 
     async fn record_last_known_limits<T: HasAll<Context> + Send + Sync>(
         this: &T,
-        environment_id: &EnvironmentId,
+        account_id: &AccountId,
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
-        let project_owner = this.project_service().get_project_owner(environment_id).await?;
         this.resource_limits()
-            .update_last_known_limits(&project_owner, last_known_limits)
+            .update_last_known_limits(&account_id, last_known_limits)
             .await
     }
 

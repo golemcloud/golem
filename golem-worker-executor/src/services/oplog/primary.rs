@@ -116,7 +116,7 @@ impl PrimaryOplogService {
                     data,
                 )
                 .await
-                .map_err(|e| format!("Failed uploading oplog data to the blob store {e}"));
+                .map_err(|e| format!("Failed uploading oplog data to the blob store {e}"))?;
 
             Ok(OplogPayload::External {
                 payload_id,
