@@ -54,14 +54,6 @@ pub fn proto_promise_id_string(promise_id: &Option<worker::PromiseId>) -> Option
         .map(|v| v.to_string())
 }
 
-pub fn proto_plugin_installation_id_string(
-    component_id: &Option<common::PluginInstallationId>,
-) -> Option<String> {
-    (*component_id)
-        .and_then(|v| TryInto::<PluginInstallationId>::try_into(v).ok())
-        .map(|v| v.to_string())
-}
-
 pub fn proto_invocation_context_parent_worker_id_string(
     invocation_context: &Option<worker::InvocationContext>,
 ) -> Option<String> {

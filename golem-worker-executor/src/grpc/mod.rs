@@ -1477,15 +1477,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let plugin_installation_id =
-            request
-                .installation_id
-                .ok_or(WorkerExecutorError::invalid_request(
-                    "installation_id not found",
-                ))?;
-        let plugin_installation_id: PluginInstallationId = plugin_installation_id
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)?;
+        let plugin_priority = PluginPriority(request.plugin_priority);
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
             .await
@@ -1497,7 +1489,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if !metadata
             .last_known_status
             .active_plugins
-            .contains(&plugin_installation_id)
+            .contains(&plugin_priority)
         {
             warn!("Plugin is already deactivated");
             Ok(())
@@ -2561,7 +2553,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "activate_plugin",
             worker_id = proto_worker_id_string(&request.worker_id),
-            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id)
+            plugin_priority = request.plugin_priority
         );
 
         let result = self

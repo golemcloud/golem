@@ -460,7 +460,7 @@ message ActivatePluginResponse {
 message DeactivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.AccountId account_id = 2;
-  golem.common.PluginInstallationId installation_id = 3;
+  int32 plugin_priority = 3;
   golem.common.EnvironmentId environment_id = 4;
 }
 

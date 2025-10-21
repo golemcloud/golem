@@ -416,7 +416,7 @@ pub enum OplogEntry {
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
-        initial_active_plugins: HashSet<PluginInstallationId>,
+        initial_active_plugins: HashSet<PluginPriority>,
         wasi_config_vars: BTreeMap<String, String>,
     },
     /// Activates a plugin for the worker
@@ -524,7 +524,7 @@ impl OplogEntry {
         parent: Option<WorkerId>,
         component_size: u64,
         initial_total_linear_memory_size: u64,
-        initial_active_plugins: HashSet<PluginInstallationId>,
+        initial_active_plugins: HashSet<PluginPriority>,
     ) -> OplogEntry {
         OplogEntry::Create {
             timestamp: Timestamp::now_utc(),
