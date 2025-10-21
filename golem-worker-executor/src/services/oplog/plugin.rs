@@ -134,6 +134,7 @@ impl<Ctx: WorkerCtx> PerExecutorOplogProcessorPlugin<Ctx> {
                         let (plugin_component_id, plugin_component_version) =
                             Self::get_oplog_processor_component_id(&definition)?;
                         let worker_id = self.generate_worker_id_for(&plugin_component_id).await?;
+                        let plugin_component = self.component_service.get_metadata(&plugin_component_id, Some(plugin_component_version)).await?;
                         let owned_worker_id = OwnedWorkerId {
                             environment_id: environment_id.clone(),
                             worker_id: worker_id.clone(),
