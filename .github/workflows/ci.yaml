@@ -240,7 +240,7 @@ jobs:
   it:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-8vcpu-ubuntu-2204
+    runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
     needs: build-and-store
     strategy:
       fail-fast: false
@@ -258,8 +258,10 @@ jobs:
             description: "CLI tests #1"
           - name: cli-integration-tests-group2
             description: "CLI tests #2"
+            runner: blacksmith-16vcpu-ubuntu-2204
           - name: cli-integration-tests-group3
             description: "CLI tests #3"
+            runner: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
         uses: actions/checkout@v5
