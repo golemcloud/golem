@@ -51,7 +51,7 @@ impl From<PublicOplogEntry> for oplog::OplogEntry {
             }) => Self::Create(oplog::CreateParameters {
                 timestamp: timestamp.into(),
                 agent_id: worker_id.into(),
-                component_version,
+                component_version: component_version.0,
                 args,
                 env: env.into_iter().collect(),
                 created_by: oplog::AccountId {
