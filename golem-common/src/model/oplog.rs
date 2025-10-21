@@ -36,6 +36,7 @@ use std::fmt::{Display, Formatter};
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 use uuid::Uuid;
+use super::component::PluginPriority;
 
 pub struct OplogIndexRange {
     current: u64,
@@ -433,7 +434,7 @@ pub enum OplogEntry {
         timestamp: Timestamp,
         target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     },
     /// Similar to `Jump` but caused by an external revert request. TODO: Golem 2.0 should probably merge with Jump
     Revert {
@@ -630,7 +631,7 @@ impl OplogEntry {
     pub fn successful_update(
         target_version: ComponentRevision,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) -> OplogEntry {
         OplogEntry::SuccessfulUpdate {
             timestamp: Timestamp::now_utc(),

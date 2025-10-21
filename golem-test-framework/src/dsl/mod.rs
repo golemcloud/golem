@@ -50,7 +50,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
-use golem_common::model::plugin_registration::PluginPriority;
+use golem_common::model::component::PluginPriority;
 
 #[derive(Clone)]
 pub struct TestDependenciesDsl<Deps> {

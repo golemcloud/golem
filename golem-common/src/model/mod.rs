@@ -46,7 +46,7 @@ pub mod worker;
 
 pub use crate::base_model::*;
 
-use self::component::ComponentId;
+use self::component::{ComponentId, PluginPriority};
 use self::component::{ComponentFilePermissions, ComponentRevision, PluginInstallationId};
 use self::environment::EnvironmentId;
 use crate::model::account::AccountId;
@@ -642,7 +642,7 @@ pub struct WorkerStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<WorkerResourceId, WorkerResourceDescription>,
     pub oplog_idx: OplogIndex,
-    pub active_plugins: HashSet<PluginInstallationId>,
+    pub active_plugins: HashSet<PluginPriority>,
     pub deleted_regions: DeletedRegions,
     /// The component version at the starting point of the replay. Will be the version of the Create oplog entry
     /// if only automatic updates were used or the version of the latest snapshot-based update

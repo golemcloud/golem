@@ -56,7 +56,7 @@ declare_transparent_newtypes! {
 
     /// Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
     /// There can only be a single plugin with a given priority installed to a component.
-    #[derive(Copy, PartialOrd, Eq, Ord, derive_more::Display)]
+    #[derive(Copy, PartialOrd, Eq, Hash, Ord, derive_more::Display, Encode, Decode)]
     pub struct PluginPriority(pub i32);
 }
 

@@ -56,7 +56,7 @@ use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{OplogIndex, UpdateDescription};
 use golem_common::model::protobuf::to_protobuf_resource_description;
-use golem_common::model::component::{ComponentId, ComponentFilePath, ComponentType};
+use golem_common::model::component::{ComponentFilePath, ComponentId, ComponentType, PluginPriority};
 use golem_common::model::account::AccountId;
 use golem_common::model::{
     GetFileSystemNodeResult,
@@ -942,7 +942,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: UpdateWorkerRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
@@ -1409,19 +1409,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: ActivatePluginRequest,
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
-            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.project_id)?;
+            extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let plugin_installation_id =
-            request
-                .installation_id
-                .ok_or(WorkerExecutorError::invalid_request(
-                    "installation_id not found",
-                ))?;
-        let plugin_installation_id: PluginInstallationId = plugin_installation_id
-            .try_into()
-            .map_err(WorkerExecutorError::invalid_request)?;
+        let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
         let metadata = Worker::get_latest_metadata(&self.services, &owned_worker_id).await;
 
@@ -1431,7 +1423,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 if metadata
                     .last_known_status
                     .active_plugins
-                    .contains(&plugin_installation_id)
+                    .contains(&plugin_priority)
                 {
                     warn!("Plugin is already activated");
                     Ok(())
@@ -1447,7 +1439,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     if component_metadata
                         .installed_plugins
                         .iter()
-                        .any(|installation| installation.id == plugin_installation_id)
+                        .any(|installation| installation.priority == plugin_priority)
                     {
                         let worker = Worker::get_or_create_suspended(
                             self,
@@ -1461,7 +1453,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &InvocationContextStack::fresh(),
                         )
                         .await?;
-                        worker.activate_plugin(plugin_installation_id).await?;
+                        worker.activate_plugin(plugin_priority).await?;
                         Ok(())
                     } else {
                         Err(WorkerExecutorError::invalid_request(
@@ -1588,7 +1580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         for failed_update in &latest_status.failed_updates {
             updates.push(golem::worker::UpdateRecord {
                 timestamp: Some(failed_update.timestamp.into()),
-                target_version: failed_update.target_version,
+                target_version: failed_update.target_version.0,
                 update: Some(golem::worker::update_record::Update::Failed(
                     golem::worker::FailedUpdate {
                         details: failed_update.details.clone(),
@@ -1610,7 +1602,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         Ok(golem::worker::WorkerMetadata {
             worker_id: Some(metadata.worker_id.into()),
-            project_id: Some(metadata.project_id.into()),
+            environment_id: Some(metadata.environment_id.into()),
             args: metadata.args.clone(),
             env: HashMap::from_iter(metadata.env.iter().cloned()),
             created_by: Some(metadata.created_by.into()),

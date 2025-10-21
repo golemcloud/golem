@@ -93,7 +93,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentType, ComponentRevision, InitialComponentFile};
+use golem_common::model::component::{ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision, ComponentType, InitialComponentFile, PluginPriority};
 use golem_common::model::{TransactionId};
 use golem_common::model::{
     ComponentFileSystemNode,
@@ -1585,7 +1585,7 @@ impl<Ctx: WorkerCtx> UpdateManagement for DurableWorkerCtx<Ctx> {
         &self,
         update: &UpdateDescription,
         new_component_size: u64,
-        new_active_plugins: HashSet<PluginInstallationId>,
+        new_active_plugins: HashSet<PluginPriority>,
     ) {
         let target_version = *update.target_version();
         info!("Worker update to {} finished successfully", target_version);
