@@ -32,10 +32,10 @@ use golem_common::model::component::VersionedComponentId;
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
-use golem_common::model::ComponentId;
+use golem_common::model::component::ComponentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_service_base::model::{Component, ComponentName};
+use golem_common::model::component::{ComponentDto, ComponentName};
 use http::Uri;
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,27 +51,27 @@ pub trait ComponentService: Send + Sync {
         component_id: &ComponentId,
         version: u64,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component>;
+    ) -> ComponentResult<ComponentDto>;
 
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component>;
+    ) -> ComponentResult<ComponentDto>;
 
     async fn get_latest_by_name(
         &self,
         component_id: &ComponentName,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component>;
+    ) -> ComponentResult<ComponentDto>;
 
     async fn get_all_by_name(
         &self,
         component_id: &ComponentName,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Vec<Component>>;
+    ) -> ComponentResult<Vec<ComponentDto>>;
 
     async fn create_or_update_constraints(
         &self,
@@ -95,7 +95,7 @@ pub trait ComponentService: Send + Sync {
 
 pub struct CachedComponentService {
     inner: Arc<dyn ComponentService>,
-    cache: Cache<VersionedComponentId, (), Component, ComponentServiceError>,
+    cache: Cache<VersionedComponentId, (), ComponentDto, ComponentServiceError>,
 }
 
 #[async_trait]
@@ -105,7 +105,7 @@ impl ComponentService for CachedComponentService {
         component_id: &ComponentId,
         version: u64,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component> {
+    ) -> ComponentResult<ComponentDto> {
         let inner_clone = self.inner.clone();
         self.cache
             .get_or_insert_simple(
@@ -126,7 +126,7 @@ impl ComponentService for CachedComponentService {
         &self,
         component_id: &ComponentId,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component> {
+    ) -> ComponentResult<ComponentDto> {
         self.inner.get_latest_by_id(component_id, auth_ctx).await
     }
 
@@ -135,7 +135,7 @@ impl ComponentService for CachedComponentService {
         component_id: &ComponentName,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Component> {
+    ) -> ComponentResult<ComponentDto> {
         self.inner
             .get_latest_by_name(component_id, namespace, auth_ctx)
             .await
@@ -146,7 +146,7 @@ impl ComponentService for CachedComponentService {
         component_id: &ComponentName,
         namespace: &Namespace,
         auth_ctx: &AuthCtx,
-    ) -> ComponentResult<Vec<Component>> {
+    ) -> ComponentResult<Vec<ComponentDto>> {
         self.inner
             .get_all_by_name(component_id, namespace, auth_ctx)
             .await
@@ -217,7 +217,7 @@ impl RemoteComponentService {
 
     fn process_metadata_response_opt(
         response: GetComponentMetadataResponse,
-    ) -> Result<Option<Component>, ComponentServiceError> {
+    ) -> Result<Option<ComponentDto>, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Empty response".to_string(),
@@ -232,7 +232,7 @@ impl RemoteComponentService {
 
     fn process_metadata_response(
         response: GetComponentMetadataResponse,
-    ) -> Result<Component, ComponentServiceError> {
+    ) -> Result<ComponentDto, ComponentServiceError> {
         match Self::process_metadata_response_opt(response)? {
             Some(component) => Ok(component),
             None => Err(ComponentServiceError::NotFound(
@@ -243,7 +243,7 @@ impl RemoteComponentService {
 
     fn process_get_components_response(
         response: GetComponentsResponse,
-    ) -> Result<Vec<Component>, ComponentServiceError> {
+    ) -> Result<Vec<ComponentDto>, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Empty response".to_string(),
@@ -260,7 +260,7 @@ impl RemoteComponentService {
 
     fn process_get_components_response_and_get_last(
         response: GetComponentsResponse,
-    ) -> Result<Component, ComponentServiceError> {
+    ) -> Result<ComponentDto, ComponentServiceError> {
         match response.result {
             None => Err(ComponentServiceError::Internal(
                 "Empty response".to_string(),
@@ -280,7 +280,7 @@ impl RemoteComponentService {
 
     fn process_component(
         component: golem_api_grpc::proto::golem::component::Component,
-    ) -> Result<Component, ComponentServiceError> {
+    ) -> Result<ComponentDto, ComponentServiceError> {
         component.try_into().map_err(|err| {
             ComponentServiceError::Internal(format!(
                 "Response conversion error for component: {err}"
@@ -373,7 +373,7 @@ impl ComponentService for RemoteComponentService {
         component_id: &ComponentId,
         version: u64,
         metadata: &AuthCtx,
-    ) -> ComponentResult<Component> {
+    ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
             "get_component",
@@ -408,7 +408,7 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: &ComponentId,
         metadata: &AuthCtx,
-    ) -> ComponentResult<Component> {
+    ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
             "get_latest",
@@ -442,7 +442,7 @@ impl ComponentService for RemoteComponentService {
         component_name: &ComponentName,
         namespace: &Namespace,
         metadata: &AuthCtx,
-    ) -> ComponentResult<Component> {
+    ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
             "get_latest_by_name",
@@ -483,7 +483,7 @@ impl ComponentService for RemoteComponentService {
         component_name: &ComponentName,
         namespace: &Namespace,
         metadata: &AuthCtx,
-    ) -> ComponentResult<Vec<Component>> {
+    ) -> ComponentResult<Vec<ComponentDto>> {
         with_retries(
             "component",
             "get_all_by_name",

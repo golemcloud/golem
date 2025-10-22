@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
+// use crate::service::gateway::api_definition::ApiDefinitionServiceConfig;
 use golem_common::config::RedisConfig;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples};
 use golem_common::config::{DbConfig, DbSqliteConfig};
@@ -43,7 +43,7 @@ pub struct WorkerServiceConfig {
     pub routing_table: RoutingTableConfig,
     pub worker_executor_retries: RetryConfig,
     pub blob_storage: BlobStorageConfig,
-    pub api_definition: ApiDefinitionServiceConfig,
+    // pub api_definition: ApiDefinitionServiceConfig,
     pub workspace: String,
     pub domain_records: DomainRecordsConfig,
     pub cloud_service: RemoteServiceConfig,
@@ -150,7 +150,7 @@ impl Default for WorkerServiceConfig {
                 max_jitter_factor: Some(0.15),
             },
             blob_storage: BlobStorageConfig::default(),
-            api_definition: ApiDefinitionServiceConfig::default(),
+            // api_definition: ApiDefinitionServiceConfig::default(),
             workspace: "release".to_string(),
             domain_records: DomainRecordsConfig::default(),
             cloud_service: RemoteServiceConfig::default(),

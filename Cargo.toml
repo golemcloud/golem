@@ -2,13 +2,11 @@
 resolver = "2"
 
 members = [
-    # "cloud-service",
     "golem-api-grpc",
     "golem-client",
     "golem-common",
     # "golem-debugging-service",
     "golem-service-base",
-    # "golem-component-service",
     "golem-component-compilation-service",
     "golem-registry-service",
     "golem-rib",

@@ -19,14 +19,68 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_common::SafeDisplay;
 use std::fmt::Display;
 use tonic::Status;
+use async_trait::async_trait;
+use super::RemoteServiceConfig;
+use super::authorised_request;
+use crate::model::ResourceLimits;
+use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
+use golem_api_grpc::proto::golem::limit::v1::limits_error::Error;
+use golem_api_grpc::proto::golem::limit::v1::{
+    GetResourceLimitsRequest, UpdateComponentLimitRequest, UpdateWorkerLimitRequest,
+    get_resource_limits_response, update_component_limit_response, update_worker_limit_response,
+};
+use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::RetryConfig;
+use golem_common::model::WorkerId;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
+use golem_common::retries::with_retries;
+use tonic::codec::CompressionEncoding;
+use tonic::transport::Channel;
+use tracing::info;
+use uuid::Uuid;
+use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
 
-#[derive(Clone)]
-pub struct AuthService {
-    // auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
-    // retry_config: RetryConfig,
+#[async_trait]
+pub trait AuthService: Send + Sync {
 }
 
-impl AuthService {
+pub struct AuthServiceDefault {
+    auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
+    access_token: Uuid,
+    retry_config: RetryConfig,
+}
+
+impl AuthServiceDefault {
+    pub fn new(config: &RemoteServiceConfig) -> Self {
+        let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
+            "auth",
+            |channel| {
+                CloudAuthServiceClient::new(channel)
+                    .send_compressed(CompressionEncoding::Gzip)
+                    .accept_compressed(CompressionEncoding::Gzip)
+            },
+            config.uri(),
+            GrpcClientConfig {
+                retries_on_unavailable: config.retries.clone(),
+                ..Default::default()
+            },
+        );
+        Self {
+            auth_service_client,
+            access_token: config.access_token,
+            retry_config: config.retries.clone(),
+        }
+    }
+}
+
+// #[derive(Clone)]
+// pub struct AuthService {
+//     // auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>>,
+//     // retry_config: RetryConfig,
+// }
+
+impl AuthService for AuthServiceDefault {
     // pub fn new(config: &RemoteServiceConfig) -> Self {
     //     let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
     //         "auth",

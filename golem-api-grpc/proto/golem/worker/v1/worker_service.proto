@@ -311,7 +311,7 @@ message GetFileSystemNodeResponse {
 message ListFileSystemNodeResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
- 
+
 
 message GetFileContentsRequest {
   golem.worker.WorkerId worker_id = 1;
@@ -327,7 +327,7 @@ message GetFileContentsResponse {
 
 message ActivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
-  golem.common.PluginInstallationId installation_id = 2;
+  int32 plugin_priority = 2;
 }
 
 message ActivatePluginResponse {
@@ -339,7 +339,7 @@ message ActivatePluginResponse {
 
 message DeactivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
-  golem.common.PluginInstallationId installation_id = 2;
+  int32 plugin_priority = 2;
 }
 
 message DeactivatePluginResponse {

@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod api_certificate;
-pub mod api_domain;
-pub mod api_security;
+// pub mod api_certificate;
+// pub mod api_domain;
+// pub mod api_security;
 pub mod auth;
 pub mod component;
-pub mod gateway;
+// pub mod gateway;
 pub mod worker;
 
 use crate::aws_config::AwsConfig;

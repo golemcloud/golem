@@ -22,9 +22,9 @@ use golem_api_grpc::proto::golem::component::v1::{
 };
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::auth::ProjectAction;
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::{AccountId, ComponentId, ProjectId};
+use golem_common::model::auth::EnvironmentAction;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentId;
 use golem_common::retries::with_retries;
 use golem_service_base::clients::auth::AuthServiceError;
 use std::time::Duration;
@@ -41,7 +41,7 @@ pub trait AuthService: Send + Sync {
     async fn authorize_project_action(
         &self,
         project_id: &ProjectId,
-        permission: ProjectAction,
+        permission: EnvironmentAction,
         ctx: &AuthCtx,
     ) -> Result<Namespace, AuthServiceError>;
 

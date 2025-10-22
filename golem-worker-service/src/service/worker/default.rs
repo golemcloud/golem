@@ -32,17 +32,17 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::auth::{Namespace, TokenSecret};
+use golem_common::model::auth::{TokenSecret};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
+use golem_common::model::component::{ComponentFilePath, ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::{
-    ComponentFilePath, ComponentFileSystemNode, ComponentId, ComponentVersion, FilterComparator,
-    IdempotencyKey, PluginInstallationId, PromiseId, ScanCursor, WorkerFilter, WorkerId,
+    ComponentFileSystemNode, FilterComparator,
+    IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId,
     WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
-use golem_service_base::clients::project::ProjectService;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::RevertWorkerTarget;
@@ -64,7 +64,7 @@ pub trait WorkerService: Send + Sync {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        component_version: u64,
+        component_version: ComponentRevision,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -433,7 +433,7 @@ impl WorkerServiceDefault {
                             count,
                             precise,
                             account_id: Some(namespace.account_id.clone().into()),
-                            project_id: Some(namespace.project_id.clone().into()),
+                            environment_id: Some(namespace.project_id.clone().into()),
                         },
                     ))
                 },

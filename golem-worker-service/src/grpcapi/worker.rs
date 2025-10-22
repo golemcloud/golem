@@ -15,7 +15,7 @@
 use super::error::WorkerTraceErrorKind;
 use super::{
     bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
-    validate_component_file_path, validate_protobuf_plugin_installation_id,
+    validate_component_file_path,
     validate_protobuf_worker_id,
 };
 use crate::service::auth::AuthService;
@@ -53,13 +53,14 @@ use golem_api_grpc::proto::golem::worker::v1::{
 use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string, proto_plugin_installation_id_string,
+    proto_invocation_context_parent_worker_id_string,
     proto_worker_id_string,
 };
 use golem_common::model::auth::AuthCtx;
 use golem_common::model::auth::ProjectAction;
 use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{ComponentVersion, ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::component::ComponentRevision;
+use golem_common::model::{ScanCursor, WorkerFilter, WorkerId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::clients::get_authorisation_token;
 use std::collections::BTreeMap;
@@ -102,7 +103,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             ),
             Err(error) => record.fail(
                 launch_new_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -129,7 +130,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(complete_promise_response::Result::Success(result)),
             Err(error) => record.fail(
                 complete_promise_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -156,7 +157,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(delete_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 delete_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -183,7 +184,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(metadata) => record.succeed(get_worker_metadata_response::Result::Success(metadata)),
             Err(error) => record.fail(
                 get_worker_metadata_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -211,7 +212,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(interrupt_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 interrupt_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -241,7 +242,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(invoke_and_await_response::Result::Success(result)),
             Err(error) => record.fail(
                 invoke_and_await_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -271,7 +272,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(invoke_and_await_json_response::Result::Success(result)),
             Err(error) => record.fail(
                 invoke_and_await_json_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -301,7 +302,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(invoke_and_await_typed_response::Result::Success(result)),
             Err(error) => record.fail(
                 invoke_and_await_typed_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -327,7 +328,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -353,7 +354,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -380,7 +381,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(resume_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 resume_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -435,7 +436,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             ),
             Err(error) => record.fail(
                 get_workers_metadata_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -462,7 +463,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(update_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 update_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -489,7 +490,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(response) => record.succeed(get_oplog_response::Result::Success(response)),
             Err(error) => record.fail(
                 get_oplog_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -516,7 +517,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(response) => record.succeed(search_oplog_response::Result::Success(response)),
             Err(error) => record.fail(
                 search_oplog_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -544,7 +545,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(response) => record.succeed(response.result.unwrap()),
             Err(error) => record.fail(
                 get_file_system_node_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -583,7 +584,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
                 };
                 let err_stream: Self::GetFileContentsStream =
                     Box::pin(tokio_stream::iter(vec![Ok(res)]));
-                record.fail(err_stream, &WorkerTraceErrorKind(&error))
+                record.fail(err_stream, &mut WorkerTraceErrorKind(&error))
             }
         };
         Ok(Response::new(stream))
@@ -597,7 +598,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let record = recorded_grpc_api_request!(
             "activate_plugin",
             worker_id = proto_worker_id_string(&request.worker_id),
-            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id),
+            plugin_priority = request.plugin_priority,
         );
 
         let response = match self
@@ -608,7 +609,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(activate_plugin_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 activate_plugin_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -625,7 +626,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         let record = recorded_grpc_api_request!(
             "deactivate_plugin",
             worker_id = proto_worker_id_string(&request.worker_id),
-            plugin_installation_id = proto_plugin_installation_id_string(&request.installation_id),
+            plugin_priority = request.plugin_priority,
         );
 
         let response = match self
@@ -636,7 +637,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(()) => record.succeed(deactivate_plugin_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 deactivate_plugin_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -664,7 +665,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(_) => record.succeed(fork_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 fork_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -691,7 +692,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(_) => record.succeed(revert_worker_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 revert_worker_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -718,7 +719,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok(result) => record.succeed(cancel_invocation_response::Result::Success(result)),
             Err(error) => record.fail(
                 cancel_invocation_response::Result::Error(error.clone()),
-                &WorkerTraceErrorKind(&error),
+                &mut WorkerTraceErrorKind(&error),
             ),
         };
 
@@ -756,9 +757,9 @@ impl WorkerGrpcApi {
         &self,
         request: LaunchNewWorkerRequest,
         metadata: MetadataMap,
-    ) -> Result<(WorkerId, ComponentVersion), GrpcWorkerError> {
+    ) -> Result<(WorkerId, ComponentRevision), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let component_id: golem_common::model::ComponentId = request
+        let component_id: golem_common::model::component::ComponentId = request
             .component_id
             .and_then(|id| id.try_into().ok())
             .ok_or_else(|| bad_request_error("Missing component id"))?;
@@ -792,7 +793,7 @@ impl WorkerGrpcApi {
             .worker_service
             .create(
                 &worker_id,
-                latest_component.versioned_component_id.version,
+                latest_component.revision,
                 request.args,
                 request.env,
                 wasi_config_vars,
@@ -801,7 +802,7 @@ impl WorkerGrpcApi {
             )
             .await?;
 
-        Ok((worker, latest_component.versioned_component_id.version))
+        Ok((worker, latest_component.revision))
     }
 
     async fn delete_worker(
@@ -872,7 +873,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(Option<ScanCursor>, Vec<WorkerMetadata>), GrpcWorkerError> {
         let auth = self.auth(metadata)?;
-        let component_id: golem_common::model::ComponentId = request
+        let component_id: golem_common::model::component::ComponentId = request
             .component_id
             .ok_or_else(|| bad_request_error("Missing component id"))?
             .try_into()
@@ -1366,8 +1367,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-        let plugin_installation_id =
-            validate_protobuf_plugin_installation_id(request.installation_id)?;
+        let plugin_priority = request.plugin_priority;
 
         let auth = self.auth(metadata)?;
 
@@ -1377,7 +1377,7 @@ impl WorkerGrpcApi {
             .await?;
 
         self.worker_service
-            .activate_plugin(&worker_id, &plugin_installation_id, namespace)
+            .activate_plugin(&worker_id, &plugin_priority, namespace)
             .await?;
 
         Ok(())
@@ -1389,8 +1389,7 @@ impl WorkerGrpcApi {
         metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-        let plugin_installation_id =
-            validate_protobuf_plugin_installation_id(request.installation_id)?;
+        let plugin_priority = request.plugin_priority;
 
         let auth = self.auth(metadata)?;
 
@@ -1400,7 +1399,7 @@ impl WorkerGrpcApi {
             .await?;
 
         self.worker_service
-            .deactivate_plugin(&worker_id, &plugin_installation_id, namespace)
+            .deactivate_plugin(&worker_id, &plugin_priority, namespace)
             .await?;
 
         Ok(())

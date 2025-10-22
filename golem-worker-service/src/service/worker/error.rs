@@ -14,11 +14,11 @@
 
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::CallWorkerExecutorError;
-use golem_common::model::component::VersionedComponentId;
-use golem_common::model::{AccountId, ComponentFilePath, ComponentId, WorkerId};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentFilePath, ComponentId};
+use golem_common::model::{WorkerId};
 use golem_common::SafeDisplay;
 use golem_service_base::clients::limit::LimitError;
-use golem_service_base::clients::project::ProjectError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]

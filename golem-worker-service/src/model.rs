@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
-use crate::gateway_api_deployment::ApiSite;
+// use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
+// use crate::gateway_api_deployment::ApiSite;
 use derive_more::FromStr;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::{
-    AccountId, PluginInstallationId, ScanCursor, WorkerId, WorkerResourceDescription,
+    ScanCursor, WorkerId, WorkerResourceDescription,
 };
-use golem_common::model::{ComponentVersion, ProjectId, Timestamp, WorkerStatus};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{PluginPriority, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{Timestamp, WorkerStatus};
 use golem_service_base::model::UpdateRecord;
 use poem_openapi::{NewType, Object};
 use serde::{Deserialize, Serialize};
@@ -42,13 +45,13 @@ pub struct ExportedResourceMetadata {
 #[oai(rename_all = "camelCase")]
 pub struct WorkerMetadata {
     pub worker_id: WorkerId,
-    pub project_id: ProjectId,
+    pub environment_id: EnvironmentId,
     pub created_by: AccountId,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
     pub wasi_config_vars: WasiConfigVars,
     pub status: WorkerStatus,
-    pub component_version: ComponentVersion,
+    pub component_version: ComponentRevision,
     pub retry_count: u32,
     pub pending_invocation_count: u64,
     pub updates: Vec<UpdateRecord>,
@@ -57,7 +60,7 @@ pub struct WorkerMetadata {
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub exported_resource_instances: Vec<ExportedResourceMetadata>,
-    pub active_plugins: HashSet<PluginInstallationId>,
+    pub active_plugins: HashSet<PluginPriority>,
     /// Oplog regions that are skipped during the worker's state recovery, but describe
     /// the history of the worker. For example if an atomic region gets restarted, its partially
     /// recorded oplog entries will be skipped on retry.
@@ -86,7 +89,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
         }
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            project_id: value.project_id.ok_or("Missing project_id")?.try_into()?,
+            environment_id: value.environment_id.ok_or("Missing environment_id")?.try_into()?,
             created_by: value.created_by.ok_or("Missing account_id")?.into(),
             args: value.args,
             env: value.env,
@@ -141,7 +144,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
 
         Self {
             worker_id: Some(value.worker_id.into()),
-            project_id: Some(value.project_id.into()),
+            environment_id: Some(value.environment_id.into()),
             created_by: Some(value.created_by.into()),
             args: value.args,
             env: value.env,
@@ -181,136 +184,136 @@ pub struct WorkersMetadataResponse {
     pub cursor: Option<ScanCursor>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ApiDeploymentRequest {
-    pub api_definitions: Vec<ApiDefinitionInfo>,
-    pub project_id: ProjectId,
-    pub site: ApiSite,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct ApiDeploymentRequest {
+//     pub api_definitions: Vec<ApiDefinitionInfo>,
+//     pub project_id: ProjectId,
+//     pub site: ApiSite,
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ApiDeployment {
-    pub api_definitions: Vec<ApiDefinitionInfo>,
-    pub project_id: ProjectId,
-    pub site: ApiSite,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct ApiDeployment {
+//     pub api_definitions: Vec<ApiDefinitionInfo>,
+//     pub project_id: ProjectId,
+//     pub site: ApiSite,
+//     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ApiDefinitionInfo {
-    pub id: ApiDefinitionId,
-    pub version: ApiVersion,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct ApiDefinitionInfo {
+//     pub id: ApiDefinitionId,
+//     pub version: ApiVersion,
+// }
 
-impl From<crate::gateway_api_deployment::ApiDeployment> for ApiDeployment {
-    fn from(api_deployment: crate::gateway_api_deployment::ApiDeployment) -> Self {
-        Self {
-            api_definitions: api_deployment
-                .api_definition_keys
-                .iter()
-                .map(|k| ApiDefinitionInfo {
-                    id: k.id.clone(),
-                    version: k.version.clone(),
-                })
-                .collect(),
-            project_id: api_deployment.namespace.project_id.clone(),
-            site: api_deployment.site.clone(),
-            created_at: Some(api_deployment.created_at),
-        }
-    }
-}
+// impl From<crate::gateway_api_deployment::ApiDeployment> for ApiDeployment {
+//     fn from(api_deployment: crate::gateway_api_deployment::ApiDeployment) -> Self {
+//         Self {
+//             api_definitions: api_deployment
+//                 .api_definition_keys
+//                 .iter()
+//                 .map(|k| ApiDefinitionInfo {
+//                     id: k.id.clone(),
+//                     version: k.version.clone(),
+//                 })
+//                 .collect(),
+//             project_id: api_deployment.namespace.project_id.clone(),
+//             site: api_deployment.site.clone(),
+//             created_at: Some(api_deployment.created_at),
+//         }
+//     }
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct ApiDomain {
-    pub project_id: ProjectId,
-    pub domain_name: String,
-    pub name_servers: Vec<String>,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct ApiDomain {
+//     pub project_id: ProjectId,
+//     pub domain_name: String,
+//     pub name_servers: Vec<String>,
+//     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+// }
 
-impl ApiDomain {
-    pub fn new(
-        request: &DomainRequest,
-        name_servers: Vec<String>,
-        created_at: chrono::DateTime<chrono::Utc>,
-    ) -> Self {
-        Self {
-            project_id: request.project_id.clone(),
-            domain_name: request.domain_name.clone(),
-            name_servers,
-            created_at: Some(created_at),
-        }
-    }
-}
+// impl ApiDomain {
+//     pub fn new(
+//         request: &DomainRequest,
+//         name_servers: Vec<String>,
+//         created_at: chrono::DateTime<chrono::Utc>,
+//     ) -> Self {
+//         Self {
+//             project_id: request.project_id.clone(),
+//             domain_name: request.domain_name.clone(),
+//             name_servers,
+//             created_at: Some(created_at),
+//         }
+//     }
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountApiDomain {
-    pub account_id: AccountId,
-    pub domain: ApiDomain,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+// #[serde(rename_all = "camelCase")]
+// pub struct AccountApiDomain {
+//     pub account_id: AccountId,
+//     pub domain: ApiDomain,
+// }
 
-impl AccountApiDomain {
-    pub fn new(account_id: &AccountId, domain: &ApiDomain) -> Self {
-        Self {
-            account_id: account_id.clone(),
-            domain: domain.clone(),
-        }
-    }
-}
+// impl AccountApiDomain {
+//     pub fn new(account_id: &AccountId, domain: &ApiDomain) -> Self {
+//         Self {
+//             account_id: account_id.clone(),
+//             domain: domain.clone(),
+//         }
+//     }
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct DomainRequest {
-    pub project_id: ProjectId,
-    pub domain_name: String,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct DomainRequest {
+//     pub project_id: ProjectId,
+//     pub domain_name: String,
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct CertificateRequest {
-    pub project_id: ProjectId,
-    pub domain_name: String,
-    pub certificate_body: String,
-    pub certificate_private_key: String,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct CertificateRequest {
+//     pub project_id: ProjectId,
+//     pub domain_name: String,
+//     pub certificate_body: String,
+//     pub certificate_private_key: String,
+// }
 
-#[derive(Debug, Clone, Eq, PartialEq, Hash, FromStr, Serialize, Deserialize, NewType)]
-pub struct CertificateId(pub Uuid);
+// #[derive(Debug, Clone, Eq, PartialEq, Hash, FromStr, Serialize, Deserialize, NewType)]
+// pub struct CertificateId(pub Uuid);
 
-impl Display for CertificateId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
+// impl Display for CertificateId {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         write!(f, "{}", self.0)
+//     }
+// }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
-#[serde(rename_all = "camelCase")]
-#[oai(rename_all = "camelCase")]
-pub struct Certificate {
-    pub id: CertificateId,
-    pub project_id: ProjectId,
-    pub domain_name: String,
-    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
-}
+// #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Object)]
+// #[serde(rename_all = "camelCase")]
+// #[oai(rename_all = "camelCase")]
+// pub struct Certificate {
+//     pub id: CertificateId,
+//     pub project_id: ProjectId,
+//     pub domain_name: String,
+//     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
+// }
 
-impl Certificate {
-    pub fn new(request: &CertificateRequest, created_at: chrono::DateTime<chrono::Utc>) -> Self {
-        Self {
-            id: CertificateId(Uuid::new_v4()),
-            project_id: request.project_id.clone(),
-            domain_name: request.domain_name.clone(),
-            created_at: Some(created_at),
-        }
-    }
-}
+// impl Certificate {
+//     pub fn new(request: &CertificateRequest, created_at: chrono::DateTime<chrono::Utc>) -> Self {
+//         Self {
+//             id: CertificateId(Uuid::new_v4()),
+//             project_id: request.project_id.clone(),
+//             domain_name: request.domain_name.clone(),
+//             created_at: Some(created_at),
+//         }
+//     }
+// }
