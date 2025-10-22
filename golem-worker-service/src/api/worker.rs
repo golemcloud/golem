@@ -14,26 +14,26 @@
 
 use super::common::ApiEndpointError;
 use crate::model;
-use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
 use crate::service::worker::{proxy_worker_connection, InvocationParameters};
 use crate::service::worker::{ConnectWorkerStream, WorkerService};
 use futures::StreamExt;
 use futures::TryStreamExt;
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::auth::{ProjectAction, TokenSecret};
+// use golem_common::model::auth::{AuthCtx, Namespace};
+use golem_common::model::auth::{TokenSecret};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WorkerCreationRequest;
+use golem_common::model::component::{ComponentFilePath, ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::{
-    ComponentFilePath, ComponentId, ComponentVersion, IdempotencyKey, PluginInstallationId,
+    IdempotencyKey,
     ScanCursor, WorkerFilter, WorkerId,
 };
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::{GolemSecurityScheme, WrappedGolemSecuritySchema};
+use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::Body;
@@ -44,6 +44,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::Instrument;
+use golem_service_base::clients::auth::AuthService;
 
 const WORKER_CONNECT_PING_INTERVAL: Duration = Duration::from_secs(30);
 const WORKER_CONNECT_PING_TIMEOUT: Duration = Duration::from_secs(15);
@@ -54,6 +55,7 @@ pub struct WorkerApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<dyn WorkerService>,
     worker_auth_service: Arc<dyn AuthService>,
+    auth_service: Arc<dyn AuthService>
 }
 
 #[OpenApi(prefix_path = "/v1/components", tag = ApiTags::Worker)]
@@ -109,7 +111,7 @@ impl WorkerApi {
         request: WorkerCreationRequest,
         token: GolemSecurityScheme,
     ) -> Result<Json<WorkerCreationResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let WorkerCreationRequest {
             name,
@@ -160,7 +162,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -207,7 +209,7 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResult>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -300,7 +302,7 @@ impl WorkerApi {
         params: Json<InvokeParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InvokeResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -381,7 +383,7 @@ impl WorkerApi {
         params: Json<CompleteParameters>,
         token: GolemSecurityScheme,
     ) -> Result<Json<bool>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -438,7 +440,7 @@ impl WorkerApi {
         recover_immediately: Query<Option<bool>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<InterruptResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -500,7 +502,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<model::WorkerMetadata>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -600,9 +602,8 @@ impl WorkerApi {
         cursor: Option<String>,
         count: Option<u64>,
         precise: Option<bool>,
-        token: GolemSecurityScheme,
+        auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
@@ -677,8 +678,10 @@ impl WorkerApi {
             component_id = component_id.0.to_string()
         );
 
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
         let response = self
-            .find_workers_metadata_internal(component_id.0, params.0, token)
+            .find_workers_metadata_internal(component_id.0, params.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -689,9 +692,8 @@ impl WorkerApi {
         &self,
         component_id: ComponentId,
         params: WorkersMetadataRequest,
-        token: GolemSecurityScheme,
+        auth: AuthCtx,
     ) -> Result<Json<model::WorkersMetadataResponse>> {
-        let auth = AuthCtx::new(token.secret());
         let namespace = self
             .worker_auth_service
             .is_authorized_by_component(&component_id, ProjectAction::ViewWorker, &auth)
@@ -723,7 +725,7 @@ impl WorkerApi {
         worker_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ResumeResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -768,7 +770,7 @@ impl WorkerApi {
         params: Json<UpdateWorkerRequest>,
         token: GolemSecurityScheme,
     ) -> Result<Json<UpdateWorkerResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -822,7 +824,7 @@ impl WorkerApi {
         query: Query<Option<String>>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetOplogResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -904,7 +906,7 @@ impl WorkerApi {
         file_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Json<GetFilesResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -956,7 +958,7 @@ impl WorkerApi {
         file_name: Path<String>,
         token: GolemSecurityScheme,
     ) -> Result<Binary<Body>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -1007,10 +1009,10 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
+        #[oai(name = "plugin-priority")] plugin_installation_id: Query<PluginPriority>,
         token: GolemSecurityScheme,
     ) -> Result<Json<ActivatePluginResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -1033,7 +1035,7 @@ impl WorkerApi {
     async fn activate_plugin_internal(
         &self,
         worker_id: WorkerId,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
         auth: &AuthCtx,
     ) -> Result<Json<ActivatePluginResponse>> {
         let namespace = self
@@ -1042,7 +1044,7 @@ impl WorkerApi {
             .await?;
 
         self.worker_service
-            .activate_plugin(&worker_id, &plugin_installation_id, namespace)
+            .activate_plugin(&worker_id, &plugin_priority, namespace)
             .await?;
 
         Ok(Json(ActivatePluginResponse {}))
@@ -1060,10 +1062,10 @@ impl WorkerApi {
         &self,
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
-        #[oai(name = "plugin-installation-id")] plugin_installation_id: Query<PluginInstallationId>,
+        #[oai(name = "plugin-priority")] plugin_priority: Query<PluginPriority>,
         token: GolemSecurityScheme,
     ) -> Result<Json<DeactivatePluginResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -1072,11 +1074,11 @@ impl WorkerApi {
         let record = recorded_http_api_request!(
             "activate_plugin",
             worker_id = worker_id.to_string(),
-            plugin_installation_id = plugin_installation_id.to_string()
+            plugin_priority = plugin_priority.to_string()
         );
 
         let response = self
-            .deactivate_plugin_internal(worker_id, plugin_installation_id.0, &auth)
+            .deactivate_plugin_internal(worker_id, plugin_priority.0, &auth)
             .instrument(record.span.clone())
             .await;
 
@@ -1086,7 +1088,7 @@ impl WorkerApi {
     async fn deactivate_plugin_internal(
         &self,
         worker_id: WorkerId,
-        plugin_installation_id: PluginInstallationId,
+        plugin_priority: PluginPriority,
         auth: &AuthCtx,
     ) -> Result<Json<DeactivatePluginResponse>> {
         let namespace = self
@@ -1095,7 +1097,7 @@ impl WorkerApi {
             .await?;
 
         self.worker_service
-            .deactivate_plugin(&worker_id, &plugin_installation_id, namespace)
+            .deactivate_plugin(&worker_id, &plugin_priority, namespace)
             .await?;
 
         Ok(Json(DeactivatePluginResponse {}))
@@ -1116,7 +1118,7 @@ impl WorkerApi {
         target: Json<RevertWorkerTarget>,
         token: GolemSecurityScheme,
     ) -> Result<Json<RevertWorkerResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -1166,7 +1168,7 @@ impl WorkerApi {
         idempotency_key: Path<IdempotencyKey>,
         token: GolemSecurityScheme,
     ) -> Result<Json<CancelInvocationResponse>> {
-        let auth = AuthCtx::new(token.secret());
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id.0, worker_name.as_str(), &auth)
@@ -1246,7 +1248,7 @@ impl WorkerApi {
         worker_name: String,
         token: TokenSecret,
     ) -> Result<(WorkerId, ConnectWorkerStream)> {
-        let auth = AuthCtx::new(token);
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id, worker_name.as_str(), &auth)
@@ -1284,7 +1286,7 @@ impl WorkerApi {
         component_id: ComponentId,
         worker_id: &str,
         auth: &AuthCtx,
-    ) -> Result<(WorkerId, ComponentVersion)> {
+    ) -> Result<(WorkerId, ComponentRevision)> {
         let latest_component = self
             .component_service
             .get_latest_by_id(&component_id, auth)
