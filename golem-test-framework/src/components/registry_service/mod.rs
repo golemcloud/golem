@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod spawned;
+pub mod stub;
 
 use async_trait::async_trait;
 pub use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient as ComponentServiceGrpcClient;
