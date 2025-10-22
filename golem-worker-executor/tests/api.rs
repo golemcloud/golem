@@ -1854,7 +1854,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let component_id = executor.component("write-stdout").store().await;
 
     let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
-    let project_id = executor.default_project().await;
+    let project_id = executor.default_project_id.clone();
 
     // worker is idle. if we restart the server, it will get recovered
     drop(executor);

@@ -28,7 +28,6 @@ use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
-use tracing::warn;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

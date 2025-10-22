@@ -699,12 +699,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .map_item(|i| i.map_err(widen_infallible))
             .map_error(widen_infallible);
 
-        let project_id = self
-            .deps
-            .cloud_service()
-            .get_default_project(&self.token)
-            .await
-            .expect("Failed to get default project");
+        let project_id = self.default_project_id.clone();
         self.deps
             .initial_component_files_service()
             .put_if_not_exists(&project_id, stream)
