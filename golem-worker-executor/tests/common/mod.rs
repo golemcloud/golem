@@ -237,6 +237,7 @@ impl TestContext {
     pub fn new(last_unique_id: &LastUniqueId) -> Self {
         let base_prefix = Uuid::new_v4().to_string();
         let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
+
         Self {
             base_prefix,
             unique_id,
@@ -269,14 +270,7 @@ pub async fn start_customized(
 
     let prometheus = golem_worker_executor::metrics::register_all();
     let admin_account_id = deps.cloud_service.admin_account_id();
-    let admin_project_id = deps
-        .cloud_service
-        .get_default_project(&deps.cloud_service.admin_token())
-        .await?;
-    let admin_project_name = deps
-        .cloud_service
-        .get_project_name(&admin_project_id)
-        .await?;
+
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
             port: redis.public_port(),
@@ -304,8 +298,6 @@ pub async fn start_customized(
         }),
         project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
             account_id: admin_account_id,
-            project_id: admin_project_id,
-            project_name: admin_project_name,
         }),
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
         engine: EngineConfig {

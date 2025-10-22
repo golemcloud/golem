@@ -18,7 +18,7 @@ use figment::Figment;
 use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
-use golem_common::model::{AccountId, ProjectId, RetryConfig};
+use golem_common::model::{AccountId, RetryConfig};
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;
 use golem_service_base::config::BlobStorageConfig;
@@ -922,16 +922,12 @@ impl SafeDisplay for ProjectServiceGrpcConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectServiceDisabledConfig {
     pub account_id: AccountId,
-    pub project_id: ProjectId,
-    pub project_name: String,
 }
 
 impl SafeDisplay for ProjectServiceDisabledConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "account_id: {}", self.account_id);
-        let _ = writeln!(&mut result, "project id: {}", self.project_id);
-        let _ = writeln!(&mut result, "project name: {}", self.project_name);
         result
     }
 }

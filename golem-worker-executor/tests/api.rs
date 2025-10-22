@@ -76,7 +76,11 @@ async fn interruption(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("interruption").store().await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
@@ -114,7 +118,11 @@ async fn simulated_crash(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("interruption").store().await;
     let worker_id = executor
@@ -156,7 +164,11 @@ async fn shopping_cart_example(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -276,7 +288,11 @@ async fn dynamic_worker_creation(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("environment-service").store().await;
     let worker_id = WorkerId {
@@ -355,7 +371,11 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("counters").ephemeral().store().await;
     let worker_id = WorkerId {
@@ -395,7 +415,11 @@ async fn promise(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("promise").store().await;
     let worker_id = executor.start_worker(&component_id, "promise-1").await;
@@ -485,7 +509,11 @@ async fn get_workers_from_worker(
     #[tagged_as("golem_host")] type_resolve: &SharedAnalysedTypeResolve,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -587,7 +615,11 @@ async fn get_metadata_from_worker(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("runtime-service").store().await;
 
@@ -694,7 +726,11 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -761,7 +797,11 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -786,7 +826,11 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
         .unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let _result2 = executor
         .invoke_and_await_with_key(
@@ -831,7 +875,11 @@ async fn component_env_variables(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor
         .component("environment-service")
@@ -885,7 +933,11 @@ async fn component_env_variables_update(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor
         .component("environment-service")
@@ -939,7 +991,11 @@ async fn component_env_and_worker_env_priority(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor
         .component("environment-service")
@@ -976,7 +1032,11 @@ async fn optional_parameters(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1049,7 +1109,11 @@ async fn flags_parameters(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("flags-service").store().await;
     let worker_id = executor
@@ -1112,7 +1176,11 @@ async fn variants_with_no_payloads(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("variant-service").store().await;
     let worker_id = executor
@@ -1137,7 +1205,11 @@ async fn delete_worker(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1203,7 +1275,11 @@ async fn get_workers(
     }
 
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
 
@@ -1324,7 +1400,11 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1348,7 +1428,11 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -1381,7 +1465,11 @@ async fn get_worker_metadata(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("clock-service").store().await;
 
@@ -1447,7 +1535,11 @@ async fn create_invoke_delete_create_invoke(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart").store().await;
     let worker_id = executor
@@ -1503,7 +1595,11 @@ async fn recovering_an_old_worker_after_updating_a_component(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart").unique().store().await;
     let worker_id = executor
@@ -1552,7 +1648,11 @@ async fn recovering_an_old_worker_after_updating_a_component(
 
     // Restarting the server to force worker recovery
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     // Call the first worker again to check if it is still working
     let r3 = executor
@@ -1587,7 +1687,11 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart").unique().store().await;
     let worker_id = executor
@@ -1658,7 +1762,11 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
     let context = TestContext::new(last_unique_id);
     // case: WASM is an old version, rejected by protector
 
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor
         .component("old-component")
@@ -1689,7 +1797,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 ) {
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed, but wasmtime does not support it
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let component_id = executor.component("write-stdout").store().await;
 
     let cwd = env::current_dir().expect("Failed to get current directory");
@@ -1734,7 +1846,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let component_id = executor.component("write-stdout").store().await;
 
     let worker_id = executor.start_worker(&component_id, "bad-wasm-2").await;
@@ -1771,7 +1887,11 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     .await
     .unwrap();
 
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     debug!("Trying to invoke recovered worker");
 
@@ -1799,7 +1919,11 @@ async fn long_running_poll_loop_works_as_expected(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2018,7 +2142,11 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2088,7 +2216,11 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2230,7 +2362,11 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2312,7 +2448,11 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2384,7 +2524,11 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2513,7 +2657,11 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2582,7 +2730,11 @@ async fn shopping_cart_resource_example(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("shopping-cart-resource").store().await;
     let worker_id = executor
@@ -2731,7 +2883,11 @@ async fn counter_resource_test_1(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor.start_worker(&component_id, "counters-1").await;
@@ -2859,7 +3015,11 @@ async fn reconstruct_interrupted_state(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("interruption").store().await;
     let worker_id = executor.start_worker(&component_id, "interruption-1").await;
@@ -2918,7 +3078,11 @@ async fn invocation_queue_is_persistent(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(Mutex::new("initial".to_string()));
     let response_clone = response.clone();
@@ -2997,7 +3161,11 @@ async fn invocation_queue_is_persistent(
     executor.check_oplog_is_queryable(&worker_id).await;
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     executor
         .invoke(&worker_id, "golem:it/api.{increment}", vec![])
@@ -3034,7 +3202,11 @@ async fn invoke_with_non_existing_function(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -3072,7 +3244,11 @@ async fn invoke_with_wrong_parameters(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -3112,7 +3288,11 @@ async fn stderr_returned_for_failed_component(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -3189,7 +3369,11 @@ async fn cancelling_pending_invocations(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor
@@ -3311,12 +3495,12 @@ async fn cancelling_pending_invocations(
         .await
         .unwrap();
 
+    executor.check_oplog_is_queryable(&worker_id).await;
+
     check!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
     check!(cancel2.is_ok() && cancel2.unwrap());
     check!(cancel4.is_err()); // cannot cancel a non-existing invocation
     check!(final_result == vec![Value::U64(12)]);
-
-    executor.check_oplog_is_queryable(&worker_id).await;
 }
 
 /// Test resolving a component_id from the name.
@@ -3329,7 +3513,11 @@ async fn resolve_components_from_name(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     // Make sure the name is unique
     let counter_component_id = executor
@@ -3390,7 +3578,11 @@ async fn scheduled_invocation_test(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let server_component = executor.component(server_component_name).store().await;
 
@@ -3592,7 +3784,11 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     deps: &WorkerExecutorTestDependencies,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("option-service").store().await;
     let worker_id = executor
@@ -3632,7 +3828,11 @@ async fn delete_worker_during_invocation(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("clock-service").store().await;
     let worker_id = executor
@@ -3688,7 +3888,11 @@ async fn invoking_worker_while_its_getting_deleted_works(
     deps: &WorkerExecutorTestDependencies,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("counters").unique().store().await;
     let worker_id = executor.start_worker(&component_id, "worker").await;

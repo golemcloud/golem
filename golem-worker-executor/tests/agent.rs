@@ -28,6 +28,7 @@ use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};
+use tracing::warn;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -41,7 +42,11 @@ async fn agent_self_rpc_is_not_allowed(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("golem_it_agent_self_rpc").store().await;
     let worker_id = executor
@@ -85,7 +90,11 @@ async fn agent_await_parallel_rpc_calls(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor
         .component("golem_it_agent_rpc")
@@ -94,7 +103,7 @@ async fn agent_await_parallel_rpc_calls(
         .await;
     let unique_id = context.redis_prefix();
     let worker_id = executor
-        .start_worker(&component_id, &format!("test-agent(\"${unique_id}\")"))
+        .start_worker(&component_id, &format!("test-agent(\"{unique_id}\")"))
         .await;
 
     let result = executor
@@ -118,7 +127,11 @@ async fn agent_env_inheritance(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor
         .component("golem_it_agent_rpc")
@@ -127,6 +140,7 @@ async fn agent_env_inheritance(
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "2".to_string()),
         ])
+        .unique()
         .store()
         .await;
     let unique_id = context.redis_prefix();
@@ -138,12 +152,14 @@ async fn agent_env_inheritance(
     let worker_id = executor
         .start_worker_with(
             &component_id,
-            &format!("test-agent(\"${unique_id}\")"),
+            &format!("test-agent(\"{unique_id}\")"),
             vec![],
             env,
             vec![],
         )
         .await;
+
+    executor.log_output(&worker_id).await;
 
     let result = executor
         .invoke_and_await(
@@ -164,7 +180,7 @@ async fn agent_env_inheritance(
     let (mut child_metadata, _) = executor
         .get_worker_metadata(&child_worker_id)
         .await
-        .unwrap();
+        .expect("Could not get child metadata");
 
     child_metadata.env.sort_by_key(|(k, _)| k.clone());
 
