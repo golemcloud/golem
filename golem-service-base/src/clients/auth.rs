@@ -40,9 +40,12 @@ use tonic::transport::Channel;
 use tracing::info;
 use uuid::Uuid;
 use golem_api_grpc::proto::golem::auth::v1::cloud_auth_service_client::CloudAuthServiceClient;
+use golem_common::model::auth::TokenSecret;
+use crate::model::auth::AuthCtx;
 
 #[async_trait]
 pub trait AuthService: Send + Sync {
+    async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError>;
 }
 
 pub struct AuthServiceDefault {
@@ -80,7 +83,41 @@ impl AuthServiceDefault {
 //     // retry_config: RetryConfig,
 // }
 
+#[async_trait]
 impl AuthService for AuthServiceDefault {
+    async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
+        let result: Result<AccountId, AuthClientError> = with_retries(
+            "auth",
+            "authenticate-token",
+            None,
+            &self.retry_config,
+            &(self.auth_service_client.clone(), ctx.token_secret.0),
+            |(client, token)| {
+                Box::pin(async move {
+                    let response = client
+                        .call("get-account", move |client| {
+                            let request = authorised_request(GetAccountRequest {}, token);
+
+                            Box::pin(client.get_account(request))
+                        })
+                        .await?
+                        .into_inner();
+                    match response.result {
+                        None => Err("Empty response".to_string().into()),
+                        Some(get_account_response::Result::Success(payload)) => {
+                            Ok(payload.account_id.unwrap().try_into()?)
+                        }
+                        Some(get_account_response::Result::Error(error)) => Err(error.into()),
+                    }
+                })
+            },
+            AuthClientError::is_retriable,
+        )
+        .await;
+
+        result.map_err(|e| e.into())
+    }
+
     // pub fn new(config: &RemoteServiceConfig) -> Self {
     //     let auth_service_client: GrpcClient<CloudAuthServiceClient<Channel>> = GrpcClient::new(
     //         "auth",

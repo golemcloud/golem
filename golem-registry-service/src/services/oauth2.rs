@@ -18,7 +18,7 @@ use super::oauth2_github_client::{
 };
 use super::token::{TokenError, TokenService};
 use crate::config::OAuth2Config;
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::model::login::{
     ExternalLogin, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState,
     OAuth2WebflowStateMetadata,

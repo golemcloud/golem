@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;

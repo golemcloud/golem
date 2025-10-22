@@ -14,7 +14,7 @@
 
 use super::plan::{PlanError, PlanService};
 use crate::config::AccountsConfig;
-use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;

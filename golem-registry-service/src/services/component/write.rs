@@ -14,7 +14,7 @@
 
 use super::ComponentError;
 use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;

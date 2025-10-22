@@ -15,8 +15,8 @@
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
 use crate::repo::model::hash::SqlBlake3Hash;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::{
-    model::auth::{AuthCtx, AuthorizationError},
     services::environment::{EnvironmentError, EnvironmentService},
 };
 use golem_common::model::auth::EnvironmentAction;

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::reports::ReportsRepo;
 use golem_common::model::auth::GlobalAction;
 use golem_common::model::reports::{AccountCounts, AccountSummary};

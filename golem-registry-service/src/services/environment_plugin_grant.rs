@@ -14,7 +14,7 @@
 
 use super::environment::{EnvironmentError, EnvironmentService};
 use super::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
-use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment_plugin_grant::EnvironmentPluginGrantRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::environment_plugin_grant::{

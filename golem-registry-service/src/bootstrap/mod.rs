@@ -16,7 +16,7 @@ pub mod login;
 
 use self::login::LoginSystem;
 use crate::config::RegistryServiceConfig;
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::repo::account::{AccountRepo, DbAccountRepo};
 use crate::repo::account_usage::{AccountUsageRepo, DbAccountUsageRepo};
 use crate::repo::application::{ApplicationRepo, DbApplicationRepo};

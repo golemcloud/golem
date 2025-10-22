@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
-use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
 use chrono::{DateTime, Utc};

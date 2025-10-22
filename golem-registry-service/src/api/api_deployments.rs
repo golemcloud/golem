@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::ApiResult;
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use golem_common::api::{Page, UpdateApiDeploymentRequest};
 use golem_common::model::api_deployment::ApiDeploymentRevision;

@@ -15,7 +15,7 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::services::token::{TokenError, TokenService};
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};

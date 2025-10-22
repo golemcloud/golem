@@ -155,6 +155,28 @@ pub enum EnvironmentAction {
     ViewShares,
 }
 
+mod protobuf {
+    use super::AccountRole;
+
+    impl From<golem_api_grpc::proto::golem::auth::AccountRole> for AccountRole {
+        fn from(value: golem_api_grpc::proto::golem::auth::AccountRole) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::auth::AccountRole::Admin => Self::Admin,
+                golem_api_grpc::proto::golem::auth::AccountRole::MarketingAdmin => Self::MarketingAdmin
+            }
+        }
+    }
+
+    impl From<AccountRole> for golem_api_grpc::proto::golem::auth::AccountRole {
+        fn from(value: AccountRole) -> Self {
+            match value {
+                AccountRole::Admin => Self::Admin,
+                AccountRole::MarketingAdmin => Self::MarketingAdmin
+            }
+        }
+    }
+}
+
 // #[cfg(feature = "protobuf")]
 // mod protobuf {
 //     use super::AccountAction;

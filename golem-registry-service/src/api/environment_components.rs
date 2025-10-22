@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::ApiResult;
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::component::{ComponentService, ComponentWriteService};
 use golem_common::api::Page;

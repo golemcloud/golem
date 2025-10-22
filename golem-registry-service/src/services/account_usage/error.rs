@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::model::auth::AuthorizationError;
+use golem_service_base::model::auth::AuthorizationError;
 use golem_common::model::account::AccountId;
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::repo::RepoError;

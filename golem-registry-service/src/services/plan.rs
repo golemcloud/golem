@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::config::PlansConfig;
-use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;

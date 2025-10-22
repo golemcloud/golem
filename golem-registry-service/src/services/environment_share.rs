@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::environment::{EnvironmentError, EnvironmentService};
-use crate::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment_share::EnvironmentShareRepo;
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment_share::{

@@ -21,7 +21,7 @@ pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
 use super::component_transformer_plugin_caller::{self};
 use super::environment::EnvironmentService;
-use crate::model::auth::AuthCtx;
+use golem_service_base::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::repo::component::ComponentRepo;
 use crate::services::environment::EnvironmentError;
