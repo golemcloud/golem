@@ -22,7 +22,7 @@ use crate::services::oplog::{
 };
 use async_trait::async_trait;
 use bytes::Bytes;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
+use golem_common::model::oplog::{AtomicOplogIndex, OplogEntry, OplogIndex, OplogPayload};
 use golem_common::model::{
     ComponentId, ComponentType, OwnedWorkerId, ProjectId, ScanCursor, WorkerMetadata,
     WorkerStatusRecord,
@@ -104,7 +104,7 @@ pub trait OplogArchive: Debug {
     /// Drop a chunk of entries from the beginning of the oplog
     ///
     /// This should only be called _after_ `append` succeeded in the archive below this one
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex);
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
     /// Gets the total number of entries in this oplog archive
     async fn length(&self) -> u64;
@@ -509,7 +509,8 @@ pub struct MultiLayerOplog {
     multi_layer_oplog_service: MultiLayerOplogService,
     transfer_fiber: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     transfer: UnboundedSender<BackgroundTransferMessage>,
-    primary_length: AtomicU64,
+    last_oplog_index: AtomicOplogIndex,
+    last_transfer_point: AtomicOplogIndex,
     close_fn: Option<Box<dyn FnOnce() + Send + Sync>>,
 }
 
@@ -544,6 +545,11 @@ impl MultiLayerOplog {
         let lower = NEVec::try_from_vec(lower).expect("At least one lower layer is required");
 
         let initial_primary_length = primary.length().await;
+        let last_oplog_index =
+            AtomicOplogIndex::from_oplog_index(primary.current_oplog_index().await);
+        let last_transfer_point = AtomicOplogIndex::from_oplog_index(
+            last_oplog_index.get().subtract(initial_primary_length),
+        );
         let result = Arc::new(Self {
             owned_worker_id: owned_worker_id.clone(),
             primary: primary.clone(),
@@ -551,7 +557,8 @@ impl MultiLayerOplog {
             multi_layer_oplog_service: multi_layer_oplog_service.clone(),
             transfer_fiber: Arc::new(Mutex::new(None)),
             transfer: tx,
-            primary_length: AtomicU64::new(initial_primary_length),
+            last_oplog_index,
+            last_transfer_point,
             close_fn: Some(close),
         });
         let result_oplog: Arc<dyn Oplog> = result.clone();
@@ -658,7 +665,7 @@ impl MultiLayerOplog {
         } else {
             (None, None)
         };
-        let result = if this.primary_length.load(Ordering::Acquire) > 0 {
+        let result = if this.primary.length().await > 0 {
             // transferring the whole primary oplog to the next layer
             this.transfer
                 .send(TransferFromPrimary {
@@ -736,31 +743,30 @@ impl Debug for MultiLayerOplog {
 impl Oplog for MultiLayerOplog {
     async fn add(&self, entry: OplogEntry) -> OplogIndex {
         let result = self.primary.add(entry).await;
-        self.primary_length.fetch_add(1, Ordering::AcqRel);
+        self.last_oplog_index.set(result);
         result
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
-        self.primary.drop_prefix(last_dropped_id).await;
-        let new_length = self.primary.length().await;
-        let old_length = self.primary_length.load(Ordering::Acquire);
-        let new_length = min(new_length, old_length);
-        self.primary_length.store(new_length, Ordering::Release);
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        let dropped_entries = self.primary.drop_prefix(last_dropped_id).await;
+        self.last_transfer_point.max(last_dropped_id);
+        dropped_entries
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {
         let result = self.primary.commit(level).await;
-        let count = self.primary_length.load(Ordering::Acquire);
+
+        let last_committed_idx = self.last_oplog_index.get();
+        let last_transferred_idx = self.last_transfer_point.get();
+        let count: u64 = u64::from(last_committed_idx) - u64::from(last_transferred_idx);
         if count >= self.multi_layer_oplog_service.entry_count_limit {
-            let current_idx = self.primary.current_oplog_index().await;
-            debug!("Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {current_idx}");
+            debug!("Enqueuing transfer of {count} oplog entries from the primary oplog to the next layer up to {last_committed_idx}");
             let _ = self.transfer.send(TransferFromPrimary {
-                last_transferred_idx: current_idx,
+                last_transferred_idx: last_committed_idx,
                 keep_alive: None,
                 done: None,
             });
-            // Resetting the counter, otherwise it would trigger additional transfers until the background process finishes
-            self.primary_length.store(0, Ordering::Release);
+            self.last_transfer_point.set(last_committed_idx);
         }
         result
     }
@@ -879,7 +885,7 @@ impl OplogArchive for WrappedOplogArchive {
         if !chunk.is_empty() {
             let last_idx = chunk.last().unwrap().0;
             self.archive.append(chunk).await;
-            let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel);
+            let old_count = self.entry_count.fetch_add(1, Ordering::AcqRel); // Note: the whole chunk is stored as one entry, so incrementing only by one
             let count = old_count + 1;
             if count >= self.entry_count_limit {
                 debug!("Enqueuing transfer of oplog entries from the oplog layer {} to the next layer up to {last_idx}", self.layer);
@@ -899,12 +905,13 @@ impl OplogArchive for WrappedOplogArchive {
         self.archive.current_oplog_index().await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
-        self.archive.drop_prefix(last_dropped_id).await;
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        let dropped_entries = self.archive.drop_prefix(last_dropped_id).await;
         let new_length = self.archive.length().await;
         let old_entry_count = self.entry_count.load(Ordering::Acquire);
         let new_entry_count = min(new_length, old_entry_count);
         self.entry_count.store(new_entry_count, Ordering::Release);
+        dropped_entries
     }
 
     async fn length(&self) -> u64 {
@@ -958,7 +965,7 @@ impl BackgroundTransfer for BackgroundTransferFromPrimary {
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {
-        self.primary.drop_prefix(last_dropped_id).await
+        self.primary.drop_prefix(last_dropped_id).await;
     }
 }
 
@@ -1000,6 +1007,6 @@ impl BackgroundTransfer for BackgroundTransferBetweenLowers {
     }
 
     async fn drop_source_prefix(&self, last_dropped_id: OplogIndex) {
-        self.source_layer.drop_prefix(last_dropped_id).await
+        self.source_layer.drop_prefix(last_dropped_id).await;
     }
 }

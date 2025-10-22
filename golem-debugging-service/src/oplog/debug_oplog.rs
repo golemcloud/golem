@@ -73,7 +73,9 @@ impl Oplog for DebugOplog {
         OplogIndex::NONE
     }
 
-    async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {}
+    async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
+        0
+    }
 
     // There is no need to commit anything to the indexed storage
     async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {

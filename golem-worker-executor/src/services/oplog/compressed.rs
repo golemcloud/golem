@@ -327,8 +327,9 @@ impl OplogArchive for CompressedOplogArchive {
         )
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         let worker_id = &self.worker_id;
+        let before = self.length().await;
         self.indexed_storage.with("compressed_oplog", "drop_prefix")
             .drop_prefix(IndexedStorageNamespace::CompressedOpLog { level: self.level }, &self.key, last_dropped_id.into())
             .await
@@ -344,6 +345,7 @@ impl OplogArchive for CompressedOplogArchive {
                     panic!("failed to drop compressed oplog for worker {worker_id} in indexed storage: {err}")
                 });
         }
+        before - remaining
     }
 
     async fn length(&self) -> u64 {
