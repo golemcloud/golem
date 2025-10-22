@@ -27,8 +27,8 @@ use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
-use golem_common::model::auth::{AuthCtx, Namespace};
-use golem_common::model::component::VersionedComponentId;
+use golem_common::model::component::ComponentRevision;
+use golem_service_base::model::auth::AuthCtx;
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
@@ -95,7 +95,7 @@ pub trait ComponentService: Send + Sync {
 
 pub struct CachedComponentService {
     inner: Arc<dyn ComponentService>,
-    cache: Cache<VersionedComponentId, (), ComponentDto, ComponentServiceError>,
+    cache: Cache<(ComponentId, ComponentRevision), (), ComponentDto, ComponentServiceError>,
 }
 
 #[async_trait]
@@ -103,16 +103,13 @@ impl ComponentService for CachedComponentService {
     async fn get_by_version(
         &self,
         component_id: &ComponentId,
-        version: u64,
+        version: ComponentRevision,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto> {
         let inner_clone = self.inner.clone();
         self.cache
             .get_or_insert_simple(
-                &VersionedComponentId {
-                    component_id: component_id.clone(),
-                    version,
-                },
+                &(component_id.clone(), version.clone()),
                 || async {
                     inner_clone
                         .get_by_version(component_id, version, auth_ctx)

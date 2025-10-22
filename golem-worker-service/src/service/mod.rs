@@ -15,7 +15,6 @@
 // pub mod api_certificate;
 // pub mod api_domain;
 // pub mod api_security;
-pub mod auth;
 pub mod component;
 // pub mod gateway;
 pub mod worker;
@@ -81,6 +80,7 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
+use self::component::{CachedComponentService, RemoteComponentService};
 // use tracing::error;
 
 #[derive(Clone)]
@@ -224,14 +224,14 @@ impl Services {
         //     dyn ApiDefinitionValidatorService<HttpApiDefinition> + Send + Sync,
         // > = Arc::new(HttpApiDefinitionValidator {});
 
-        // let component_service: Arc<dyn ComponentService> = Arc::new(CachedComponentService::new(
-        //     Arc::new(RemoteComponentService::new(
-        //         config.component_service.uri(),
-        //         config.component_service.retries.clone(),
-        //         config.component_service.connect_timeout,
-        //     )),
-        //     config.component_service.cache_capacity,
-        // ));
+        let component_service: Arc<dyn ComponentService> = Arc::new(CachedComponentService::new(
+            Arc::new(RemoteComponentService::new(
+                config.component_service.uri(),
+                config.component_service.retries.clone(),
+                config.component_service.connect_timeout,
+            )),
+            config.component_service.cache_capacity,
+        ));
 
         // let identity_provider = Arc::new(DefaultIdentityProvider);
 
