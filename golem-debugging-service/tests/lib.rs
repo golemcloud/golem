@@ -89,8 +89,6 @@ pub fn get_golem_config(
     grpc_port: u16,
     http_port: u16,
     account_id: AccountId,
-    default_project_id: ProjectId,
-    default_project_name: String,
 ) -> GolemConfig {
     GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
@@ -120,8 +118,6 @@ pub fn get_golem_config(
         memory: MemoryConfig::default(),
         project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
             account_id,
-            project_id: default_project_id,
-            project_name: default_project_name,
         }),
         ..Default::default()
     }

@@ -220,7 +220,7 @@ mod tests {
     use futures::StreamExt;
     use std::sync::Arc;
     use std::time::Duration;
-    use test_r::{non_flaky, test, timeout};
+    use test_r::{test, timeout};
     use tokio::sync::Mutex;
     use tracing::Instrument;
 
