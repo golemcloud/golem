@@ -23,5 +23,5 @@ message AuthenticateTokenResponse {
 }
 
 message AuthenticateTokenSuccessResponse {
-    golem.auth.AuthCtx auth_ctx = 1;
+    golem.auth.UserAuthCtx auth_ctx = 1;
 }

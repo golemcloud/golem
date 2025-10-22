@@ -6,7 +6,7 @@ import "golem/common/account_id.proto";
 import "golem/account/plan_id.proto";
 import "golem/auth/account_role.proto";
 
-message AuthCtx {
+message UserAuthCtx {
   golem.common.AccountId account_id = 1;
   golem.account.PlanId plan_id = 2;
   repeated AccountRole account_roles = 3;

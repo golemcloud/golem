@@ -389,9 +389,9 @@ mod protobuf {
     use super::{UserAuthCtx};
     use golem_common::model::auth::AccountRole;
 
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for UserAuthCtx {
+    impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
         type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::auth::AuthCtx) -> Result<Self, Self::Error> {
+        fn try_from(value: golem_api_grpc::proto::golem::auth::UserAuthCtx) -> Result<Self, Self::Error> {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
@@ -400,7 +400,7 @@ mod protobuf {
         }
     }
 
-    impl From<UserAuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
+    impl From<UserAuthCtx> for golem_api_grpc::proto::golem::auth::UserAuthCtx {
         fn from(value: UserAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
