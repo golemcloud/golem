@@ -103,7 +103,7 @@ impl EnvironmentService {
 
         auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
 
-        let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id.clone());
+        let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id().clone());
 
         let result = self
             .environment_repo
@@ -141,7 +141,7 @@ impl EnvironmentService {
             environment.name = new_name
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         let result = self
@@ -178,7 +178,7 @@ impl EnvironmentService {
         let current_revision = environment.revision;
         environment.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0.clone());
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         self.environment_repo
@@ -203,7 +203,7 @@ impl EnvironmentService {
             .environment_repo
             .get_by_id(
                 &environment_id.0,
-                &auth.account_id.0,
+                &auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -235,7 +235,7 @@ impl EnvironmentService {
             .get_by_name(
                 &application_id.0,
                 &name.0,
-                &auth.account_id.0,
+                &auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -285,7 +285,7 @@ impl EnvironmentService {
             .environment_repo
             .list_by_app(
                 &application_id.0,
-                &auth.account_id.0,
+                &auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?

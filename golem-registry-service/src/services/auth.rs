@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;
@@ -68,10 +68,10 @@ impl AuthService {
 
         let account_roles: HashSet<AccountRole> = HashSet::from_iter(account.roles.clone());
 
-        Ok(AuthCtx {
+        Ok(AuthCtx::User(UserAuthCtx {
             account_id: account.id,
             account_roles,
-            account_plan_id: Some(account.plan_id),
-        })
+            account_plan_id: account.plan_id,
+        }))
     }
 }

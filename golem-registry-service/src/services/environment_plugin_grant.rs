@@ -127,7 +127,7 @@ impl EnvironmentPluginGrantService {
 
         let record = EnvironmentPluginGrantRecord::from_model(
             grant,
-            ImmutableAuditFields::new(auth.account_id.0),
+            ImmutableAuditFields::new(auth.account_id().0.clone()),
         );
 
         let created: EnvironmentPluginGrant = self
@@ -162,7 +162,7 @@ impl EnvironmentPluginGrantService {
 
         let deleted: EnvironmentPluginGrant = self
             .environment_plugin_grant_repo
-            .delete(&environment_plugin_grant_id.0, &auth.account_id.0)
+            .delete(&environment_plugin_grant_id.0, &auth.account_id().0)
             .await?
             .ok_or(EnvironmentPluginGrantError::EnvironmentPluginGrantNotFound(
                 environment_plugin_grant_id.clone(),

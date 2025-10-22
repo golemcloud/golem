@@ -103,7 +103,7 @@ impl ApplicationService {
             name: data.name,
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         let result = self
@@ -138,7 +138,7 @@ impl ApplicationService {
             application.name = new_name
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         let result = self
@@ -171,7 +171,7 @@ impl ApplicationService {
         let current_revision = application.revision;
         application.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0.clone());
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         self.application_repo

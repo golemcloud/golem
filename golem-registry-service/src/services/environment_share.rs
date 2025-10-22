@@ -144,7 +144,7 @@ impl EnvironmentShareService {
         environment_share.revision = current_revision.next()?;
         environment_share.roles = update.new_roles;
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
 
         let result = self
             .environment_share_repo
@@ -189,7 +189,7 @@ impl EnvironmentShareService {
 
         environment_share.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0.clone());
 
         let result = self
             .environment_share_repo

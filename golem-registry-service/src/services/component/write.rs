@@ -172,7 +172,7 @@ impl ComponentWriteService {
             .await?;
 
         let record =
-            ComponentRevisionRecord::from_model(finalized_revision.clone(), &auth.account_id);
+            ComponentRevisionRecord::from_model(finalized_revision.clone(), auth.account_id());
 
         let stored_component: Component = self
             .component_repo
@@ -307,7 +307,7 @@ impl ComponentWriteService {
             .finalize_new_component_revision(&environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision, &auth.account_id);
+        let record = ComponentRevisionRecord::from_model(finalized_revision, auth.account_id());
 
         let stored_component: Component = self
             .component_repo

@@ -129,7 +129,7 @@ impl DeploymentService {
         let deployment: Deployment = self
             .deployment_repo
             .deploy(
-                &auth.account_id.0,
+                &auth.account_id().0,
                 &environment_id.0,
                 new_deployment
                     .current_deployment_revision
