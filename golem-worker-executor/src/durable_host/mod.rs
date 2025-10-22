@@ -1997,14 +1997,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         if decision == RetryDecision::None {
                                             // Cannot retry so we need to fail
                                             match trap_type {
-                                                TrapType::Interrupt(interrupt_kind) => {
-                                                    if interrupt_kind == InterruptKind::Interrupt {
-                                                        break Err(WorkerExecutorError::runtime(
-                                                            "Interrupted via the Golem API",
-                                                        ));
-                                                    } else {
-                                                        break Err(WorkerExecutorError::runtime(format!("The worker could not finish replaying a function {function_name}")));
-                                                    }
+                                                TrapType::Interrupt(_interrupt_kind) => {
+                                                    // In case of an interrupt, we return with RetryDecision::None
+                                                    // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
                                                     break Err(WorkerExecutorError::runtime(

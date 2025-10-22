@@ -53,7 +53,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use system_interface::fs::FileIoExt;
 use test_r::core::{DynamicTestRegistration, TestProperties};
-use test_r::{add_test, inherit_test_dep, test, test_gen, timeout};
+use test_r::{add_test, inherit_test_dep, non_flaky, test, test_gen, timeout};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -3500,7 +3500,7 @@ async fn cancelling_pending_invocations(
     check!(cancel1.is_ok() && !cancel1.unwrap()); // cannot cancel a completed invocation
     check!(cancel2.is_ok() && cancel2.unwrap());
     check!(cancel4.is_err()); // cannot cancel a non-existing invocation
-    check!(final_result == vec![Value::U64(12)]);
+    assert_eq!(final_result, vec![Value::U64(12)]);
 }
 
 /// Test resolving a component_id from the name.
