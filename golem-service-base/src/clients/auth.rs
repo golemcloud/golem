@@ -360,12 +360,12 @@ impl From<String> for AuthClientError {
 }
 
 impl AuthClientError {
-    // fn is_retriable(error: &AuthClientError) -> bool {
-    //     matches!(
-    //         error,
-    //         AuthClientError::Connection(_) | AuthClientError::Transport(_)
-    //     )
-    // }
+    fn is_retriable(error: &AuthClientError) -> bool {
+        matches!(
+            error,
+            AuthClientError::Connection(_) | AuthClientError::Transport(_)
+        )
+    }
 }
 
 impl From<AuthClientError> for AuthServiceError {

@@ -22,11 +22,13 @@ use poem_openapi::auth::{ApiKey, Bearer};
 use std::str::FromStr;
 use std::hash::Hash;
 use std::collections::HashSet;
-use golem_common::model::account::{AccountId, PlanId};
+use golem_common::model::account::{AccountId, PlanId, SYSTEM_ACCOUNT_ID};
 use golem_common::SafeDisplay;
+use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
+static SYSTEM_ACCOUNT_ROLES: LazyLock<HashSet<AccountRole>> = LazyLock::new(|| HashSet::from_iter([AccountRole::Admin]));
 
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
@@ -161,10 +163,16 @@ impl SafeDisplay for AuthorizationError {
 }
 
 #[derive(Debug)]
-pub struct AuthCtx {
+pub struct UserAuthCtx {
     pub account_id: AccountId,
-    pub account_plan_id: Option<PlanId>,
+    pub account_plan_id: PlanId,
     pub account_roles: HashSet<AccountRole>,
+}
+
+#[derive(Debug)]
+pub enum AuthCtx {
+    System,
+    User(UserAuthCtx)
 }
 
 // Note: Basic visibility of resources is enforced in the repo. Use this to check permissions to modify resource / access restricted resources.
@@ -178,27 +186,45 @@ pub struct AuthCtx {
 impl AuthCtx {
     /// Get the sytem AuthCtx for system initiated action
     pub fn system() -> AuthCtx {
-        AuthCtx {
-            account_id: AccountId::SYSTEM.clone(),
-            account_plan_id: None,
-            account_roles: HashSet::from([AccountRole::Admin]),
+        AuthCtx::System
+    }
+
+    pub fn account_id(&self) -> &AccountId {
+        match self {
+            Self::System => &SYSTEM_ACCOUNT_ID,
+            Self::User(user) => &user.account_id,
+        }
+    }
+
+    pub fn account_roles(&self) -> &HashSet<AccountRole> {
+        match self {
+            Self::System => &SYSTEM_ACCOUNT_ROLES,
+            Self::User(user) => &user.account_roles,
+        }
+    }
+
+    fn account_plan_id(&self) -> Option<&PlanId> {
+        match self {
+            Self::System => None,
+            Self::User(user) => Some(&user.account_plan_id),
         }
     }
 
     /// Whether storage level visibility rules (e.g. does this account have any shares for this environment)
     /// should be disabled for this user.
     pub fn should_override_storage_visibility_rules(&self) -> bool {
-        has_any_role(&self.account_roles, &[AccountRole::Admin])
+        has_any_role(self.account_roles(), &[AccountRole::Admin])
     }
 
     pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
+        let account_roles = self.account_roles();
         let is_allowed = match action {
-            GlobalAction::CreateAccount => has_any_role(&self.account_roles, &[AccountRole::Admin]),
+            GlobalAction::CreateAccount => has_any_role(account_roles, &[AccountRole::Admin]),
             GlobalAction::GetDefaultPlan => {
-                has_any_role(&self.account_roles, &[AccountRole::Admin])
+                has_any_role(account_roles, &[AccountRole::Admin])
             }
             GlobalAction::GetReports => has_any_role(
-                &self.account_roles,
+                account_roles,
                 &[AccountRole::Admin, AccountRole::MarketingAdmin],
             ),
         };
@@ -218,14 +244,13 @@ impl AuthCtx {
         match action {
             PlanAction::ViewPlan => {
                 // Users are allowed to see their own plan
-                if let Some(account_plan_id) = &self.account_plan_id
-                    && account_plan_id == plan_id
+                if let Some(account_plan_id) = self.account_plan_id() && account_plan_id == plan_id
                 {
                     return Ok(());
                 }
 
                 // admins are allowed to see all plans
-                if has_any_role(&self.account_roles, &[AccountRole::Admin]) {
+                if has_any_role(self.account_roles(), &[AccountRole::Admin]) {
                     return Ok(());
                 }
 
@@ -233,7 +258,7 @@ impl AuthCtx {
             }
             PlanAction::CreateOrUpdatePlan => {
                 // Only admins can change plan details
-                if has_any_role(&self.account_roles, &[AccountRole::Admin]) {
+                if has_any_role(self.account_roles(), &[AccountRole::Admin]) {
                     Ok(())
                 } else {
                     Err(AuthorizationError::PlanActionNotAllowed(action))
@@ -248,12 +273,8 @@ impl AuthCtx {
         action: AccountAction,
     ) -> Result<(), AuthorizationError> {
         // Accounts owners are allowed to do everything with their accounts
-        if self.account_id == *target_account_id {
-            return Ok(());
-        };
 
-        let is_allowed = (self.account_id == *target_account_id)
-            || has_any_role(&self.account_roles, &[AccountRole::Admin]);
+        let is_allowed = (self.account_id() == target_account_id) || has_any_role(&self.account_roles(), &[AccountRole::Admin]);
 
         if !is_allowed {
             Err(AuthorizationError::AccountActionNotAllowed(action))?
@@ -269,7 +290,7 @@ impl AuthCtx {
         action: EnvironmentAction,
     ) -> Result<(), AuthorizationError> {
         // Environment owners are allowed to do everything with their environments
-        if self.account_id == *account_owning_enviroment {
+        if self.account_id() == account_owning_enviroment {
             return Ok(());
         };
 
@@ -365,17 +386,22 @@ fn has_any_role<T: Eq + Hash>(roles: &HashSet<T>, allowed: &[T]) -> bool {
 }
 
 mod protobuf {
-    use super::AuthCtx;
+    use super::{UserAuthCtx};
+    use golem_common::model::auth::AccountRole;
 
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for AuthCtx {
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for UserAuthCtx {
         type Error = String;
         fn try_from(value: golem_api_grpc::proto::golem::auth::AuthCtx) -> Result<Self, Self::Error> {
-            todo!()
+            Ok(Self {
+                account_id: value.account_id.ok_or("missing account id")?.try_into()?,
+                account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
+                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar).map_err(|e| format!("Failed connverting account role: {e}")).map(AccountRole::from)).collect::<Result<_, _>>()?
+            })
         }
     }
 
-    impl From<AuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
-        fn from(value: AuthCtx) -> Self {
+    impl From<UserAuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
+        fn from(value: UserAuthCtx) -> Self {
             Self {
                 account_id: Some(value.account_id.into()),
                 plan_id: Some(value.account_plan_id.into()),
