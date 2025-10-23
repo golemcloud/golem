@@ -2,26 +2,27 @@ syntax = "proto3";
 
 package golem.worker.v1;
 
-import public "golem/common/empty.proto";
-import public "golem/common/plugin_installation_id.proto";
-import public "golem/common/revert_worker_response.proto";
-import public "golem/worker/complete_parameters.proto";
-import public "golem/worker/cursor.proto";
-import public "golem/worker/idempotency_key.proto";
-import public "golem/worker/invocation_context.proto";
-import public "golem/worker/invoke_parameters.proto";
-import public "golem/worker/invoke_result.proto";
-import public "golem/worker/invoke_result_json.proto";
-import public "golem/worker/v1/worker_error.proto";
-import public "golem/worker/worker_filter.proto";
-import public "golem/worker/worker_metadata.proto";
-import public "golem/worker/log_event.proto";
-import public "golem/worker/oplog_cursor.proto";
-import public "golem/worker/public_oplog.proto";
-import public "golem/worker/worker_id.proto";
-import public "golem/component/component_id.proto";
-import public "golem/worker/update_mode.proto";
-import public "golem/worker/filesystem.proto";
+import "golem/common/empty.proto";
+import "golem/common/plugin_installation_id.proto";
+import "golem/common/revert_worker_response.proto";
+import "golem/worker/complete_parameters.proto";
+import "golem/worker/cursor.proto";
+import "golem/worker/idempotency_key.proto";
+import "golem/worker/invocation_context.proto";
+import "golem/worker/invoke_parameters.proto";
+import "golem/worker/invoke_result.proto";
+import "golem/worker/invoke_result_json.proto";
+import "golem/worker/v1/worker_error.proto";
+import "golem/worker/worker_filter.proto";
+import "golem/worker/worker_metadata.proto";
+import "golem/worker/log_event.proto";
+import "golem/worker/oplog_cursor.proto";
+import "golem/worker/public_oplog.proto";
+import "golem/worker/worker_id.proto";
+import "golem/component/component_id.proto";
+import "golem/worker/update_mode.proto";
+import "golem/worker/filesystem.proto";
+import "golem/auth/auth_ctx.proto";
 import "golem/worker/wasi_config_vars.proto";
 
 service WorkerService {
@@ -57,8 +58,6 @@ service WorkerService {
   rpc CancelInvocation(CancelInvocationRequest) returns (CancelInvocationResponse);
 }
 
-
-
 message LaunchNewWorkerRequest {
   golem.component.ComponentId componentId = 1;
   string name = 2;
@@ -66,6 +65,7 @@ message LaunchNewWorkerRequest {
   map<string, string> env = 4;
   golem.worker.WasiConfigVars wasi_config_vars = 5;
   bool ignore_already_existing = 6;
+  golem.auth.AuthCtx auth_ctx = 7;
 }
 
 message LaunchNewWorkerResponse {
@@ -74,8 +74,6 @@ message LaunchNewWorkerResponse {
     golem.worker.v1.WorkerError error = 2;
   }
 }
-
-
 
 message LaunchNewWorkerSuccessResponse {
   golem.worker.WorkerId workerId = 1;
@@ -86,12 +84,13 @@ message ForkWorkerRequest {
   golem.worker.WorkerId source_worker_id = 2;
   golem.worker.WorkerId target_worker_id = 3;
   uint64 oplog_index_cutoff = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
 }
-
 
 message CompletePromiseRequest {
   golem.worker.WorkerId workerId = 1;
   golem.worker.CompleteParameters completeParameters = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message CompletePromiseResponse {
@@ -108,9 +107,9 @@ message ForkWorkerResponse {
   }
 }
 
-
 message DeleteWorkerRequest {
   golem.worker.WorkerId workerId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message DeleteWorkerResponse {
@@ -122,6 +121,7 @@ message DeleteWorkerResponse {
 
 message GetWorkerMetadataRequest {
   golem.worker.WorkerId workerId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message GetWorkerMetadataResponse {
@@ -134,6 +134,7 @@ message GetWorkerMetadataResponse {
 message InterruptWorkerRequest {
   golem.worker.WorkerId workerId = 1;
   bool recoverImmediately = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message InterruptWorkerResponse {
@@ -148,7 +149,8 @@ message InvokeAndAwaitRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
+  optional golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message InvokeAndAwaitResponse {
@@ -170,7 +172,8 @@ message InvokeAndAwaitJsonRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
+  optional golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message InvokeAndAwaitJsonResponse {
@@ -185,7 +188,8 @@ message InvokeRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   golem.worker.InvokeParameters invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
+  optional golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message InvokeResponse {
@@ -200,12 +204,14 @@ message InvokeJsonRequest {
   golem.worker.IdempotencyKey idempotencyKey = 2;
   string function = 3;
   repeated string invokeParameters = 4;
-  optional golem.worker.InvocationContext context = 6;
+  optional golem.worker.InvocationContext context = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message ResumeWorkerRequest {
   golem.worker.WorkerId workerId = 1;
   optional bool force = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message ResumeWorkerResponse {
@@ -217,6 +223,7 @@ message ResumeWorkerResponse {
 
 message ConnectWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message GetWorkersMetadataRequest {
@@ -225,8 +232,8 @@ message GetWorkersMetadataRequest {
   golem.worker.Cursor cursor = 3;
   uint64 count = 4;
   bool precise = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
-
 
 message GetWorkersMetadataResponse {
   oneof result {
@@ -240,11 +247,11 @@ message GetWorkersMetadataSuccessResponse {
   optional golem.worker.Cursor cursor = 2;
 }
 
-
 message UpdateWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   uint64 target_version = 2;
   golem.worker.UpdateMode mode = 3;
+  golem.auth.AuthCtx auth_ctx = 4;
 }
 
 message UpdateWorkerResponse {
@@ -259,6 +266,7 @@ message GetOplogRequest {
   uint64 from_oplog_index = 3;
   optional golem.worker.OplogCursor cursor = 4;
   uint64 count = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message GetOplogResponse {
@@ -275,12 +283,12 @@ message GetOplogSuccessResponse {
   uint64 last_index = 5;
 }
 
-
 message SearchOplogRequest {
   golem.worker.WorkerId worker_id = 1;
-  string query = 3;
-  optional golem.worker.OplogCursor cursor = 5;
-  uint64 count = 6;
+  string query = 2;
+  optional golem.worker.OplogCursor cursor = 3;
+  uint64 count = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
 }
 
 message SearchOplogResponse {
@@ -299,6 +307,7 @@ message SearchOplogSuccessResponse {
 message GetFileSystemNodeRequest {
   golem.worker.WorkerId worker_id = 1;
   string path = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetFileSystemNodeResponse {
@@ -312,10 +321,10 @@ message ListFileSystemNodeResponse {
   repeated golem.worker.FileSystemNode nodes = 1;
 }
 
-
 message GetFileContentsRequest {
   golem.worker.WorkerId worker_id = 1;
   string file_path = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetFileContentsResponse {
@@ -328,6 +337,7 @@ message GetFileContentsResponse {
 message ActivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
   int32 plugin_priority = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message ActivatePluginResponse {
@@ -340,6 +350,7 @@ message ActivatePluginResponse {
 message DeactivatePluginRequest {
   golem.worker.WorkerId worker_id = 1;
   int32 plugin_priority = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message DeactivatePluginResponse {
@@ -349,10 +360,10 @@ message DeactivatePluginResponse {
   }
 }
 
-
 message RevertWorkerRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.common.RevertWorkerTarget target = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message RevertWorkerResponse {
@@ -365,6 +376,7 @@ message RevertWorkerResponse {
 message CancelInvocationRequest {
   golem.worker.WorkerId worker_id = 1;
   golem.worker.IdempotencyKey idempotency_key = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message CancelInvocationResponse {

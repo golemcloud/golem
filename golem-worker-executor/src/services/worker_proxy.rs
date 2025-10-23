@@ -43,6 +43,7 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::debug;
 use uuid::Uuid;
+use golem_service_base::model::auth::AuthCtx;
 
 #[async_trait]
 pub trait WorkerProxy: Send + Sync {
@@ -256,6 +257,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         env: caller_env,
                         wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                         ignore_already_existing: true,
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -318,6 +320,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                             tracing: Some(caller_stack.clone().into()),
                         }),
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -387,6 +390,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             wasi_config_vars: Some(caller_wasi_config_vars.clone().into()),
                             tracing: Some(caller_stack.clone().into()),
                         }),
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -419,6 +423,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         worker_id: Some(owned_worker_id.worker_id().into()),
                         target_version: target_version.0,
                         mode: mode as i32,
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -445,6 +450,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     ResumeWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                         force: Some(force),
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -477,6 +483,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                         source_worker_id: Some(source_worker_id.clone().into()),
                         target_worker_id: Some(target_worker_id.clone().into()),
                         oplog_index_cutoff: u64::from(*oplog_index_cutoff),
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -507,6 +514,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                     RevertWorkerRequest {
                         worker_id: Some(worker_id.clone().into()),
                         target: Some(target.clone().into()),
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
@@ -538,6 +546,7 @@ impl WorkerProxy for RemoteWorkerProxy {
                             oplog_idx: promise_id.oplog_idx.into(),
                             data: data.clone(),
                         }),
+                        auth_ctx: Some(AuthCtx::System.into())
                     },
                     &self.access_token,
                 )))
