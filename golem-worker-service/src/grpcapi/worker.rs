@@ -59,6 +59,7 @@ use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
 use golem_service_base::clients::auth::AuthService;
+use golem_service_base::model::WorkerUpdateMode;
 
 pub struct WorkerGrpcApi {
     component_service: Arc<dyn ComponentService>,
@@ -72,15 +73,15 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<LaunchNewWorkerRequest>,
     ) -> Result<Response<LaunchNewWorkerResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "launch_new_worker",
-            component_id = proto_component_id_string(&r.component_id),
-            name = r.name
+            component_id = proto_component_id_string(&request.component_id),
+            name = request.name
         );
 
         let response = match self
-            .launch_new_worker(r, m)
+            .launch_new_worker(request)
             .instrument(record.span.clone())
             .await
         {
@@ -105,14 +106,14 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<CompletePromiseRequest>,
     ) -> Result<Response<CompletePromiseResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "complete_promise",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
         );
 
         let response = match self
-            .complete_promise(r, m)
+            .complete_promise(request)
             .instrument(record.span.clone())
             .await
         {
@@ -132,17 +133,17 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<InvokeAndAwaitRequest>,
     ) -> Result<Response<InvokeAndAwaitTypedResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke_and_await_typed",
-            worker_id = proto_worker_id_string(&r.worker_id),
-            idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
-            function = r.function,
-            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            function = request.function,
+            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&request.context)
         );
 
         let response = match self
-            .invoke_and_await_typed(r, m)
+            .invoke_and_await_typed(request)
             .instrument(record.span.clone())
             .await
         {
@@ -162,16 +163,16 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<InvokeRequest>,
     ) -> Result<Response<InvokeResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "invoke",
-            worker_id = proto_worker_id_string(&r.worker_id),
-            idempotency_key = proto_idempotency_key_string(&r.idempotency_key),
-            function = r.function,
-            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&r.context)
+            worker_id = proto_worker_id_string(&request.worker_id),
+            idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
+            function = request.function,
+            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&request.context)
         );
 
-        let response = match self.invoke(r, m).instrument(record.span.clone()).await {
+        let response = match self.invoke(request).instrument(record.span.clone()).await {
             Ok(()) => record.succeed(invoke_response::Result::Success(Empty {})),
             Err(error) => record.fail(
                 invoke_response::Result::Error(error.clone()),
@@ -188,14 +189,14 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<ResumeWorkerRequest>,
     ) -> Result<Response<ResumeWorkerResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "resume_worker",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
         );
 
         let response = match self
-            .resume_worker(r, m)
+            .resume_worker(request)
             .instrument(record.span.clone())
             .await
         {
@@ -215,14 +216,14 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<UpdateWorkerRequest>,
     ) -> Result<Response<UpdateWorkerResponse>, Status> {
-        let (m, _, r) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "update_worker",
-            worker_id = proto_worker_id_string(&r.worker_id),
+            worker_id = proto_worker_id_string(&request.worker_id),
         );
 
         let response = match self
-            .update_worker(r, m)
+            .update_worker(request)
             .instrument(record.span.clone())
             .await
         {
@@ -242,7 +243,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<ForkWorkerRequest>,
     ) -> Result<Response<ForkWorkerResponse>, Status> {
-        let (metadata, _, request) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "fork_worker",
             source_worker_id = proto_worker_id_string(&request.source_worker_id),
@@ -250,7 +251,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
         );
 
         let response = match self
-            .fork_worker(request, metadata)
+            .fork_worker(request)
             .instrument(record.span.clone())
             .await
         {
@@ -270,14 +271,14 @@ impl GrpcWorkerService for WorkerGrpcApi {
         &self,
         request: Request<RevertWorkerRequest>,
     ) -> Result<Response<RevertWorkerResponse>, Status> {
-        let (metadata, _, request) = request.into_parts();
+        let (_, _, request) = request.into_parts();
         let record = recorded_grpc_api_request!(
             "revert_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
         );
 
         let response = match self
-            .revert_worker(request, metadata)
+            .revert_worker(request)
             .instrument(record.span.clone())
             .await
         {
@@ -310,7 +311,6 @@ impl WorkerGrpcApi {
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
-        metadata: MetadataMap,
     ) -> Result<(WorkerId, ComponentRevision), GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
 
@@ -363,7 +363,6 @@ impl WorkerGrpcApi {
     async fn complete_promise(
         &self,
         request: CompletePromiseRequest,
-        metadata: MetadataMap,
     ) -> Result<bool, GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
@@ -396,7 +395,6 @@ impl WorkerGrpcApi {
     async fn invoke(
         &self,
         request: InvokeRequest,
-        metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
@@ -437,7 +435,6 @@ impl WorkerGrpcApi {
     async fn invoke_and_await(
         &self,
         request: InvokeAndAwaitRequest,
-        metadata: MetadataMap,
     ) -> Result<InvokeResult, GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
@@ -479,7 +476,6 @@ impl WorkerGrpcApi {
     async fn invoke_and_await_typed(
         &self,
         request: InvokeAndAwaitRequest,
-        metadata: MetadataMap,
     ) -> Result<InvokeResultTyped, GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
@@ -528,7 +524,6 @@ impl WorkerGrpcApi {
     async fn resume_worker(
         &self,
         request: ResumeWorkerRequest,
-        metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
@@ -556,11 +551,12 @@ impl WorkerGrpcApi {
     async fn update_worker(
         &self,
         request: UpdateWorkerRequest,
-        metadata: MetadataMap,
     ) -> Result<(), GrpcWorkerError> {
+        let worker_update_mode: WorkerUpdateMode = request.mode().into();
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let target_version = ComponentRevision(request.target_version);
+
 
         let latest_component = self
             .component_service
@@ -578,7 +574,7 @@ impl WorkerGrpcApi {
         self.worker_service
             .update(
                 &worker_id,
-                request.mode(),
+                worker_update_mode,
                 target_version,
                 latest_component.environment_id,
                 auth
@@ -590,8 +586,7 @@ impl WorkerGrpcApi {
 
     async fn fork_worker(
         &self,
-        request: ForkWorkerRequest,
-        metadata: MetadataMap,
+        request: ForkWorkerRequest
     ) -> Result<(), GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let source_worker_id = validate_protobuf_worker_id(request.source_worker_id)?;
@@ -620,8 +615,7 @@ impl WorkerGrpcApi {
 
     async fn revert_worker(
         &self,
-        request: RevertWorkerRequest,
-        metadata: MetadataMap,
+        request: RevertWorkerRequest
     ) -> Result<(), GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;

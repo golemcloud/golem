@@ -447,52 +447,6 @@ fn has_any_role<T: Eq + Hash>(roles: &HashSet<T>, allowed: &[T]) -> bool {
     allowed.iter().any(|r| roles.contains(r))
 }
 
-mod protobuf {
-    use super::{UserAuthCtx, AuthCtx};
-    use golem_common::model::auth::AccountRole;
-
-    impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
-        type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::auth::UserAuthCtx) -> Result<Self, Self::Error> {
-            Ok(Self {
-                account_id: value.account_id.ok_or("missing account id")?.try_into()?,
-                account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
-                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar).map_err(|e| format!("Failed converting account role: {e}")).map(AccountRole::from)).collect::<Result<_, _>>()?
-            })
-        }
-    }
-
-    impl From<UserAuthCtx> for golem_api_grpc::proto::golem::auth::UserAuthCtx {
-        fn from(value: UserAuthCtx) -> Self {
-            Self {
-                account_id: Some(value.account_id.into()),
-                plan_id: Some(value.account_plan_id.into()),
-                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar) as i32).collect()
-            }
-        }
-    }
-
-    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for AuthCtx {
-        type Error = String;
-        fn try_from(value: golem_api_grpc::proto::golem::auth::AuthCtx) -> Result<Self, Self::Error> {
-            match value.value {
-                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(_)) => Ok(AuthCtx::System),
-                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => Ok(AuthCtx::User(user.try_into()?)),
-                None => Err("No auth_ctx value present".to_string())
-            }
-        }
-    }
-
-    impl From<AuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
-        fn from(value: AuthCtx) -> Self {
-            match value {
-                AuthCtx::System => Self { value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(golem_api_grpc::proto::golem::common::Empty {})) },
-                AuthCtx::User(user) => Self { value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user.into())) }
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
     use super::AUTH_ERROR_MESSAGE;
@@ -712,5 +666,67 @@ mod test {
     #[test]
     async fn conflict_both_uuid_invalid_bearer_auth_non_openapi() {
         conflict_both_uuid_invalid_bearer_auth(make_non_openapi()).await;
+    }
+}
+
+mod protobuf {
+    use super::{AuthCtx, AuthorizationError, UserAuthCtx};
+    use golem_common::model::auth::AccountRole;
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
+        type Error = String;
+        fn try_from(value: golem_api_grpc::proto::golem::auth::UserAuthCtx) -> Result<Self, Self::Error> {
+            Ok(Self {
+                account_id: value.account_id.ok_or("missing account id")?.try_into()?,
+                account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
+                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar).map_err(|e| format!("Failed converting account role: {e}")).map(AccountRole::from)).collect::<Result<_, _>>()?
+            })
+        }
+    }
+
+    impl From<UserAuthCtx> for golem_api_grpc::proto::golem::auth::UserAuthCtx {
+        fn from(value: UserAuthCtx) -> Self {
+            Self {
+                account_id: Some(value.account_id.into()),
+                plan_id: Some(value.account_plan_id.into()),
+                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar) as i32).collect()
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for AuthCtx {
+        type Error = String;
+        fn try_from(value: golem_api_grpc::proto::golem::auth::AuthCtx) -> Result<Self, Self::Error> {
+            match value.value {
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(_)) => Ok(AuthCtx::System),
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => Ok(AuthCtx::User(user.try_into()?)),
+                None => Err("No auth_ctx value present".to_string())
+            }
+        }
+    }
+
+    impl From<AuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
+        fn from(value: AuthCtx) -> Self {
+            match value {
+                AuthCtx::System => Self { value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(golem_api_grpc::proto::golem::common::Empty {})) },
+                AuthCtx::User(user) => Self { value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user.into())) }
+            }
+        }
+    }
+
+    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::WorkerError {
+        fn from(error: AuthorizationError) -> Self {
+            Self {
+                error: Some(error.into()),
+            }
+        }
+    }
+
+    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::worker_error::Error {
+        fn from(error: AuthorizationError) -> Self {
+            use golem_api_grpc::proto::golem::common::{ErrorBody};
+
+            Self::Unauthorized(ErrorBody { error: error.to_string() })
+        }
     }
 }

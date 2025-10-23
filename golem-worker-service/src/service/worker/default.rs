@@ -21,7 +21,6 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::stream::TryStreamExt;
 use futures::{Stream, StreamExt};
-use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, InvokeResult};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -45,7 +44,7 @@ use golem_common::model::{
 use golem_service_base::clients::limit::LimitService;
 use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::RevertWorkerTarget;
+use golem_service_base::model::{RevertWorkerTarget, WorkerUpdateMode};
 use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm::analysis::AnalysedFunctionResult;
@@ -268,7 +267,7 @@ pub trait WorkerService: Send + Sync {
     async fn update(
         &self,
         worker_id: &WorkerId,
-        update_mode: UpdateMode,
+        update_mode: WorkerUpdateMode,
         target_version: ComponentRevision,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx
@@ -1195,7 +1194,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn update(
         &self,
         worker_id: &WorkerId,
-        update_mode: UpdateMode,
+        update_mode: WorkerUpdateMode,
         target_version: ComponentRevision,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx
@@ -1208,7 +1207,7 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    mode: update_mode.into(),
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode) as i32,
                     target_version: target_version.0,
                     environment_id: Some(environment_id.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
