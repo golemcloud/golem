@@ -56,6 +56,9 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
+use golem_common::model::environment::EnvironmentId;
+use golem_service_base::model::auth::AuthCtx;
+use golem_common::model::account::AccountId;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
@@ -319,7 +322,6 @@ pub struct WorkerServiceDefault {
     worker_executor_retries: RetryConfig,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     limit_service: Arc<dyn LimitService>,
-    project_service: Arc<dyn ProjectService + Send + Sync>,
     cloud_service_config: RemoteServiceConfig,
 }
 
@@ -329,7 +331,6 @@ impl WorkerServiceDefault {
         worker_executor_retries: RetryConfig,
         routing_table_service: Arc<dyn RoutingTableService>,
         limit_service: Arc<dyn LimitService>,
-        project_service: Arc<dyn ProjectService + Send + Sync>,
         cloud_service_config: RemoteServiceConfig,
     ) -> Self {
         Self {
@@ -337,7 +338,6 @@ impl WorkerServiceDefault {
             worker_executor_retries,
             routing_table_service,
             limit_service,
-            project_service,
             cloud_service_config,
         }
     }
@@ -417,7 +417,9 @@ impl WorkerServiceDefault {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: Namespace,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
         let result = self
@@ -432,8 +434,9 @@ impl WorkerServiceDefault {
                             cursor: Some(cursor.clone().into()),
                             count,
                             precise,
-                            account_id: Some(namespace.account_id.clone().into()),
-                            environment_id: Some(namespace.project_id.clone().into()),
+                            account_id: Some(account_id.clone().into()),
+                            environment_id: Some(environment_id.clone().into()),
+                            auth_ctx: Some(auth_ctx.clone().into())
                         },
                     ))
                 },
@@ -502,10 +505,11 @@ impl WorkerService for WorkerServiceDefault {
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
-        namespace: Namespace,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<WorkerId> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
-        let account_id = namespace.account_id.clone();
 
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
@@ -519,10 +523,11 @@ impl WorkerService for WorkerServiceDefault {
                     args: arguments.clone(),
                     env: environment_variables.clone(),
                     account_id: Some(account_id.clone().into()),
-                    project_id: Some(namespace.project_id.clone().into()),
+                    environment_id: Some(environment_id.clone().into()),
                     account_limits: Some(resource_limits.clone().into()),
                     wasi_config_vars: Some(wasi_config_vars.clone().into()),
                     ignore_already_existing,
+                    auth_ctx: Some(auth_ctx.clone().into())
                 }))
             },
             |response| match response.into_inner() {
@@ -592,10 +597,14 @@ impl WorkerService for WorkerServiceDefault {
         ))
     }
 
-    async fn delete(&self, worker_id: &WorkerId, namespace: Namespace) -> WorkerResult<()> {
+    async fn delete(
+        &self,
+        worker_id: &WorkerId,
+        environment_id: EnvironmentId,
+        account_id: &AccountId,
+        auth_ctx: AuthCtx
+    ) -> WorkerResult<()> {
         let worker_id_clone = worker_id.clone();
-        let account_id_clone = namespace.account_id.clone();
-
         self.call_worker_executor(
             worker_id.clone(),
             "delete_worker",
@@ -605,8 +614,8 @@ impl WorkerService for WorkerServiceDefault {
                         worker_id: Some(golem_api_grpc::proto::golem::worker::WorkerId::from(
                             worker_id_clone.clone(),
                         )),
-                        account_id: Some(account_id_clone.clone().into()),
-                        project_id: Some(namespace.project_id.clone().into()),
+                        environment_id: Some(environment_id.clone().into()),
+                        auth_ctx: Some(auth_ctx.clone().into())
                     },
                 ))
             },
@@ -624,7 +633,7 @@ impl WorkerService for WorkerServiceDefault {
         .await?;
 
         self.limit_service
-            .update_worker_limit(&namespace.account_id, worker_id, -1)
+            .update_worker_limit(&account_id, worker_id, -1)
             .await?;
 
         Ok(())
@@ -646,7 +655,9 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Option<ValueAndType>> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
@@ -662,10 +673,11 @@ impl WorkerService for WorkerServiceDefault {
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        account_id: Some(namespace.account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        project_id: Some(namespace.project_id.clone().into()),
+                        environment_id: Some(environment_id.clone().into()),
+                        auth_ctx: Some(auth_ctx.clone().into())
                     }
                 )
                 )
@@ -709,7 +721,9 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<InvokeResult> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
@@ -725,10 +739,11 @@ impl WorkerService for WorkerServiceDefault {
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
-                        account_id: Some(namespace.account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        project_id: Some(namespace.project_id.clone().into()),
+                        environment_id: Some(environment_id.clone().into()),
+                        auth_ctx: Some(auth_ctx.clone().into())
                     }
                 )
                 )
@@ -769,7 +784,9 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Option<ValueAndType>> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
@@ -785,10 +802,11 @@ impl WorkerService for WorkerServiceDefault {
                         name: function_name.clone(),
                         input: params.clone(),
                         idempotency_key: idempotency_key.clone().map(|v| v.into()),
-                        account_id: Some(namespace.account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        project_id: Some(namespace.project_id.clone().into()),
+                        environment_id: Some(environment_id.clone().into()),
+                        auth_ctx: Some(auth_ctx.clone().into())
                     }
                 )
                 )
@@ -834,7 +852,9 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
@@ -849,10 +869,11 @@ impl WorkerService for WorkerServiceDefault {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        account_id: Some(namespace.account_id.clone().into()),
+                        component_owner_account_id: Some(account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
-                        project_id: Some(namespace.project_id.clone().into()),
+                        environment_id: Some(environment_id.clone().into()),
+                        auth_ctx: Some(auth_ctx.clone().into())
                     },
                 ))
             },
@@ -878,7 +899,9 @@ impl WorkerService for WorkerServiceDefault {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()> {
         let resource_limits = self.get_resource_limits(&namespace).await?;
         let worker_id = worker_id.clone();
@@ -893,7 +916,7 @@ impl WorkerService for WorkerServiceDefault {
                         idempotency_key: idempotency_key.clone().map(|k| k.into()),
                         name: function_name.clone(),
                         input: params.clone(),
-                        account_id: Some(namespace.account_id.clone().into()),
+                        component_owner_account_id: Some(namespace.account_id.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
                         project_id: Some(namespace.project_id.clone().into()),
