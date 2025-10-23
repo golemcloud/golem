@@ -41,6 +41,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use golem_common::model::environment::EnvironmentId;
+use golem_common::model::component::ComponentRevision;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -49,7 +51,7 @@ pub trait ComponentService: Send + Sync {
     async fn get_by_version(
         &self,
         component_id: &ComponentId,
-        version: u64,
+        version: ComponentRevision,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto>;
 
@@ -62,14 +64,14 @@ pub trait ComponentService: Send + Sync {
     async fn get_latest_by_name(
         &self,
         component_id: &ComponentName,
-        namespace: &Namespace,
+        environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto>;
 
     async fn get_all_by_name(
         &self,
         component_id: &ComponentName,
-        namespace: &Namespace,
+        environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Vec<ComponentDto>>;
 
@@ -130,22 +132,22 @@ impl ComponentService for CachedComponentService {
     async fn get_latest_by_name(
         &self,
         component_id: &ComponentName,
-        namespace: &Namespace,
+        environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto> {
         self.inner
-            .get_latest_by_name(component_id, namespace, auth_ctx)
+            .get_latest_by_name(component_id, environment_id, auth_ctx)
             .await
     }
 
     async fn get_all_by_name(
         &self,
         component_id: &ComponentName,
-        namespace: &Namespace,
+        environment_id: &EnvironmentId,
         auth_ctx: &AuthCtx,
     ) -> ComponentResult<Vec<ComponentDto>> {
         self.inner
-            .get_all_by_name(component_id, namespace, auth_ctx)
+            .get_all_by_name(component_id, environment_id, auth_ctx)
             .await
     }
 
@@ -368,8 +370,8 @@ impl ComponentService for RemoteComponentService {
     async fn get_by_version(
         &self,
         component_id: &ComponentId,
-        version: u64,
-        metadata: &AuthCtx,
+        version: ComponentRevision,
+        _auth: &AuthCtx,
     ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
@@ -383,10 +385,8 @@ impl ComponentService for RemoteComponentService {
                         .call("get_component_metadata", move |client| {
                             let request = GetVersionedComponentRequest {
                                 component_id: Some(id.clone().into()),
-                                version,
+                                version: version.0,
                             };
-
-                            let request = with_metadata(request, metadata.clone());
 
                             Box::pin(client.get_component_metadata(request))
                         })
