@@ -67,21 +67,31 @@ pub trait WorkerService: Send + Sync {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        component_version: ComponentRevision,
+        component_version: u64,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
         ignore_already_existing: bool,
-        namespace: Namespace,
+        account_id: AccountId,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<WorkerId>;
 
     async fn connect(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<ConnectWorkerStream>;
 
-    async fn delete(&self, worker_id: &WorkerId, namespace: Namespace) -> WorkerResult<()>;
+    async fn delete(
+        &self,
+        worker_id: &WorkerId,
+        environment_id: EnvironmentId,
+        account_id: &AccountId,
+        auth_ctx: AuthCtx
+    ) -> WorkerResult<()>;
 
     fn validate_typed_parameters(&self, params: Vec<ValueAndType>) -> WorkerResult<Vec<ProtoVal>>;
 
@@ -94,7 +104,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<ValueAndType>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Option<ValueAndType>> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
@@ -103,7 +115,9 @@ pub trait WorkerService: Send + Sync {
             function_name,
             params,
             invocation_context,
-            namespace,
+            environment_id,
+            account_id,
+            auth_ctx
         )
         .await
     }
@@ -117,7 +131,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
@@ -129,7 +145,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<InvokeResult>;
 
     /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
@@ -142,7 +160,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
@@ -154,7 +174,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<ValueAndType>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke(
@@ -163,7 +185,9 @@ pub trait WorkerService: Send + Sync {
             function_name,
             params,
             invocation_context,
-            namespace,
+            environment_id,
+            account_id,
+            auth_ctx
         )
         .await
     }
@@ -177,7 +201,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<ProtoVal>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     /// Enqueues an invocation for the worker without awaiting its results, using JSON value
@@ -190,7 +216,9 @@ pub trait WorkerService: Send + Sync {
         function_name: String,
         params: Vec<String>,
         invocation_context: Option<InvocationContext>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn complete_promise(
@@ -198,20 +226,24 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         oplog_id: u64,
         data: Vec<u8>,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<bool>;
 
     async fn interrupt(
         &self,
         worker_id: &WorkerId,
         recover_immediately: bool,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<WorkerMetadata>;
 
     async fn find_metadata(
@@ -221,22 +253,26 @@ pub trait WorkerService: Send + Sync {
         cursor: ScanCursor,
         count: u64,
         precise: bool,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
     async fn resume(
         &self,
         worker_id: &WorkerId,
-        namespace: Namespace,
         force: bool,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn update(
         &self,
         worker_id: &WorkerId,
         update_mode: UpdateMode,
-        target_version: ComponentVersion,
-        namespace: Namespace,
+        target_version: ComponentRevision,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn get_oplog(
@@ -245,7 +281,8 @@ pub trait WorkerService: Send + Sync {
         from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn search_oplog(
@@ -254,35 +291,42 @@ pub trait WorkerService: Send + Sync {
         cursor: Option<OplogCursor>,
         count: u64,
         query: String,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn get_file_system_node(
         &self,
         worker_id: &WorkerId,
         path: ComponentFilePath,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
         &self,
         worker_id: &WorkerId,
         path: ComponentFilePath,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 
     async fn activate_plugin(
         &self,
         worker_id: &WorkerId,
-        plugin_installation_id: &PluginInstallationId,
-        namespace: Namespace,
+        plugin_priority: PluginPriority,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn deactivate_plugin(
         &self,
         worker_id: &WorkerId,
-        plugin_installation_id: &PluginInstallationId,
-        namespace: Namespace,
+        plugin_priority: &PluginPriority,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn fork_worker(
@@ -290,21 +334,25 @@ pub trait WorkerService: Send + Sync {
         source_worker_id: &WorkerId,
         target_worker_id: &WorkerId,
         oplog_index_cut_off: OplogIndex,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        account_id: AccountId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn revert_worker(
         &self,
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<()>;
 
     async fn cancel_invocation(
         &self,
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
-        namespace: Namespace,
+        environment_id: EnvironmentId,
+        auth_ctx: AuthCtx
     ) -> WorkerResult<bool>;
 }
 
@@ -577,7 +625,7 @@ impl WorkerService for WorkerServiceDefault {
         Ok(ConnectWorkerStream::new(
             stream,
             worker_id.clone(),
-            namespace,
+            account_id,
             self.limit_service.clone(),
         ))
     }
@@ -1322,7 +1370,7 @@ impl WorkerService for WorkerServiceDefault {
         account_id: AccountId,
         auth_ctx: AuthCtx
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
-        let resource_limits = self.get_resource_limits(&namespace).await?;
+        let resource_limits = self.get_resource_limits(&account_id).await?;
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
         self.call_worker_executor(
@@ -1669,12 +1717,6 @@ impl WorkerService for WorkerServiceDefault {
             .await?;
         Ok(canceled)
     }
-}
-
-#[derive(Clone)]
-pub struct WorkerNamespace {
-    pub namespace: Namespace,
-    pub resource_limits: ResourceLimits,
 }
 
 fn is_filter_with_running_status(filter: &WorkerFilter) -> bool {
