@@ -512,6 +512,7 @@ mod grpc {
     use golem_common::retries::with_retries;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
+    use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::service::compiled_component::CompiledComponentService;
     use http::Uri;
     use prost::Message;
@@ -525,7 +526,6 @@ mod grpc {
     use uuid::Uuid;
     use wasmtime::component::Component;
     use wasmtime::Engine;
-    use golem_service_base::model::auth::AuthCtx;
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
@@ -613,7 +613,7 @@ mod grpc {
                                         GetComponentsRequest {
                                             environment_id: Some(environment_id.clone().into()),
                                             component_name: Some(component_name.clone()),
-                                            auth_ctx: Some(AuthCtx::System.into())
+                                            auth_ctx: Some(AuthCtx::System.into()),
                                         },
                                         access_token,
                                     );
@@ -879,7 +879,7 @@ mod grpc {
                                 DownloadComponentRequest {
                                     component_id: Some(component_id.clone().into()),
                                     version: Some(component_version.0),
-                                    auth_ctx: Some(AuthCtx::System.into())
+                                    auth_ctx: Some(AuthCtx::System.into()),
                                 },
                                 access_token,
                             );
@@ -943,7 +943,7 @@ mod grpc {
                                     GetVersionedComponentRequest {
                                         component_id: Some(component_id.clone().into()),
                                         version: component_version.0,
-                                        auth_ctx: Some(AuthCtx::System.into())
+                                        auth_ctx: Some(AuthCtx::System.into()),
                                     },
                                     access_token,
                                 );
@@ -956,7 +956,7 @@ mod grpc {
                                 let request = authorised_grpc_request(
                                     GetLatestComponentRequest {
                                         component_id: Some(component_id.clone().into()),
-                                        auth_ctx: Some(AuthCtx::System.into())
+                                        auth_ctx: Some(AuthCtx::System.into()),
                                     },
                                     access_token,
                                 );

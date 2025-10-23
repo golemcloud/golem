@@ -19,6 +19,7 @@ use anyhow::anyhow;
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentFilePath, ComponentFilePermissions, ComponentName, ComponentRevision,
@@ -41,7 +42,6 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt::Debug;
 use std::ops::Deref;
 use uuid::Uuid;
-use golem_common::model::auth::EnvironmentRole;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ComponentRepoError {
@@ -474,7 +474,7 @@ impl ComponentExtRevisionRecord {
         self,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>
+        environment_roles_from_shares: HashSet<EnvironmentRole>,
     ) -> Result<Component, RepoError> {
         Ok(Component {
             id: ComponentId(self.revision.component_id),
@@ -511,7 +511,7 @@ impl ComponentExtRevisionRecord {
                 .collect::<Result<_, _>>()?,
             original_env: self.revision.original_env.0,
             transformed_object_store_key: self.revision.transformed_object_store_key,
-            environment_roles_from_shares
+            environment_roles_from_shares,
         })
     }
 }

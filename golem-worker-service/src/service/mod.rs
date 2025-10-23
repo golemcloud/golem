@@ -53,8 +53,8 @@ use crate::config::WorkerServiceConfig;
 // };
 // use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 // use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
-use golem_service_base::clients::auth::{AuthService, AuthServiceDefault};
 use crate::service::component::ComponentService;
+use golem_service_base::clients::auth::{AuthService, AuthServiceDefault};
 // use crate::service::component::{CachedComponentService, ComponentService, RemoteComponentService};
 // use crate::service::gateway::api_definition::{
 //     ApiDefinitionService, ApiDefinitionServiceConfig, ApiDefinitionServiceDefault,
@@ -77,10 +77,10 @@ use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
 // use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
 // use golem_service_base::storage::blob::BlobStorage;
+use self::component::{CachedComponentService, RemoteComponentService};
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
-use self::component::{CachedComponentService, RemoteComponentService};
 // use tracing::error;
 
 #[derive(Clone)]
@@ -108,7 +108,8 @@ impl Services {
         // let project_service: Arc<dyn ProjectService> =
         //     Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let auth_service: Arc<dyn AuthService> = Arc::new(AuthServiceDefault::new(&config.cloud_service));
+        let auth_service: Arc<dyn AuthService> =
+            Arc::new(AuthServiceDefault::new(&config.cloud_service));
 
         // let (
         //     api_definition_repo,
@@ -366,7 +367,6 @@ impl Services {
             config.worker_executor_retries.clone(),
             routing_table_service.clone(),
             limit_service.clone(),
-            config.cloud_service.clone(),
         ));
 
         // let worker_request_to_http_service: Arc<dyn GatewayWorkerRequestExecutor> =

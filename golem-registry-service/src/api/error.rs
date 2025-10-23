@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::model::auth::AuthorizationError;
 use crate::services::account::AccountError;
 use crate::services::application::ApplicationError;
 use crate::services::auth::AuthError;
@@ -29,6 +28,7 @@ use crate::services::token::TokenError;
 use golem_common::SafeDisplay;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 

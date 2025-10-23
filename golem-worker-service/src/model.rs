@@ -14,23 +14,18 @@
 
 // use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 // use crate::gateway_api_deployment::ApiSite;
-use derive_more::FromStr;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentRevision, PluginPriority};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::WorkerResourceId;
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::worker::WasiConfigVars;
-use golem_common::model::{
-    ScanCursor, WorkerId, WorkerResourceDescription,
-};
-use golem_common::model::account::AccountId;
-use golem_common::model::component::{PluginPriority, ComponentRevision};
-use golem_common::model::environment::EnvironmentId;
+use golem_common::model::{ScanCursor, WorkerId, WorkerResourceDescription};
 use golem_common::model::{Timestamp, WorkerStatus};
 use golem_service_base::model::UpdateRecord;
-use poem_openapi::{NewType, Object};
-use serde::{Deserialize, Serialize};
+use poem_openapi::Object;
 use std::collections::{HashMap, HashSet};
-use std::fmt::{Debug, Display};
-use uuid::Uuid;
+use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 #[serde(rename_all = "camelCase")]
@@ -89,7 +84,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
         }
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
-            environment_id: value.environment_id.ok_or("Missing environment_id")?.try_into()?,
+            environment_id: value
+                .environment_id
+                .ok_or("Missing environment_id")?
+                .try_into()?,
             created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
             args: value.args,
             env: value.env,
@@ -159,11 +157,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
             owned_resources,
-            active_plugins: value
-                .active_plugins
-                .into_iter()
-                .map(|id| id.0)
-                .collect(),
+            active_plugins: value.active_plugins.into_iter().map(|id| id.0).collect(),
             skipped_regions: value
                 .skipped_regions
                 .into_iter()

@@ -14,7 +14,6 @@
 
 use super::plan::{PlanError, PlanService};
 use crate::config::AccountsConfig;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountRepoError, AccountRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
@@ -22,8 +21,9 @@ use anyhow::anyhow;
 use golem_common::model::account::PlanId;
 use golem_common::model::account::{Account, AccountCreation, AccountId, AccountUpdate};
 use golem_common::model::auth::{AccountRole, TokenSecret};
-use golem_service_base::model::auth::{AccountAction, GlobalAction};
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::{AccountAction, GlobalAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -172,7 +172,7 @@ impl AccountService {
 
         let record = AccountRevisionRecord::from_model(
             account,
-            DeletableRevisionAuditFields::deletion(auth.account_id().0.clone()),
+            DeletableRevisionAuditFields::deletion(auth.account_id().0),
         );
 
         let result = self
@@ -263,7 +263,7 @@ impl AccountService {
 
         let record = AccountRevisionRecord::from_model(
             account,
-            DeletableRevisionAuditFields::new(auth.account_id().0.clone()),
+            DeletableRevisionAuditFields::new(auth.account_id().0),
         );
 
         let result = self

@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use super::ApiResult;
-use golem_service_base::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use golem_common::api::{Page, UpdateApiDeploymentRequest};
 use golem_common::model::api_deployment::ApiDeploymentRevision;
 use golem_common::model::api_deployment::{ApiDeployment, ApiDeploymentId};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Path;
 use poem_openapi::payload::Json;

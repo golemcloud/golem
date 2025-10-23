@@ -49,8 +49,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
-    proto_component_id_string, proto_idempotency_key_string,
-    proto_promise_id_string, proto_worker_id_string,
+    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
+    proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -69,6 +69,7 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
+use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::protobuf::Val;
 use golem_wasm::ValueAndType;
 use std::cmp::min;
@@ -84,7 +85,6 @@ use tonic::{Request, Response, Status};
 use tracing::info_span;
 use tracing::{debug, info, warn, Instrument};
 use wasmtime::Error;
-use golem_service_base::model::auth::AuthCtx;
 
 /// This is the implementation of the Worker Executor gRPC API
 pub struct WorkerExecutorImpl<
@@ -209,14 +209,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.clone().ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         if let Some(limits) = request.account_limits {
             let account_id = request
                 .component_owner_account_id
                 .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
                 .try_into()
-                .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))?;
+                .map_err(|e| {
+                    WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
+                })?;
 
             Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
@@ -324,7 +333,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
             .await
@@ -332,7 +347,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             let worker = Worker::get_or_create_suspended(
                 self,
-                &auth_ctx.account_id(),
+                auth_ctx.account_id(),
                 &owned_worker_id,
                 None,
                 None,
@@ -426,7 +441,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let target = request
             .target
@@ -470,7 +491,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let idempotency_key = request
             .idempotency_key
@@ -525,7 +552,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await;
 
@@ -623,7 +656,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let force_resume = request.force.unwrap_or(false);
 
@@ -754,7 +793,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &request.component_account_id()?, &limits.into()).await?;
+            Ctx::record_last_known_limits(self, &request.component_account_id()?, &limits.into())
+                .await?;
         }
 
         let invocation_context = request
@@ -966,7 +1006,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.clone().ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
             .await
@@ -1116,7 +1163,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
             .await
@@ -1439,7 +1492,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
@@ -1504,7 +1563,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        let auth_ctx: AuthCtx = request.auth_ctx.ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?.try_into().map_err(|e| WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}")))?;
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::account::{AccountError, AccountService};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::application::ApplicationRepo;
 use crate::repo::model::application::{ApplicationRepoError, ApplicationRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
@@ -22,8 +21,9 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
     ApplicationUpdate,
 };
-use golem_service_base::model::auth::{AccountAction, GlobalAction};
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::AccountAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::fmt::Debug;
 use std::sync::Arc;
 use tracing::error;
@@ -103,7 +103,7 @@ impl ApplicationService {
             name: data.name,
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         let result = self
@@ -138,7 +138,7 @@ impl ApplicationService {
             application.name = new_name
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         let result = self
@@ -171,7 +171,7 @@ impl ApplicationService {
         let current_revision = application.revision;
         application.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0.clone());
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
         let record = ApplicationRevisionRecord::from_model(application, audit);
 
         self.application_repo

@@ -15,11 +15,11 @@
 use super::WorkerStream;
 use futures::{Stream, StreamExt};
 use golem_api_grpc::proto::golem::worker::LogEvent;
+use golem_common::model::account::AccountId;
 use golem_common::model::WorkerId;
 use golem_service_base::clients::limit::LimitService;
 use std::sync::Arc;
 use tonic::Status;
-use golem_common::model::account::AccountId;
 
 pub struct ConnectWorkerStream {
     stream: WorkerStream<LogEvent>,

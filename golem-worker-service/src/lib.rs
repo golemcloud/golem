@@ -46,12 +46,12 @@ use include_dir::{include_dir, Dir};
 use poem::endpoint::{BoxEndpoint, PrometheusExporter};
 use poem::listener::Acceptor;
 use poem::listener::Listener;
-use poem::middleware::{CookieJarManager, Cors, OpenTelemetryMetrics, Tracing};
+use poem::middleware::{CookieJarManager, Cors};
 use poem::{EndpointExt, Route};
 use prometheus::Registry;
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::task::JoinSet;
-use tracing::{info, Instrument};
+use tracing::Instrument;
 
 #[cfg(test)]
 test_r::enable!();

@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::model::auth::AuthorizationError;
 use crate::repo::model::component::ComponentRepoError;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::application::ApplicationError;
@@ -27,6 +26,7 @@ use golem_common::model::component_metadata::ComponentProcessingError;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::{IntoAnyhow, SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::repo::RepoError;
 
 #[derive(Debug, thiserror::Error)]

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::service::component::ComponentServiceError;
-use crate::service::with_metadata;
 use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -27,21 +26,21 @@ use golem_api_grpc::proto::golem::component::ComponentConstraints;
 use golem_api_grpc::proto::golem::component::FunctionConstraintCollection as FunctionConstraintCollectionProto;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
+use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
-use golem_service_base::model::auth::AuthCtx;
+use golem_common::model::component::{ComponentDto, ComponentName};
 use golem_common::model::component_constraint::{
     FunctionConstraints, FunctionSignature, FunctionUsageConstraint,
 };
-use golem_common::model::component::ComponentId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_common::model::component::{ComponentDto, ComponentName};
+use golem_service_base::model::auth::AuthCtx;
 use http::Uri;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
-use golem_common::model::environment::EnvironmentId;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
@@ -109,14 +108,11 @@ impl ComponentService for CachedComponentService {
     ) -> ComponentResult<ComponentDto> {
         let inner_clone = self.inner.clone();
         self.cache
-            .get_or_insert_simple(
-                &(component_id.clone(), version.clone()),
-                || async {
-                    inner_clone
-                        .get_by_version(component_id, version, auth_ctx)
-                        .await
-                },
-            )
+            .get_or_insert_simple(&(component_id.clone(), version), || async {
+                inner_clone
+                    .get_by_version(component_id, version, auth_ctx)
+                    .await
+            })
             .await
     }
 
@@ -385,7 +381,7 @@ impl ComponentService for RemoteComponentService {
                             let request = GetVersionedComponentRequest {
                                 component_id: Some(id.clone().into()),
                                 version: version.0,
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.get_component_metadata(request))
                         })
@@ -417,7 +413,7 @@ impl ComponentService for RemoteComponentService {
                         .call("get_latest_component_metadata", move |client| {
                             let request = GetLatestComponentRequest {
                                 component_id: Some(id.clone().into()),
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.get_latest_component_metadata(request))
                         })
@@ -456,7 +452,7 @@ impl ComponentService for RemoteComponentService {
                             let request = GetComponentsRequest {
                                 environment_id: Some(environment_id.clone().into()),
                                 component_name: Some(name.clone()),
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.get_components(request))
                         })
@@ -495,7 +491,7 @@ impl ComponentService for RemoteComponentService {
                             let request = GetComponentsRequest {
                                 environment_id: Some(environment_id.clone().into()),
                                 component_name: Some(name.clone()),
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.get_components(request))
                         })
@@ -601,7 +597,7 @@ impl ComponentService for RemoteComponentService {
                                     ),
                                     constraints: Some(function_constraints.clone()),
                                 }),
-                                auth_ctx: Some(auth_ctx.clone().into())
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
                             Box::pin(client.delete_component_constraint(request))
                         })

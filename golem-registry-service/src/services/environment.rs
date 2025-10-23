@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use super::application::ApplicationService;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
-use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -141,7 +141,7 @@ impl EnvironmentService {
             environment.name = new_name
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id().0.clone());
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         let result = self
@@ -178,7 +178,7 @@ impl EnvironmentService {
         let current_revision = environment.revision;
         environment.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0.clone());
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         self.environment_repo

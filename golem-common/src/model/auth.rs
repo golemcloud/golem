@@ -79,7 +79,9 @@ mod protobuf {
         fn from(value: golem_api_grpc::proto::golem::auth::AccountRole) -> Self {
             match value {
                 golem_api_grpc::proto::golem::auth::AccountRole::Admin => Self::Admin,
-                golem_api_grpc::proto::golem::auth::AccountRole::MarketingAdmin => Self::MarketingAdmin
+                golem_api_grpc::proto::golem::auth::AccountRole::MarketingAdmin => {
+                    Self::MarketingAdmin
+                }
             }
         }
     }
@@ -88,7 +90,7 @@ mod protobuf {
         fn from(value: AccountRole) -> Self {
             match value {
                 AccountRole::Admin => Self::Admin,
-                AccountRole::MarketingAdmin => Self::MarketingAdmin
+                AccountRole::MarketingAdmin => Self::MarketingAdmin,
             }
         }
     }
@@ -98,7 +100,7 @@ mod protobuf {
             match value {
                 golem_api_grpc::proto::golem::auth::EnvironmentRole::Admin => Self::Admin,
                 golem_api_grpc::proto::golem::auth::EnvironmentRole::Viewer => Self::Viewer,
-                golem_api_grpc::proto::golem::auth::EnvironmentRole::Deployer => Self::Deployer
+                golem_api_grpc::proto::golem::auth::EnvironmentRole::Deployer => Self::Deployer,
             }
         }
     }

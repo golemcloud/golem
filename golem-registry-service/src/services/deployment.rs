@@ -15,11 +15,7 @@
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
 use crate::repo::model::hash::SqlBlake3Hash;
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
-use crate::{
-    services::environment::{EnvironmentError, EnvironmentService},
-};
-use golem_service_base::model::auth::EnvironmentAction;
+use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision};
 use golem_common::{
     SafeDisplay, error_forwarding,
@@ -28,6 +24,8 @@ use golem_common::{
         environment::EnvironmentId,
     },
 };
+use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 

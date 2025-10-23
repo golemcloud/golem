@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use crate::repo::account::AccountRepo;
 use crate::repo::model::account::{AccountBySecretRecord, AccountRepoError};
 use chrono::Utc;
 use golem_common::model::account::Account;
 use golem_common::model::auth::{AccountRole, TokenSecret};
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tracing::warn;

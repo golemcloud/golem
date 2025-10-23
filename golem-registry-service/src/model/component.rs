@@ -15,6 +15,7 @@
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::application::ApplicationId;
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component::{ComponentName, InstalledPlugin};
 use golem_common::model::component::{ComponentType, InitialComponentFile};
@@ -27,7 +28,6 @@ use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
-use golem_common::model::auth::EnvironmentRole;
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {
@@ -192,7 +192,7 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             installed_plugins: value.installed_plugins,
             env: value.env,
             wasm_hash: value.wasm_hash,
-            environment_roles_from_shares: value.environment_roles_from_shares
+            environment_roles_from_shares: value.environment_roles_from_shares,
         }
     }
 }

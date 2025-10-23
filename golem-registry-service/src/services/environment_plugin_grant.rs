@@ -14,19 +14,19 @@
 
 use super::environment::{EnvironmentError, EnvironmentService};
 use super::plugin_registration::{PluginRegistrationError, PluginRegistrationService};
-use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment_plugin_grant::EnvironmentPluginGrantRepo;
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::environment_plugin_grant::{
     EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
 };
-use golem_service_base::model::auth::EnvironmentAction;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,
 };
 use golem_common::model::plugin_registration::PluginRegistrationId;
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use std::sync::Arc;
 
 #[derive(Debug, thiserror::Error)]
@@ -127,7 +127,7 @@ impl EnvironmentPluginGrantService {
 
         let record = EnvironmentPluginGrantRecord::from_model(
             grant,
-            ImmutableAuditFields::new(auth.account_id().0.clone()),
+            ImmutableAuditFields::new(auth.account_id().0),
         );
 
         let created: EnvironmentPluginGrant = self

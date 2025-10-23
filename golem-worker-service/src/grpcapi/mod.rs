@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
 };
 use golem_common::model::component::ComponentFilePath;
-use golem_common::model::{WorkerId};
+use golem_common::model::WorkerId;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;

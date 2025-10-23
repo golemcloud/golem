@@ -13,53 +13,37 @@
 // limitations under the License.
 
 use super::error::WorkerTraceErrorKind;
-use super::{
-    bad_request_error, bad_request_errors, parse_json_invoke_parameters,
-    validate_component_file_path,
-    validate_protobuf_worker_id,
-};
+use super::{bad_request_error, validate_protobuf_worker_id};
 use crate::service::component::ComponentService;
-use crate::service::worker::InvocationParameters;
-use crate::service::worker::{ConnectWorkerStream, WorkerService};
-use futures::StreamExt;
+use crate::service::worker::WorkerService;
 use golem_api_grpc::proto::golem::common::{Empty, ErrorBody};
 use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerService as GrpcWorkerService;
 use golem_api_grpc::proto::golem::worker::v1::{
-    complete_promise_response,
-    fork_worker_response,
-    invoke_and_await_typed_response, invoke_response,
-    launch_new_worker_response, resume_worker_response, revert_worker_response,
-    update_worker_response, worker_error, worker_execution_error,
-    CompletePromiseRequest, CompletePromiseResponse,
-    ForkWorkerRequest, ForkWorkerResponse,
-    InvokeAndAwaitRequest,
-    InvokeAndAwaitTypedResponse, InvokeRequest, InvokeResponse,
-    LaunchNewWorkerRequest, LaunchNewWorkerResponse, LaunchNewWorkerSuccessResponse,
-    ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest, RevertWorkerResponse,
-    UnknownError,
-    UpdateWorkerRequest, UpdateWorkerResponse, WorkerError as GrpcWorkerError,
-    WorkerExecutionError,
+    complete_promise_response, fork_worker_response, invoke_and_await_typed_response,
+    invoke_response, launch_new_worker_response, resume_worker_response, revert_worker_response,
+    update_worker_response, worker_error, CompletePromiseRequest, CompletePromiseResponse,
+    ForkWorkerRequest, ForkWorkerResponse, InvokeAndAwaitRequest, InvokeAndAwaitTypedResponse,
+    InvokeRequest, InvokeResponse, LaunchNewWorkerRequest, LaunchNewWorkerResponse,
+    LaunchNewWorkerSuccessResponse, ResumeWorkerRequest, ResumeWorkerResponse, RevertWorkerRequest,
+    RevertWorkerResponse, UpdateWorkerRequest, UpdateWorkerResponse,
+    WorkerError as GrpcWorkerError,
 };
-use golem_api_grpc::proto::golem::worker::{InvokeResult, InvokeResultTyped, WorkerMetadata};
+use golem_api_grpc::proto::golem::worker::InvokeResultTyped;
 use golem_common::grpc::{
     proto_component_id_string, proto_idempotency_key_string,
-    proto_invocation_context_parent_worker_id_string,
-    proto_worker_id_string,
+    proto_invocation_context_parent_worker_id_string, proto_worker_id_string,
 };
-use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
-use golem_common::model::oplog::OplogIndex;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::{ScanCursor, WorkerFilter, WorkerId};
+use golem_common::model::oplog::OplogIndex;
+use golem_common::model::WorkerId;
 use golem_common::recorded_grpc_api_request;
-use golem_service_base::clients::get_authorisation_token;
+use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
+use golem_service_base::model::WorkerUpdateMode;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tap::TapFallible;
-use tonic::metadata::MetadataMap;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
-use golem_service_base::clients::auth::AuthService;
-use golem_service_base::model::WorkerUpdateMode;
 
 pub struct WorkerGrpcApi {
     component_service: Arc<dyn ComponentService>,
@@ -138,7 +122,8 @@ impl GrpcWorkerService for WorkerGrpcApi {
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
-            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&request.context)
+            context_parent_worker_id =
+                proto_invocation_context_parent_worker_id_string(&request.context)
         );
 
         let response = match self
@@ -168,7 +153,8 @@ impl GrpcWorkerService for WorkerGrpcApi {
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
             function = request.function,
-            context_parent_worker_id = proto_invocation_context_parent_worker_id_string(&request.context)
+            context_parent_worker_id =
+                proto_invocation_context_parent_worker_id_string(&request.context)
         );
 
         let response = match self.invoke(request).instrument(record.span.clone()).await {
@@ -309,7 +295,11 @@ impl WorkerGrpcApi {
         &self,
         request: LaunchNewWorkerRequest,
     ) -> Result<(WorkerId, ComponentRevision), GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
 
         let component_id: golem_common::model::component::ComponentId = request
             .component_id
@@ -337,7 +327,11 @@ impl WorkerGrpcApi {
             worker_name: request.name,
         };
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::CreateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::CreateWorker,
+        )?;
 
         let worker = self
             .worker_service
@@ -350,7 +344,7 @@ impl WorkerGrpcApi {
                 request.ignore_already_existing,
                 latest_component.account_id,
                 latest_component.environment_id,
-                auth
+                auth,
             )
             .await?;
 
@@ -361,7 +355,11 @@ impl WorkerGrpcApi {
         &self,
         request: CompletePromiseRequest,
     ) -> Result<bool, GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let parameters = request
@@ -379,21 +377,32 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         let result = self
             .worker_service
-            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, latest_component.environment_id, auth)
+            .complete_promise(
+                &worker_id,
+                parameters.oplog_idx,
+                parameters.data,
+                latest_component.environment_id,
+                auth,
+            )
             .await?;
 
         Ok(result)
     }
 
-    async fn invoke(
-        &self,
-        request: InvokeRequest,
-    ) -> Result<(), GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+    async fn invoke(&self, request: InvokeRequest) -> Result<(), GrpcWorkerError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = request
@@ -411,7 +420,11 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         self.worker_service
             .invoke(
@@ -422,59 +435,22 @@ impl WorkerGrpcApi {
                 request.context,
                 latest_component.environment_id,
                 latest_component.account_id,
-                auth
+                auth,
             )
             .await?;
 
         Ok(())
     }
 
-    async fn invoke_and_await(
-        &self,
-        request: InvokeAndAwaitRequest,
-    ) -> Result<InvokeResult, GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
-        let worker_id = validate_protobuf_worker_id(request.worker_id)?;
-
-        let params = request
-            .invoke_parameters
-            .ok_or_else(|| bad_request_error("Missing invoke parameters"))?;
-
-        let latest_component = self
-            .component_service
-            .get_latest_by_id(&worker_id.component_id, &auth)
-            .await
-            .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
-            .map_err(|_| GrpcWorkerError {
-                error: Some(worker_error::Error::NotFound(ErrorBody {
-                    error: format!("Component not found: {}", &worker_id.component_id),
-                })),
-            })?;
-
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
-
-        let result = self
-            .worker_service
-            .invoke_and_await(
-                &worker_id,
-                request.idempotency_key.map(|k| k.into()),
-                request.function,
-                params.params,
-                request.context,
-                latest_component.environment_id,
-                latest_component.account_id,
-                auth
-            )
-            .await?;
-
-        Ok(result)
-    }
-
     async fn invoke_and_await_typed(
         &self,
         request: InvokeAndAwaitRequest,
     ) -> Result<InvokeResultTyped, GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let params = request
@@ -497,7 +473,11 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         let result = self
             .worker_service
@@ -509,7 +489,7 @@ impl WorkerGrpcApi {
                 request.context,
                 latest_component.environment_id,
                 latest_component.account_id,
-                auth
+                auth,
             )
             .await?;
 
@@ -518,11 +498,12 @@ impl WorkerGrpcApi {
         })
     }
 
-    async fn resume_worker(
-        &self,
-        request: ResumeWorkerRequest,
-    ) -> Result<(), GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+    async fn resume_worker(&self, request: ResumeWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let latest_component = self
@@ -536,24 +517,33 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         self.worker_service
-            .resume(&worker_id, request.force.unwrap_or(false), latest_component.environment_id, auth)
+            .resume(
+                &worker_id,
+                request.force.unwrap_or(false),
+                latest_component.environment_id,
+                auth,
+            )
             .await?;
 
         Ok(())
     }
 
-    async fn update_worker(
-        &self,
-        request: UpdateWorkerRequest,
-    ) -> Result<(), GrpcWorkerError> {
+    async fn update_worker(&self, request: UpdateWorkerRequest) -> Result<(), GrpcWorkerError> {
         let worker_update_mode: WorkerUpdateMode = request.mode().into();
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
         let target_version = ComponentRevision(request.target_version);
-
 
         let latest_component = self
             .component_service
@@ -566,7 +556,11 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         self.worker_service
             .update(
@@ -574,18 +568,19 @@ impl WorkerGrpcApi {
                 worker_update_mode,
                 target_version,
                 latest_component.environment_id,
-                auth
+                auth,
             )
             .await?;
 
         Ok(())
     }
 
-    async fn fork_worker(
-        &self,
-        request: ForkWorkerRequest
-    ) -> Result<(), GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+    async fn fork_worker(&self, request: ForkWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let source_worker_id = validate_protobuf_worker_id(request.source_worker_id)?;
         let target_worker_id = validate_protobuf_worker_id(request.target_worker_id)?;
         let oplog_idx = OplogIndex::from_u64(request.oplog_index_cutoff);
@@ -601,20 +596,32 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_source_component.account_id, &latest_source_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_source_component.account_id,
+            &latest_source_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         self.worker_service
-            .fork_worker(&source_worker_id, &target_worker_id, oplog_idx, latest_source_component.environment_id, latest_source_component.account_id, auth)
+            .fork_worker(
+                &source_worker_id,
+                &target_worker_id,
+                oplog_idx,
+                latest_source_component.environment_id,
+                latest_source_component.account_id,
+                auth,
+            )
             .await?;
 
         Ok(())
     }
 
-    async fn revert_worker(
-        &self,
-        request: RevertWorkerRequest
-    ) -> Result<(), GrpcWorkerError> {
-        let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
+    async fn revert_worker(&self, request: RevertWorkerRequest) -> Result<(), GrpcWorkerError> {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .ok_or(bad_request_error("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
 
         let target = request
@@ -634,7 +641,11 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        auth.authorize_environment_action(&latest_component.account_id, &latest_component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
+        auth.authorize_environment_action(
+            &latest_component.account_id,
+            &latest_component.environment_roles_from_shares,
+            EnvironmentAction::UpdateWorker,
+        )?;
 
         self.worker_service
             .revert_worker(&worker_id, target, latest_component.environment_id, auth)

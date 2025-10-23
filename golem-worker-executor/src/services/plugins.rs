@@ -196,13 +196,13 @@ mod grpc {
     use golem_common::model::RetryConfig;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::grpc::authorised_grpc_request;
+    use golem_service_base::model::auth::AuthCtx;
     use golem_service_base::model::plugin_registration::PluginRegistration;
     use http::Uri;
     use std::time::Duration;
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
-    use golem_service_base::model::auth::AuthCtx;
 
     #[derive(Clone)]
     pub struct PluginsGrpc {
@@ -265,7 +265,7 @@ mod grpc {
                         GetInstalledPluginsRequest {
                             component_id: Some(component_id.clone().into()),
                             version: Some(component_version.0),
-                            auth_ctx: Some(AuthCtx::System.into())
+                            auth_ctx: Some(AuthCtx::System.into()),
                         },
                         &self.access_token,
                     );

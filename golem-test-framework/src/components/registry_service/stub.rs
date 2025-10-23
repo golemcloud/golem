@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::account::AccountId;
-use uuid::Uuid;
 use super::RegistryService;
-use golem_common::model::auth::TokenSecret;
 use async_trait::async_trait;
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::TokenSecret;
+use uuid::Uuid;
 
 pub struct AdminOnlyStubRegistryService {
     admin_account_id: AccountId,
@@ -33,7 +33,7 @@ impl AdminOnlyStubRegistryService {
         Self {
             admin_account_id,
             admin_account_email,
-            admin_token: TokenSecret(admin_token)
+            admin_token: TokenSecret(admin_token),
         }
     }
 }
@@ -68,7 +68,7 @@ impl RegistryService for AdminOnlyStubRegistryService {
         self.admin_token.clone()
     }
 
-    async fn kill(&mut self) { }
+    async fn kill(&mut self) {}
 
     async fn base_http_client(&self) -> reqwest::Client {
         panic!("No registry service running")

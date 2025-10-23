@@ -26,9 +26,9 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_service_base::grpc::authorised_grpc_request;
 use golem_service_base::grpc::is_grpc_retriable;
 use golem_service_base::grpc::GrpcError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,10 +37,8 @@ use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{info, warn, Instrument};
-use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use golem_service_base::model::auth::AuthCtx;
 
 // Single worker that compiles WASM components.
 #[derive(Clone)]
@@ -175,7 +173,7 @@ impl CompileWorker {
 
         if let Some(client) = &*self.client.lock().await {
             let bytes = download_via_grpc(
-                &client,
+                client,
                 &self.config.retries,
                 &component_with_version.id,
                 component_with_version.version,
@@ -229,10 +227,7 @@ async fn download_via_grpc(
         "download",
         Some(format!("{component_id}@{component_version}")),
         retry_config,
-        &(
-            client.clone(),
-            component_id.clone(),
-        ),
+        &(client.clone(), component_id.clone()),
         |(client, component_id)| {
             Box::pin(async move {
                 let component_id = component_id.clone();
@@ -241,7 +236,7 @@ async fn download_via_grpc(
                         let request = DownloadComponentRequest {
                             component_id: Some(component_id.clone().into()),
                             version: Some(component_version.0),
-                            auth_ctx: Some(AuthCtx::System.into())
+                            auth_ctx: Some(AuthCtx::System.into()),
                         };
                         Box::pin(client.download_component(request))
                     })

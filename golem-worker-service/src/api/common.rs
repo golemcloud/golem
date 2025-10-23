@@ -22,19 +22,18 @@ use crate::service::component::ComponentServiceError;
 // use crate::service::gateway::api_deployment::ApiDeploymentError;
 // use crate::service::gateway::security_scheme::SecuritySchemeServiceError as BaseSecuritySchemeServiceError;
 use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
-use golem_api_grpc::proto::golem::project::v1::project_error::Error;
 use golem_common::metrics::api::ApiErrorDetails;
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
-use golem_common::{safe, SafeDisplay};
+use golem_common::SafeDisplay;
 use golem_service_base::clients::auth::AuthServiceError;
 use golem_service_base::clients::limit::LimitError;
 // use golem_service_base::clients::project::ProjectError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthorizationError;
 use poem_openapi::payload::Json;
 use poem_openapi::ApiResponse;
 use serde::{Deserialize, Serialize};
-use golem_service_base::model::auth::AuthorizationError;
 
 /// Detail in case the error was caused by the worker failing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
@@ -104,7 +103,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::InternalError(_) => None,
             Self::Forbidden(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
-            Self::AlreadyExists(inner) => inner.cause.take()
+            Self::AlreadyExists(inner) => inner.cause.take(),
         }
     }
 }

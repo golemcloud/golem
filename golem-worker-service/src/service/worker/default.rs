@@ -31,21 +31,23 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     RevertWorkerRequest, SearchOplogResponse, UpdateWorkerRequest,
 };
 use golem_common::client::MultiTargetGrpcClient;
-use golem_common::model::auth::{TokenSecret};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{
+    ComponentFilePath, ComponentId, ComponentRevision, PluginPriority,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::{OplogCursor, PublicOplogEntry};
 use golem_common::model::RetryConfig;
-use golem_common::model::component::{ComponentFilePath, ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::{
-    ComponentFileSystemNode, FilterComparator,
-    IdempotencyKey, PromiseId, ScanCursor, WorkerFilter, WorkerId,
-    WorkerStatus,
+    ComponentFileSystemNode, FilterComparator, IdempotencyKey, PromiseId, ScanCursor, WorkerFilter,
+    WorkerId, WorkerStatus,
 };
 use golem_service_base::clients::limit::LimitService;
-use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex};
 use golem_service_base::model::{RevertWorkerTarget, WorkerUpdateMode};
-use golem_service_base::model::{GetOplogResponse, PublicOplogEntryWithIndex, ResourceLimits};
 use golem_service_base::service::routing_table::{HasRoutingTableService, RoutingTableService};
 use golem_wasm::analysis::AnalysedFunctionResult;
 use golem_wasm::protobuf::Val as ProtoVal;
@@ -55,9 +57,6 @@ use std::pin::Pin;
 use std::{collections::HashMap, sync::Arc};
 use tonic::transport::Channel;
 use tonic::Code;
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::model::auth::AuthCtx;
-use golem_common::model::account::AccountId;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
@@ -73,7 +72,7 @@ pub trait WorkerService: Send + Sync {
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<WorkerId>;
 
     async fn connect(
@@ -81,7 +80,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream>;
 
     async fn delete(
@@ -89,7 +88,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
         account_id: &AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     fn validate_typed_parameters(&self, params: Vec<ValueAndType>) -> WorkerResult<Vec<ProtoVal>>;
@@ -105,7 +104,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<ValueAndType>> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke_and_await_typed(
@@ -116,7 +115,7 @@ pub trait WorkerService: Send + Sync {
             invocation_context,
             environment_id,
             account_id,
-            auth_ctx
+            auth_ctx,
         )
         .await
     }
@@ -132,7 +131,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Invokes a worker using raw `Val` parameter values and awaits its results returning
@@ -146,7 +145,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<InvokeResult>;
 
     /// Invokes a worker using JSON value encoding represented by raw strings and awaits its results
@@ -161,7 +160,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<ValueAndType>>;
 
     /// Validates the provided list of `TypeAnnotatedValue` parameters, and then enqueues
@@ -175,7 +174,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let params = self.validate_typed_parameters(params)?;
         self.invoke(
@@ -186,7 +185,7 @@ pub trait WorkerService: Send + Sync {
             invocation_context,
             environment_id,
             account_id,
-            auth_ctx
+            auth_ctx,
         )
         .await
     }
@@ -202,7 +201,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     /// Enqueues an invocation for the worker without awaiting its results, using JSON value
@@ -217,7 +216,7 @@ pub trait WorkerService: Send + Sync {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn complete_promise(
@@ -226,7 +225,7 @@ pub trait WorkerService: Send + Sync {
         oplog_id: u64,
         data: Vec<u8>,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<bool>;
 
     async fn interrupt(
@@ -234,14 +233,14 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         recover_immediately: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_metadata(
         &self,
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<WorkerMetadata>;
 
     async fn find_metadata(
@@ -252,7 +251,7 @@ pub trait WorkerService: Send + Sync {
         count: u64,
         precise: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)>;
 
     async fn resume(
@@ -260,7 +259,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         force: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn update(
@@ -269,7 +268,7 @@ pub trait WorkerService: Send + Sync {
         update_mode: WorkerUpdateMode,
         target_version: ComponentRevision,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn get_oplog(
@@ -279,7 +278,7 @@ pub trait WorkerService: Send + Sync {
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn search_oplog(
@@ -289,7 +288,7 @@ pub trait WorkerService: Send + Sync {
         count: u64,
         query: String,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError>;
 
     async fn get_file_system_node(
@@ -298,7 +297,7 @@ pub trait WorkerService: Send + Sync {
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>>;
 
     async fn get_file_contents(
@@ -307,7 +306,7 @@ pub trait WorkerService: Send + Sync {
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>>;
 
     async fn activate_plugin(
@@ -315,7 +314,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn deactivate_plugin(
@@ -323,7 +322,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn fork_worker(
@@ -333,7 +332,7 @@ pub trait WorkerService: Send + Sync {
         oplog_index_cut_off: OplogIndex,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn revert_worker(
@@ -341,7 +340,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()>;
 
     async fn cancel_invocation(
@@ -349,7 +348,7 @@ pub trait WorkerService: Send + Sync {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<bool>;
 }
 
@@ -367,7 +366,6 @@ pub struct WorkerServiceDefault {
     worker_executor_retries: RetryConfig,
     routing_table_service: Arc<dyn RoutingTableService + Send + Sync>,
     limit_service: Arc<dyn LimitService>,
-    cloud_service_config: RemoteServiceConfig,
 }
 
 impl WorkerServiceDefault {
@@ -376,14 +374,12 @@ impl WorkerServiceDefault {
         worker_executor_retries: RetryConfig,
         routing_table_service: Arc<dyn RoutingTableService>,
         limit_service: Arc<dyn LimitService>,
-        cloud_service_config: RemoteServiceConfig,
     ) -> Self {
         Self {
             worker_executor_clients,
             worker_executor_retries,
             routing_table_service,
             limit_service,
-            cloud_service_config,
         }
     }
 
@@ -391,7 +387,7 @@ impl WorkerServiceDefault {
         &self,
         component_id: &ComponentId,
         filter: Option<WorkerFilter>,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<WorkerMetadata>> {
         let component_id = component_id.clone();
         let result = self.call_worker_executor(
@@ -447,7 +443,7 @@ impl WorkerServiceDefault {
         count: u64,
         precise: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         let component_id = component_id.clone();
         let result = self
@@ -463,7 +459,7 @@ impl WorkerServiceDefault {
                             count,
                             precise,
                             environment_id: Some(environment_id.clone().into()),
-                            auth_ctx: Some(auth_ctx.clone().into())
+                            auth_ctx: Some(auth_ctx.clone().into()),
                         },
                     ))
                 },
@@ -534,12 +530,9 @@ impl WorkerService for WorkerServiceDefault {
         ignore_already_existing: bool,
         account_id: AccountId,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<WorkerId> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id_clone = worker_id.clone();
         let account_id_clone = account_id.clone();
@@ -558,7 +551,7 @@ impl WorkerService for WorkerServiceDefault {
                     account_limits: Some(resource_limits.clone().into()),
                     wasi_config_vars: Some(wasi_config_vars.clone().into()),
                     ignore_already_existing,
-                    auth_ctx: Some(auth_ctx.clone().into())
+                    auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -586,12 +579,9 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<ConnectWorkerStream> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
         let worker_id_clone = worker_id.clone();
         let account_id_clone = account_id.clone();
         let worker_id_err = worker_id.clone();
@@ -605,7 +595,7 @@ impl WorkerService for WorkerServiceDefault {
                         component_owner_account_id: Some(account_id_clone.clone().into()),
                         account_limits: Some(resource_limits.clone().into()),
                         environment_id: Some(environment_id.clone().into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
                     }))
                 },
                 |response| Ok(WorkerStream::new(response.into_inner())),
@@ -637,7 +627,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
         account_id: &AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id_clone = worker_id.clone();
         self.call_worker_executor(
@@ -650,7 +640,7 @@ impl WorkerService for WorkerServiceDefault {
                             worker_id_clone.clone(),
                         )),
                         environment_id: Some(environment_id.clone().into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
             },
@@ -668,7 +658,7 @@ impl WorkerService for WorkerServiceDefault {
         .await?;
 
         self.limit_service
-            .update_worker_limit(&account_id, worker_id, -1)
+            .update_worker_limit(account_id, worker_id, -1)
             .await?;
 
         Ok(())
@@ -692,12 +682,9 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<ValueAndType>> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -762,12 +749,9 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<InvokeResult> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -829,12 +813,9 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<ValueAndType>> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         let worker_id_clone = worker_id.clone();
@@ -901,12 +882,9 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -924,7 +902,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
                         environment_id: Some(environment_id.clone().into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
             },
@@ -952,12 +930,9 @@ impl WorkerService for WorkerServiceDefault {
         invocation_context: Option<InvocationContext>,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -975,7 +950,7 @@ impl WorkerService for WorkerServiceDefault {
                         account_limits: Some(resource_limits.clone().into()),
                         context: invocation_context.clone(),
                         environment_id: Some(environment_id.clone().into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
                     },
                 ))
             },
@@ -1000,7 +975,7 @@ impl WorkerService for WorkerServiceDefault {
         oplog_id: u64,
         data: Vec<u8>,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<bool> {
         let promise_id = PromiseId {
             worker_id: worker_id.clone(),
@@ -1054,7 +1029,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         recover_immediately: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1092,7 +1067,7 @@ impl WorkerService for WorkerServiceDefault {
         &self,
         worker_id: &WorkerId,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<WorkerMetadata> {
         let worker_id = worker_id.clone();
         let metadata = self.call_worker_executor(
@@ -1141,7 +1116,7 @@ impl WorkerService for WorkerServiceDefault {
         count: u64,
         precise: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<(Option<ScanCursor>, Vec<WorkerMetadata>)> {
         if filter.as_ref().is_some_and(is_filter_with_running_status) {
             let result = self
@@ -1150,8 +1125,16 @@ impl WorkerService for WorkerServiceDefault {
 
             Ok((None, result.into_iter().take(count as usize).collect()))
         } else {
-            self.find_metadata_internal(component_id, filter, cursor, count, precise, environment_id, auth_ctx)
-                .await
+            self.find_metadata_internal(
+                component_id,
+                filter,
+                cursor,
+                count,
+                precise,
+                environment_id,
+                auth_ctx,
+            )
+            .await
         }
     }
 
@@ -1160,7 +1143,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         force: bool,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1172,7 +1155,7 @@ impl WorkerService for WorkerServiceDefault {
                     worker_id: Some(worker_id.into()),
                     force: Some(force),
                     environment_id: Some(environment_id.clone().into()),
-                    auth_ctx: Some(auth_ctx.clone().into())
+                    auth_ctx: Some(auth_ctx.clone().into()),
                 }))
             },
             |response| match response.into_inner() {
@@ -1196,7 +1179,7 @@ impl WorkerService for WorkerServiceDefault {
         update_mode: WorkerUpdateMode,
         target_version: ComponentRevision,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1206,7 +1189,9 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode.clone()) as i32,
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(
+                        update_mode.clone(),
+                    ) as i32,
                     target_version: target_version.0,
                     environment_id: Some(environment_id.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
@@ -1234,7 +1219,7 @@ impl WorkerService for WorkerServiceDefault {
         cursor: Option<OplogCursor>,
         count: u64,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1249,7 +1234,7 @@ impl WorkerService for WorkerServiceDefault {
                         cursor: cursor.clone().map(|c| c.into()),
                         count,
                         environment_id: Some(environment_id.clone().into()),
-                        auth_ctx: Some(auth_ctx.clone().into())
+                        auth_ctx: Some(auth_ctx.clone().into()),
                     }),
                 )
             },
@@ -1307,7 +1292,7 @@ impl WorkerService for WorkerServiceDefault {
         count: u64,
         query: String,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1367,12 +1352,9 @@ impl WorkerService for WorkerServiceDefault {
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<ComponentFileSystemNode>> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1435,12 +1417,9 @@ impl WorkerService for WorkerServiceDefault {
         path: ComponentFilePath,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<Pin<Box<dyn Stream<Item = WorkerResult<Bytes>> + Send + 'static>>> {
-        let resource_limits = self
-            .limit_service
-            .get_resource_limits(&account_id)
-            .await?;
+        let resource_limits = self.limit_service.get_resource_limits(&account_id).await?;
 
         let worker_id = worker_id.clone();
         let path_clone = path.clone();
@@ -1456,7 +1435,7 @@ impl WorkerService for WorkerServiceDefault {
                             account_limits: Some(resource_limits.clone().into()),
                             file_path: path_clone.to_string(),
                             environment_id: Some(environment_id.clone().into()),
-                            auth_ctx: Some(auth_ctx.clone().into())
+                            auth_ctx: Some(auth_ctx.clone().into()),
                         },
                     ))
                 },
@@ -1534,7 +1513,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1573,7 +1552,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         plugin_priority: PluginPriority,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1614,7 +1593,7 @@ impl WorkerService for WorkerServiceDefault {
         oplog_index_cut_off: OplogIndex,
         environment_id: EnvironmentId,
         account_id: AccountId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let source_worker_id = source_worker_id.clone();
         let target_worker_id = target_worker_id.clone();
@@ -1653,7 +1632,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         target: RevertWorkerTarget,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
         let worker_id = worker_id.clone();
         self.call_worker_executor(
@@ -1689,7 +1668,7 @@ impl WorkerService for WorkerServiceDefault {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
         environment_id: EnvironmentId,
-        auth_ctx: AuthCtx
+        auth_ctx: AuthCtx,
     ) -> WorkerResult<bool> {
         let worker_id = worker_id.clone();
         let idempotency_key = idempotency_key.clone();

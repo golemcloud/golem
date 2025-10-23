@@ -10,6 +10,7 @@ description = "Golem Worker Service including API Gateway functionalities"
 license-file = "../LICENSE"
 
 autotests = false
+autobenches = false
 
 [[bin]]
 name = "golem-worker-service"

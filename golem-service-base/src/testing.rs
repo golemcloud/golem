@@ -15,6 +15,7 @@
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentType;
 use golem_common::model::application::ApplicationId;
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
@@ -26,7 +27,6 @@ use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedExport;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
-use golem_common::model::auth::EnvironmentRole;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -77,7 +77,7 @@ impl From<LocalFileSystemComponentMetadata> for ComponentDto {
             installed_plugins: vec![],
             env: value.env,
             wasm_hash: value.wasm_hash,
-            environment_roles_from_shares: value.environment_roles_from_shares
+            environment_roles_from_shares: value.environment_roles_from_shares,
         }
     }
 }
