@@ -90,7 +90,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
         Ok(Self {
             worker_id: value.worker_id.ok_or("Missing worker_id")?.try_into()?,
             environment_id: value.environment_id.ok_or("Missing environment_id")?.try_into()?,
-            created_by: value.created_by.ok_or("Missing account_id")?.into(),
+            created_by: value.created_by.ok_or("Missing account_id")?.try_into()?,
             args: value.args,
             env: value.env,
             wasi_config_vars: value
@@ -98,7 +98,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
                 .ok_or("Missing wasi_config_vars field")?
                 .into(),
             status: value.status.try_into()?,
-            component_version: value.component_version,
+            component_version: ComponentRevision(value.component_version),
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
             updates: value
@@ -114,8 +114,8 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMet
             active_plugins: value
                 .active_plugins
                 .into_iter()
-                .map(|id| id.try_into())
-                .collect::<Result<HashSet<_>, _>>()?,
+                .map(PluginPriority)
+                .collect::<HashSet<_, _>>(),
             skipped_regions: value
                 .skipped_regions
                 .into_iter()
@@ -150,7 +150,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             env: value.env,
             wasi_config_vars: Some(value.wasi_config_vars.into()),
             status: value.status.into(),
-            component_version: value.component_version,
+            component_version: value.component_version.0,
             retry_count: value.retry_count,
             pending_invocation_count: value.pending_invocation_count,
             updates: value.updates.iter().cloned().map(|u| u.into()).collect(),
@@ -162,7 +162,7 @@ impl From<WorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetada
             active_plugins: value
                 .active_plugins
                 .into_iter()
-                .map(|id| id.into())
+                .map(|id| id.0)
                 .collect(),
             skipped_regions: value
                 .skipped_regions

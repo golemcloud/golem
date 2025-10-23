@@ -102,11 +102,11 @@ impl SafeDisplay for WorkerServiceConfig {
             self.blob_storage.to_safe_string_indented()
         );
         let _ = writeln!(&mut result, "API definition service:");
-        let _ = writeln!(
-            &mut result,
-            "{}",
-            self.api_definition.to_safe_string_indented()
-        );
+        // let _ = writeln!(
+        //     &mut result,
+        //     "{}",
+        //     self.api_definition.to_safe_string_indented()
+        // );
         let _ = writeln!(&mut result, "workspace: {}", self.workspace);
         let _ = writeln!(&mut result, "domain records:");
         let _ = writeln!(

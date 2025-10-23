@@ -87,7 +87,7 @@ impl GrpcWorkerService for WorkerGrpcApi {
             Ok((worker_id, component_version)) => record.succeed(
                 launch_new_worker_response::Result::Success(LaunchNewWorkerSuccessResponse {
                     worker_id: Some(worker_id.into()),
-                    component_version,
+                    component_version: component_version.0,
                 }),
             ),
             Err(error) => record.fail(
@@ -307,17 +307,6 @@ impl WorkerGrpcApi {
         }
     }
 
-    fn auth(&self, metadata: MetadataMap) -> Result<AuthCtx, GrpcWorkerError> {
-        match get_authorisation_token(metadata) {
-            Some(t) => Ok(AuthCtx::new(t)),
-            None => Err(GrpcWorkerError {
-                error: Some(worker_error::Error::Unauthorized(ErrorBody {
-                    error: "Missing token".into(),
-                })),
-            }),
-        }
-    }
-
     async fn launch_new_worker(
         &self,
         request: LaunchNewWorkerRequest,
@@ -362,8 +351,8 @@ impl WorkerGrpcApi {
                 request.env,
                 wasi_config_vars,
                 request.ignore_already_existing,
-                latest_component.environment_id,
                 latest_component.account_id,
+                latest_component.environment_id,
                 auth
             )
             .await?;
@@ -398,7 +387,7 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, latest_component.environment_id, latest_component.account_id, auth)
+            .complete_promise(&worker_id, parameters.oplog_idx, parameters.data, latest_component.environment_id, auth)
             .await?;
 
         Ok(result)
@@ -571,6 +560,7 @@ impl WorkerGrpcApi {
     ) -> Result<(), GrpcWorkerError> {
         let auth: AuthCtx = request.auth_ctx.ok_or(bad_request_error("auth_ctx not found"))?.try_into().map_err(|e| bad_request_error(format!("failed converting auth_ctx: {e}")))?;
         let worker_id = validate_protobuf_worker_id(request.worker_id)?;
+        let target_version = ComponentRevision(request.target_version);
 
         let latest_component = self
             .component_service
@@ -589,7 +579,7 @@ impl WorkerGrpcApi {
             .update(
                 &worker_id,
                 request.mode(),
-                request.target_version,
+                target_version,
                 latest_component.environment_id,
                 auth
             )

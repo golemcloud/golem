@@ -54,7 +54,6 @@ type Result<T> = std::result::Result<T, ApiEndpointError>;
 pub struct WorkerApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<dyn WorkerService>,
-    worker_auth_service: Arc<dyn AuthService>,
     auth_service: Arc<dyn AuthService>
 }
 
@@ -68,7 +67,7 @@ impl WorkerApi {
         Self {
             component_service,
             worker_service,
-            worker_auth_service: auth_service,
+            auth_service,
         }
     }
 
@@ -135,7 +134,7 @@ impl WorkerApi {
                 env,
                 wasi_config_vars.into(),
                 false,
-                auth.account_id(),
+                component.account_id,
                 component.environment_id,
                 auth,
             )
@@ -171,7 +170,7 @@ impl WorkerApi {
             recorded_http_api_request!("delete_worker", worker_id = worker_id.to_string(),);
 
         let response = self
-            .delete_worker_internal(worker_id, &auth)
+            .delete_worker_internal(worker_id, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -181,7 +180,7 @@ impl WorkerApi {
     async fn delete_worker_internal(
         &self,
         worker_id: WorkerId,
-        auth: &AuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<DeleteWorkerResponse>> {
         let component = self.component_service.get_latest_by_id(&worker_id.component_id, &auth).await?;
 
@@ -249,7 +248,7 @@ impl WorkerApi {
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
-                .map_err(|errors| ApiEndpointError::BadRequest(Json(ErrorsBody { errors })))?;
+                .map_err(|errors| ApiEndpointError::BadRequest(Json(ErrorsBody { errors, cause: None })))?;
 
         let result = match params {
             InvocationParameters::TypedProtoVals(vals) => {
@@ -335,7 +334,7 @@ impl WorkerApi {
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
-                .map_err(|errors| ApiEndpointError::BadRequest(Json(ErrorsBody { errors })))?;
+                .map_err(|errors| ApiEndpointError::BadRequest(Json(ErrorsBody { errors, cause: None })))?;
 
         match params {
             InvocationParameters::TypedProtoVals(vals) => self.worker_service.validate_and_invoke(
@@ -411,7 +410,7 @@ impl WorkerApi {
 
         let response = self
             .worker_service
-            .complete_promise(&worker_id, oplog_idx, data, component.environment_id, component.account_id, auth)
+            .complete_promise(&worker_id, oplog_idx, data, component.environment_id, auth)
             .await?;
 
         Ok(Json(response))
@@ -577,6 +576,8 @@ impl WorkerApi {
             component_id = component_id.0.to_string()
         );
 
+        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+
         let response = self
             .get_workers_metadata_internal(
                 component_id.0,
@@ -584,7 +585,7 @@ impl WorkerApi {
                 cursor.0,
                 count.0,
                 precise.0,
-                token,
+                auth,
             )
             .instrument(record.span.clone())
             .await;
@@ -608,7 +609,7 @@ impl WorkerApi {
         let filter = match filter {
             Some(filters) if !filters.is_empty() => {
                 Some(WorkerFilter::from(filters).map_err(|e| {
-                    ApiEndpointError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    ApiEndpointError::BadRequest(Json(ErrorsBody { errors: vec![e], cause: None }))
                 })?)
             }
             _ => None,
@@ -617,7 +618,7 @@ impl WorkerApi {
         let cursor =
             match cursor {
                 Some(cursor) => Some(ScanCursor::from_str(&cursor).map_err(|e| {
-                    ApiEndpointError::BadRequest(Json(ErrorsBody { errors: vec![e] }))
+                    ApiEndpointError::BadRequest(Json(ErrorsBody { errors: vec![e], cause: None }))
                 })?),
                 None => None,
             };
@@ -631,7 +632,6 @@ impl WorkerApi {
                 count.unwrap_or(50),
                 precise.unwrap_or(false),
                 component.environment_id,
-                component.account_id,
                 auth
             )
             .await?;
@@ -705,7 +705,6 @@ impl WorkerApi {
                 params.count.unwrap_or(50),
                 params.precise.unwrap_or(false),
                 component.environment_id,
-                component.account_id,
                 auth
             )
             .await?;
@@ -859,6 +858,7 @@ impl WorkerApi {
                 errors: vec![
                     "Cannot specify both the 'from' and the 'query' parameters".to_string()
                 ],
+                cause: None
             }))),
             (Some(from), None) => {
                 let response = self
@@ -1095,7 +1095,7 @@ impl WorkerApi {
 
 
         self.worker_service
-            .deactivate_plugin(&worker_id, &plugin_priority, component.environment_id, auth)
+            .deactivate_plugin(&worker_id, plugin_priority, component.environment_id, auth)
             .await?;
 
         Ok(Json(DeactivatePluginResponse {}))
@@ -1324,6 +1324,7 @@ impl WorkerApi {
                         &component_id,
                         error.to_safe_string()
                     ),
+                    cause: None
                 }))
             })?;
 
@@ -1347,10 +1348,7 @@ impl WorkerApi {
             .component_service
             .get_all_by_name(
                 &latest_component_version.component_name,
-                &Namespace {
-                    project_id: latest_component_version.owner.project_id,
-                    account_id: latest_component_version.owner.account_id,
-                },
+                &latest_component_version.environment_id,
                 auth,
             )
             .await
@@ -1361,6 +1359,7 @@ impl WorkerApi {
                         &component_id,
                         error.to_safe_string()
                     ),
+                    cause: None
                 }))
             })?;
 
@@ -1390,6 +1389,7 @@ fn validated_worker_id<S: AsRef<str>>(
         |error| {
             ApiEndpointError::BadRequest(Json(ErrorsBody {
                 errors: vec![format!("Invalid worker name: {error}")],
+                cause: None
             }))
         },
     )
@@ -1399,6 +1399,7 @@ fn make_component_file_path(name: String) -> Result<ComponentFilePath> {
     ComponentFilePath::from_rel_str(&name).map_err(|error| {
         ApiEndpointError::BadRequest(Json(ErrorsBody {
             errors: vec![format!("Invalid file name: {error}")],
+            cause: None
         }))
     })
 }

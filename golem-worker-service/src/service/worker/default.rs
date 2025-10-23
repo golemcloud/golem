@@ -68,7 +68,7 @@ pub trait WorkerService: Send + Sync {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        component_version: u64,
+        component_version: ComponentRevision,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -529,7 +529,7 @@ impl WorkerService for WorkerServiceDefault {
     async fn create(
         &self,
         worker_id: &WorkerId,
-        component_version: u64,
+        component_version: ComponentRevision,
         arguments: Vec<String>,
         environment_variables: HashMap<String, String>,
         wasi_config_vars: BTreeMap<String, String>,
@@ -552,7 +552,7 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id_clone.clone();
                 Box::pin(worker_executor_client.create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    component_version,
+                    component_version: component_version.0,
                     args: arguments.clone(),
                     env: environment_variables.clone(),
                     component_owner_account_id: Some(account_id_clone.clone().into()),
