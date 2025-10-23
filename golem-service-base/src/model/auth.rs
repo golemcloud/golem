@@ -220,14 +220,14 @@ impl SafeDisplay for AuthorizationError {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UserAuthCtx {
     pub account_id: AccountId,
     pub account_plan_id: PlanId,
     pub account_roles: HashSet<AccountRole>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum AuthCtx {
     System,
     User(UserAuthCtx)

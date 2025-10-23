@@ -53,7 +53,7 @@ use crate::config::WorkerServiceConfig;
 // };
 // use crate::service::api_domain::{AwsRegisterDomain, RegisterDomain};
 // use crate::service::api_security::{SecuritySchemeService, SecuritySchemeServiceDefault};
-use crate::service::auth::{AuthService, GrpcAuthService};
+use golem_service_base::clients::auth::{AuthService, AuthServiceDefault};
 use crate::service::component::ComponentService;
 // use crate::service::component::{CachedComponentService, ComponentService, RemoteComponentService};
 // use crate::service::gateway::api_definition::{
@@ -71,12 +71,12 @@ use golem_common::client::{GrpcClientConfig, MultiTargetGrpcClient};
 use golem_common::model::RetryConfig;
 // use golem_common::redis::RedisPool;
 use golem_service_base::clients::limit::{LimitService, LimitServiceDefault};
-use golem_service_base::config::BlobStorageConfig;
+// use golem_service_base::config::BlobStorageConfig;
 // use golem_service_base::db::postgres::PostgresPool;
-use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
+// use golem_service_base::db::sqlite::SqlitePool;
+// use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::routing_table::{RoutingTableService, RoutingTableServiceDefault};
-use golem_service_base::storage::blob::BlobStorage;
+// use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -108,10 +108,7 @@ impl Services {
         // let project_service: Arc<dyn ProjectService> =
         //     Arc::new(ProjectServiceDefault::new(&config.cloud_service));
 
-        let auth_service: Arc<dyn AuthService> = Arc::new(GrpcAuthService::new(
-            golem_service_base::clients::auth::AuthService::new(&config.cloud_service),
-            config.component_service.clone(),
-        ));
+        let auth_service: Arc<dyn AuthService> = Arc::new(AuthServiceDefault::new(&config.cloud_service));
 
         // let (
         //     api_definition_repo,
@@ -192,33 +189,35 @@ impl Services {
         //     }
         // };
 
-        let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
-            BlobStorageConfig::S3(config) => Arc::new(
-                golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await,
-            ),
-            BlobStorageConfig::LocalFileSystem(config) => Arc::new(
-                golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
-                    .await?,
-            ),
-            BlobStorageConfig::Sqlite(sqlite) => {
-                let pool = SqlitePool::configured(sqlite)
-                    .await
-                    .map_err(|e| format!("Failed to create sqlite pool: {e}"))?;
-                Arc::new(
-                    golem_service_base::storage::blob::sqlite::SqliteBlobStorage::new(pool.clone())
-                        .await?,
-                )
-            }
-            BlobStorageConfig::InMemory(_) => {
-                Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
-            }
-            _ => {
-                return Err("Unsupported blob storage configuration".to_string());
-            }
-        };
+        // let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
+        //     BlobStorageConfig::S3(config) => Arc::new(
+        //         golem_service_base::storage::blob::s3::S3BlobStorage::new(config.clone()).await,
+        //     ),
+        //     BlobStorageConfig::LocalFileSystem(config) => Arc::new(
+        //         golem_service_base::storage::blob::fs::FileSystemBlobStorage::new(&config.root)
+        //             .await
+        //             .map_err(|e| e.to_string())?,
+        //     ),
+        //     BlobStorageConfig::Sqlite(sqlite) => {
+        //         let pool = SqlitePool::configured(sqlite)
+        //             .await
+        //             .map_err(|e| format!("Failed to create sqlite pool: {e}"))?;
+        //         Arc::new(
+        //             golem_service_base::storage::blob::sqlite::SqliteBlobStorage::new(pool.clone())
+        //                 .await
+        //                 .map_err(|e| e.to_string())?,
+        //         )
+        //     }
+        //     BlobStorageConfig::InMemory(_) => {
+        //         Arc::new(golem_service_base::storage::blob::memory::InMemoryBlobStorage::new())
+        //     }
+        //     _ => {
+        //         return Err("Unsupported blob storage configuration".to_string());
+        //     }
+        // };
 
-        let initial_component_files_service: Arc<InitialComponentFilesService> =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
+        // let initial_component_files_service: Arc<InitialComponentFilesService> =
+        //     Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         // let api_definition_validator: Arc<
         //     dyn ApiDefinitionValidatorService<HttpApiDefinition> + Send + Sync,
@@ -367,7 +366,6 @@ impl Services {
             config.worker_executor_retries.clone(),
             routing_table_service.clone(),
             limit_service.clone(),
-            project_service.clone(),
             config.cloud_service.clone(),
         ));
 
@@ -403,7 +401,7 @@ impl Services {
             // domain_route,
             // domain_service,
             // certificate_service,
-            // component_service,
+            component_service,
             worker_service,
             // worker_request_to_http_service,
             // http_request_api_definition_lookup_service,

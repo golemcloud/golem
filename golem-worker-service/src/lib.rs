@@ -200,35 +200,35 @@ impl WorkerService {
         Ok(port)
     }
 
-    async fn start_api_gateway_server(
-        &self,
-        join_set: &mut JoinSet<anyhow::Result<()>>,
-    ) -> Result<u16, anyhow::Error> {
-        let route = Route::new()
-            .nest("/", api::custom_http_request_api(&self.services))
-            .with(OpenTelemetryMetrics::new())
-            .with(Tracing);
+    // async fn start_api_gateway_server(
+    //     &self,
+    //     join_set: &mut JoinSet<anyhow::Result<()>>,
+    // ) -> Result<u16, anyhow::Error> {
+    //     let route = Route::new()
+    //         .nest("/", api::custom_http_request_api(&self.services))
+    //         .with(OpenTelemetryMetrics::new())
+    //         .with(Tracing);
 
-        let poem_listener = poem::listener::TcpListener::bind(format!(
-            "0.0.0.0:{}",
-            self.config.custom_request_port
-        ));
-        let acceptor = poem_listener.into_acceptor().await?;
-        let port = acceptor.local_addr()[0]
-            .as_socket_addr()
-            .expect("socket address")
-            .port();
+    //     let poem_listener = poem::listener::TcpListener::bind(format!(
+    //         "0.0.0.0:{}",
+    //         self.config.custom_request_port
+    //     ));
+    //     let acceptor = poem_listener.into_acceptor().await?;
+    //     let port = acceptor.local_addr()[0]
+    //         .as_socket_addr()
+    //         .expect("socket address")
+    //         .port();
 
-        join_set.spawn(
-            async move {
-                poem::Server::new_with_acceptor(acceptor)
-                    .run(route)
-                    .await
-                    .map_err(|err| anyhow!(err).context("API Gateway server failed"))
-            }
-            .in_current_span(),
-        );
+    //     join_set.spawn(
+    //         async move {
+    //             poem::Server::new_with_acceptor(acceptor)
+    //                 .run(route)
+    //                 .await
+    //                 .map_err(|err| anyhow!(err).context("API Gateway server failed"))
+    //         }
+    //         .in_current_span(),
+    //     );
 
-        Ok(port)
-    }
+    //     Ok(port)
+    // }
 }
