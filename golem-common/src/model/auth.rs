@@ -72,91 +72,8 @@ declare_enums! {
     }
 }
 
-impl From<AccountRole> for i32 {
-    fn from(value: AccountRole) -> Self {
-        value as i32
-    }
-}
-
-impl TryFrom<i32> for AccountRole {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        AccountRole::from_repr(value).ok_or_else(|| format!("Invalid role: {value}"))
-    }
-}
-
-impl From<EnvironmentRole> for i32 {
-    fn from(value: EnvironmentRole) -> Self {
-        value as i32
-    }
-}
-
-impl TryFrom<i32> for EnvironmentRole {
-    type Error = String;
-
-    fn try_from(value: i32) -> Result<Self, Self::Error> {
-        EnvironmentRole::from_repr(value).ok_or_else(|| format!("Invalid role: {value}"))
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum GlobalAction {
-    CreateAccount,
-    GetDefaultPlan,
-    GetReports,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum PlanAction {
-    ViewPlan,
-    CreateOrUpdatePlan,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum AccountAction {
-    CreateApplication,
-    CreateEnvironment,
-    CreateKnownSecret,
-    CreateToken,
-    DeleteAccount,
-    DeleteApplication,
-    DeletePlugin,
-    DeleteToken,
-    ListAllApplicationEnvironments,
-    RegisterPlugin,
-    SetRoles,
-    UpdateAccount,
-    UpdateApplication,
-    UpdateUsage,
-    ViewAccount,
-    ViewApplications,
-    ViewPlugin,
-    ViewToken,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
-pub enum EnvironmentAction {
-    CreateComponent,
-    CreateEnvironmentPluginGrant,
-    CreateShare,
-    DeleteEnvironment,
-    DeleteEnvironmentPluginGrant,
-    DeleteShare,
-    DeployEnvironment,
-    UpdateComponent,
-    UpdateEnvironment,
-    UpdateShare,
-    ViewComponent,
-    ViewDeployment,
-    ViewDeploymentPlan,
-    ViewEnvironment,
-    ViewEnvironmentPluginGrant,
-    ViewShares,
-}
-
 mod protobuf {
-    use super::AccountRole;
+    use super::{AccountRole, EnvironmentRole};
 
     impl From<golem_api_grpc::proto::golem::auth::AccountRole> for AccountRole {
         fn from(value: golem_api_grpc::proto::golem::auth::AccountRole) -> Self {
@@ -172,6 +89,26 @@ mod protobuf {
             match value {
                 AccountRole::Admin => Self::Admin,
                 AccountRole::MarketingAdmin => Self::MarketingAdmin
+            }
+        }
+    }
+
+    impl From<golem_api_grpc::proto::golem::auth::EnvironmentRole> for EnvironmentRole {
+        fn from(value: golem_api_grpc::proto::golem::auth::EnvironmentRole) -> Self {
+            match value {
+                golem_api_grpc::proto::golem::auth::EnvironmentRole::Admin => Self::Admin,
+                golem_api_grpc::proto::golem::auth::EnvironmentRole::Viewer => Self::Viewer,
+                golem_api_grpc::proto::golem::auth::EnvironmentRole::Deployer => Self::Deployer
+            }
+        }
+    }
+
+    impl From<EnvironmentRole> for golem_api_grpc::proto::golem::auth::EnvironmentRole {
+        fn from(value: EnvironmentRole) -> Self {
+            match value {
+                EnvironmentRole::Admin => Self::Admin,
+                EnvironmentRole::Viewer => Self::Viewer,
+                EnvironmentRole::Deployer => Self::Deployer,
             }
         }
     }

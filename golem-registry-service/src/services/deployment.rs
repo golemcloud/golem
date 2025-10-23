@@ -19,7 +19,7 @@ use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use crate::{
     services::environment::{EnvironmentError, EnvironmentService},
 };
-use golem_common::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::EnvironmentAction;
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision};
 use golem_common::{
     SafeDisplay, error_forwarding,

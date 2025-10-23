@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use axum::http::header;
-use golem_common::model::auth::{AccountAction, AccountRole, EnvironmentAction, EnvironmentRole, GlobalAction, PlanAction, TokenSecret};
+use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
 use poem::Request;
@@ -143,6 +143,60 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum GlobalAction {
+    CreateAccount,
+    GetDefaultPlan,
+    GetReports,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum PlanAction {
+    ViewPlan,
+    CreateOrUpdatePlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum AccountAction {
+    CreateApplication,
+    CreateEnvironment,
+    CreateKnownSecret,
+    CreateToken,
+    DeleteAccount,
+    DeleteApplication,
+    DeletePlugin,
+    DeleteToken,
+    ListAllApplicationEnvironments,
+    RegisterPlugin,
+    SetRoles,
+    UpdateAccount,
+    UpdateApplication,
+    UpdateUsage,
+    ViewAccount,
+    ViewApplications,
+    ViewPlugin,
+    ViewToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum EnvironmentAction {
+    CreateComponent,
+    CreateEnvironmentPluginGrant,
+    CreateShare,
+    DeleteEnvironment,
+    DeleteEnvironmentPluginGrant,
+    DeleteShare,
+    DeployEnvironment,
+    UpdateComponent,
+    UpdateEnvironment,
+    UpdateShare,
+    ViewComponent,
+    ViewDeployment,
+    ViewDeploymentPlan,
+    ViewEnvironment,
+    ViewEnvironmentPluginGrant,
+    ViewShares,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorizationError {
@@ -395,7 +449,7 @@ mod protobuf {
             Ok(Self {
                 account_id: value.account_id.ok_or("missing account id")?.try_into()?,
                 account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
-                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar).map_err(|e| format!("Failed connverting account role: {e}")).map(AccountRole::from)).collect::<Result<_, _>>()?
+                account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar).map_err(|e| format!("Failed converting account role: {e}")).map(AccountRole::from)).collect::<Result<_, _>>()?
             })
         }
     }

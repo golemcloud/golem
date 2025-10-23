@@ -25,8 +25,9 @@ use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_wasm::analysis::AnalysedType;
 use rib::FunctionName;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
+use golem_common::model::auth::EnvironmentRole;
 
 #[derive(Debug, Clone)]
 pub struct NewComponentRevision {
@@ -134,6 +135,7 @@ pub struct Component {
     pub environment_id: EnvironmentId,
     pub application_id: ApplicationId,
     pub account_id: AccountId,
+    pub environment_roles_from_shares: HashSet<EnvironmentRole>,
     pub component_name: ComponentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
@@ -190,6 +192,7 @@ impl From<Component> for golem_common::model::component::ComponentDto {
             installed_plugins: value.installed_plugins,
             env: value.env,
             wasm_hash: value.wasm_hash,
+            environment_roles_from_shares: value.environment_roles_from_shares
         }
     }
 }

@@ -20,7 +20,7 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::environment_plugin_grant::{
     EnvironmentPluginGrantRecord, EnvironmentPluginGrantRepoError,
 };
-use golem_common::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::EnvironmentAction;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::{
     EnvironmentPluginGrant, EnvironmentPluginGrantCreation, EnvironmentPluginGrantId,

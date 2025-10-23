@@ -19,7 +19,7 @@ use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::PluginRecord;
 use crate::repo::plugin::PluginRepo;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::AccountAction;
+use golem_service_base::model::auth::AccountAction;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };

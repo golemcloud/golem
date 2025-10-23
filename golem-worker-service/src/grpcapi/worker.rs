@@ -56,8 +56,7 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string,
     proto_worker_id_string,
 };
-use golem_common::model::auth::AuthCtx;
-use golem_common::model::auth::ProjectAction;
+use golem_service_base::model::auth::AuthCtx;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::{ScanCursor, WorkerFilter, WorkerId};

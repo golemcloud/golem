@@ -19,7 +19,7 @@ use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::{AccountAction, EnvironmentAction};
+use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };

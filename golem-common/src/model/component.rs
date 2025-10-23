@@ -35,6 +35,8 @@ use std::str::FromStr;
 use strum_macros::FromRepr;
 use typed_path::Utf8UnixPathBuf;
 use uuid::Uuid;
+use std::collections::HashSet;
+use super::auth::EnvironmentRole;
 
 newtype_uuid!(
     ComponentId,
@@ -136,6 +138,7 @@ declare_structs! {
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub wasm_hash: crate::model::diff::Hash,
+        pub environment_roles_from_shares: HashSet<EnvironmentRole>
     }
 
     #[derive(Default)]
@@ -351,6 +354,7 @@ mod protobuf {
     use applying::Apply;
     use std::collections::BTreeMap;
     use std::time::SystemTime;
+    use crate::model::auth::EnvironmentRole;
 
     impl From<InstalledPlugin> for golem_api_grpc::proto::golem::component::PluginInstallation {
         fn from(value: InstalledPlugin) -> Self {
@@ -453,6 +457,16 @@ mod protobuf {
                 .map_err(|e| format!("Invalid wasm hash bytes: {e}"))?
                 .apply(crate::model::diff::Hash::from);
 
+            let environment_roles_from_shares = value
+                .environment_roles_from_shares
+                .into_iter()
+                .map(|ar|
+                    golem_api_grpc::proto::golem::auth::EnvironmentRole::try_from(ar)
+                        .map_err(|e| format!("Failed converting environment role: {e}"))
+                        .map(EnvironmentRole::from)
+                )
+                .collect::<Result<_, _>>()?;
+
             Ok(Self {
                 id,
                 revision,
@@ -468,6 +482,7 @@ mod protobuf {
                 installed_plugins,
                 env,
                 wasm_hash,
+                environment_roles_from_shares
             })
         }
     }

@@ -22,7 +22,7 @@ use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
     ApplicationUpdate,
 };
-use golem_common::model::auth::AccountAction;
+use golem_service_base::model::auth::{AccountAction, GlobalAction};
 use golem_common::{SafeDisplay, error_forwarding};
 use std::fmt::Debug;
 use std::sync::Arc;

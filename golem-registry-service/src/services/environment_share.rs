@@ -20,7 +20,7 @@ use crate::repo::model::environment_share::{
     EnvironmentShareRepoError, EnvironmentShareRevisionRecord,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::EnvironmentAction;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::environment_share::{
     EnvironmentShare, EnvironmentShareCreation, EnvironmentShareId, EnvironmentShareUpdate,
