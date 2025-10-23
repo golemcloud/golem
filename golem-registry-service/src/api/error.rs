@@ -98,7 +98,7 @@ impl ApiErrorDetails for ApiError {
             ApiError::InternalError(inner) => inner.cause.take(),
             ApiError::Forbidden(inner) => inner.cause.take(),
             ApiError::Conflict(inner) => inner.cause.take(),
-            ApiError::LimitExceeded(inner) => inner.cause.take(),
+            Self::LimitExceeded(inner) => inner.cause.take(),
         }
     }
 }

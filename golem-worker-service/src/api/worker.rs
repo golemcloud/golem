@@ -226,7 +226,7 @@ impl WorkerApi {
                 idempotency_key.0,
                 function.0,
                 params.0,
-                &auth,
+                auth,
             )
             .instrument(record.span.clone())
             .await;
@@ -1042,7 +1042,7 @@ impl WorkerApi {
         auth.authorize_environment_action(&component.account_id, &component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
 
         self.worker_service
-            .activate_plugin(&worker_id, &plugin_priority, component.environment_id, auth)
+            .activate_plugin(&worker_id, plugin_priority, component.environment_id, auth)
             .await?;
 
         Ok(Json(ActivatePluginResponse {}))
@@ -1244,7 +1244,7 @@ impl WorkerApi {
         worker_name: String,
         token: TokenSecret,
     ) -> Result<(WorkerId, ConnectWorkerStream)> {
-        let auth = self.auth_service.authenticate_token(token.secret()).await?;
+        let auth = self.auth_service.authenticate_token(token).await?;
 
         let worker_id = self
             .normalize_worker_id(component_id, worker_name.as_str(), &auth)
@@ -1294,6 +1294,7 @@ impl WorkerApi {
                         &component_id,
                         error.to_safe_string()
                     ),
+                    cause: None
                 }))
             })?;
 

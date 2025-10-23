@@ -61,12 +61,12 @@ static DB_MIGRATIONS: Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration");
 pub struct RunDetails {
     pub http_port: u16,
     pub grpc_port: u16,
-    pub custom_request_port: u16,
+    // pub custom_request_port: u16,
 }
 
 pub struct TrafficReadyEndpoints {
     pub grpc_port: u16,
-    pub custom_request_port: u16,
+    // pub custom_request_port: u16,
     pub api_endpoint: BoxEndpoint<'static>,
 }
 
@@ -114,17 +114,17 @@ impl WorkerService {
     ) -> anyhow::Result<RunDetails> {
         let grpc_port = self.start_grpc_server(join_set).await?;
         let http_port = self.start_http_server(join_set).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set).await?;
+        // let custom_request_port = self.start_api_gateway_server(join_set).await?;
 
-        info!(
-            "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
-            http_port, grpc_port, custom_request_port
-        );
+        // info!(
+        //     "Started worker service on ports: http: {}, grpc: {}, gateway: {}",
+        //     http_port, grpc_port, custom_request_port
+        // );
 
         Ok(RunDetails {
             http_port,
             grpc_port,
-            custom_request_port,
+            // custom_request_port,
         })
     }
 
@@ -134,12 +134,12 @@ impl WorkerService {
         join_set: &mut JoinSet<Result<(), anyhow::Error>>,
     ) -> Result<TrafficReadyEndpoints, anyhow::Error> {
         let grpc_port = self.start_grpc_server(join_set).await?;
-        let custom_request_port = self.start_api_gateway_server(join_set).await?;
+        // let custom_request_port = self.start_api_gateway_server(join_set).await?;
         let api_endpoint = api::make_open_api_service(&self.services).boxed();
         Ok(TrafficReadyEndpoints {
             grpc_port,
             api_endpoint,
-            custom_request_port,
+            // custom_request_port,
         })
     }
 

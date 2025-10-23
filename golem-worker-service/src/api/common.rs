@@ -34,6 +34,7 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use poem_openapi::payload::Json;
 use poem_openapi::ApiResponse;
 use serde::{Deserialize, Serialize};
+use golem_service_base::model::auth::AuthorizationError;
 
 /// Detail in case the error was caused by the worker failing
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, poem_openapi::Object)]
@@ -52,7 +53,7 @@ pub struct ErrorBodyWithOptionalWorkerError {
     pub worker_error: Option<WorkerErrorDetails>,
 }
 
-#[derive(ApiResponse, Debug, Clone)]
+#[derive(ApiResponse, Debug)]
 pub enum ApiEndpointError {
     #[oai(status = 400)]
     BadRequest(Json<ErrorsBody>),
@@ -73,25 +74,37 @@ pub enum ApiEndpointError {
 impl ApiErrorDetails for ApiEndpointError {
     fn trace_error_kind(&self) -> &'static str {
         match &self {
-            ApiEndpointError::BadRequest(_) => "BadRequest",
-            ApiEndpointError::NotFound(_) => "NotFound",
-            ApiEndpointError::AlreadyExists(_) => "AlreadyExists",
-            ApiEndpointError::LimitExceeded(_) => "LimitExceeded",
-            ApiEndpointError::Forbidden(_) => "Forbidden",
-            ApiEndpointError::Unauthorized(_) => "Unauthorized",
-            ApiEndpointError::InternalError(_) => "InternalError",
+            Self::BadRequest(_) => "BadRequest",
+            Self::NotFound(_) => "NotFound",
+            Self::AlreadyExists(_) => "AlreadyExists",
+            Self::LimitExceeded(_) => "LimitExceeded",
+            Self::Forbidden(_) => "Forbidden",
+            Self::Unauthorized(_) => "Unauthorized",
+            Self::InternalError(_) => "InternalError",
         }
     }
 
     fn is_expected(&self) -> bool {
         match &self {
-            ApiEndpointError::BadRequest(_) => true,
-            ApiEndpointError::NotFound(_) => true,
-            ApiEndpointError::AlreadyExists(_) => true,
-            ApiEndpointError::LimitExceeded(_) => true,
-            ApiEndpointError::Forbidden(_) => true,
-            ApiEndpointError::Unauthorized(_) => true,
-            ApiEndpointError::InternalError(_) => false,
+            Self::BadRequest(_) => true,
+            Self::NotFound(_) => true,
+            Self::AlreadyExists(_) => true,
+            Self::LimitExceeded(_) => true,
+            Self::Forbidden(_) => true,
+            Self::Unauthorized(_) => true,
+            Self::InternalError(_) => false,
+        }
+    }
+
+    fn take_cause(&mut self) -> Option<anyhow::Error> {
+        match self {
+            Self::BadRequest(inner) => inner.cause.take(),
+            Self::NotFound(inner) => inner.cause.take(),
+            Self::Unauthorized(inner) => inner.cause.take(),
+            Self::InternalError(_) => None,
+            Self::Forbidden(inner) => inner.cause.take(),
+            Self::LimitExceeded(inner) => inner.cause.take(),
+            Self::AlreadyExists(inner) => inner.cause.take()
         }
     }
 }
@@ -100,12 +113,14 @@ impl ApiEndpointError {
     pub fn unauthorized<T: SafeDisplay>(error: T) -> Self {
         Self::Unauthorized(Json(ErrorBody {
             error: error.to_safe_string(),
+            cause: None,
         }))
     }
 
     pub fn forbidden<T: SafeDisplay>(error: T) -> Self {
         Self::Forbidden(Json(ErrorBody {
             error: error.to_safe_string(),
+            cause: None,
         }))
     }
 
@@ -119,24 +134,28 @@ impl ApiEndpointError {
     pub fn bad_request<T: SafeDisplay>(error: T) -> Self {
         Self::BadRequest(Json(ErrorsBody {
             errors: vec![error.to_safe_string()],
+            cause: None,
         }))
     }
 
     pub fn not_found<T: SafeDisplay>(error: T) -> Self {
         Self::NotFound(Json(ErrorBody {
             error: error.to_safe_string(),
+            cause: None,
         }))
     }
 
     pub fn already_exists<T: SafeDisplay>(error: T) -> Self {
         Self::AlreadyExists(Json(ErrorBody {
             error: error.to_safe_string(),
+            cause: None,
         }))
     }
 
     pub fn limit_exceeded<T: SafeDisplay>(error: T) -> Self {
         Self::LimitExceeded(Json(ErrorBody {
             error: error.to_safe_string(),
+            cause: None,
         }))
     }
 }
@@ -225,6 +244,15 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             }
             _ => Self::internal(error),
         }
+    }
+}
+
+impl From<AuthorizationError> for ApiEndpointError {
+    fn from(value: AuthorizationError) -> Self {
+        Self::Forbidden(Json(ErrorBody {
+            error: value.to_string(),
+            cause: None,
+        }))
     }
 }
 
