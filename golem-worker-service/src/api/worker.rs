@@ -26,14 +26,14 @@ use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
 use golem_common::model::worker::WorkerCreationRequest;
-use golem_common::model::component::{ComponentFilePath, ComponentId, ComponentRevision, PluginPriority};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId, ComponentRevision, PluginPriority};
 use golem_common::model::{
     IdempotencyKey,
     ScanCursor, WorkerFilter, WorkerId,
 };
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
-use golem_service_base::model::auth::{AuthCtx, GolemSecurityScheme, WrappedGolemSecuritySchema};
+use golem_service_base::model::auth::{AuthCtx, EnvironmentAction, GolemSecurityScheme, WrappedGolemSecuritySchema};
 use golem_service_base::model::*;
 use poem::web::websocket::{BoxWebSocketUpgraded, WebSocket};
 use poem::Body;
@@ -120,20 +120,17 @@ impl WorkerApi {
             wasi_config_vars,
         } = request;
 
-        let (worker_id, component_version) = self
+        let (worker_id, component) = self
             .normalize_worker_id_by_latest_version(component_id, &name, &auth)
             .await?;
 
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::CreateWorker, &auth)
-            .await?;
+        auth.authorize_environment_action(&component.account_id, &component.environment_roles_from_shares, EnvironmentAction::CreateWorker)?;
 
         let _worker = self
             .worker_service
             .create(
                 &worker_id,
-                component_version,
+                component.revision,
                 args,
                 env,
                 wasi_config_vars.into(),
@@ -1286,7 +1283,7 @@ impl WorkerApi {
         component_id: ComponentId,
         worker_id: &str,
         auth: &AuthCtx,
-    ) -> Result<(WorkerId, ComponentRevision)> {
+    ) -> Result<(WorkerId, ComponentDto)> {
         let latest_component = self
             .component_service
             .get_latest_by_id(&component_id, auth)
@@ -1301,8 +1298,8 @@ impl WorkerApi {
                 }))
             })?;
 
-        validated_worker_id(component_id, &latest_component.metadata, worker_id)
-            .map(|id| (id, latest_component.versioned_component_id.version))
+        let worker_id = validated_worker_id(component_id, &latest_component.metadata, worker_id)?;
+        Ok((worker_id, latest_component))
     }
 
     // TODO: ideally we should not use metadata at all here, and instead we should use
