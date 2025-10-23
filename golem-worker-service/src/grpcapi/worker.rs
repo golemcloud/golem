@@ -788,6 +788,7 @@ impl WorkerGrpcApi {
             .auth_service
             .is_authorized_by_component(&worker_id.component_id, ProjectAction::CreateWorker, &auth)
             .await?;
+
         let worker = self
             .worker_service
             .create(
