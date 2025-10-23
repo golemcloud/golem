@@ -36,7 +36,7 @@ use crate::golem_agentic::exports::golem::agent::guest::{AgentType, DataValue};
 //  impl WeatherAgent for MyWeatherAgent {fn get_weather(&self, location: String) -> String } }
 //  ```
 // There is no need to implement `Agent` anywhere, as it is automatically implemented by the `[agent_implementation]` attribute.
-pub trait Agent: Send + Sync {
+pub trait Agent {
     fn get_id(&self) -> String;
     fn invoke(&self, method_name: String, input: DataValue) -> DataValue;
     fn get_definition(&self) -> AgentType;

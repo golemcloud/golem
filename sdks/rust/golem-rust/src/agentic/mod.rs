@@ -12,13 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_wasm_rpc::AgentId;
+
 mod agent;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
 mod agent_type_name;
 
-#[derive(Clone)]
 pub struct ResolvedAgent {
-    pub agent: ::std::sync::Arc<dyn agent::Agent + Send + Sync>,
+    pub agent: Box<dyn agent::Agent>,
+    pub id: AgentId,
 }

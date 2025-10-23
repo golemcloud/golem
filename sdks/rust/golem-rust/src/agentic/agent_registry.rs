@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    agentic::{agent_initiator::AgentInitiator, agent_type_name::AgentTypeName},
+    agentic::{agent_initiator::AgentInitiator, agent_type_name::AgentTypeName, ResolvedAgent},
     golem_agentic::exports::golem::agent::guest::AgentType,
 };
 
@@ -23,6 +23,6 @@ pub fn get_agent_initiator(
 }
 
 // At any point, there should be only one active agent instance
-pub fn get_agent_instance() -> Option<Arc<crate::agentic::ResolvedAgent>> {
+pub fn get_agent_instance() -> Option<ResolvedAgent> {
     todo!("Unimplemented function to get the active agent instance")
 }

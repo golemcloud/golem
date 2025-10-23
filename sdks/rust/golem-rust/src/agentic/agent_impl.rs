@@ -51,10 +51,16 @@ impl Guest for Component {
             agent.initiate(input);
             Ok(())
         } else {
-            panic!(
-                "No agent implementation found for agent definition: {}",
-                agent_type.type_name
-            );
+            Err(AgentError::CustomError(
+                golem_wasm_rpc::ValueAndType::new(
+                    golem_wasm_rpc::Value::String(format!(
+                        "No agent implementation found for agent definition: {}",
+                        agent_type.type_name
+                    )),
+                    str(),
+                )
+                .into(),
+            ))
         }
     }
 
