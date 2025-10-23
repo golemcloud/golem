@@ -448,7 +448,7 @@ fn has_any_role<T: Eq + Hash>(roles: &HashSet<T>, allowed: &[T]) -> bool {
 }
 
 mod protobuf {
-    use super::{UserAuthCtx};
+    use super::{UserAuthCtx, AuthCtx};
     use golem_common::model::auth::AccountRole;
 
     impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
@@ -468,6 +468,26 @@ mod protobuf {
                 account_id: Some(value.account_id.into()),
                 plan_id: Some(value.account_plan_id.into()),
                 account_roles: value.account_roles.into_iter().map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar) as i32).collect()
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for AuthCtx {
+        type Error = String;
+        fn try_from(value: golem_api_grpc::proto::golem::auth::AuthCtx) -> Result<Self, Self::Error> {
+            match value.value {
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(_)) => Ok(AuthCtx::System),
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => Ok(AuthCtx::User(user.try_into()?)),
+                None => Err("No auth_ctx value present".to_string())
+            }
+        }
+    }
+
+    impl From<AuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
+        fn from(value: AuthCtx) -> Self {
+            match value {
+                AuthCtx::System => Self { value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(golem_api_grpc::proto::golem::common::Empty {})) },
+                AuthCtx::User(user) => Self { value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user.into())) }
             }
         }
     }

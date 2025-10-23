@@ -32,9 +32,10 @@ use rib::{ParsedFunctionName, ParsedFunctionSite};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use tracing::warn;
+use golem_service_base::model::auth::AuthCtx;
 
 pub trait CanStartWorker {
-    fn account_id(&self) -> Result<AccountId, WorkerExecutorError>;
+    fn component_account_id(&self) -> Result<AccountId, WorkerExecutorError>;
     fn account_limits(&self) -> Option<GrpcResourceLimits>;
     fn environment_id(&self) -> Result<EnvironmentId, WorkerExecutorError>;
     fn worker_id(&self) -> Result<WorkerId, WorkerExecutorError>;
@@ -45,6 +46,7 @@ pub trait CanStartWorker {
     fn maybe_invocation_context(&self) -> Option<InvocationContextStack> {
         None
     }
+    fn auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError>;
 }
 
 pub trait GrpcInvokeRequest: CanStartWorker {
@@ -58,7 +60,7 @@ pub trait GrpcInvokeRequest: CanStartWorker {
 }
 
 trait ProtobufInvocationDetails {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId>;
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId>;
     fn proto_account_limits(&self)
         -> &Option<golem_api_grpc::proto::golem::common::ResourceLimits>;
     fn proto_worker_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::WorkerId>;
@@ -66,11 +68,14 @@ trait ProtobufInvocationDetails {
     fn proto_invocation_context(
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext>;
+    fn proto_auth_ctx(
+        &self
+    ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx>;
 }
 
 impl<T: ProtobufInvocationDetails> CanStartWorker for T {
-    fn account_id(&self) -> Result<AccountId, WorkerExecutorError> {
-        (*self.proto_account_id())
+    fn component_account_id(&self) -> Result<AccountId, WorkerExecutorError> {
+        (*self.proto_component_account_id())
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
             .try_into()
             .map_err(|e| WorkerExecutorError::unknown(format!("Invalid account id from grpc: {e}")))
@@ -130,13 +135,22 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
                 .and_then(|worker_id| worker_id.clone().try_into().ok())
         })
     }
+
+    fn auth_ctx(&self) -> Result<AuthCtx, WorkerExecutorError> {
+        self
+            .proto_auth_ctx()
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)
+    }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileSystemNodeRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
+        &self.component_owner_account_id
     }
 
     fn proto_account_limits(
@@ -157,14 +171,20 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &None
+    }
+
+    fn proto_auth_ctx(
+            &self
+        ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::GetFileContentsRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
+        &self.component_owner_account_id
     }
 
     fn proto_account_limits(
@@ -186,13 +206,19 @@ impl ProtobufInvocationDetails
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &None
     }
+
+    fn proto_auth_ctx(
+            &self
+        ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
+    }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeWorkerRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
+        &self.component_owner_account_id
     }
 
     fn proto_account_limits(
@@ -213,14 +239,20 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(
+            &self
+        ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAndAwaitWorkerRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
+        &self.component_owner_account_id
     }
 
     fn proto_account_limits(
@@ -241,14 +273,20 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(
+            &self
+        ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeAndAwaitWorkerJsonRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
+        &self.component_owner_account_id
     }
 
     fn proto_account_limits(
@@ -269,6 +307,12 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(
+            &self
+        ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 
@@ -296,8 +340,8 @@ impl GrpcInvokeRequest for golem_api_grpc::proto::golem::workerexecutor::v1::Inv
 impl ProtobufInvocationDetails
     for golem_api_grpc::proto::golem::workerexecutor::v1::InvokeJsonWorkerRequest
 {
-    fn proto_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
-        &self.account_id
+    fn proto_component_account_id(&self) -> &Option<golem_api_grpc::proto::golem::common::AccountId> {
+        &self.component_owner_account_id
     }
 
     fn proto_account_limits(
@@ -318,6 +362,12 @@ impl ProtobufInvocationDetails
         &self,
     ) -> &Option<golem_api_grpc::proto::golem::worker::InvocationContext> {
         &self.context
+    }
+
+    fn proto_auth_ctx(
+            &self
+        ) -> &Option<golem_api_grpc::proto::golem::auth::AuthCtx> {
+        &self.auth_ctx
     }
 }
 

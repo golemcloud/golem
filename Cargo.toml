@@ -14,7 +14,7 @@ members = [
     "golem-test-framework",
     "golem-shard-manager",
     "golem-worker-executor",
-    "golem-worker-service",
+    # "golem-worker-service",
     "integration-tests",
     "golem-wasm",
     "golem-wasm-derive",
