@@ -58,7 +58,6 @@ use tonic::Code;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::model::auth::AuthCtx;
 use golem_common::model::account::AccountId;
-use golem_api_grpc::proto::golem::auth::AuthCtx;
 
 pub type WorkerResult<T> = Result<T, WorkerServiceError>;
 
@@ -1207,7 +1206,7 @@ impl WorkerService for WorkerServiceDefault {
                 let worker_id = worker_id.clone();
                 Box::pin(worker_executor_client.update_worker(UpdateWorkerRequest {
                     worker_id: Some(worker_id.into()),
-                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode) as i32,
+                    mode: golem_api_grpc::proto::golem::worker::UpdateMode::from(update_mode.clone()) as i32,
                     target_version: target_version.0,
                     environment_id: Some(environment_id.clone().into()),
                     auth_ctx: Some(auth_ctx.clone().into()),

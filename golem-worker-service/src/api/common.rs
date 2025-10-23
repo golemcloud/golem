@@ -171,14 +171,12 @@ impl From<WorkerServiceError> for ApiEndpointError {
                 Self::bad_request(error)
             }
 
-            WorkerServiceError::VersionedComponentIdNotFound(_)
-            | WorkerServiceError::ComponentNotFound(_)
+            WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_) => Self::not_found(error),
 
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
-            WorkerServiceError::Project(inner) => inner.into(),
             WorkerServiceError::InternalCallError(inner) => inner.into(),
             WorkerServiceError::LimitError(inner) => inner.into(),
         }

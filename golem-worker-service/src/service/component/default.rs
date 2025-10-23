@@ -42,7 +42,6 @@ use std::time::Duration;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::component::ComponentRevision;
 
 pub type ComponentResult<T> = Result<T, ComponentServiceError>;
 
