@@ -2781,20 +2781,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dashmap"
-version = "6.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
-dependencies = [
- "cfg-if",
- "crossbeam-utils",
- "hashbrown 0.14.5",
- "lock_api",
- "once_cell",
- "parking_lot_core",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4251,7 +4237,6 @@ dependencies = [
  "chrono",
  "combine",
  "console-subscriber",
- "dashmap",
  "derive_more 2.0.1",
  "figment",
  "fred",
@@ -4340,7 +4325,6 @@ dependencies = [
  "conditional-trait-gen",
  "console-subscriber",
  "darling 0.20.11",
- "dashmap",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -4517,7 +4501,6 @@ dependencies = [
  "bytes 1.10.1",
  "chrono",
  "conditional-trait-gen",
- "dashmap",
  "figment",
  "futures",
  "golem-api-grpc",
@@ -4735,7 +4718,6 @@ dependencies = [
  "cap-std",
  "cap-time-ext",
  "chrono",
- "dashmap",
  "drop-stream",
  "evicting_cache_map",
  "figment",

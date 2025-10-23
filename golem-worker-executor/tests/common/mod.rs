@@ -2,7 +2,6 @@ use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestD
 use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
-use dashmap::DashMap;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
@@ -99,7 +98,7 @@ use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
-use std::ops::Deref;
+use std::ops::{Add, Deref};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
@@ -985,7 +984,7 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<TestWorkerCtx>> {
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
         let extra_deps = AdditionalTestDeps::new();
         let rdbms_service: Arc<dyn rdbms::RdbmsService> = Arc::new(TestRdmsService::new(
             rdbms_service.clone(),
@@ -1127,7 +1126,7 @@ impl TestOplog {
         }
     }
 
-    fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
+    async fn check_oplog_add(&self, entry: &OplogEntry) -> Result<(), String> {
         let entry_name = match entry {
             OplogEntry::BeginRemoteTransaction { .. } => "BeginRemoteTransaction",
             OplogEntry::PreRollbackRemoteTransaction { .. } => "PreRollbackRemoteTransaction",
@@ -1147,18 +1146,23 @@ impl TestOplog {
             let times = &captures[1].parse::<usize>().unwrap_or_default();
             let entry = &captures[2];
             if entry == entry_name {
-                let failed_before = self.additional_test_deps.get_oplog_failures_count(
-                    self.owned_worker_id.worker_id.clone(),
-                    entry_name.to_string(),
-                );
+                let failed_before = self
+                    .additional_test_deps
+                    .get_oplog_failures_count(
+                        self.owned_worker_id.worker_id.clone(),
+                        entry_name.to_string(),
+                    )
+                    .await;
 
                 if failed_before >= *times {
                     Ok(())
                 } else {
-                    self.additional_test_deps.add_oplog_failure(
-                        self.owned_worker_id.worker_id.clone(),
-                        entry_name.to_string(),
-                    );
+                    self.additional_test_deps
+                        .add_oplog_failure(
+                            self.owned_worker_id.worker_id.clone(),
+                            entry_name.to_string(),
+                        )
+                        .await;
 
                     tracing::info!("Failing worker as it hit marked oplog entry");
 
@@ -1183,7 +1187,7 @@ impl Oplog for TestOplog {
     }
 
     async fn add_safe(&self, entry: OplogEntry) -> Result<(), String> {
-        self.check_oplog_add(&entry)?;
+        self.check_oplog_add(&entry).await?;
         self.oplog.add_safe(entry).await
     }
 
@@ -1275,7 +1279,11 @@ impl<T: rdbms::RdbmsType> TestRdms<T> {
         }
     }
 
-    fn check_rdbms_tx(&self, worker_id: &WorkerId, entry_name: &str) -> Result<(), rdbms::Error> {
+    async fn check_rdbms_tx(
+        &self,
+        worker_id: &WorkerId,
+        entry_name: &str,
+    ) -> Result<(), rdbms::Error> {
         // FailRdbmsTx{times}On{entry}
         let re = Regex::new(r"FailRdbmsTx(\d+)On([A-Za-z]+)").unwrap();
 
@@ -1286,13 +1294,15 @@ impl<T: rdbms::RdbmsType> TestRdms<T> {
             if entry == entry_name {
                 let failed_before = self
                     .additional_test_deps
-                    .get_rdbms_tx_failures_count(worker_id.clone(), entry_name.to_string());
+                    .get_rdbms_tx_failures_count(worker_id.clone(), entry_name.to_string())
+                    .await;
 
                 if failed_before >= *times {
                     Ok(())
                 } else {
                     self.additional_test_deps
-                        .add_rdbms_tx_failure(worker_id.clone(), entry_name.to_string());
+                        .add_rdbms_tx_failure(worker_id.clone(), entry_name.to_string())
+                        .await;
                     Err(rdbms::Error::Other(format!(
                         "worker {} failed on {} {} times",
                         worker_name,
@@ -1373,7 +1383,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         key: &RdbmsPoolKey,
         worker_id: &WorkerId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::Error> {
-        self.check_rdbms_tx(worker_id, "BeginTransaction")?;
+        self.check_rdbms_tx(worker_id, "BeginTransaction").await?;
         self.rdbms.begin_transaction(key, worker_id).await
     }
 
@@ -1383,7 +1393,9 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
     ) -> Result<RdbmsTransactionStatus, rdbms::Error> {
-        let r = self.check_rdbms_tx(worker_id, "GetTransactionStatusNotFound");
+        let r = self
+            .check_rdbms_tx(worker_id, "GetTransactionStatusNotFound")
+            .await;
         if r.is_err() {
             Ok(RdbmsTransactionStatus::NotFound)
         } else {
@@ -1400,7 +1412,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
         transaction_id: &TransactionId,
     ) -> Result<(), rdbms::Error> {
-        self.check_rdbms_tx(worker_id, "CleanupTransaction")?;
+        self.check_rdbms_tx(worker_id, "CleanupTransaction").await?;
         self.rdbms
             .deref()
             .cleanup_transaction(key, worker_id, transaction_id)
@@ -1414,53 +1426,62 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
 
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
-    oplog_failures: Arc<DashMap<WorkerId, DashMap<String, usize>>>,
-    rdbms_tx_failures: Arc<DashMap<WorkerId, DashMap<String, usize>>>,
+    oplog_failures: Arc<scc::HashMap<WorkerId, scc::HashMap<String, usize>>>,
+    rdbms_tx_failures: Arc<scc::HashMap<WorkerId, scc::HashMap<String, usize>>>,
 }
 
 impl AdditionalTestDeps {
     pub fn new() -> Self {
-        let oplog_failures = Arc::new(DashMap::new());
-        let rdbms_tx_failures = Arc::new(DashMap::new());
+        let oplog_failures = Arc::new(scc::HashMap::new());
+        let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
             oplog_failures,
             rdbms_tx_failures,
         }
     }
 
-    pub fn get_oplog_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
-        let v = self
+    pub async fn get_oplog_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
+        let inner = self.oplog_failures.get_async(&worker_id).await;
+        if let Some(inner) = inner {
+            inner
+                .read_async(&entry, |_, v| *v)
+                .await
+                .unwrap_or_default()
+        } else {
+            0
+        }
+    }
+
+    pub async fn add_oplog_failure(&self, worker_id: WorkerId, entry: String) {
+        let inner = self
             .oplog_failures
-            .get(&worker_id)
-            .and_then(|v| v.get(&entry).map(|v| *v.value()));
-        v.unwrap_or_default()
+            .entry_async(worker_id)
+            .await
+            .or_default();
+
+        let _ = inner.entry_async(entry).await.or_default().get_mut().add(1);
     }
 
-    pub fn add_oplog_failure(&self, worker_id: WorkerId, entry: String) {
-        *self
-            .oplog_failures
-            .entry(worker_id)
-            .or_default()
-            .entry(entry)
-            .or_default()
-            .value_mut() += 1;
+    pub async fn get_rdbms_tx_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
+        let inner = self.rdbms_tx_failures.get_async(&worker_id).await;
+
+        if let Some(inner) = inner {
+            inner
+                .read_async(&entry, |_, v| *v)
+                .await
+                .unwrap_or_default()
+        } else {
+            0
+        }
     }
 
-    pub fn get_rdbms_tx_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
-        let v = self
+    pub async fn add_rdbms_tx_failure(&self, worker_id: WorkerId, entry: String) {
+        let inner = self
             .rdbms_tx_failures
-            .get(&worker_id)
-            .and_then(|v| v.get(&entry).map(|v| *v.value()));
-        v.unwrap_or_default()
-    }
+            .entry_async(worker_id)
+            .await
+            .or_default();
 
-    pub fn add_rdbms_tx_failure(&self, worker_id: WorkerId, entry: String) {
-        *self
-            .rdbms_tx_failures
-            .entry(worker_id)
-            .or_default()
-            .entry(entry)
-            .or_default()
-            .value_mut() += 1;
+        let _ = inner.entry_async(entry).await.or_default().get_mut().add(1);
     }
 }

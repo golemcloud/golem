@@ -153,7 +153,6 @@ convert_case = "0.8.0"
 criterion = "0.5"
 crossterm = "0.28.1"
 darling = "0.20.11"
-dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dir-diff = "0.3.3"
 dirs = "4.0.0"

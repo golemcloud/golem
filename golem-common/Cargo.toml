@@ -28,7 +28,6 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 combine = { workspace = true }
 console-subscriber = { workspace = true }
-dashmap = { workspace = true }
 derive_more = { workspace = true }
 figment = { workspace = true }
 fred = { workspace = true }
