@@ -56,7 +56,7 @@ use golem_common::grpc::{
     proto_invocation_context_parent_worker_id_string,
     proto_worker_id_string,
 };
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{AuthCtx, EnvironmentAction};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::{ScanCursor, WorkerFilter, WorkerId};
@@ -885,6 +885,10 @@ impl WorkerGrpcApi {
                 })?),
                 _ => None,
             };
+
+        let component = self.component_service.get_latest_by_id(&component_id, &auth).await?;
+
+        auth.authorize_environment_action(&component.account_id, &component.environment_roles_from_shares, EnvironmentAction::ViewWorker)?;
 
         let namespace = self
             .auth_service

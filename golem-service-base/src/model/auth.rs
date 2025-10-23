@@ -183,19 +183,23 @@ pub enum EnvironmentAction {
     CreateComponent,
     CreateEnvironmentPluginGrant,
     CreateShare,
+    CreateWorker,
     DeleteEnvironment,
     DeleteEnvironmentPluginGrant,
     DeleteShare,
+    DeleteWorker,
     DeployEnvironment,
     UpdateComponent,
     UpdateEnvironment,
     UpdateShare,
+    UpdateWorker,
     ViewComponent,
     ViewDeployment,
     ViewDeploymentPlan,
     ViewEnvironment,
     ViewEnvironmentPluginGrant,
     ViewShares,
+    ViewWorker,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -425,6 +429,10 @@ impl AuthCtx {
                     EnvironmentRole::Viewer,
                 ],
             ),
+            EnvironmentAction::CreateWorker => todo!(),
+            EnvironmentAction::DeleteWorker => todo!(),
+            EnvironmentAction::ViewWorker => todo!(),
+            EnvironmentAction::UpdateWorker => todo!()
         };
 
         if !is_allowed {
