@@ -135,13 +135,15 @@ impl WorkerApi {
                 env,
                 wasi_config_vars.into(),
                 false,
-                namespace,
+                auth.account_id(),
+                component.environment_id,
+                auth,
             )
             .await?;
 
         Ok(Json(WorkerCreationResponse {
             worker_id,
-            component_version,
+            component_version: component.revision,
         }))
     }
 
@@ -181,11 +183,11 @@ impl WorkerApi {
         worker_id: WorkerId,
         auth: &AuthCtx,
     ) -> Result<Json<DeleteWorkerResponse>> {
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(&worker_id.component_id, ProjectAction::DeleteWorker, auth)
-            .await?;
-        self.worker_service.delete(&worker_id, namespace).await?;
+        let component = self.component_service.get_latest_by_id(&worker_id.component_id, &auth).await?;
+
+        auth.authorize_environment_action(&component.account_id, &component.environment_roles_from_shares, EnvironmentAction::DeleteWorker)?;
+
+        self.worker_service.delete(&worker_id, component.environment_id, &component.account_id, auth).await?;
         Ok(Json(DeleteWorkerResponse {}))
     }
 
@@ -239,16 +241,11 @@ impl WorkerApi {
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         params: InvokeParameters,
-        auth: &AuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<InvokeResult>> {
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(
-                &target_worker_id.component_id,
-                ProjectAction::UpdateWorker,
-                auth,
-            )
-            .await?;
+        let component = self.component_service.get_latest_by_id(&target_worker_id.component_id, &auth).await?;
+
+        auth.authorize_environment_action(&component.account_id, &component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
@@ -262,7 +259,9 @@ impl WorkerApi {
                     function,
                     vals,
                     None,
-                    namespace,
+                    component.environment_id,
+                    component.account_id,
+                    auth,
                 )
             }
             InvocationParameters::RawJsonStrings(jsons) => {
@@ -272,7 +271,9 @@ impl WorkerApi {
                     function,
                     jsons,
                     None,
-                    namespace,
+                    component.environment_id,
+                    component.account_id,
+                    auth,
                 )
             }
         }
@@ -313,7 +314,7 @@ impl WorkerApi {
         );
 
         let response = self
-            .invoke_function_internal(worker_id, idempotency_key.0, function.0, params.0, &auth)
+            .invoke_function_internal(worker_id, idempotency_key.0, function.0, params.0, auth)
             .instrument(record.span.clone())
             .await;
 
@@ -326,16 +327,11 @@ impl WorkerApi {
         idempotency_key: Option<IdempotencyKey>,
         function: String,
         params: InvokeParameters,
-        auth: &AuthCtx,
+        auth: AuthCtx,
     ) -> Result<Json<InvokeResponse>> {
-        let namespace = self
-            .worker_auth_service
-            .is_authorized_by_component(
-                &target_worker_id.component_id,
-                ProjectAction::UpdateWorker,
-                auth,
-            )
-            .await?;
+        let component = self.component_service.get_latest_by_id(&target_worker_id.component_id, &auth).await?;
+
+        auth.authorize_environment_action(&component.account_id, &component.environment_roles_from_shares, EnvironmentAction::UpdateWorker)?;
 
         let params =
             InvocationParameters::from_optionally_type_annotated_value_jsons(params.params)
@@ -348,7 +344,9 @@ impl WorkerApi {
                 function,
                 vals,
                 None,
-                namespace,
+                component.environment_id,
+                component.account_id,
+                auth,
             ),
             InvocationParameters::RawJsonStrings(jsons) => self.worker_service.invoke_json(
                 &target_worker_id,
