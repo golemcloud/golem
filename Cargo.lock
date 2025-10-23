@@ -4774,6 +4774,7 @@ dependencies = [
  "redis",
  "regex",
  "ringbuf",
+ "scc",
  "serde",
  "serde_json",
  "sqlx",

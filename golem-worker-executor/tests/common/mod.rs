@@ -1316,15 +1316,15 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         address: &str,
         worker_id: &WorkerId,
     ) -> Result<RdbmsPoolKey, rdbms::Error> {
-        self.rdbms.deref().create(address, worker_id).await
+        self.rdbms.create(address, worker_id).await
     }
 
-    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
-        self.rdbms.deref().exists(key, worker_id)
+    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+        self.rdbms.exists(key, worker_id).await
     }
 
-    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
-        self.rdbms.deref().remove(key, worker_id)
+    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+        self.rdbms.remove(key, worker_id).await
     }
 
     async fn execute(
@@ -1337,10 +1337,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        self.rdbms
-            .deref()
-            .execute(key, worker_id, statement, params)
-            .await
+        self.rdbms.execute(key, worker_id, statement, params).await
     }
 
     async fn query_stream(
@@ -1354,7 +1351,6 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         <T as RdbmsType>::DbValue: 'async_trait,
     {
         self.rdbms
-            .deref()
             .query_stream(key, worker_id, statement, params)
             .await
     }
@@ -1369,10 +1365,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
     where
         <T as RdbmsType>::DbValue: 'async_trait,
     {
-        self.rdbms
-            .deref()
-            .query(key, worker_id, statement, params)
-            .await
+        self.rdbms.query(key, worker_id, statement, params).await
     }
 
     async fn begin_transaction(
@@ -1381,7 +1374,7 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
         worker_id: &WorkerId,
     ) -> Result<Arc<dyn DbTransaction<T> + Send + Sync>, rdbms::Error> {
         self.check_rdbms_tx(worker_id, "BeginTransaction")?;
-        self.rdbms.deref().begin_transaction(key, worker_id).await
+        self.rdbms.begin_transaction(key, worker_id).await
     }
 
     async fn get_transaction_status(
@@ -1414,8 +1407,8 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
             .await
     }
 
-    fn status(&self) -> RdbmsStatus {
-        self.rdbms.deref().status()
+    async fn status(&self) -> RdbmsStatus {
+        self.rdbms.status().await
     }
 }
 
