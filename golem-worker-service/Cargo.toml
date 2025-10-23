@@ -9,17 +9,16 @@ description = "Golem Worker Service including API Gateway functionalities"
 
 license-file = "../LICENSE"
 
+autotests = false
+
 [[bin]]
 name = "golem-worker-service"
 path = "src/server.rs"
-harness = false
 test = false
 
 [lib]
 path = "src/lib.rs"
 harness = false
-
-autotests = false
 
 # [[test]]
 # name = "services_tests"
@@ -36,9 +35,9 @@ autotests = false
 # path = "tests/api_gateway_end_to_end_tests.rs"
 # harness = false
 
-[[bench]]
-name = "tree"
-harness = false
+# [[bench]]
+# name = "tree"
+# harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
