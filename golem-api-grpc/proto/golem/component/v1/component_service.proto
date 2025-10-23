@@ -2,18 +2,19 @@ syntax = "proto3";
 
 package golem.component.v1;
 
-import public "golem/common/plugin_installation_id.proto";
-import public "golem/common/environment.proto";
-import public "golem/common/empty.proto";
-import public "golem/component/agent.proto";
-import public "golem/component/component.proto";
-import public "golem/component/component_type.proto";
-import public "golem/component/dynamic_linked_instance.proto";
-import public "golem/component/v1/component_error.proto";
-import public "golem/component/component_id.proto";
-import public "golem/component/component_constraints.proto";
-import public "golem/component/component_files.proto";
-import public "golem/component/plugin_installation.proto";
+import "golem/common/plugin_installation_id.proto";
+import "golem/common/environment.proto";
+import "golem/common/empty.proto";
+import "golem/component/agent.proto";
+import "golem/component/component.proto";
+import "golem/component/component_type.proto";
+import "golem/component/dynamic_linked_instance.proto";
+import "golem/component/v1/component_error.proto";
+import "golem/component/component_id.proto";
+import "golem/component/component_constraints.proto";
+import "golem/component/component_files.proto";
+import "golem/component/plugin_installation.proto";
+import "golem/auth/auth_ctx.proto";
 
 service ComponentService {
   rpc GetComponents (GetComponentsRequest) returns (GetComponentsResponse);
@@ -34,10 +35,12 @@ service ComponentService {
 
 message CreateComponentConstraintsRequest {
   ComponentConstraints componentConstraints = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message DeleteComponentConstraintsRequest {
   ComponentConstraints componentConstraints = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message CreateComponentConstraintsResponse {
@@ -65,6 +68,7 @@ message DeleteComponentConstraintsSuccessResponse {
 message GetComponentsRequest {
   golem.common.EnvironmentId environment_id = 1;
   optional string component_name = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetComponentsResponse {
@@ -94,6 +98,7 @@ message CreateComponentRequestHeader {
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
   map<string, string> env = 6;
   repeated golem.component.AgentType agent_types = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
 }
 
 message CreateComponentRequestChunk {
@@ -110,6 +115,7 @@ message CreateComponentResponse {
 message DownloadComponentRequest {
   golem.component.ComponentId componentId = 1;
   optional uint64 version = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message DownloadComponentResponse {
@@ -121,11 +127,13 @@ message DownloadComponentResponse {
 
 message GetComponentRequest {
   golem.component.ComponentId componentId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message GetVersionedComponentRequest {
   golem.component.ComponentId componentId = 1;
   uint64 version = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetComponentMetadataAllVersionsResponse {
@@ -152,6 +160,7 @@ message GetComponentSuccessResponse {
 
 message GetLatestComponentRequest {
   golem.component.ComponentId componentId = 1;
+  golem.auth.AuthCtx auth_ctx = 2;
 }
 
 message UpdateComponentRequest {
@@ -171,6 +180,7 @@ message UpdateComponentRequestHeader {
   map<string, golem.component.DynamicLinkedInstance> dynamic_linking = 5;
   map<string, string> env = 6;
   repeated golem.component.AgentType agent_types = 7;
+  golem.auth.AuthCtx auth_ctx = 8;
 }
 
 message UpdateComponentRequestChunk {
@@ -187,6 +197,7 @@ message UpdateComponentResponse {
 message GetInstalledPluginsRequest {
   golem.component.ComponentId componentId = 1;
   optional uint64 version = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message GetInstalledPluginsResponse {
@@ -206,6 +217,7 @@ message InstallPluginRequest {
   string version = 3;
   int32 priority = 4;
   map<string, string> parameters = 5;
+  golem.auth.AuthCtx auth_ctx = 6;
 }
 
 message InstallPluginResponse {
@@ -224,6 +236,7 @@ message UpdateInstalledPluginRequest {
   golem.common.PluginInstallationId installationId = 2;
   int32 updated_priority = 3;
   map<string, string> updated_parameters = 4;
+  golem.auth.AuthCtx auth_ctx = 5;
 }
 
 message UpdateInstalledPluginResponse {
@@ -236,6 +249,7 @@ message UpdateInstalledPluginResponse {
 message UninstallPluginRequest {
   golem.component.ComponentId componentId = 1;
   golem.common.PluginInstallationId installationId = 2;
+  golem.auth.AuthCtx auth_ctx = 3;
 }
 
 message UninstallPluginResponse {

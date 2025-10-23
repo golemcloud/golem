@@ -371,23 +371,23 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: &ComponentId,
         version: ComponentRevision,
-        _auth: &AuthCtx,
+        auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
             "get_component",
             Some(component_id.to_string()),
             &self.retry_config,
-            &(self.client.clone(), component_id.clone(), metadata.clone()),
-            |(client, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), auth_ctx.clone()),
+            |(client, id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get_component_metadata", move |client| {
                             let request = GetVersionedComponentRequest {
                                 component_id: Some(id.clone().into()),
                                 version: version.0,
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
-
                             Box::pin(client.get_component_metadata(request))
                         })
                         .await?
@@ -404,23 +404,22 @@ impl ComponentService for RemoteComponentService {
     async fn get_latest_by_id(
         &self,
         component_id: &ComponentId,
-        metadata: &AuthCtx,
+        auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
             "get_latest",
             Some(component_id.to_string()),
             &self.retry_config,
-            &(self.client.clone(), component_id.clone(), metadata.clone()),
-            |(client, id, metadata)| {
+            &(self.client.clone(), component_id.clone(), auth_ctx.clone()),
+            |(client, id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get_latest_component_metadata", move |client| {
                             let request = GetLatestComponentRequest {
                                 component_id: Some(id.clone().into()),
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
-                            let request = with_metadata(request, metadata.clone());
-
                             Box::pin(client.get_latest_component_metadata(request))
                         })
                         .await?
@@ -437,8 +436,8 @@ impl ComponentService for RemoteComponentService {
     async fn get_latest_by_name(
         &self,
         component_name: &ComponentName,
-        namespace: &Namespace,
-        metadata: &AuthCtx,
+        environment_id: &EnvironmentId,
+        auth_ctx: &AuthCtx,
     ) -> ComponentResult<ComponentDto> {
         with_retries(
             "component",
@@ -448,20 +447,18 @@ impl ComponentService for RemoteComponentService {
             &(
                 self.client.clone(),
                 component_name.0.clone(),
-                namespace.project_id.clone(),
-                metadata.clone(),
+                environment_id.clone(),
+                auth_ctx.clone(),
             ),
-            |(client, name, project_id, metadata)| {
+            |(client, name, environment_id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get_components", move |client| {
                             let request = GetComponentsRequest {
-                                project_id: Some(project_id.clone().into()),
+                                environment_id: Some(environment_id.clone().into()),
                                 component_name: Some(name.clone()),
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
-
-                            let request = with_metadata(request, metadata.clone());
-
                             Box::pin(client.get_components(request))
                         })
                         .await?
@@ -478,8 +475,8 @@ impl ComponentService for RemoteComponentService {
     async fn get_all_by_name(
         &self,
         component_name: &ComponentName,
-        namespace: &Namespace,
-        metadata: &AuthCtx,
+        environment_id: &EnvironmentId,
+        auth_ctx: &AuthCtx,
     ) -> ComponentResult<Vec<ComponentDto>> {
         with_retries(
             "component",
@@ -489,20 +486,18 @@ impl ComponentService for RemoteComponentService {
             &(
                 self.client.clone(),
                 component_name.0.clone(),
-                namespace.project_id.clone(),
-                metadata.clone(),
+                environment_id.clone(),
+                auth_ctx.clone(),
             ),
-            |(client, name, project_id, metadata)| {
+            |(client, name, environment_id, auth_ctx)| {
                 Box::pin(async move {
                     let response = client
                         .call("get_components", move |client| {
                             let request = GetComponentsRequest {
-                                project_id: Some(project_id.clone().into()),
+                                environment_id: Some(environment_id.clone().into()),
                                 component_name: Some(name.clone()),
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
-
-                            let request = with_metadata(request, metadata.clone());
-
                             Box::pin(client.get_components(request))
                         })
                         .await?
@@ -520,7 +515,7 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: &ComponentId,
         constraints: FunctionConstraints,
-        metadata: &AuthCtx,
+        auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints> {
         let constraints_proto = FunctionConstraintCollectionProto::from(constraints);
 
@@ -532,10 +527,10 @@ impl ComponentService for RemoteComponentService {
             &(
                 self.client.clone(),
                 component_id.clone(),
-                metadata.clone(),
+                auth_ctx.clone(),
                 constraints_proto.clone(),
             ),
-            |(client, id, metadata, function_constraints)| {
+            |(client, id, auth_ctx, function_constraints)| {
                 Box::pin(async move {
                     let response = client
                         .call("create_component_constraints", move |client| {
@@ -548,9 +543,8 @@ impl ComponentService for RemoteComponentService {
                                     ),
                                     constraints: Some(function_constraints.clone()),
                                 }),
+                                auth_ctx: Some(auth_ctx.clone().into()),
                             };
-                            let request = with_metadata(request, metadata.clone());
-
                             Box::pin(client.create_component_constraints(request))
                         })
                         .await?
@@ -570,7 +564,7 @@ impl ComponentService for RemoteComponentService {
         &self,
         component_id: &ComponentId,
         constraints: &[FunctionSignature],
-        metadata: &AuthCtx,
+        auth_ctx: &AuthCtx,
     ) -> ComponentResult<FunctionConstraints> {
         let constraint = constraints
             .iter()
@@ -592,10 +586,10 @@ impl ComponentService for RemoteComponentService {
             &(
                 self.client.clone(),
                 component_id.clone(),
-                metadata.clone(),
+                auth_ctx.clone(),
                 constraints_proto.clone(),
             ),
-            |(client, id, metadata, function_constraints)| {
+            |(client, id, auth_ctx, function_constraints)| {
                 Box::pin(async move {
                     let response = client
                         .call("delete_component_constraints", move |client| {
@@ -608,9 +602,8 @@ impl ComponentService for RemoteComponentService {
                                     ),
                                     constraints: Some(function_constraints.clone()),
                                 }),
+                                auth_ctx: Some(auth_ctx.clone().into())
                             };
-                            let request = with_metadata(request, metadata.clone());
-
                             Box::pin(client.delete_component_constraint(request))
                         })
                         .await?

@@ -202,6 +202,7 @@ mod grpc {
     use tonic::codec::CompressionEncoding;
     use tonic::transport::Channel;
     use uuid::Uuid;
+    use golem_service_base::model::auth::AuthCtx;
 
     #[derive(Clone)]
     pub struct PluginsGrpc {
@@ -264,6 +265,7 @@ mod grpc {
                         GetInstalledPluginsRequest {
                             component_id: Some(component_id.clone().into()),
                             version: Some(component_version.0),
+                            auth_ctx: Some(AuthCtx::System.into())
                         },
                         &self.access_token,
                     );

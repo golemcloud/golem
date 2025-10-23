@@ -525,6 +525,7 @@ mod grpc {
     use uuid::Uuid;
     use wasmtime::component::Component;
     use wasmtime::Engine;
+    use golem_service_base::model::auth::AuthCtx;
 
     pub struct ComponentServiceGrpc {
         component_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
@@ -612,6 +613,7 @@ mod grpc {
                                         GetComponentsRequest {
                                             environment_id: Some(environment_id.clone().into()),
                                             component_name: Some(component_name.clone()),
+                                            auth_ctx: Some(AuthCtx::System.into())
                                         },
                                         access_token,
                                     );
@@ -877,6 +879,7 @@ mod grpc {
                                 DownloadComponentRequest {
                                     component_id: Some(component_id.clone().into()),
                                     version: Some(component_version.0),
+                                    auth_ctx: Some(AuthCtx::System.into())
                                 },
                                 access_token,
                             );
@@ -940,6 +943,7 @@ mod grpc {
                                     GetVersionedComponentRequest {
                                         component_id: Some(component_id.clone().into()),
                                         version: component_version.0,
+                                        auth_ctx: Some(AuthCtx::System.into())
                                     },
                                     access_token,
                                 );
@@ -952,6 +956,7 @@ mod grpc {
                                 let request = authorised_grpc_request(
                                     GetLatestComponentRequest {
                                         component_id: Some(component_id.clone().into()),
+                                        auth_ctx: Some(AuthCtx::System.into())
                                     },
                                     access_token,
                                 );
