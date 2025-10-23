@@ -20,6 +20,7 @@ use golem_common::model::WorkerId;
 use golem_service_base::clients::limit::LimitService;
 use std::sync::Arc;
 use tonic::Status;
+use golem_common::model::account::AccountId;
 
 pub struct ConnectWorkerStream {
     stream: WorkerStream<LogEvent>,
@@ -32,13 +33,13 @@ impl ConnectWorkerStream {
     pub fn new(
         stream: WorkerStream<LogEvent>,
         worker_id: WorkerId,
-        namespace: Namespace,
+        account_id: AccountId,
         limit_service: Arc<dyn LimitService + Sync + Send>,
     ) -> Self {
         Self {
             stream,
             worker_id,
-            namespace,
+            account_id,
             limit_service,
         }
     }
