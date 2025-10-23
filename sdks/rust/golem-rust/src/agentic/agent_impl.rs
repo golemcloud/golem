@@ -13,9 +13,11 @@
 // limitations under the License.
 
 use crate::{
-    agentic::{agent_export, agent_registry, agent_type_name::AgentTypeName},
+    agentic::agent_type_name::AgentTypeName,
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
+
+use crate::agentic::agent_registry;
 
 use golem_wasm_ast::analysis::analysed_type::str;
 
@@ -87,4 +89,4 @@ impl Guest for Component {
     }
 }
 
-crate::golem_agentic::export_golem_agentic!(Component with_types_in bindings);
+crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);

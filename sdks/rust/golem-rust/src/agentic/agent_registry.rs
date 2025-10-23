@@ -14,9 +14,12 @@ pub fn get_all_agent_definitions() -> Vec<AgentType> {
 // The registry should hold the initiator instances for each agent type
 // TODO; Implement registration of initiators and retrieval
 pub fn get_agent_initiator(
-    _agent_type_name: &AgentTypeName,
+    agent_type_name: &AgentTypeName,
 ) -> Option<Arc<dyn AgentInitiator + Send + Sync>> {
-    todo!("Unimplemented function to get agent initiator")
+    todo!(
+        "Unimplemented function to get agent initiator of type {}",
+        agent_type_name.0
+    )
 }
 
 // At any point, there should be only one active agent instance

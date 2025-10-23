@@ -13,7 +13,7 @@
 // limitations under the License.
 
 mod agent;
-mod agent_export;
+mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
 mod agent_type_name;

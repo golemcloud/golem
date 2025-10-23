@@ -1,7 +1,4 @@
-use crate::{
-    agentic::ResolvedAgent,
-    golem_agentic::exports::golem::agent::guest::{DataValue, Guest},
-};
+use crate::{agentic::ResolvedAgent, golem_agentic::exports::golem::agent::guest::DataValue};
 
 /**
  * An initiator for an agent implementation.
