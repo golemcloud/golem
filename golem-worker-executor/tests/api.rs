@@ -2070,8 +2070,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
 
-    info!("*** POLL LOOP IS ALIVE, WAITING FOR 3 POLLS");
-
     // Poll loop is running. Wait until a given poll count
     let begin = Instant::now();
     loop {
@@ -2085,21 +2083,15 @@ async fn long_running_poll_loop_http_failures_are_retried(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    info!("*** KILLING THE HTTP SERVER");
-
     // Kill the HTTP server
     http_server.abort();
 
     // Wait more than the poll cycle time
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    info!("*** RESTARTING THE HTTP SERVER");
-
     // Restart the HTTP server (TODO: another test could have taken the port for now - we need to retry until we can bind again)
     let (_, http_server) =
         start_http_poll_server(response.clone(), poll_count.clone(), Some(host_http_port)).await;
-
-    info!("*** WAITING FOR 3 MORE POLLS");
 
     // Wait until more polls are coming in
     let begin = Instant::now();
@@ -2114,8 +2106,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    info!("*** FINISH SIGNAL SET");
-
     // Finish signal
 
     {
@@ -2126,8 +2116,6 @@ async fn long_running_poll_loop_http_failures_are_retried(
     executor
         .wait_for_status(&worker_id, WorkerStatus::Idle, Duration::from_secs(10))
         .await;
-
-    info!("*** INVOCATION STOPPED");
 
     executor.check_oplog_is_queryable(&worker_id).await;
     drop(executor);
@@ -2584,6 +2572,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     executor
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await;
+
     let mut rx = executor.capture_output_with_termination(&worker_id).await;
 
     // wait for one loop to finish
@@ -2606,12 +2595,6 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         }
     }
 
-    // change the response. Next loop will be the last
-    {
-        let mut response = response.lock().unwrap();
-        *response = "first".to_string();
-    }
-
     // check we are getting the full last loop
     {
         let mut found1 = false;
@@ -2626,6 +2609,14 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
                         found2 = true;
                     } else if stdout_event_matching(&event, "Poll loop finished\n") {
                         found3 = true;
+                    }
+
+                    if found1 && !found2 {
+                        // change the response. Next loop will be the last
+                        {
+                            let mut response = response.lock().unwrap();
+                            *response = "first".to_string();
+                        }
                     }
                 }
                 _ => {
