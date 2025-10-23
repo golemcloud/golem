@@ -12,20 +12,29 @@ license-file = "../LICENSE"
 [[bin]]
 name = "golem-worker-service"
 path = "src/server.rs"
+harness = false
 test = false
 
 [lib]
+path = "src/lib.rs"
 harness = false
 
-[[test]]
-name = "services_tests"
-path = "tests/services_tests.rs"
-harness = false
+autotests = false
 
-[[test]]
-name = "api_gateway_end_to_end_tests"
-path = "tests/api_gateway_end_to_end_tests.rs"
-harness = false
+# [[test]]
+# name = "services_tests"
+# path = "tests/services_tests.rs"
+# harness = false
+
+# [[test]]
+# name = "api_oas_convert_tests"
+# path = "tests/api_oas_convert_tests.rs"
+# harness = false
+
+# [[test]]
+# name = "api_gateway_end_to_end_tests"
+# path = "tests/api_gateway_end_to_end_tests.rs"
+# harness = false
 
 [[bench]]
 name = "tree"

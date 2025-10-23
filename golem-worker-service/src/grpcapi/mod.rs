@@ -64,7 +64,6 @@ pub async fn start_grpc_server(
                     WorkerServiceServer::new(WorkerGrpcApi::new(
                         services.component_service.clone(),
                         services.worker_service.clone(),
-                        services.worker_auth_service.clone(),
                     ))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip),

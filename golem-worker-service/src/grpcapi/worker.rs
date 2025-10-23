@@ -64,7 +64,6 @@ use golem_service_base::model::WorkerUpdateMode;
 pub struct WorkerGrpcApi {
     component_service: Arc<dyn ComponentService>,
     worker_service: Arc<dyn WorkerService>,
-    auth_service: Arc<dyn AuthService>,
 }
 
 #[async_trait::async_trait]
@@ -299,12 +298,10 @@ impl WorkerGrpcApi {
     pub fn new(
         component_service: Arc<dyn ComponentService>,
         worker_service: Arc<dyn WorkerService>,
-        auth_service: Arc<dyn AuthService>,
     ) -> Self {
         Self {
             component_service,
             worker_service,
-            auth_service,
         }
     }
 
