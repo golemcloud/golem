@@ -467,7 +467,7 @@ dependencies = [
 [tasks.integration-tests-group1]
 description = "Runs integration tests (group 1/3)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "debug", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
@@ -475,7 +475,7 @@ cargo-test-r run --package integration-tests --test integration -- --nocapture -
 [tasks.integration-tests-group2]
 description = "Runs integration tests (group 2/3)"
 dependencies = ["wit"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package cloud-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-component-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
@@ -487,7 +487,7 @@ cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $
 [tasks.integration-tests-group3]
 description = "Runs integration tests (group 3/3)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
 '''
@@ -512,6 +512,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test int
 [tasks.cli-integration-tests-group2]
 dependencies = ["build-bins-all-non-ci"]
 description = "Run CLI integration tests"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --report-time %{JUNIT_OPTS}
@@ -520,6 +521,7 @@ exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test int
 [tasks.cli-integration-tests-group3]
 dependencies = ["build-bins-all-non-ci"]
 description = "Run CLI integration tests"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --report-time %{JUNIT_OPTS}
@@ -550,7 +552,7 @@ dependencies = ["api-tests-http", "api-tests-grpc"]
 [tasks.api-tests-http]
 description = "Runs API HTTP tests only"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
 '''
@@ -558,7 +560,7 @@ cargo-test-r run --package integration-tests --test api -- --nocapture --report-
 [tasks.api-tests-grpc]
 description = "Runs API GRPC tests only"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package integration-tests --test api  :tag: -- --nocapture --report-time $JUNIT_OPTS
 '''
