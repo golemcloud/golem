@@ -14,9 +14,8 @@
 
 use anyhow::{anyhow, Context};
 use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
-use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata};
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory, RawComponentMetadata};
+use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm::analysis::AnalysedExport;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -72,11 +71,11 @@ impl FileSystemComponentWriter {
         files: &[InitialComponentFile],
         skip_analysis: bool,
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
-        env: &HashMap<String, String>,
+        env: &BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
-    ) -> anyhow::Result<Component> {
+    ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -158,7 +157,7 @@ impl FileSystemComponentWriter {
         };
 
         write_metadata_to_file(
-            metadata,
+            &metadata,
             &target_dir.join(metadata_filename(component_id, component_version)),
         )
         .await?;
@@ -203,11 +202,11 @@ impl FileSystemComponentWriter {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
-        env: &HashMap<String, String>,
+        env: &BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
-    ) -> Component {
+    ) -> ComponentDto {
         self.add_component(
             local_path,
             name,
@@ -232,16 +231,16 @@ impl FileSystemComponentWriter {
         files: &[(PathBuf, InitialComponentFile)],
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         unverified: bool,
-        env: &HashMap<String, String>,
+        env: &BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
-    ) -> anyhow::Result<Component> {
+    ) -> anyhow::Result<ComponentDto> {
         self.write_component_to_filesystem(
             local_path,
             name,
             &ComponentId(Uuid::new_v4()),
-            0,
+            ComponentRevision(0),
             component_type,
             &files
                 .iter()
@@ -271,12 +270,12 @@ impl FileSystemComponentWriter {
             local_path,
             component_name,
             component_id,
-            0,
+            ComponentRevision(0),
             component_type,
             &[],
             false,
             &HashMap::new(),
-            &HashMap::new(),
+            &BTreeMap::new(),
             environment_id,
             application_id,
             environment_roles_from_shares
@@ -292,8 +291,8 @@ impl FileSystemComponentWriter {
         component_type: ComponentType,
         files: Option<&[(PathBuf, InitialComponentFile)]>,
         dynamic_linking: Option<&HashMap<String, DynamicLinkedInstance>>,
-        env: &HashMap<String, String>,
-    ) -> anyhow::Result<u64> {
+        env: &BTreeMap<String, String>,
+    ) -> anyhow::Result<ComponentRevision> {
         let target_dir = &self.root;
 
         debug!("Local component store: {target_dir:?}");
@@ -307,7 +306,7 @@ impl FileSystemComponentWriter {
         }
 
         let last_version = self.get_latest_version(component_id).await;
-        let new_version = last_version + 1;
+        let new_version = last_version.next().unwrap();
 
         let old_metadata = self
             .load_metadata(component_id, last_version)
@@ -341,7 +340,7 @@ impl FileSystemComponentWriter {
         Ok(new_version)
     }
 
-    async fn get_latest_version(&self, component_id: &ComponentId) -> u64 {
+    async fn get_latest_version(&self, component_id: &ComponentId) -> ComponentRevision {
         let target_dir = &self.root;
 
         let component_id_str = component_id.to_string();
@@ -362,7 +361,7 @@ impl FileSystemComponentWriter {
             })
             .collect::<Vec<u64>>();
         versions.sort();
-        *versions.last().unwrap_or(&0)
+        ComponentRevision(*versions.last().unwrap_or(&0))
     }
 
     async fn get_latest_component_metadata(
@@ -387,10 +386,10 @@ impl FileSystemComponentWriter {
 }
 
 async fn write_metadata_to_file(
-    metadata: LocalFileSystemComponentMetadata,
+    metadata: &LocalFileSystemComponentMetadata,
     path: &Path,
 ) -> anyhow::Result<()> {
-    let json = serde_json::to_string(&metadata).map_err(|_| {
+    let json = serde_json::to_string(metadata).map_err(|_| {
         anyhow!("Failed to serialize component file properties".to_string())
     })?;
     tokio::fs::write(path, json).await.map_err(|_| {
