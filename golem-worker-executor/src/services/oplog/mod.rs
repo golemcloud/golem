@@ -176,7 +176,9 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// Drop a chunk of entries from the beginning of the oplog
     ///
     /// This should only be called _after_ `append` succeeded in the layer below this one
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex);
+    ///
+    /// Returns the number of dropped entries.
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64;
 
     /// Commits the buffered entries to the oplog
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry>;

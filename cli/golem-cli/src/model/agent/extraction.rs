@@ -22,7 +22,10 @@ use wasmtime_wasi::p2::pipe;
 
 /// Extracts the implemented agent types from the given WASM component, assuming it implements the `golem:agent/guest` interface.
 /// If it does not, it fails.
-pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentType>> {
+pub async fn extract_agent_types(
+    wasm_path: &Path,
+    enable_wasmtime_fs_cache: bool,
+) -> anyhow::Result<Vec<AgentType>> {
     log_action(
         "Extracting",
         format!(
@@ -42,6 +45,7 @@ pub async fn extract_agent_types(wasm_path: &Path) -> anyhow::Result<Vec<AgentTy
         Some(stdout.clone()),
         Some(stderr.clone()),
         true,
+        enable_wasmtime_fs_cache,
     )
     .await
     .map_err(|err| {

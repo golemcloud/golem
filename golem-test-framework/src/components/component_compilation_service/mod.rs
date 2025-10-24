@@ -136,6 +136,7 @@ async fn env_vars(
             "GOLEM__COMPONENT_SERVICE__CONFIG__PORT",
             component_service.private_grpc_port().to_string(),
         )
+        .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .build()

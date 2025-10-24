@@ -27,6 +27,11 @@ name = "api_gateway_end_to_end_tests"
 path = "tests/api_gateway_end_to_end_tests.rs"
 harness = false
 
+[[test]]
+name = "api_oas_convert_tests"
+path = "tests/api_oas_convert_tests.rs"
+harness = false
+
 [[bench]]
 name = "tree"
 harness = false

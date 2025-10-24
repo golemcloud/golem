@@ -748,6 +748,7 @@ struct ApplicationContextConfig {
     golem_rust_override: RustDependencyOverride,
     wasm_rpc_client_build_offline: bool,
     dev_mode: bool,
+    enable_wasmtime_fs_cache: bool,
 }
 
 impl ApplicationContextConfig {
@@ -771,6 +772,7 @@ impl ApplicationContextConfig {
             },
             wasm_rpc_client_build_offline: global_flags.wasm_rpc_offline,
             dev_mode: global_flags.dev_mode,
+            enable_wasmtime_fs_cache: global_flags.enable_wasmtime_fs_cache,
         }
     }
 
@@ -836,6 +838,7 @@ impl ApplicationContextState {
             steps_filter: self.build_steps_filter.clone(),
             golem_rust_override: config.golem_rust_override.clone(),
             dev_mode: config.dev_mode,
+            enable_wasmtime_fs_cache: config.enable_wasmtime_fs_cache,
         };
 
         debug!(app_config = ?app_config, "Initializing application context");

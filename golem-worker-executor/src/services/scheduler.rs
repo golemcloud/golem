@@ -637,11 +637,13 @@ mod tests {
             )
             .await;
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         assert_eq!(
             result,
             HashMap::from_iter(vec![
@@ -771,11 +773,14 @@ mod tests {
         svc.cancel(s2).await;
         svc.cancel(s3).await;
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
+
         assert_eq!(
             result,
             HashMap::from([
@@ -885,11 +890,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,
@@ -1003,11 +1010,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,
@@ -1128,11 +1137,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,
@@ -1240,11 +1251,13 @@ mod tests {
             .await
             .unwrap();
 
-        let result = kvs
-            .sorted_sets()
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect::<HashMap<_, _>>();
+        let mut result = HashMap::new();
+        kvs.sorted_sets()
+            .iter_async(|key, entry| {
+                result.insert(key.clone(), entry.clone());
+                true
+            })
+            .await;
         // The only item remaining is the one in the future
         assert_eq!(
             result,

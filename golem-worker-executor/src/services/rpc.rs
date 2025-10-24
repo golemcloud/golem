@@ -650,6 +650,9 @@ fn enrich_function_name_by_target_information(
     root_package_version: Option<String>,
 ) -> String {
     if let Some(root_package_name) = root_package_name {
+        // Hack for supporting the 'unique' name generation of golem-test-framework. Stripping everything after '---'
+        let root_package_name = strip_unique_suffix(&root_package_name);
+
         if let Some(root_package_version) = root_package_version {
             // The target root package is versioned, and the version has to be put _after_ the interface
             // name which we assume to be the first section (before a dot) of the provided string:
@@ -684,6 +687,14 @@ fn enrich_function_name_by_target_information(
     }
 }
 
+fn strip_unique_suffix(root_package_name: &str) -> String {
+    if let Some(index) = root_package_name.rfind("---") {
+        root_package_name[..index].to_string()
+    } else {
+        root_package_name.to_string()
+    }
+}
+
 #[async_trait]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
     async fn create_demand(
@@ -701,7 +712,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .check_worker(&owned_worker_id.worker_id)
             .is_ok()
         {
-            debug!("Ensuring local target worker exists");
+            debug!(target_worker_id = %owned_worker_id, "Ensuring local target worker exists");
 
             let _worker = Worker::get_or_create_running(
                 self,

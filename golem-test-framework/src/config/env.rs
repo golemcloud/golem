@@ -115,7 +115,7 @@ impl EnvBasedTestDependenciesConfig {
 
     pub fn default_stdout_level(&self) -> Level {
         if self.quiet {
-            Level::TRACE
+            Level::DEBUG
         } else {
             Level::INFO
         }
@@ -123,7 +123,7 @@ impl EnvBasedTestDependenciesConfig {
 
     pub fn default_stderr_level(&self) -> Level {
         if self.quiet {
-            Level::TRACE
+            Level::DEBUG
         } else {
             Level::ERROR
         }
@@ -131,7 +131,7 @@ impl EnvBasedTestDependenciesConfig {
 
     pub fn default_verbosity(&self) -> Level {
         if self.quiet {
-            Level::INFO
+            Level::WARN
         } else {
             Level::DEBUG
         }

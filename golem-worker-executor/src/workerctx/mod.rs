@@ -356,17 +356,23 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError>;
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.
-    /// This can be used to restore the previous state of the worker but by general it can be no-op.
+    /// This can be used to restore the previous state of the worker, but by general it can be no-op.
     ///
-    /// If the result is true, the instance
+    /// If the result is:
+    /// - Err() - a fatal error happened during preparation that cannot be retried
+    /// - Ok(None) - the preparation succeeded and the instance is ready to be used
+    /// - Ok(Some(RetryDecision::Immediate)) - the preparation has been interrupted by an error but should be retried immediately
+    /// - Ok(Some(RetryDecision::Delayed())) - the preparation has been interrupted by an error and should be retried after a delay
+    /// - Ok(Some(RetryDecision::ReacquirePermits)) - the preparation has been interrupted by an error, but should be retried immediately after dropping and reacquiring te permits
+    /// - Ok(Some(RetryDecision::None)) - the preparation has been interrupted and should not be retried, but it is not an error (example: suspend after resuming a previously interrupted invocation)
     async fn prepare_instance(
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError>;
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError>;
 
     /// Records the last known resource limits of a worker without activating it
     async fn record_last_known_limits<T: HasAll<Ctx> + Send + Sync>(

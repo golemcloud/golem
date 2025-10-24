@@ -76,11 +76,10 @@ tag_suite!(wasi, group2);
 tag_suite!(revert, group2);
 tag_suite!(durability, group2);
 tag_suite!(observability, group2);
-
-tag_suite!(scalability, group3);
-tag_suite!(hot_update, group3);
-tag_suite!(rust_rpc, group3);
-tag_suite!(rust_rpc_stubless, group3);
+tag_suite!(scalability, group2);
+tag_suite!(hot_update, group2);
+tag_suite!(rust_rpc, group2);
+tag_suite!(rust_rpc_stubless, group2);
 
 tag_suite!(rdbms_service, rdbms_service);
 

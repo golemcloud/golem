@@ -957,7 +957,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> RetryDecision {
+    ) -> Option<RetryDecision> {
         let pending_update = store
             .as_context_mut()
             .data_mut()
@@ -1072,7 +1072,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .data_mut()
                                 .on_worker_update_failed(target_version, Some(error))
                                 .await;
-                            RetryDecision::Immediate
+                            Some(RetryDecision::Immediate)
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
@@ -1091,7 +1091,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     ),
                                 )
                                 .await;
-                            RetryDecision::None
+                            None
                         }
                     }
                     Ok(None) => {
@@ -1103,7 +1103,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 Some("Failed to find snapshot data for update".to_string()),
                             )
                             .await;
-                        RetryDecision::Immediate
+                        Some(RetryDecision::Immediate)
                     }
                     Err(error) => {
                         store
@@ -1111,7 +1111,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .on_worker_update_failed(target_version, Some(error))
                             .await;
-                        RetryDecision::Immediate
+                        Some(RetryDecision::Immediate)
                     }
                 }
             }
@@ -1446,7 +1446,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             trap_type,
         );
 
-        debug!("Recovery decision: {:?}", decision);
+        debug!(
+            "Recovery decision for {trap_type:?} with {:?} retries: {:?}",
+            latest_status.current_retry_count, decision
+        );
 
         decision
     }
@@ -1794,7 +1797,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
@@ -1839,7 +1842,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .durable_ctx_mut()
                             .process_pending_replay_events()
                             .await?;
-                        break Ok(RetryDecision::None);
+                        break Ok(None);
                     }
                     Ok(Some(replay_state::ExportedFunctionInvoked {
                         function_name,
@@ -1997,14 +2000,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         if decision == RetryDecision::None {
                                             // Cannot retry so we need to fail
                                             match trap_type {
-                                                TrapType::Interrupt(interrupt_kind) => {
-                                                    if interrupt_kind == InterruptKind::Interrupt {
-                                                        break Err(WorkerExecutorError::runtime(
-                                                            "Interrupted via the Golem API",
-                                                        ));
-                                                    } else {
-                                                        break Err(WorkerExecutorError::runtime(format!("The worker could not finish replaying a function {function_name}")));
-                                                    }
+                                                TrapType::Interrupt(_interrupt_kind) => {
+                                                    // In case of an interrupt, we return with RetryDecision::None
+                                                    // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
                                                     break Err(WorkerExecutorError::runtime(
@@ -2028,9 +2026,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             }
                                         }
 
-                                        decision
+                                        Some(decision)
                                     }
-                                    None => RetryDecision::None,
+                                    None => None,
                                 };
 
                                 break Ok(decision);
@@ -2045,7 +2043,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .process_pending_replay_events()
                     .await?;
-                break Ok(RetryDecision::None);
+                break Ok(None);
             }
         };
 
@@ -2058,7 +2056,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
@@ -2091,7 +2089,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .add(OplogEntry::restart())
                 .await;
 
-            Ok(RetryDecision::None)
+            Ok(None)
         } else {
             let pending_update = store
                 .as_context_mut()
@@ -2148,7 +2146,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                                             debug!("Retrying prepare_instance after failed update attempt");
 
-                                            Ok(RetryDecision::Immediate)
+                                            Ok(Some(RetryDecision::Immediate))
                                         }
                                         _ => Err(error),
                                     }
@@ -2166,9 +2164,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 }
             };
             match prepare_result {
-                Ok(RetryDecision::None) => {
+                Ok(None) => {
                     store.as_context_mut().data_mut().set_suspended();
-                    Ok(RetryDecision::None)
+                    Ok(None)
                 }
                 Ok(other) => Ok(other),
                 Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
