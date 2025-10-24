@@ -167,6 +167,76 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  worker-tests:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
+    strategy:
+      fail-fast: false
+      matrix:
+        group:
+          - name: misc
+          - name: group1
+          - name: group2
+    name: worker-tests-${{ matrix.group.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: davidB/rust-cargo-make@v1
+      - name: Setup Redis
+        uses: shogo82148/actions-setup-redis@v1.35.1
+        with:
+          redis-version: latest
+          auto-start: false
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: tmp/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/golem-binaries
+          key: golem-binaries-${{ github.run_id }}
+#      - name: Mount binary store
+#        uses: useblacksmith/stickydisk@v1
+#        with:
+#          key: golem-binaries-${{ github.run_id }}
+#          path: ~/golem-binaries-cache
+
+      - name: Apply binary archive
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+
+      - name: Worker Executor integration tests
+        run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
+        timeout-minutes: 10
+      - name: Publish Test Report
+        uses: ctrf-io/github-test-reporter@v1
+        if: always()
+        with:
+          report-path: "**/target/ctrf-*.json"
+          summary: true
+          summary-report: true
+          failed-report: true
+          slowest-report: true
+          github-report: true
+          # pull-request-report: true
+          flaky-report: true
+          collapse-large-reports: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   it:
     env:
       CARGO_BUILD_JOBS: 10
@@ -176,12 +246,6 @@ jobs:
       fail-fast: false
       matrix:
         group:
-          - name: worker-executor-tests-group1
-            description: "worker-executor #1"
-          - name: worker-executor-tests-group2
-            description: "worker-executor #2"
-          - name: worker-executor-tests-misc
-            description: "worker-executor misc"
           - name: integration-tests-group1
             description: "IT #1"
           - name: integration-tests-group2
@@ -272,6 +336,19 @@ jobs:
           collapse-large-reports: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+#  cleanup:
+#    runs-on: blacksmith
+#    needs:
+#      - worker-tests
+#      - it
+#      - unit-tests-and-checks
+#    if: always()
+#    steps:
+#      - name: Delete sticky disk
+#        uses: useblacksmith/stickydisk-delete@v1
+#        with:
+#          delete-key: golem-binaries-${{ github.run_id }}
 
   wasm-rpc-stub:
     runs-on: blacksmith
@@ -612,6 +689,7 @@ jobs:
       - check-clippy-and-format
       - unit-tests-and-checks
       - wasm-rpc-stub
+      - worker-tests
       - it
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
