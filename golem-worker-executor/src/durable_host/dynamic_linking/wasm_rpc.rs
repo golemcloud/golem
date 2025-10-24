@@ -18,7 +18,7 @@ use crate::workerctx::WorkerCtx;
 use anyhow::{anyhow, Context};
 use golem_common::model::component_metadata::{DynamicLinkedWasmRpc, InvokableFunction};
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::{ComponentId, ComponentType, OwnedWorkerId, WorkerId};
+use golem_common::model::{ComponentId, OwnedWorkerId, WorkerId};
 use golem_wasm::analysis::analysed_type::str;
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, HostFutureInvokeResult};
@@ -1028,11 +1028,9 @@ enum DynamicRpcCall {
     GlobalCustomConstructor {},
     ResourceStubConstructor {
         component_name: String,
-        component_type: ComponentType,
         target_constructor_name: ParsedFunctionName,
     },
     ResourceCustomConstructor {
-        component_type: ComponentType,
         target_constructor_name: ParsedFunctionName,
     },
     BlockingFunctionCall {
@@ -1103,7 +1101,6 @@ impl DynamicRpcCall {
                             },
                         },
                         component_name: target.component_name,
-                        component_type: target.component_type,
                     }))
                 }
                 _ => Ok(None),
@@ -1146,7 +1143,6 @@ impl DynamicRpcCall {
                                             resource: resource_name.to_string(),
                                         },
                                     },
-                                    component_type: target.component_type,
                                 }))
                             }
                             DynamicRpcResource::InvokeResult => {

@@ -5,7 +5,7 @@ import {
 
 @agent()
 class EchoAgent extends BaseAgent {
-    private readonly name: string;
+    private name: string;
 
     constructor(name: string) {
         super()
@@ -14,5 +14,11 @@ class EchoAgent extends BaseAgent {
 
     async echo(): Promise<string> {
         return this.name
+    }
+
+    /// A method that appends a '!' to the returned string every time it's called.
+    async changeAndGet(): Promise<string> {
+        this.name = this.name + "!";
+        return this.name;
     }
 }

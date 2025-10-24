@@ -643,7 +643,14 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
                 if self.store.data().component_metadata().component_type == ComponentType::Ephemeral
                 {
-                    Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
+                    // For ephemeral agents, we allow running the 'initialize' call and one another
+                    if self.store.data().component_metadata().metadata.is_agent()
+                        && full_function_name == "golem:agent/guest.{initialize}"
+                    {
+                        Ok(CommandOutcome::Continue)
+                    } else {
+                        Ok(CommandOutcome::BreakInnerLoop(RetryDecision::None))
+                    }
                 } else {
                     Ok(CommandOutcome::Continue)
                 }
