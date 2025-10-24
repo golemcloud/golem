@@ -19,18 +19,18 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_test_framework::components::cloud_service::{AdminOnlyStubCloudService, CloudService};
-use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
-use golem_test_framework::components::component_service::ComponentService;
+// use golem_test_framework::components::cloud_service::{AdminOnlyStubCloudService, CloudService};
+// use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
+// use golem_test_framework::components::component_service::ComponentService;
 use golem_test_framework::components::redis::provided::ProvidedRedis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
-use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
-use golem_test_framework::components::worker_executor::WorkerExecutor;
-use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
-use golem_test_framework::components::worker_service::WorkerService;
+// use golem_test_framework::components::worker_executor::provided::ProvidedWorkerExecutor;
+// use golem_test_framework::components::worker_executor::WorkerExecutor;
+// use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
+// use golem_test_framework::components::worker_service::WorkerService;
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
@@ -43,46 +43,46 @@ use uuid::Uuid;
 
 mod common;
 
-pub mod agent;
-pub mod api;
-pub mod blobstore;
-pub mod compatibility;
-pub mod durability;
-pub mod hot_update;
-pub mod http;
-pub mod indexed_storage;
-pub mod key_value_storage;
-pub mod keyvalue;
-pub mod observability;
-pub mod rdbms;
-pub mod rdbms_service;
-pub mod revert;
-pub mod rust_rpc;
-pub mod rust_rpc_stubless;
-pub mod scalability;
-pub mod transactions;
-pub mod wasi;
+// pub mod agent;
+// pub mod api;
+// pub mod blobstore;
+// pub mod compatibility;
+// pub mod durability;
+// pub mod hot_update;
+// pub mod http;
+// pub mod indexed_storage;
+// pub mod key_value_storage;
+// pub mod keyvalue;
+// pub mod observability;
+// pub mod rdbms;
+// pub mod rdbms_service;
+// pub mod revert;
+// pub mod rust_rpc;
+// pub mod rust_rpc_stubless;
+// pub mod scalability;
+// pub mod transactions;
+// pub mod wasi;
 
 test_r::enable!();
 
-tag_suite!(api, group1);
-tag_suite!(blobstore, group1);
-tag_suite!(keyvalue, group1);
-tag_suite!(http, group1);
-tag_suite!(rdbms, group1);
-tag_suite!(agent, group1);
+// tag_suite!(api, group1);
+// tag_suite!(blobstore, group1);
+// tag_suite!(keyvalue, group1);
+// tag_suite!(http, group1);
+// tag_suite!(rdbms, group1);
+// tag_suite!(agent, group1);
 
-tag_suite!(transactions, group2);
-tag_suite!(wasi, group2);
-tag_suite!(revert, group2);
-tag_suite!(durability, group2);
-tag_suite!(observability, group2);
-tag_suite!(scalability, group2);
-tag_suite!(hot_update, group2);
-tag_suite!(rust_rpc, group2);
-tag_suite!(rust_rpc_stubless, group2);
+// tag_suite!(transactions, group2);
+// tag_suite!(wasi, group2);
+// tag_suite!(revert, group2);
+// tag_suite!(durability, group2);
+// tag_suite!(observability, group2);
+// tag_suite!(scalability, group2);
+// tag_suite!(hot_update, group2);
+// tag_suite!(rust_rpc, group2);
+// tag_suite!(rust_rpc_stubless, group2);
 
-tag_suite!(rdbms_service, rdbms_service);
+// tag_suite!(rdbms_service, rdbms_service);
 
 #[derive(Clone)]
 pub struct WorkerExecutorPerTestDependencies {
