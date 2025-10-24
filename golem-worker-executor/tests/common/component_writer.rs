@@ -35,14 +35,12 @@ const WASMS_DIRNAME: &str = "wasms";
 pub struct FileSystemComponentWriter {
     root: PathBuf,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    account_id: AccountId
 }
 
 impl FileSystemComponentWriter {
     pub async fn new(
         root: &Path,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-        account_id: AccountId
     ) -> Self {
         info!("Using a directory for storing components: {root:?}");
 
@@ -53,8 +51,7 @@ impl FileSystemComponentWriter {
 
         Self {
             root: root.to_path_buf(),
-            plugin_wasm_files_service,
-            account_id
+            plugin_wasm_files_service
         }
     }
 
@@ -71,6 +68,7 @@ impl FileSystemComponentWriter {
         env: &BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
+        account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
@@ -132,7 +130,7 @@ impl FileSystemComponentWriter {
             .len();
 
         let metadata = LocalFileSystemComponentMetadata {
-            account_id: self.account_id.clone(),
+            account_id: account_id.clone(),
             environment_id: environment_id.clone(),
             application_id: application_id.clone(),
             component_id: component_id.clone(),
@@ -202,6 +200,7 @@ impl FileSystemComponentWriter {
         env: &BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
+        account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> ComponentDto {
         self.add_component(
@@ -214,6 +213,7 @@ impl FileSystemComponentWriter {
             env,
             environment_id,
             application_id,
+            account_id,
             environment_roles_from_shares
         )
         .await
@@ -231,6 +231,7 @@ impl FileSystemComponentWriter {
         env: &BTreeMap<String, String>,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
+        account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> anyhow::Result<ComponentDto> {
         self.write_component_to_filesystem(
@@ -248,6 +249,7 @@ impl FileSystemComponentWriter {
             env,
             environment_id,
             application_id,
+            account_id,
             environment_roles_from_shares
         )
         .await
@@ -261,6 +263,7 @@ impl FileSystemComponentWriter {
         component_type: ComponentType,
         environment_id: EnvironmentId,
         application_id: ApplicationId,
+        account_id: AccountId,
         environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> anyhow::Result<()> {
         self.write_component_to_filesystem(
@@ -275,6 +278,7 @@ impl FileSystemComponentWriter {
             &BTreeMap::new(),
             environment_id,
             application_id,
+            account_id,
             environment_roles_from_shares
         )
         .await?;
@@ -329,6 +333,7 @@ impl FileSystemComponentWriter {
             env,
            old_metadata.environment_id,
            old_metadata.application_id,
+           old_metadata.account_id,
            old_metadata.environment_roles_from_shares
         )
         .await
