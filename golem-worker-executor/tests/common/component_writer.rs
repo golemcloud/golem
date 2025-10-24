@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context};
-use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -32,8 +31,6 @@ use golem_common::model::agent::AgentType;
 use golem_common::model::auth::EnvironmentRole;
 
 const WASMS_DIRNAME: &str = "wasms";
-// const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
-// const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
 
 pub struct FileSystemComponentWriter {
     root: PathBuf,
@@ -366,9 +363,8 @@ impl FileSystemComponentWriter {
 
     async fn get_latest_component_metadata(
         &self,
-        request: GetLatestComponentRequest,
+        component_id: ComponentId,
     ) -> anyhow::Result<ComponentDto> {
-        let component_id: ComponentId = request.component_id.unwrap().try_into().unwrap();
         let version = self.get_latest_version(&component_id).await;
         let metadata = self.load_metadata(&component_id, version).await?;
         let component: golem_common::model::component::ComponentDto = metadata.into();
