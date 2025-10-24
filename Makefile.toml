@@ -270,31 +270,15 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-worker-service"] }]
 
-[tasks.build-component-service]
-dependencies = ["wit"]
-description = "Builds the component-service"
-command = "cargo"
-args = ["build", "-p", "golem-component-service"]
-
-[tasks.build-component-service-non-ci]
-private = true
-condition = { env_not_set = ["CI"] }
-run_task = [{ name = ["build-component-service"] }]
-
-[tasks.build-cloud-service]
-description = "Builds cloud service"
-command = "cargo"
-args = ["build", "-p", "cloud-service"]
-
-[tasks.build-cloud-service-non-ci]
-private = true
-condition = { env_not_set = ["CI"] }
-run_task = [{ name = ["build-cloud-service"] }]
-
 [tasks.build-registry-service]
 description = "Builds registry service"
 command = "cargo"
 args = ["build", "-p", "golem-registry-service"]
+
+[tasks.build-registry-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-registry-service"] }]
 
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
@@ -486,8 +470,8 @@ env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
 cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
 cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-# cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-# cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group3]

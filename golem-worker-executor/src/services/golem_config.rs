@@ -19,7 +19,6 @@ use golem_common::config::{
     ConfigExample, ConfigLoader, DbSqliteConfig, HasConfigExamples, RedisConfig,
 };
 use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
 use golem_common::tracing::TracingConfig;
 use golem_common::SafeDisplay;

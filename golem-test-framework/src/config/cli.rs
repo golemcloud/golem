@@ -16,16 +16,14 @@
 // use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 // use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::blob_storage::BlobStorageInfo;
-use crate::components::registry_service::spawned::SpawnedRegistyService;
-use crate::components::registry_service::RegistryService;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
 use crate::components::rdb::{PostgresInfo, Rdb};
-use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
+use crate::components::registry_service::spawned::SpawnedRegistyService;
+use crate::components::registry_service::RegistryService;
 use crate::components::service::spawned::SpawnedService;
 use crate::components::service::Service;
 // use crate::components::shard_manager::provided::ProvidedShardManager;

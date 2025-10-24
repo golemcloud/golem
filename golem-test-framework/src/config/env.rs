@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::blob_storage::BlobStorageInfo;
 use crate::components::rdb::DbInfo;
 use crate::components::registry_service::spawned::SpawnedRegistyService;
 use crate::components::registry_service::RegistryService;
-use crate::components::blob_storage::BlobStorageInfo;
 // use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 // use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;

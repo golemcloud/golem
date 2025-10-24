@@ -32,7 +32,6 @@ use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
-use tracing::info;
 use uuid::Uuid;
 
 pub mod cli;
