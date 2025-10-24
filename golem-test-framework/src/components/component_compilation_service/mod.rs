@@ -32,8 +32,6 @@ use golem_common::model::{ComponentId, ProjectId};
 
 use super::cloud_service::CloudService;
 
-pub mod docker;
-pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
