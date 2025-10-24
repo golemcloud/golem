@@ -58,6 +58,7 @@ pub struct GolemConfig {
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
     pub agent_types_service: AgentTypesServiceConfig,
+    pub engine: EngineConfig,
     pub grpc_address: String,
     pub port: u16,
     pub http_address: String,
@@ -169,6 +170,8 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.agent_types_service.to_safe_string_indented()
         );
+        let _ = writeln!(&mut result, "engine:");
+        let _ = writeln!(&mut result, "{}", self.engine.to_safe_string_indented());
         let _ = writeln!(&mut result, "gRPC address: {}", self.grpc_address);
         let _ = writeln!(&mut result, "gRPC port: {}", self.port);
         let _ = writeln!(&mut result, "HTTP address: {}", self.http_address);
@@ -900,16 +903,12 @@ impl SafeDisplay for ProjectServiceGrpcConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ProjectServiceDisabledConfig {
     pub account_id: AccountId,
-    pub environment_id: EnvironmentId,
-    pub project_name: String,
 }
 
 impl SafeDisplay for ProjectServiceDisabledConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "account_id: {}", self.account_id);
-        let _ = writeln!(&mut result, "environment_id id: {}", self.environment_id);
-        let _ = writeln!(&mut result, "project name: {}", self.project_name);
         result
     }
 }
@@ -1055,6 +1054,19 @@ impl SafeDisplay for ComponentServiceGrpcConfig {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct EngineConfig {
+    pub enable_fs_cache: bool,
+}
+
+impl SafeDisplay for EngineConfig {
+    fn to_safe_string(&self) -> String {
+        let mut result = String::new();
+        let _ = writeln!(&mut result, "enable fs cache: {}", self.enable_fs_cache);
+        result
+    }
+}
+
 impl Default for GolemConfig {
     fn default() -> Self {
         Self {
@@ -1080,6 +1092,7 @@ impl Default for GolemConfig {
             component_cache: ComponentCacheConfig::default(),
             project_service: ProjectServiceConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
+            engine: EngineConfig::default(),
             grpc_address: "0.0.0.0".to_string(),
             port: 9000,
             http_address: "0.0.0.0".to_string(),

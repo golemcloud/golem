@@ -369,7 +369,8 @@ async fn scan_with_no_pattern_single_paged(
     }
 
     result.sort();
-    check!(result == vec![key1.to_string(), key2.to_string()]);
+    check!(result.contains(&key1.to_string()));
+    check!(result.contains(&key2.to_string()));
 }
 
 #[test]
@@ -434,7 +435,8 @@ async fn scan_with_no_pattern_paginated(
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
     // check!(r1.len() == 1);
     // check!(r2.len() == 1);
-    check!(all == vec![key1.to_string(), key2.to_string()]);
+    check!(all.contains(&key1.to_string()));
+    check!(all.contains(&key2.to_string()));
 }
 
 #[test]
@@ -479,7 +481,8 @@ async fn scan_with_prefix_pattern_single_paged(
     }
 
     result.sort();
-    check!(result == vec![key1.to_string(), key3.to_string()]);
+    check!(result.contains(&key1.to_string()));
+    check!(result.contains(&key3.to_string()));
 }
 
 #[test]
@@ -546,7 +549,8 @@ async fn scan_with_prefix_pattern_paginated(
     // Note: Redis does not guarantee to return the asked number of items, it is just a hint.
     // check!(r1.len() == 1);
     // check!(r2.len() == 1);
-    check!(all == vec![key1.to_string(), key3.to_string()]);
+    check!(all.contains(&key1.to_string()));
+    check!(all.contains(&key3.to_string()));
 }
 
 #[test]

@@ -162,6 +162,9 @@ pub struct GolemCliGlobalFlags {
 
     #[arg(skip)]
     pub server_no_limit_change: bool,
+
+    #[arg(skip)]
+    pub enable_wasmtime_fs_cache: bool,
 }
 
 impl GolemCliGlobalFlags {
@@ -245,7 +248,14 @@ impl GolemCliGlobalFlags {
                 .unwrap_or_default()
         }
 
-        Ok(self)
+        if let Ok(enable_wasmtime_fs_cache) = std::env::var("GOLEM_ENABLE_WASMTIME_FS_CACHE") {
+            self.enable_wasmtime_fs_cache = enable_wasmtime_fs_cache
+                .parse::<LenientBool>()
+                .map(|b| b.into())
+                .unwrap_or_default()
+        }
+
+        self
     }
 
     pub fn config_dir(&self) -> PathBuf {
