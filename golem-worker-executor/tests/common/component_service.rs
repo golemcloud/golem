@@ -24,7 +24,6 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::compiled_component::CompiledComponentService;
-use golem_service_base::testing::LocalFileSystemComponentMetadata;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -33,6 +32,7 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, warn, Instrument};
 use wasmtime::component::Component;
 use wasmtime::Engine;
+use super::component_writer::LocalFileSystemComponentMetadata;
 
 pub struct ComponentServiceLocalFileSystem {
     root: PathBuf,

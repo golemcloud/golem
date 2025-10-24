@@ -27,9 +27,8 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context};
-use async_trait::async_trait;
 use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
-use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata, VersionedComponentId};
+use golem_api_grpc::proto::golem::component::{Component, ComponentMetadata};
 use golem_common::model::agent::extraction::extract_agent_types;
 use golem_common::model::component_metadata::{DynamicLinkedInstance, LinearMemory, RawComponentMetadata};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -37,8 +36,6 @@ use golem_wasm::analysis::AnalysedExport;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
-use tonic::transport::Channel;
 use tracing::{debug, info};
 use uuid::Uuid;
 use golem_common::model::account::AccountId;
@@ -53,13 +50,13 @@ const WASMS_DIRNAME: &str = "wasms";
 // const PLACEHOLDER_ACCOUNT: uuid::Uuid = uuid!("91879a4b-6c62-4dd1-91fe-9dcd29ebe178");
 // const PLACEHOLDER_PROJECT: uuid::Uuid = uuid!("6dfe5ca7-ab78-46b2-a98d-41098bb29c98");
 
-pub struct FileSystemComponentService {
+pub struct FileSystemComponentWriter {
     root: PathBuf,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     account_id: AccountId
 }
 
-impl FileSystemComponentService {
+impl FileSystemComponentWriter {
     pub async fn new(
         root: &Path,
         plugin_wasm_files_service: Arc<PluginWasmFilesService>,
@@ -91,6 +88,8 @@ impl FileSystemComponentService {
         dynamic_linking: &HashMap<String, DynamicLinkedInstance>,
         env: &HashMap<String, String>,
         environment_id: EnvironmentId,
+        application_id: ApplicationId,
+        environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> anyhow::Result<Component> {
         let target_dir = &self.root;
 
@@ -114,6 +113,12 @@ impl FileSystemComponentService {
 
         let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_version}.wasm");
         let target_path = target_dir.join(&wasm_filename);
+
+        let wasm_hash = {
+            let content = tokio::fs::read(source_path).await?;
+            let hash = blake3::hash(&content);
+            golem_common::model::diff::Hash::from(hash)
+        };
 
         tokio::fs::copy(source_path, &target_path)
             .await
@@ -146,7 +151,8 @@ impl FileSystemComponentService {
 
         let metadata = LocalFileSystemComponentMetadata {
             account_id: self.account_id.clone(),
-            project_id: project_id.clone(),
+            environment_id: environment_id.clone(),
+            application_id: application_id.clone(),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -161,48 +167,22 @@ impl FileSystemComponentService {
             agent_types,
             root_package_name: raw_component_metadata.root_package_name.clone(),
             root_package_version: raw_component_metadata.root_package_version.clone(),
+            wasm_hash,
+            environment_roles_from_shares
         };
+
         write_metadata_to_file(
             metadata,
             &target_dir.join(metadata_filename(component_id, component_version)),
         )
         .await?;
 
-        Ok(Component {
-            versioned_component_id: Some(VersionedComponentId {
-                component_id: Some(golem_api_grpc::proto::golem::component::ComponentId {
-                    value: Some(component_id.0.into()),
-                }),
-                version: component_version,
-            }),
-            component_name: component_name.into(),
-            component_size: size,
-            metadata: Some(ComponentMetadata {
-                exports: exports.into_iter().map(|export| export.into()).collect(),
-                producers: vec![],
-                memories: memories.into_iter().map(|mem| mem.into()).collect(),
-                dynamic_linking: dynamic_linking
-                    .iter()
-                    .map(|(link, instance)| (link.clone(), instance.clone().into()))
-                    .collect(),
-                binary_wit: raw_component_metadata.binary_wit,
-                root_package_name: raw_component_metadata.root_package_name,
-                root_package_version: raw_component_metadata.root_package_version,
-                agent_types: vec![],
-            }),
-            account_id: Some(self.account_id.clone().into()),
-            project_id: Some(project_id.into()),
-            created_at: Some(SystemTime::now().into()),
-            component_type: Some(component_type as i32),
-            files: files.iter().map(|file| file.clone().into()).collect(),
-            installed_plugins: vec![],
-            env: env.clone(),
-        })
+        Ok(metadata.into())
     }
 
     async fn analyze_memories_and_exports(
         path: &Path,
-    ) -> crate::Result<(RawComponentMetadata, Vec<LinearMemory>, Vec<AnalysedExport>)> {
+    ) -> anyhow::Result<(RawComponentMetadata, Vec<LinearMemory>, Vec<AnalysedExport>)> {
         let component_bytes = &tokio::fs::read(path).await?;
         let raw_component_metadata = RawComponentMetadata::analyse_component(component_bytes)?;
 
@@ -215,8 +195,8 @@ impl FileSystemComponentService {
     async fn load_metadata(
         &self,
         component_id: &ComponentId,
-        component_version: ComponentVersion,
-    ) -> crate::Result<LocalFileSystemComponentMetadata> {
+        component_version: ComponentRevision,
+    ) -> anyhow::Result<LocalFileSystemComponentMetadata> {
         let path = self
             .root
             .join(metadata_filename(component_id, component_version));
@@ -231,7 +211,6 @@ impl FileSystemComponentService {
 
     async fn get_or_add_component(
         &self,
-        token: &Uuid,
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
@@ -240,9 +219,10 @@ impl FileSystemComponentService {
         unverified: bool,
         env: &HashMap<String, String>,
         environment_id: EnvironmentId,
+        application_id: ApplicationId,
+        environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> Component {
         self.add_component(
-            token,
             local_path,
             name,
             component_type,
@@ -251,6 +231,8 @@ impl FileSystemComponentService {
             unverified,
             env,
             environment_id,
+            application_id,
+            environment_roles_from_shares
         )
         .await
         .expect("Failed to add component")
@@ -258,7 +240,6 @@ impl FileSystemComponentService {
 
     async fn add_component(
         &self,
-        _token: &Uuid,
         local_path: &Path,
         name: &str,
         component_type: ComponentType,
@@ -267,6 +248,8 @@ impl FileSystemComponentService {
         unverified: bool,
         env: &HashMap<String, String>,
         environment_id: EnvironmentId,
+        application_id: ApplicationId,
+        environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> anyhow::Result<Component> {
         self.write_component_to_filesystem(
             local_path,
@@ -282,6 +265,8 @@ impl FileSystemComponentService {
             dynamic_linking,
             env,
             environment_id,
+            application_id,
+            environment_roles_from_shares
         )
         .await
     }
@@ -293,6 +278,8 @@ impl FileSystemComponentService {
         component_name: &str,
         component_type: ComponentType,
         environment_id: EnvironmentId,
+        application_id: ApplicationId,
+        environment_roles_from_shares: HashSet<EnvironmentRole>
     ) -> anyhow::Result<()> {
         self.write_component_to_filesystem(
             local_path,
@@ -305,6 +292,8 @@ impl FileSystemComponentService {
             &HashMap::new(),
             &HashMap::new(),
             environment_id,
+            application_id,
+            environment_roles_from_shares
         )
         .await?;
         Ok(())
@@ -312,7 +301,6 @@ impl FileSystemComponentService {
 
     async fn update_component(
         &self,
-        token: &Uuid,
         component_id: &ComponentId,
         local_path: &Path,
         component_type: ComponentType,
@@ -332,7 +320,7 @@ impl FileSystemComponentService {
             std::panic!("Source file does not exist: {local_path:?}");
         }
 
-        let last_version = self.get_latest_version(token, component_id).await;
+        let last_version = self.get_latest_version(component_id).await;
         let new_version = last_version + 1;
 
         let old_metadata = self
@@ -357,7 +345,9 @@ impl FileSystemComponentService {
             false,
             dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),
             env,
-            Some(old_metadata.project_id),
+           old_metadata.environment_id,
+           old_metadata.application_id,
+           old_metadata.environment_roles_from_shares
         )
         .await
         .expect("Failed to write component to filesystem");
@@ -428,7 +418,7 @@ fn metadata_filename(component_id: &ComponentId, component_version: ComponentRev
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct LocalFileSystemComponentMetadata {
+pub struct LocalFileSystemComponentMetadata {
     pub component_id: ComponentId,
     pub version: ComponentRevision,
     pub environment_id: EnvironmentId,
