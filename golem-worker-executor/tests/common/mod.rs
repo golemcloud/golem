@@ -71,16 +71,14 @@ use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
     AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
-    ComponentServiceConfig, ComponentServiceLocalConfig,
+    ComponentServiceConfig,
     EngineConfig, GolemConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
-    KeyValueStorageConfig, MemoryConfig, ProjectServiceConfig, ProjectServiceDisabledConfig,
+    KeyValueStorageConfig, MemoryConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
-use golem_worker_executor::services::plugins::{Plugins, PluginsObservations};
-use golem_worker_executor::services::projects::ProjectService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -134,6 +132,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision, PluginPrior
 use golem_common::model::account::AccountId;
 use golem_common::model::component::ComponentFilePath;
 use golem_service_base::service::compiled_component::{CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig};
+use self::component_service::ComponentServiceLocalFileSystem;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
@@ -252,12 +251,6 @@ pub async fn start_customized(
             system_memory_override,
             ..Default::default()
         },
-        component_service: ComponentServiceConfig::Local(ComponentServiceLocalConfig {
-            root: Path::new("data/components").to_path_buf(),
-        }),
-        project_service: ProjectServiceConfig::Disabled(ProjectServiceDisabledConfig {
-            account_id: admin_account_id,
-        }),
         agent_types_service: AgentTypesServiceConfig::Local(AgentTypesServiceLocalConfig {}),
         engine: EngineConfig {
             enable_fs_cache: true,
@@ -299,7 +292,7 @@ async fn run(
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
 
-    ServerBootstrap {}
+    TestServerBootstrap {}
         .run(golem_config, prometheus_registry, runtime, join_set)
         .await
 }
@@ -542,7 +535,7 @@ impl UpdateManagement for TestWorkerCtx {
     }
 }
 
-struct ServerBootstrap {}
+struct TestServerBootstrap {}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
@@ -577,7 +570,6 @@ impl WorkerCtx for TestWorkerCtx {
         plugins: Arc<dyn PluginsService>,
         worker_fork: Arc<dyn WorkerForkService>,
         _resource_limits: Arc<dyn ResourceLimits>,
-        project_service: Arc<dyn ProjectService>,
         agent_types_service: Arc<dyn AgentTypesService>,
         shard_service: Arc<dyn ShardService>,
         pending_update: Option<TimestampedUpdateDescription>,
@@ -881,7 +873,7 @@ impl InvocationContextManagement for TestWorkerCtx {
 }
 
 #[async_trait]
-impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
+impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
     fn create_active_workers(
         &self,
         golem_config: &GolemConfig,
@@ -892,10 +884,8 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
     fn create_plugins(
         &self,
         golem_config: &GolemConfig,
-    ) -> (Arc<dyn PluginsService>, Arc<dyn PluginsObservations>) {
-        let plugins =
-            golem_worker_executor::services::plugins::configured(&golem_config.plugin_service);
-        (plugins.clone(), plugins)
+    ) -> Arc<dyn PluginsService> {
+        golem_worker_executor::services::plugins::configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
@@ -903,12 +893,9 @@ impl Bootstrap<TestWorkerCtx> for ServerBootstrap {
         golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
-        golem_worker_executor::services::component::configured(
-            &golem_config.component_service,
-            &golem_config.component_cache,
-            &golem_config.compiled_component_service,
-            blob_storage
-        )
+        Arc::new(ComponentServiceLocalFileSystem::new(
+
+        ))
     }
 
     async fn create_services(
@@ -1204,24 +1191,24 @@ impl TestRdmsService {
 }
 
 impl rdbms::RdbmsService for TestRdmsService {
-    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType> + Send + Sync> {
+    fn mysql(&self) -> Arc<dyn Rdbms<MysqlType>> {
         self.mysql.clone()
     }
 
-    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType> + Send + Sync> {
+    fn postgres(&self) -> Arc<dyn Rdbms<PostgresType>> {
         self.postgres.clone()
     }
 }
 
 #[derive(Clone)]
 struct TestRdms<T: RdbmsType> {
-    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+    rdbms: Arc<dyn Rdbms<T>>,
     additional_test_deps: AdditionalTestDeps,
 }
 
 impl<T: RdbmsType> TestRdms<T> {
     fn new(
-        rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
+        rdbms: Arc<dyn Rdbms<T>>,
         additional_test_deps: AdditionalTestDeps,
     ) -> Self {
         Self {

@@ -40,6 +40,9 @@ use tempfile::TempDir;
 use test_r::{tag_suite, test_dep};
 use tracing::Level;
 use uuid::Uuid;
+use golem_worker_executor::services::component::ComponentService;
+use self::common::component_service::ComponentServiceLocalFileSystem;
+use self::common::component_writer::FileSystemComponentWriter;
 
 mod common;
 
@@ -88,27 +91,23 @@ test_r::enable!();
 pub struct WorkerExecutorPerTestDependencies {
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
-    worker_executor: Arc<dyn WorkerExecutor>,
-    worker_service: Arc<dyn WorkerService>,
-    component_service: Arc<dyn ComponentService>,
+    component_writer: Arc<FileSystemComponentWriter>,
     blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
-    cloud_service: Arc<dyn CloudService>,
 }
 
 pub struct WorkerExecutorTestDependencies {
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
-    component_service: Arc<dyn ComponentService>,
+    component_writer: Arc<FileSystemComponentWriter>,
     blob_storage: Arc<dyn BlobStorage>,
     initial_component_files_service: Arc<InitialComponentFilesService>,
     plugin_wasm_files_service: Arc<PluginWasmFilesService>,
     component_directory: PathBuf,
     component_temp_directory: Arc<TempDir>,
-    cloud_service: Arc<dyn CloudService>,
 }
 
 impl Debug for WorkerExecutorTestDependencies {
@@ -143,36 +142,24 @@ impl WorkerExecutorTestDependencies {
 
         let component_directory = Path::new("../test-components").to_path_buf();
         let account_id = AccountId::generate();
-        let project_id = ProjectId::new_v4();
         let project_name = "default".to_string();
         let token = Uuid::new_v4();
-        let component_service: Arc<dyn ComponentService> = Arc::new(
-            FileSystemComponentService::new(
-                Path::new("data/components"),
-                plugin_wasm_files_service.clone(),
-                account_id.clone(),
-                project_id.clone(),
-            )
-            .await,
-        );
-
-        let cloud_service = Arc::new(AdminOnlyStubCloudService::new(
-            account_id,
-            token,
-            project_id,
-            project_name,
-        ));
+        let component_writer: Arc<FileSystemComponentWriter> = Arc::new(FileSystemComponentWriter::new(
+            Path::new("data/components"),
+            plugin_wasm_files_service.clone(),
+            account_id.clone()
+        )
+        .await);
 
         Self {
             redis,
             redis_monitor,
             component_directory,
-            component_service,
+            component_writer,
             blob_storage,
             initial_component_files_service,
             plugin_wasm_files_service,
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            cloud_service,
+            component_temp_directory: Arc::new(TempDir::new().unwrap())
         }
     }
 
@@ -188,31 +175,15 @@ impl WorkerExecutorTestDependencies {
             self.redis.public_port(),
             redis_prefix.to_string(),
         ));
-        // Connecting to the worker executor started in-process
-        let worker_executor: Arc<dyn WorkerExecutor> = Arc::new(ProvidedWorkerExecutor::new(
-            "localhost".to_string(),
-            http_port,
-            grpc_port,
-            true,
-        ));
-        // Fake worker service forwarding all requests to the worker executor directly
-        let worker_service: Arc<dyn WorkerService> = Arc::new(ForwardingWorkerService::new(
-            worker_executor.clone(),
-            self.component_service.clone(),
-            self.cloud_service.clone(),
-        ));
         WorkerExecutorPerTestDependencies {
             redis,
             redis_monitor: self.redis_monitor.clone(),
-            worker_executor,
-            worker_service,
-            component_service: self.component_service.clone(),
+            component_writer: self.component_writer.clone(),
             component_directory: self.component_directory.clone(),
             blob_storage: self.blob_storage.clone(),
             initial_component_files_service: self.initial_component_files_service.clone(),
             plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
-            component_temp_directory: self.component_temp_directory.clone(),
-            cloud_service: self.cloud_service.clone(),
+            component_temp_directory: self.component_temp_directory.clone()
         }
     }
 }
