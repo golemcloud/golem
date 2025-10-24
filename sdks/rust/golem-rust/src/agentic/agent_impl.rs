@@ -19,7 +19,7 @@ use crate::{
 
 use crate::agentic::agent_registry;
 
-use golem_wasm_ast::analysis::analysed_type::str;
+use golem_wasm::analysis::analysed_type::str;
 
 pub struct Component;
 
@@ -52,8 +52,8 @@ impl Guest for Component {
             Ok(())
         } else {
             Err(AgentError::CustomError(
-                golem_wasm_rpc::ValueAndType::new(
-                    golem_wasm_rpc::Value::String(format!(
+                golem_wasm::ValueAndType::new(
+                    golem_wasm::Value::String(format!(
                         "No agent implementation found for agent definition: {}",
                         agent_type.type_name
                     )),
@@ -71,8 +71,8 @@ impl Guest for Component {
             Ok(agent.agent.invoke(method_name, input))
         } else {
             Err(AgentError::CustomError(
-                golem_wasm_rpc::ValueAndType::new(
-                    golem_wasm_rpc::Value::String("No agent instance found".to_string()),
+                golem_wasm::ValueAndType::new(
+                    golem_wasm::Value::String("No agent instance found".to_string()),
                     str(),
                 )
                 .into(),
