@@ -12,12 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub mod cli;
+pub mod dsl_impl;
+mod env;
+
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::registry_service::RegistryService;
 use crate::components::service::Service;
-use crate::dsl::TestDependenciesDsl;
+use golem_common::model::account::AccountId;
+use golem_common::model::auth::TokenSecret;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
@@ -33,9 +38,9 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
-
-pub mod cli;
-mod env;
+use crate::dsl::{TestDsl, TestDslExtended, StoreComponentBuilder};
+use golem_common::model::environment::EnvironmentId;
+use self::dsl_impl::TestDependenciesTestDsl;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "kebab-case")]
@@ -63,9 +68,9 @@ pub trait TestDependencies: Send + Sync {
 
     fn registry_service(&self) -> Arc<dyn RegistryService>;
 
-    async fn admin(&self) -> TestDependenciesDsl<&Self> {
+    async fn admin(&self) -> TestDependenciesTestDsl<&Self> {
         let registry_service = self.registry_service();
-        TestDependenciesDsl {
+        TestDependenciesTestDsl {
             account_id: registry_service.admin_account_id(),
             account_email: registry_service.admin_account_email(),
             token: registry_service.admin_account_token(),
@@ -86,7 +91,7 @@ pub trait TestDependencies: Send + Sync {
     //     }
     // }
 
-    async fn user(&self) -> anyhow::Result<TestDependenciesDsl<&Self>> {
+    async fn user(&self) -> anyhow::Result<TestDependenciesTestDsl<&Self>> {
         let registry_service = self.registry_service();
 
         let client = registry_service
@@ -110,7 +115,7 @@ pub trait TestDependencies: Send + Sync {
             )
             .await?;
 
-        Ok(TestDependenciesDsl {
+        Ok(TestDependenciesTestDsl {
             account_id: account.id,
             account_email: account.email,
             token: token.secret,
@@ -121,7 +126,7 @@ pub trait TestDependencies: Send + Sync {
     async fn user_with_roles(
         &self,
         roles: &[AccountRole],
-    ) -> anyhow::Result<TestDependenciesDsl<&Self>> {
+    ) -> anyhow::Result<TestDependenciesTestDsl<&Self>> {
         let registry_service = self.registry_service();
 
         let user_dsl = self.user().await?;
@@ -307,12 +312,4 @@ impl<T: TestDependencies> TestDependencies for &T {
 pub enum DbType {
     Postgres,
     Sqlite,
-}
-
-pub trait TestService {
-    fn service(&self) -> Arc<dyn Service>;
-
-    fn kill_all(&self) {
-        self.service().kill();
-    }
 }

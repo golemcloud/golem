@@ -35,7 +35,7 @@ use crate::components::service::Service;
 // use crate::components::worker_service::provided::ProvidedWorkerService;
 // use crate::components::worker_service::spawned::SpawnedWorkerService;
 // use crate::components::worker_service::WorkerService;
-use crate::config::{GolemClientProtocol, TestDependencies, TestService};
+use crate::config::{GolemClientProtocol, TestDependencies};
 use crate::dsl::benchmark::{BenchmarkConfig, RunConfig};
 use async_trait::async_trait;
 use clap::{Parser, Subcommand};
@@ -769,11 +769,5 @@ impl CliTestService {
                 panic!("Test mode {:?} not supported", &params.mode)
             }
         }
-    }
-}
-
-impl TestService for CliTestService {
-    fn service(&self) -> Arc<dyn Service> {
-        self.service.clone()
     }
 }
