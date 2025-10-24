@@ -13,22 +13,27 @@
 // limitations under the License.
 
 use anyhow::{anyhow, Context};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::extraction::extract_agent_types;
-use golem_common::model::component_metadata::{ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata};
+use golem_common::model::agent::AgentType;
+use golem_common::model::application::ApplicationId;
+use golem_common::model::auth::EnvironmentRole;
+use golem_common::model::component::{
+    ComponentDto, ComponentId, ComponentName, ComponentRevision, ComponentType,
+    InitialComponentFile,
+};
+use golem_common::model::component_metadata::{
+    ComponentMetadata, DynamicLinkedInstance, LinearMemory, RawComponentMetadata,
+};
+use golem_common::model::environment::EnvironmentId;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_wasm::analysis::AnalysedExport;
+use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info};
 use uuid::Uuid;
-use golem_common::model::account::AccountId;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentName, ComponentRevision, ComponentType, InitialComponentFile};
-use golem_common::model::environment::EnvironmentId;
-use serde::{Deserialize, Serialize};
-use golem_common::model::application::ApplicationId;
-use golem_common::model::agent::AgentType;
-use golem_common::model::auth::EnvironmentRole;
 
 const WASMS_DIRNAME: &str = "wasms";
 
@@ -38,10 +43,7 @@ pub struct FileSystemComponentWriter {
 }
 
 impl FileSystemComponentWriter {
-    pub async fn new(
-        root: &Path,
-        plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    ) -> Self {
+    pub async fn new(root: &Path, plugin_wasm_files_service: Arc<PluginWasmFilesService>) -> Self {
         info!("Using a directory for storing components: {root:?}");
 
         // If we keep metadata around for multiple runs invariants like unique name
@@ -51,7 +53,7 @@ impl FileSystemComponentWriter {
 
         Self {
             root: root.to_path_buf(),
-            plugin_wasm_files_service
+            plugin_wasm_files_service,
         }
     }
 
@@ -69,7 +71,7 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>
+        environment_roles_from_shares: HashSet<EnvironmentRole>,
     ) -> anyhow::Result<ComponentDto> {
         let target_dir = &self.root;
 
@@ -77,18 +79,14 @@ impl FileSystemComponentWriter {
         {
             let wasm_dir = target_dir.join(WASMS_DIRNAME);
             if !wasm_dir.exists() {
-                tokio::fs::create_dir_all(wasm_dir).await.map_err(|err| {
-                    anyhow!(
-                        "Failed to create component store directory: {err}"
-                    )
-                })?;
+                tokio::fs::create_dir_all(wasm_dir)
+                    .await
+                    .map_err(|err| anyhow!("Failed to create component store directory: {err}"))?;
             }
         }
 
         if !source_path.exists() {
-            return Err(anyhow!(
-                "Source file does not exist: {source_path:?}"
-            ));
+            return Err(anyhow!("Source file does not exist: {source_path:?}"));
         }
 
         let wasm_filename = format!("{WASMS_DIRNAME}/{component_id}-{component_version}.wasm");
@@ -102,11 +100,7 @@ impl FileSystemComponentWriter {
 
         tokio::fs::copy(source_path, &target_path)
             .await
-            .map_err(|err| {
-                anyhow!(
-                    "Failed to copy WASM to the local component store: {err:#}"
-                )
-            })?;
+            .map_err(|err| anyhow!("Failed to copy WASM to the local component store: {err:#}"))?;
 
         let (raw_component_metadata, memories, exports) = if skip_analysis {
             (RawComponentMetadata::default(), vec![], vec![])
@@ -148,7 +142,7 @@ impl FileSystemComponentWriter {
             root_package_name: raw_component_metadata.root_package_name.clone(),
             root_package_version: raw_component_metadata.root_package_version.clone(),
             wasm_hash,
-            environment_roles_from_shares
+            environment_roles_from_shares,
         };
 
         write_metadata_to_file(
@@ -201,7 +195,7 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>
+        environment_roles_from_shares: HashSet<EnvironmentRole>,
     ) -> ComponentDto {
         self.add_component(
             local_path,
@@ -214,7 +208,7 @@ impl FileSystemComponentWriter {
             environment_id,
             application_id,
             account_id,
-            environment_roles_from_shares
+            environment_roles_from_shares,
         )
         .await
         .expect("Failed to add component")
@@ -232,7 +226,7 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>
+        environment_roles_from_shares: HashSet<EnvironmentRole>,
     ) -> anyhow::Result<ComponentDto> {
         self.write_component_to_filesystem(
             local_path,
@@ -250,7 +244,7 @@ impl FileSystemComponentWriter {
             environment_id,
             application_id,
             account_id,
-            environment_roles_from_shares
+            environment_roles_from_shares,
         )
         .await
     }
@@ -264,7 +258,7 @@ impl FileSystemComponentWriter {
         environment_id: EnvironmentId,
         application_id: ApplicationId,
         account_id: AccountId,
-        environment_roles_from_shares: HashSet<EnvironmentRole>
+        environment_roles_from_shares: HashSet<EnvironmentRole>,
     ) -> anyhow::Result<()> {
         self.write_component_to_filesystem(
             local_path,
@@ -279,7 +273,7 @@ impl FileSystemComponentWriter {
             environment_id,
             application_id,
             account_id,
-            environment_roles_from_shares
+            environment_roles_from_shares,
         )
         .await?;
         Ok(())
@@ -331,10 +325,10 @@ impl FileSystemComponentWriter {
             false,
             dynamic_linking.unwrap_or(&old_metadata.dynamic_linking),
             env,
-           old_metadata.environment_id,
-           old_metadata.application_id,
-           old_metadata.account_id,
-           old_metadata.environment_roles_from_shares
+            old_metadata.environment_id,
+            old_metadata.application_id,
+            old_metadata.account_id,
+            old_metadata.environment_roles_from_shares,
         )
         .await
         .expect("Failed to write component to filesystem");
@@ -373,7 +367,7 @@ impl FileSystemComponentWriter {
         let version = self.get_latest_version(&component_id).await;
         let metadata = self.load_metadata(&component_id, version).await?;
         let component: golem_common::model::component::ComponentDto = metadata.into();
-        Ok(component.into())
+        Ok(component)
     }
 
     async fn get_component_size(
@@ -390,12 +384,11 @@ async fn write_metadata_to_file(
     metadata: &LocalFileSystemComponentMetadata,
     path: &Path,
 ) -> anyhow::Result<()> {
-    let json = serde_json::to_string(metadata).map_err(|_| {
-        anyhow!("Failed to serialize component file properties".to_string())
-    })?;
-    tokio::fs::write(path, json).await.map_err(|_| {
-        anyhow!("Failed to write component file properties".to_string())
-    })
+    let json = serde_json::to_string(metadata)
+        .map_err(|_| anyhow!("Failed to serialize component file properties".to_string()))?;
+    tokio::fs::write(path, json)
+        .await
+        .map_err(|_| anyhow!("Failed to write component file properties".to_string()))
 }
 
 fn metadata_filename(component_id: &ComponentId, component_version: ComponentRevision) -> String {

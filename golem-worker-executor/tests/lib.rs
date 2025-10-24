@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::account::AccountId;
-use golem_common::model::environment::EnvironmentId;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
@@ -22,7 +20,6 @@ use golem_service_base::storage::blob::BlobStorage;
 // use golem_test_framework::components::cloud_service::{AdminOnlyStubCloudService, CloudService};
 // use golem_test_framework::components::component_service::filesystem::FileSystemComponentService;
 // use golem_test_framework::components::component_service::ComponentService;
-use golem_test_framework::components::redis::provided::ProvidedRedis;
 use golem_test_framework::components::redis::spawned::SpawnedRedis;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::spawned::SpawnedRedisMonitor;
@@ -31,18 +28,16 @@ use golem_test_framework::components::redis_monitor::RedisMonitor;
 // use golem_test_framework::components::worker_executor::WorkerExecutor;
 // use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 // use golem_test_framework::components::worker_service::WorkerService;
+use self::common::component_writer::FileSystemComponentWriter;
 use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
+use golem_worker_executor::services::component::ComponentService;
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
 use std::sync::Arc;
 use tempfile::TempDir;
-use test_r::{tag_suite, test_dep};
+use test_r::test_dep;
 use tracing::Level;
-use uuid::Uuid;
-use golem_worker_executor::services::component::ComponentService;
-use self::common::component_service::ComponentServiceLocalFileSystem;
-use self::common::component_writer::FileSystemComponentWriter;
 
 mod common;
 
@@ -88,17 +83,6 @@ test_r::enable!();
 // tag_suite!(rdbms_service, rdbms_service);
 
 #[derive(Clone)]
-pub struct WorkerExecutorPerTestDependencies {
-    redis: Arc<dyn Redis>,
-    redis_monitor: Arc<dyn RedisMonitor>,
-    component_writer: Arc<FileSystemComponentWriter>,
-    blob_storage: Arc<dyn BlobStorage>,
-    initial_component_files_service: Arc<InitialComponentFilesService>,
-    plugin_wasm_files_service: Arc<PluginWasmFilesService>,
-    component_directory: PathBuf,
-    component_temp_directory: Arc<TempDir>,
-}
-
 pub struct WorkerExecutorTestDependencies {
     redis: Arc<dyn Redis>,
     redis_monitor: Arc<dyn RedisMonitor>,
@@ -135,21 +119,21 @@ impl WorkerExecutorTestDependencies {
                 .await
                 .unwrap(),
         );
+
         let initial_component_files_service =
             Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
 
         let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
 
         let component_directory = Path::new("../test-components").to_path_buf();
-        let account_id = AccountId::generate();
-        let project_name = "default".to_string();
-        let token = Uuid::new_v4();
-        let component_writer: Arc<FileSystemComponentWriter> = Arc::new(FileSystemComponentWriter::new(
-            Path::new("data/components"),
-            plugin_wasm_files_service.clone(),
-            account_id.clone()
-        )
-        .await);
+
+        let component_writer: Arc<FileSystemComponentWriter> = Arc::new(
+            FileSystemComponentWriter::new(
+                Path::new("data/components"),
+                plugin_wasm_files_service.clone(),
+            )
+            .await,
+        );
 
         Self {
             redis,
@@ -159,31 +143,7 @@ impl WorkerExecutorTestDependencies {
             blob_storage,
             initial_component_files_service,
             plugin_wasm_files_service,
-            component_temp_directory: Arc::new(TempDir::new().unwrap())
-        }
-    }
-
-    pub fn per_test(
-        &self,
-        redis_prefix: &str,
-        http_port: u16,
-        grpc_port: u16,
-    ) -> WorkerExecutorPerTestDependencies {
-        // Connecting to the primary Redis but using a unique prefix
-        let redis: Arc<dyn Redis> = Arc::new(ProvidedRedis::new(
-            self.redis.public_host().to_string(),
-            self.redis.public_port(),
-            redis_prefix.to_string(),
-        ));
-        WorkerExecutorPerTestDependencies {
-            redis,
-            redis_monitor: self.redis_monitor.clone(),
-            component_writer: self.component_writer.clone(),
-            component_directory: self.component_directory.clone(),
-            blob_storage: self.blob_storage.clone(),
-            initial_component_files_service: self.initial_component_files_service.clone(),
-            plugin_wasm_files_service: self.plugin_wasm_files_service.clone(),
-            component_temp_directory: self.component_temp_directory.clone()
+            component_temp_directory: Arc::new(TempDir::new().unwrap()),
         }
     }
 }

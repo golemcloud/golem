@@ -15,20 +15,6 @@
 use super::golem_config::{ComponentCacheConfig, ComponentServiceConfig};
 use crate::metrics::component::record_compilation_time;
 use async_trait::async_trait;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
-use golem_common::model::account::AccountId;
-use golem_common::model::application::ApplicationId;
-use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
-use golem_common::model::environment::EnvironmentId;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
-use golem_service_base::storage::blob::BlobStorage;
-use std::sync::Arc;
-use std::time::Duration;
-use tracing::info;
-use uuid::Uuid;
-use wasmtime::component::Component;
-use wasmtime::Engine;
 use futures::TryStreamExt;
 use golem_api_grpc::proto::golem::component::v1::component_service_client::ComponentServiceClient;
 use golem_api_grpc::proto::golem::component::v1::{
@@ -36,22 +22,36 @@ use golem_api_grpc::proto::golem::component::v1::{
     DownloadComponentRequest, GetComponentsRequest, GetLatestComponentRequest,
     GetVersionedComponentRequest,
 };
-use golem_common::cache::{SimpleCache};
+use golem_common::cache::SimpleCache;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::client::{GrpcClient, GrpcClientConfig};
 use golem_common::metrics::external_calls::record_external_call_response_size_bytes;
+use golem_common::model::account::AccountId;
+use golem_common::model::application::ApplicationId;
+use golem_common::model::component::{ComponentDto, ComponentId, ComponentRevision};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::grpc::{authorised_grpc_request, is_grpc_retriable, GrpcError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
+use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
+use golem_service_base::storage::blob::BlobStorage;
 use http::Uri;
 use prost::Message;
 use std::future::Future;
-use std::time::{Instant};
+use std::sync::Arc;
+use std::time::Duration;
+use std::time::Instant;
 use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
+use tracing::info;
 use tracing::{debug, warn};
+use uuid::Uuid;
+use wasmtime::component::Component;
+use wasmtime::Engine;
 
 /// Service for downloading a specific Golem component from the Golem Component API
 #[async_trait]
@@ -107,7 +107,7 @@ pub fn configured(
         config.retries.clone(),
         config.connect_timeout,
         compiled_component_service,
-        config.max_component_size
+        config.max_component_size,
     ))
 }
 
@@ -169,8 +169,7 @@ impl ComponentServiceDefault {
         &self,
         environment_id: &EnvironmentId,
         component_name: &str,
-    ) -> impl Future<Output = Result<Option<ComponentId>, WorkerExecutorError>> + 'static
-    {
+    ) -> impl Future<Output = Result<Option<ComponentId>, WorkerExecutorError>> + 'static {
         use golem_api_grpc::proto::golem::component::v1::{
             get_components_response, ComponentError,
         };
@@ -226,9 +225,7 @@ impl ComponentServiceDefault {
                 is_grpc_retriable::<ComponentError>,
             )
             .await
-            .map_err(|err| {
-                WorkerExecutorError::unknown(format!("Failed to get component: {err}"))
-            })
+            .map_err(|err| WorkerExecutorError::unknown(format!("Failed to get component: {err}")))
         }
     }
 }
@@ -326,10 +323,7 @@ impl ComponentService for ComponentServiceDefault {
                             match result {
                                 Ok(_) => Ok(component),
                                 Err(err) => {
-                                    warn!(
-                                        "Failed to upload compiled component {:?}: {}",
-                                        key, err
-                                    );
+                                    warn!("Failed to upload compiled component {:?}: {}", key, err);
                                     Ok(component)
                                 }
                             }
@@ -477,9 +471,7 @@ async fn download_via_grpc(
                     .into_iter()
                     .map(|chunk| match chunk.result {
                         None => Err("Empty response".to_string().into()),
-                        Some(download_component_response::Result::SuccessChunk(chunk)) => {
-                            Ok(chunk)
-                        }
+                        Some(download_component_response::Result::SuccessChunk(chunk)) => Ok(chunk),
                         Some(download_component_response::Result::Error(error)) => {
                             Err(GrpcError::Domain(error))
                         }
@@ -646,7 +638,6 @@ fn create_component_cache(
         "component",
     )
 }
-
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone)]
 pub struct ComponentSlug {

@@ -12,18 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod component_writer;
 pub mod component_service;
+pub mod component_writer;
 
-use crate::{LastUniqueId, WorkerExecutorPerTestDependencies, WorkerExecutorTestDependencies};
+use crate::{LastUniqueId, WorkerExecutorTestDependencies};
 use anyhow::Error;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    get_running_workers_metadata_response, GetRunningWorkersMetadataRequest,
-    GetRunningWorkersMetadataSuccessResponse,
-};
 use golem_common::config::RedisConfig;
 use golem_common::model::agent::AgentId;
 use golem_common::model::invocation_context::{
@@ -33,24 +29,28 @@ use golem_common::model::oplog::{
     OplogEntry, OplogPayload, TimestampedUpdateDescription, UpdateDescription,
 };
 use golem_common::model::{
-    GetFileSystemNodeResult,
-    IdempotencyKey, OplogIndex, OwnedWorkerId, RetryConfig,
-    TransactionId, WorkerFilter, WorkerId, WorkerMetadata, WorkerStatusRecord,
+    GetFileSystemNodeResult, IdempotencyKey, OplogIndex, OwnedWorkerId, RetryConfig, TransactionId,
+    WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::service::initial_component_files::InitialComponentFilesService;
-use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 // use golem_test_framework::components::cloud_service::CloudService;
 // use golem_test_framework::components::component_compilation_service::ComponentCompilationService;
-use golem_test_framework::components::rdb::Rdb;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::components::redis_monitor::RedisMonitor;
 // use golem_test_framework::components::shard_manager::ShardManager;
 // use golem_test_framework::components::worker_executor_cluster::WorkerExecutorCluster;
 use golem_test_framework::config::TestDependencies;
 // use golem_test_framework::dsl::to_worker_metadata;
+use self::component_service::ComponentServiceLocalFileSystem;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::ComponentFilePath;
+use golem_common::model::component::{ComponentRevision, PluginPriority};
+use golem_service_base::service::compiled_component::{
+    CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
+    DefaultCompiledComponentService,
+};
 use golem_wasm::golem_rpc_0_2_x::types::{FutureInvokeResult, WasmRpc};
 use golem_wasm::golem_rpc_0_2_x::types::{HostFutureInvokeResult, Pollable};
 use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
@@ -70,15 +70,14 @@ use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::events::Events;
 use golem_worker_executor::services::file_loader::FileLoader;
 use golem_worker_executor::services::golem_config::{
-    AgentTypesServiceConfig, AgentTypesServiceLocalConfig,
-    ComponentServiceConfig,
-    EngineConfig, GolemConfig, IndexedStorageConfig, IndexedStorageKVStoreRedisConfig,
-    KeyValueStorageConfig, MemoryConfig,
+    AgentTypesServiceConfig, AgentTypesServiceLocalConfig, EngineConfig, GolemConfig,
+    IndexedStorageConfig, IndexedStorageKVStoreRedisConfig, KeyValueStorageConfig, MemoryConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::oplog::plugin::OplogProcessorPlugin;
 use golem_worker_executor::services::oplog::{CommitLevel, Oplog, OplogService};
+use golem_worker_executor::services::plugins::PluginsService;
 use golem_worker_executor::services::promise::PromiseService;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
 use golem_worker_executor::services::rdbms::postgres::PostgresType;
@@ -113,10 +112,11 @@ use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
+use std::usize;
 use tokio::runtime::Handle;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
@@ -126,55 +126,53 @@ use wasmtime::component::{Component, Instance, Linker, Resource, ResourceAny};
 use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
-use golem_worker_executor::services::plugins::PluginsService;
-use golem_service_base::model::auth::AuthCtx;
-use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
-use golem_common::model::account::AccountId;
-use golem_common::model::component::ComponentFilePath;
-use golem_service_base::service::compiled_component::{CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig};
-use self::component_service::ComponentServiceLocalFileSystem;
 
 pub struct TestWorkerExecutor {
     _join_set: Option<JoinSet<anyhow::Result<()>>>,
-    deps: WorkerExecutorPerTestDependencies,
+    deps: WorkerExecutorTestDependencies,
+    client: WorkerExecutorClient<Channel>,
 }
 
 impl TestWorkerExecutor {
-    pub async fn client(&self) -> golem_test_framework::Result<WorkerExecutorClient<Channel>> {
-        self.deps.worker_executor.client().await
-    }
+    // pub async fn client(&self) -> golem_test_framework::Result<WorkerExecutorClient<Channel>> {
+    //     self.deps.worker_executor.client().await
+    // }
 
-    pub async fn get_running_workers_metadata(
-        &self,
-        component_id: &ComponentId,
-        filter: Option<WorkerFilter>,
-    ) -> Vec<(WorkerMetadata, Option<String>)> {
-        let component_id: golem_api_grpc::proto::golem::component::ComponentId =
-            component_id.clone().into();
-        let response = self
-            .client()
-            .await
-            .expect("Failed to get client")
-            .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
-                component_id: Some(component_id),
-                filter: filter.map(|f| f.into()),
-                auth_ctx: Some(AuthCtx::System.into())
-            })
-            .await
-            .expect("Failed to get running workers metadata")
-            .into_inner();
+    // pub async fn get_running_workers_metadata(
+    //     &self,
+    //     component_id: &ComponentId,
+    //     filter: Option<WorkerFilter>,
+    // ) -> Vec<(WorkerMetadata, Option<String>)> {
+    //     let component_id: golem_api_grpc::proto::golem::component::ComponentId =
+    //         component_id.clone().into();
+    //     let response = self
+    //         .client()
+    //         .await
+    //         .expect("Failed to get client")
+    //         .get_running_workers_metadata(GetRunningWorkersMetadataRequest {
+    //             component_id: Some(component_id),
+    //             filter: filter.map(|f| f.into()),
+    //             auth_ctx: Some(AuthCtx::System.into())
+    //         })
+    //         .await
+    //         .expect("Failed to get running workers metadata")
+    //         .into_inner();
 
-        match response.result {
-            None => panic!("No response from get_running_workers_metadata"),
-            Some(get_running_workers_metadata_response::Result::Success(
-                GetRunningWorkersMetadataSuccessResponse { workers },
-            )) => workers.into_iter().map(|wm| wm.try_into()).collect::<Result<_, _>>().unwrap(),
+    //     match response.result {
+    //         None => panic!("No response from get_running_workers_metadata"),
+    //         Some(get_running_workers_metadata_response::Result::Success(
+    //             GetRunningWorkersMetadataSuccessResponse { workers },
+    //         )) => workers.into_iter().map(|wm| {
+    //             let last_error = wm.last_error().clone();
+    //             let metadata: WorkerMetadata = wm.try_into()?;
+    //             Ok((wm, last_error))
+    //         }).collect::<Result<_, _>>().unwrap(),
 
-            Some(get_running_workers_metadata_response::Result::Failure(error)) => {
-                panic!("Failed to get worker metadata: {error:?}")
-            }
-        }
-    }
+    //         Some(get_running_workers_metadata_response::Result::Failure(error)) => {
+    //             panic!("Failed to get worker metadata: {error:?}")
+    //         }
+    //     }
+    // }
 }
 
 impl Clone for TestWorkerExecutor {
@@ -182,6 +180,7 @@ impl Clone for TestWorkerExecutor {
         Self {
             _join_set: None,
             deps: self.deps.clone(),
+            client: self.client.clone(),
         }
     }
 }
@@ -227,7 +226,6 @@ pub async fn start_customized(
     info!("Using Redis on port {}", redis.public_port());
 
     let prometheus = golem_worker_executor::metrics::register_all();
-    let admin_account_id = deps.cloud_service.admin_account_id();
 
     let mut config = GolemConfig {
         key_value_storage: KeyValueStorageConfig::Redis(RedisConfig {
@@ -265,18 +263,25 @@ pub async fn start_customized(
 
     let mut join_set = JoinSet::new();
 
-    let details = run(config, prometheus, handle, &mut join_set).await?;
+    let details = run(
+        config,
+        prometheus,
+        handle,
+        deps.component_directory.clone(),
+        &mut join_set,
+    )
+    .await?;
     let grpc_port = details.grpc_port;
 
     let start = std::time::Instant::now();
     loop {
         info!("Waiting for worker-executor to be reachable on port {grpc_port}");
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
-        if client.is_ok() {
-            let deps = deps.per_test(&context.redis_prefix(), details.http_port, grpc_port);
+        if let Ok(client) = client {
             break Ok(TestWorkerExecutor {
                 _join_set: Some(join_set),
-                deps,
+                deps: deps.clone(),
+                client,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -288,13 +293,16 @@ async fn run(
     golem_config: GolemConfig,
     prometheus_registry: Registry,
     runtime: Handle,
+    local_component_root: PathBuf,
     join_set: &mut JoinSet<Result<(), Error>>,
 ) -> Result<RunDetails, Error> {
     info!("Golem Worker Executor starting up...");
 
-    TestServerBootstrap {}
-        .run(golem_config, prometheus_registry, runtime, join_set)
-        .await
+    TestServerBootstrap {
+        local_component_root,
+    }
+    .run(golem_config, prometheus_registry, runtime, join_set)
+    .await
 }
 
 struct TestWorkerCtx {
@@ -535,7 +543,9 @@ impl UpdateManagement for TestWorkerCtx {
     }
 }
 
-struct TestServerBootstrap {}
+struct TestServerBootstrap {
+    local_component_root: PathBuf,
+}
 
 #[async_trait]
 impl WorkerCtx for TestWorkerCtx {
@@ -881,20 +891,20 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         Arc::new(ActiveWorkers::<TestWorkerCtx>::new(&golem_config.memory))
     }
 
-    fn create_plugins(
-        &self,
-        golem_config: &GolemConfig,
-    ) -> Arc<dyn PluginsService> {
+    fn create_plugins(&self, golem_config: &GolemConfig) -> Arc<dyn PluginsService> {
         golem_worker_executor::services::plugins::configured(&golem_config.plugin_service)
     }
 
     fn create_component_service(
         &self,
-        golem_config: &GolemConfig,
+        _golem_config: &GolemConfig,
         blob_storage: Arc<dyn BlobStorage>,
     ) -> Arc<dyn ComponentService> {
         Arc::new(ComponentServiceLocalFileSystem::new(
-
+            &self.local_component_root,
+            usize::MAX,
+            Duration::from_secs(3600),
+            Arc::new(DefaultCompiledComponentService::new(blob_storage)),
         ))
     }
 
@@ -1207,10 +1217,7 @@ struct TestRdms<T: RdbmsType> {
 }
 
 impl<T: RdbmsType> TestRdms<T> {
-    fn new(
-        rdbms: Arc<dyn Rdbms<T>>,
-        additional_test_deps: AdditionalTestDeps,
-    ) -> Self {
+    fn new(rdbms: Arc<dyn Rdbms<T>>, additional_test_deps: AdditionalTestDeps) -> Self {
         Self {
             rdbms,
             additional_test_deps,

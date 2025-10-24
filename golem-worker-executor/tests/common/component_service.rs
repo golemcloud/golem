@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_worker_executor::services::component::ComponentService;
+use super::component_writer::LocalFileSystemComponentMetadata;
 use async_lock::{RwLock, Semaphore};
 use async_trait::async_trait;
-use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::cache::SimpleCache;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::ComponentDto;
@@ -24,6 +24,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::compiled_component::CompiledComponentService;
+use golem_worker_executor::services::component::ComponentService;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -32,7 +33,6 @@ use tokio::task::spawn_blocking;
 use tracing::{debug, warn, Instrument};
 use wasmtime::component::Component;
 use wasmtime::Engine;
-use super::component_writer::LocalFileSystemComponentMetadata;
 
 pub struct ComponentServiceLocalFileSystem {
     root: PathBuf,
@@ -72,8 +72,7 @@ impl ComponentServiceLocalFileSystem {
             let mut reader = tokio::fs::read_dir(&self.root).await?;
             while let Some(entry) = reader.next_entry().await? {
                 if let Ok(file_name) = entry.file_name().into_string() {
-                    if !current.processed_files.contains(&file_name)
-                        && file_name.ends_with(".json")
+                    if !current.processed_files.contains(&file_name) && file_name.ends_with(".json")
                     {
                         new_processed_files.push(file_name.clone());
 
@@ -199,21 +198,13 @@ impl ComponentServiceLocalFileSystem {
                             );
 
                             let result = compiled_component_service
-                                .put(
-                                    environment_id,
-                                    &component_id,
-                                    component_version,
-                                    &component,
-                                )
+                                .put(environment_id, &component_id, component_version, &component)
                                 .await;
 
                             match result {
                                 Ok(_) => Ok(component),
                                 Err(err) => {
-                                    warn!(
-                                        "Failed to upload compiled component {:?}: {}",
-                                        key, err
-                                    );
+                                    warn!("Failed to upload compiled component {:?}: {}", key, err);
                                     Ok(component)
                                 }
                             }
