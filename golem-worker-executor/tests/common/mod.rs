@@ -98,7 +98,6 @@ use regex::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
-use std::ops::{Add, Deref};
 use std::path::Path;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
@@ -1164,7 +1163,7 @@ impl TestOplog {
                         )
                         .await;
 
-                    tracing::info!("Failing worker as it hit marked oplog entry");
+                    info!("Failing worker as it hit marked oplog entry");
 
                     Err(format!(
                         "worker {worker_name} failed on {entry_name} {} times",
@@ -1263,14 +1262,14 @@ impl rdbms::RdbmsService for TestRdmsService {
 }
 
 #[derive(Clone)]
-struct TestRdms<T: rdbms::RdbmsType> {
-    rdbms: Arc<dyn rdbms::Rdbms<T> + Send + Sync>,
+struct TestRdms<T: RdbmsType> {
+    rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
     additional_test_deps: AdditionalTestDeps,
 }
 
-impl<T: rdbms::RdbmsType> TestRdms<T> {
+impl<T: RdbmsType> TestRdms<T> {
     fn new(
-        rdbms: Arc<dyn rdbms::Rdbms<T> + Send + Sync>,
+        rdbms: Arc<dyn Rdbms<T> + Send + Sync>,
         additional_test_deps: AdditionalTestDeps,
     ) -> Self {
         Self {
@@ -1320,7 +1319,7 @@ impl<T: rdbms::RdbmsType> TestRdms<T> {
 }
 
 #[async_trait]
-impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
+impl<T: RdbmsType> Rdbms<T> for TestRdms<T> {
     async fn create(
         &self,
         address: &str,
@@ -1400,7 +1399,6 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
             Ok(RdbmsTransactionStatus::NotFound)
         } else {
             self.rdbms
-                .deref()
                 .get_transaction_status(key, worker_id, transaction_id)
                 .await
         }
@@ -1414,7 +1412,6 @@ impl<T: rdbms::RdbmsType> rdbms::Rdbms<T> for TestRdms<T> {
     ) -> Result<(), rdbms::Error> {
         self.check_rdbms_tx(worker_id, "CleanupTransaction").await?;
         self.rdbms
-            .deref()
             .cleanup_transaction(key, worker_id, transaction_id)
             .await
     }
@@ -1459,7 +1456,7 @@ impl AdditionalTestDeps {
             .await
             .or_default();
 
-        let _ = inner.entry_async(entry).await.or_default().get_mut().add(1);
+        *inner.entry_async(entry).await.or_default().get_mut() += 1;
     }
 
     pub async fn get_rdbms_tx_failures_count(&self, worker_id: WorkerId, entry: String) -> usize {
@@ -1482,6 +1479,6 @@ impl AdditionalTestDeps {
             .await
             .or_default();
 
-        let _ = inner.entry_async(entry).await.or_default().get_mut().add(1);
+        *inner.entry_async(entry).await.or_default().get_mut() += 1;
     }
 }
