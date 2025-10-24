@@ -25,7 +25,7 @@ pub struct Component;
 
 impl Guest for Component {
     fn initialize(agent_type: String, input: DataValue) -> Result<(), AgentError> {
-        let agent_types = agent_registry::get_all_agent_definitions();
+        let agent_types = agent_registry::get_all_agent_types();
 
         let agent_type = agent_types
             .iter()
@@ -91,7 +91,7 @@ impl Guest for Component {
     }
 
     fn discover_agent_types() -> Result<Vec<AgentType>, AgentError> {
-        Ok(agent_registry::get_all_agent_definitions())
+        Ok(agent_registry::get_all_agent_types())
     }
 }
 

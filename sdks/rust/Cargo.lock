@@ -669,6 +669,7 @@ dependencies = [
  "golem-rust-macro",
  "golem-wasm-ast",
  "golem-wasm-rpc",
+ "once_cell",
  "serde",
  "serde_json",
  "uuid",
