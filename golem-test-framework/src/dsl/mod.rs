@@ -15,10 +15,9 @@
 pub mod benchmark;
 pub mod debug_render;
 
-use crate::config::TestDependencies;
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
-use applying::Apply;
+use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
@@ -29,12 +28,11 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName,
 };
-use golem_common::model::auth::{EnvironmentRole, TokenSecret};
+use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::component::PluginPriority;
-use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
-    ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentId,
-    ComponentName, ComponentRevision, ComponentType, PluginInstallation,
+    ComponentDto, ComponentFilePath, ComponentFilePermissions, ComponentId, ComponentRevision,
+    ComponentType, PluginInstallation,
 };
 use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
 use golem_common::model::environment::{
@@ -42,7 +40,6 @@ use golem_common::model::environment::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
-use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use tempfile::{Builder, TempDir};
@@ -51,7 +48,6 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
-use async_trait::async_trait;
 
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
@@ -87,7 +83,6 @@ pub trait TestDsl {
         dynamic_linking: Option<HashMap<String, DynamicLinkedInstance>>,
         env: Option<BTreeMap<String, String>>,
     ) -> anyhow::Result<ComponentDto>;
-
 }
 
 #[async_trait]
@@ -103,7 +98,10 @@ pub trait TestDslExtended: TestDsl {
         let app_name = ApplicationName(format!("app-{}", Uuid::new_v4()));
 
         let application = client
-            .create_application(&self.account_id().0, &ApplicationCreation { name: app_name })
+            .create_application(
+                &self.account_id().0,
+                &ApplicationCreation { name: app_name },
+            )
             .await?;
 
         Ok(application)
@@ -134,7 +132,10 @@ pub trait TestDslExtended: TestDsl {
         let env_name = EnvironmentName(format!("env-{}", Uuid::new_v4()));
 
         let application = client
-            .create_application(&self.account_id().0, &ApplicationCreation { name: app_name })
+            .create_application(
+                &self.account_id().0,
+                &ApplicationCreation { name: app_name },
+            )
             .await?;
 
         let environment = client
@@ -189,11 +190,7 @@ pub struct StoreComponentBuilder<'a, Dsl: TestDsl + ?Sized> {
 }
 
 impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
-    pub fn new(
-        dsl: &'a Dsl,
-        environment_id: EnvironmentId,
-        name: String,
-    ) -> Self {
+    pub fn new(dsl: &'a Dsl, environment_id: EnvironmentId, name: String) -> Self {
         Self {
             dsl,
             environment_id,
@@ -575,7 +572,11 @@ pub fn worker_error_logs(error: &Error) -> Option<String> {
     }
 }
 
-pub fn rename_component_if_needed(temp_dir: &Path, path: &Path, name: &str) -> anyhow::Result<PathBuf> {
+pub fn rename_component_if_needed(
+    temp_dir: &Path,
+    path: &Path,
+    name: &str,
+) -> anyhow::Result<PathBuf> {
     // Check metadata
     let source = std::fs::read(path)?;
     let metadata = RawComponentMetadata::analyse_component(&source)?;

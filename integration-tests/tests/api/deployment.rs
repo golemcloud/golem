@@ -19,6 +19,7 @@ use golem_client::model::DeploymentCreation;
 use golem_common::model::component::ComponentUpdate;
 use golem_common::model::diff::Hash;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use std::collections::BTreeMap;
 use test_r::{inherit_test_dep, test};
 

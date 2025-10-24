@@ -13,43 +13,27 @@
 // limitations under the License.
 
 use crate::config::TestDependencies;
+use crate::dsl::{
+    build_ifs_archive, rename_component_if_needed, StoreComponentBuilder, TestDsl, TestDslExtended,
+};
 use crate::model::IFSEntry;
-use anyhow::{anyhow, Context};
 use applying::Apply;
-use async_zip::tokio::write::ZipFileWriter;
-use async_zip::{Compression, ZipEntryBuilder};
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
-use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
+use async_trait::async_trait;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::account::AccountId;
-use golem_common::model::application::{
-    Application, ApplicationCreation, ApplicationId, ApplicationName,
-};
-use golem_common::model::auth::{EnvironmentRole, TokenSecret};
-use golem_common::model::component::PluginPriority;
+use golem_common::model::auth::TokenSecret;
 use golem_common::model::component::{ComponentCreation, ComponentUpdate};
 use golem_common::model::component::{
-    ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions, ComponentId,
-    ComponentName, ComponentRevision, ComponentType, PluginInstallation,
+    ComponentDto, ComponentFileOptions, ComponentFilePath, ComponentId, ComponentName,
+    ComponentRevision, ComponentType, PluginInstallation,
 };
-use golem_common::model::component_metadata::{DynamicLinkedInstance, RawComponentMetadata};
-use golem_common::model::environment::{
-    Environment, EnvironmentCreation, EnvironmentId, EnvironmentName,
-};
-use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
+use golem_common::model::component_metadata::DynamicLinkedInstance;
+use golem_common::model::environment::EnvironmentId;
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
-use std::path::{Path, PathBuf};
-use tempfile::{Builder, TempDir};
+use std::path::PathBuf;
 use tokio::fs::File;
-use tokio::sync::mpsc::UnboundedReceiver;
-use tracing::info;
 use uuid::Uuid;
-use wasm_metadata::{AddMetadata, AddMetadataField};
-use async_trait::async_trait;
-use crate::dsl::{TestDsl, TestDslExtended, StoreComponentBuilder, build_ifs_archive, rename_component_if_needed};
 
 #[derive(Clone)]
 pub struct TestDependenciesTestDsl<Deps> {
@@ -60,7 +44,7 @@ pub struct TestDependenciesTestDsl<Deps> {
 }
 
 #[async_trait]
-impl <Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
+impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
     fn component(
         &self,
         environment_id: &EnvironmentId,
@@ -218,7 +202,7 @@ impl <Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
 }
 
 #[async_trait]
-impl <Deps: TestDependencies> TestDslExtended for TestDependenciesTestDsl<Deps> {
+impl<Deps: TestDependencies> TestDslExtended for TestDependenciesTestDsl<Deps> {
     fn account_id(&self) -> &AccountId {
         &self.account_id
     }

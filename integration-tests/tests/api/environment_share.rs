@@ -18,6 +18,7 @@ use golem_client::api::{RegistryServiceClient, RegistryServiceGetEnvironmentShar
 use golem_common::model::auth::EnvironmentRole;
 use golem_common::model::environment_share::{EnvironmentShareCreation, EnvironmentShareUpdate};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::TestDslExtended;
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(Tracing);

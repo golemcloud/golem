@@ -16,13 +16,11 @@ pub mod cli;
 pub mod dsl_impl;
 mod env;
 
+use self::dsl_impl::TestDependenciesTestDsl;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::registry_service::RegistryService;
-use crate::components::service::Service;
-use golem_common::model::account::AccountId;
-use golem_common::model::auth::TokenSecret;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use clap::ValueEnum;
@@ -38,9 +36,6 @@ use golem_service_base::storage::blob::BlobStorage;
 use std::path::Path;
 use std::sync::Arc;
 use uuid::Uuid;
-use crate::dsl::{TestDsl, TestDslExtended, StoreComponentBuilder};
-use golem_common::model::environment::EnvironmentId;
-use self::dsl_impl::TestDependenciesTestDsl;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 #[clap(rename_all = "kebab-case")]
