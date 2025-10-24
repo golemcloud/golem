@@ -16,7 +16,7 @@ use crate::model::{AccountApiDomain, ApiDomain, DomainRequest};
 use async_trait::async_trait;
 use conditional_trait_gen::{trait_gen, when};
 use golem_common::model::auth::Namespace;
-use golem_common::model::AccountId;
+use golem_common::model::account::AccountId;
 use golem_service_base::db::Pool;
 use golem_service_base::repo::RepoError;
 

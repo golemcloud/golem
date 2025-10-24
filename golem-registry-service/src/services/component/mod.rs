@@ -21,16 +21,16 @@ pub use self::write::ComponentWriteService;
 use super::component_object_store::ComponentObjectStore;
 use super::component_transformer_plugin_caller::{self};
 use super::environment::EnvironmentService;
-use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::repo::component::ComponentRepo;
 use crate::services::environment::EnvironmentError;
 use futures::stream::BoxStream;
-use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::{ComponentName, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::EnvironmentAction;
 use std::sync::Arc;
 use tracing::info;
 
@@ -80,7 +80,11 @@ impl ComponentService {
                     other => other.into(),
                 })?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.roles_from_shares,
+        )?)
     }
 
     pub async fn get_component_revision(
@@ -111,7 +115,11 @@ impl ComponentService {
                     other => other.into(),
                 })?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.roles_from_shares,
+        )?)
     }
 
     pub async fn list_staged_components(
@@ -140,6 +148,7 @@ impl ComponentService {
                 r.try_into_model(
                     environment.application_id.clone(),
                     environment.owner_account_id.clone(),
+                    environment.roles_from_shares.clone(),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -179,7 +188,11 @@ impl ComponentService {
                     other => other.into(),
                 })?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.roles_from_shares,
+        )?)
     }
 
     pub async fn list_deployed_components(
@@ -215,6 +228,7 @@ impl ComponentService {
                 r.try_into_model(
                     environment.application_id.clone(),
                     environment.owner_account_id.clone(),
+                    environment.roles_from_shares.clone(),
                 )
             })
             .collect::<Result<_, _>>()?;
@@ -260,7 +274,11 @@ impl ComponentService {
                     other => other.into(),
                 })?;
 
-        Ok(record.try_into_model(environment.application_id, environment.owner_account_id)?)
+        Ok(record.try_into_model(
+            environment.application_id,
+            environment.owner_account_id,
+            environment.roles_from_shares,
+        )?)
     }
 
     pub async fn download_component_wasm(

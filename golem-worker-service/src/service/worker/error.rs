@@ -14,11 +14,11 @@
 
 use crate::service::component::ComponentServiceError;
 use crate::service::worker::CallWorkerExecutorError;
-use golem_common::model::component::VersionedComponentId;
-use golem_common::model::{AccountId, ComponentFilePath, ComponentId, WorkerId};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentFilePath, ComponentId};
+use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
 use golem_service_base::clients::limit::LimitError;
-use golem_service_base::clients::project::ProjectError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[derive(Debug, thiserror::Error)]
@@ -31,13 +31,8 @@ pub enum WorkerServiceError {
     InternalCallError(CallWorkerExecutorError),
     #[error(transparent)]
     GolemError(#[from] WorkerExecutorError),
-    #[error(transparent)]
-    Project(#[from] ProjectError),
-
     #[error("Type checker error: {0}")]
     TypeChecker(String),
-    #[error("Component not found: {0}")]
-    VersionedComponentIdNotFound(VersionedComponentId),
     #[error("Component not found: {0}")]
     ComponentNotFound(ComponentId),
     #[error("Account not found: {0}")]
@@ -57,7 +52,6 @@ impl SafeDisplay for WorkerServiceError {
         match self {
             Self::Component(inner) => inner.to_safe_string(),
             Self::TypeChecker(_) => self.to_string(),
-            Self::VersionedComponentIdNotFound(_) => self.to_string(),
             Self::ComponentNotFound(_) => self.to_string(),
             Self::AccountIdNotFound(_) => self.to_string(),
             Self::WorkerNotFound(_) => self.to_string(),
@@ -67,7 +61,6 @@ impl SafeDisplay for WorkerServiceError {
             Self::FileNotFound(_) => self.to_string(),
             Self::BadFileType(_) => self.to_string(),
             Self::LimitError(inner) => inner.to_safe_string(),
-            Self::Project(inner) => inner.to_safe_string(),
         }
     }
 }
@@ -90,7 +83,6 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
         match error {
             WorkerServiceError::ComponentNotFound(_)
             | WorkerServiceError::AccountIdNotFound(_)
-            | WorkerServiceError::VersionedComponentIdNotFound(_)
             | WorkerServiceError::WorkerNotFound(_)
             | WorkerServiceError::FileNotFound(_)
             | WorkerServiceError::GolemError(WorkerExecutorError::WorkerNotFound { .. }) => {
@@ -120,7 +112,6 @@ impl From<WorkerServiceError> for golem_api_grpc::proto::golem::worker::v1::work
             }
 
             WorkerServiceError::Component(component) => component.into(),
-            WorkerServiceError::Project(project_error) => project_error.into(),
 
             WorkerServiceError::LimitError(LimitError::LimitExceeded(_)) => {
                 Self::LimitExceeded(ErrorBody {

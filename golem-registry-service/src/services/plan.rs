@@ -13,15 +13,15 @@
 // limitations under the License.
 
 use crate::config::PlansConfig;
-use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::account_usage::UsageType;
 use crate::repo::model::plan::PlanRecord;
 use crate::repo::plan::PlanRepo;
 use anyhow::anyhow;
 use golem_common::model::account::PlanId;
 use golem_common::model::account::{Plan, PlanName};
-use golem_common::model::auth::{GlobalAction, PlanAction};
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
+use golem_service_base::model::auth::{GlobalAction, PlanAction};
 use golem_service_base::repo::RepoError;
 use std::collections::BTreeMap;
 use std::fmt::Debug;

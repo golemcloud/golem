@@ -18,7 +18,6 @@ use super::oauth2_github_client::{
 };
 use super::token::{TokenError, TokenService};
 use crate::config::OAuth2Config;
-use crate::model::auth::AuthCtx;
 use crate::model::login::{
     ExternalLogin, OAuth2DeviceFlowSession, OAuth2Token, OAuth2WebflowState,
     OAuth2WebflowStateMetadata,
@@ -36,6 +35,7 @@ use golem_common::model::login::{
     OAuth2WebflowStateId,
 };
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
 use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use std::sync::Arc;

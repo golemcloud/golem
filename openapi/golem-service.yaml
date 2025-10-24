@@ -12461,6 +12461,10 @@ components:
         wasmHash:
           type: string
           format: hash
+        environmentRolesFromShares:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
       required:
       - id
       - revision
@@ -12476,6 +12480,7 @@ components:
       - installedPlugins
       - env
       - wasmHash
+      - environmentRolesFromShares
     ComponentFileOptions:
       title: ComponentFileOptions
       type: object

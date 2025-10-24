@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::agent::AgentType;
+use super::auth::EnvironmentRole;
 use super::component_metadata::DynamicLinkedInstance;
 use super::environment::EnvironmentId;
 use super::environment_plugin_grant::EnvironmentPluginGrantId;
@@ -30,6 +31,7 @@ use golem_wasm_derive::IntoValue;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fmt::{Debug, Display, Formatter};
 use std::str::FromStr;
 use strum_macros::FromRepr;
@@ -136,6 +138,7 @@ declare_structs! {
         pub installed_plugins: Vec<InstalledPlugin>,
         pub env: BTreeMap<String, String>,
         pub wasm_hash: crate::model::diff::Hash,
+        pub environment_roles_from_shares: HashSet<EnvironmentRole>
     }
 
     #[derive(Default)]
@@ -348,6 +351,7 @@ impl From<ComponentId> for golem_wasm::ComponentId {
 mod protobuf {
     use super::{ComponentDto, InstalledPlugin};
     use super::{ComponentName, ComponentRevision, ComponentType, PluginPriority};
+    use crate::model::auth::EnvironmentRole;
     use applying::Apply;
     use std::collections::BTreeMap;
     use std::time::SystemTime;
@@ -453,6 +457,16 @@ mod protobuf {
                 .map_err(|e| format!("Invalid wasm hash bytes: {e}"))?
                 .apply(crate::model::diff::Hash::from);
 
+            let environment_roles_from_shares = value
+                .environment_roles_from_shares
+                .into_iter()
+                .map(|ar| {
+                    golem_api_grpc::proto::golem::auth::EnvironmentRole::try_from(ar)
+                        .map_err(|e| format!("Failed converting environment role: {e}"))
+                        .map(EnvironmentRole::from)
+                })
+                .collect::<Result<_, _>>()?;
+
             Ok(Self {
                 id,
                 revision,
@@ -468,6 +482,7 @@ mod protobuf {
                 installed_plugins,
                 env,
                 wasm_hash,
+                environment_roles_from_shares,
             })
         }
     }

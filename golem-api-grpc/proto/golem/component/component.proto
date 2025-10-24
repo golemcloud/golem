@@ -10,6 +10,7 @@ import "golem/component/component_metadata.proto";
 import "golem/component/component_type.proto";
 import "golem/component/plugin_installation.proto";
 import "golem/component/component_id.proto";
+import "golem/auth/environment_role.proto";
 import "google/protobuf/timestamp.proto";
 
 message Component {
@@ -27,4 +28,5 @@ message Component {
   map<string, string> env = 12;
   repeated uint32 wasm_hash_bytes = 13;
   golem.common.ApplicationId application_id = 14;
+  repeated golem.auth.EnvironmentRole environment_roles_from_shares = 15;
 }

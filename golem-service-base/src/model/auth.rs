@@ -13,16 +13,23 @@
 // limitations under the License.
 
 use axum::http::header;
-use golem_common::model::auth::TokenSecret;
+use golem_common::SafeDisplay;
+use golem_common::model::account::{AccountId, PlanId, SYSTEM_ACCOUNT_ID};
+use golem_common::model::auth::{AccountRole, EnvironmentRole, TokenSecret};
 use headers::Cookie as HCookie;
 use headers::HeaderMapExt;
 use poem::Request;
 use poem_openapi::SecurityScheme;
 use poem_openapi::auth::{ApiKey, Bearer};
+use std::collections::HashSet;
+use std::hash::Hash;
 use std::str::FromStr;
+use std::sync::LazyLock;
 
 pub const COOKIE_KEY: &str = "GOLEM_SESSION";
 pub const AUTH_ERROR_MESSAGE: &str = "authorization error";
+static SYSTEM_ACCOUNT_ROLES: LazyLock<HashSet<AccountRole>> =
+    LazyLock::new(|| HashSet::from_iter([AccountRole::Admin]));
 
 #[derive(SecurityScheme)]
 #[oai(rename = "Token", ty = "bearer", checker = "bearer_checker")]
@@ -135,6 +142,310 @@ impl<'a> poem::FromRequest<'a> for WrappedGolemSecuritySchema {
 
         Ok(WrappedGolemSecuritySchema(result))
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum GlobalAction {
+    CreateAccount,
+    GetDefaultPlan,
+    GetReports,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum PlanAction {
+    ViewPlan,
+    CreateOrUpdatePlan,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum AccountAction {
+    CreateApplication,
+    CreateEnvironment,
+    CreateKnownSecret,
+    CreateToken,
+    DeleteAccount,
+    DeleteApplication,
+    DeletePlugin,
+    DeleteToken,
+    ListAllApplicationEnvironments,
+    RegisterPlugin,
+    SetRoles,
+    UpdateAccount,
+    UpdateApplication,
+    UpdateUsage,
+    ViewAccount,
+    ViewApplications,
+    ViewPlugin,
+    ViewToken,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd, strum_macros::Display)]
+pub enum EnvironmentAction {
+    CreateComponent,
+    CreateEnvironmentPluginGrant,
+    CreateShare,
+    CreateWorker,
+    DeleteEnvironment,
+    DeleteEnvironmentPluginGrant,
+    DeleteShare,
+    DeleteWorker,
+    DeployEnvironment,
+    UpdateComponent,
+    UpdateEnvironment,
+    UpdateShare,
+    UpdateWorker,
+    ViewComponent,
+    ViewDeployment,
+    ViewDeploymentPlan,
+    ViewEnvironment,
+    ViewEnvironmentPluginGrant,
+    ViewShares,
+    ViewWorker,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum AuthorizationError {
+    #[error("The global action {0} is not allowed")]
+    GlobalActionNotAllowed(GlobalAction),
+    #[error("The plan action {0} is not allowed")]
+    PlanActionNotAllowed(PlanAction),
+    #[error("The account action {0} is not allowed")]
+    AccountActionNotAllowed(AccountAction),
+    #[error("The environment action {0} is not allowed")]
+    EnvironmentActionNotAllowed(EnvironmentAction),
+}
+
+impl SafeDisplay for AuthorizationError {
+    fn to_safe_string(&self) -> String {
+        self.to_string()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UserAuthCtx {
+    pub account_id: AccountId,
+    pub account_plan_id: PlanId,
+    pub account_roles: HashSet<AccountRole>,
+}
+
+#[derive(Debug, Clone)]
+pub enum AuthCtx {
+    System,
+    User(UserAuthCtx),
+}
+
+// Note: Basic visibility of resources is enforced in the repo. Use this to check permissions to modify resource / access restricted resources.
+// To support defense-in-depth everything in here should be cheap -- avoid async / fetching data.
+//
+// The patterns for authorizing actions should be:
+// - getting a resource: fetch resource + parent information (either through joins in the repo for non-environment or explicitly for environment case) (404 here) -> check auth using parent information (404 here)
+// - listing a resource: fetch parent information explicitly (using rules in (1), so always 404 here) -> check auth using parent information (403 here)
+// - creating a new resource: fetch parent information explicitly (using rules in (1), so always 404 here) -> check auth (403 here) -> create resource
+// - update/delete a resource -> fetch resource + parent information (using rules in (1), so always 404 here)) + do auth using parent information (403 here)
+impl AuthCtx {
+    /// Get the sytem AuthCtx for system initiated action
+    pub fn system() -> AuthCtx {
+        AuthCtx::System
+    }
+
+    pub fn account_id(&self) -> &AccountId {
+        match self {
+            Self::System => &SYSTEM_ACCOUNT_ID,
+            Self::User(user) => &user.account_id,
+        }
+    }
+
+    pub fn account_roles(&self) -> &HashSet<AccountRole> {
+        match self {
+            Self::System => &SYSTEM_ACCOUNT_ROLES,
+            Self::User(user) => &user.account_roles,
+        }
+    }
+
+    fn account_plan_id(&self) -> Option<&PlanId> {
+        match self {
+            Self::System => None,
+            Self::User(user) => Some(&user.account_plan_id),
+        }
+    }
+
+    /// Whether storage level visibility rules (e.g. does this account have any shares for this environment)
+    /// should be disabled for this user.
+    pub fn should_override_storage_visibility_rules(&self) -> bool {
+        has_any_role(self.account_roles(), &[AccountRole::Admin])
+    }
+
+    pub fn authorize_global_action(&self, action: GlobalAction) -> Result<(), AuthorizationError> {
+        let account_roles = self.account_roles();
+        let is_allowed = match action {
+            GlobalAction::CreateAccount => has_any_role(account_roles, &[AccountRole::Admin]),
+            GlobalAction::GetDefaultPlan => has_any_role(account_roles, &[AccountRole::Admin]),
+            GlobalAction::GetReports => has_any_role(
+                account_roles,
+                &[AccountRole::Admin, AccountRole::MarketingAdmin],
+            ),
+        };
+
+        if !is_allowed {
+            Err(AuthorizationError::GlobalActionNotAllowed(action))?
+        }
+
+        Ok(())
+    }
+
+    pub fn authorize_plan_action(
+        &self,
+        plan_id: &PlanId,
+        action: PlanAction,
+    ) -> Result<(), AuthorizationError> {
+        match action {
+            PlanAction::ViewPlan => {
+                // Users are allowed to see their own plan
+                if let Some(account_plan_id) = self.account_plan_id()
+                    && account_plan_id == plan_id
+                {
+                    return Ok(());
+                }
+
+                // admins are allowed to see all plans
+                if has_any_role(self.account_roles(), &[AccountRole::Admin]) {
+                    return Ok(());
+                }
+
+                Err(AuthorizationError::PlanActionNotAllowed(action))
+            }
+            PlanAction::CreateOrUpdatePlan => {
+                // Only admins can change plan details
+                if has_any_role(self.account_roles(), &[AccountRole::Admin]) {
+                    Ok(())
+                } else {
+                    Err(AuthorizationError::PlanActionNotAllowed(action))
+                }
+            }
+        }
+    }
+
+    pub fn authorize_account_action(
+        &self,
+        target_account_id: &AccountId,
+        action: AccountAction,
+    ) -> Result<(), AuthorizationError> {
+        // Accounts owners are allowed to do everything with their accounts
+
+        let is_allowed = (self.account_id() == target_account_id)
+            || has_any_role(self.account_roles(), &[AccountRole::Admin]);
+
+        if !is_allowed {
+            Err(AuthorizationError::AccountActionNotAllowed(action))?
+        }
+
+        Ok(())
+    }
+
+    pub fn authorize_environment_action(
+        &self,
+        account_owning_enviroment: &AccountId,
+        roles_from_shares: &HashSet<EnvironmentRole>,
+        action: EnvironmentAction,
+    ) -> Result<(), AuthorizationError> {
+        // Environment owners are allowed to do everything with their environments
+        if self.account_id() == account_owning_enviroment {
+            return Ok(());
+        };
+
+        let is_allowed = match action {
+            EnvironmentAction::ViewEnvironment => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::CreateComponent => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::UpdateComponent => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewComponent => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::ViewShares => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::UpdateShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::CreateShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteShare => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::UpdateEnvironment => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeleteEnvironment => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::CreateEnvironmentPluginGrant => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::ViewEnvironmentPluginGrant => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::DeleteEnvironmentPluginGrant => {
+                has_any_role(roles_from_shares, &[EnvironmentRole::Admin])
+            }
+            EnvironmentAction::DeployEnvironment => has_any_role(
+                roles_from_shares,
+                &[EnvironmentRole::Admin, EnvironmentRole::Deployer],
+            ),
+            EnvironmentAction::ViewDeployment => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::ViewDeploymentPlan => has_any_role(
+                roles_from_shares,
+                &[
+                    EnvironmentRole::Admin,
+                    EnvironmentRole::Deployer,
+                    EnvironmentRole::Viewer,
+                ],
+            ),
+            EnvironmentAction::CreateWorker => todo!(),
+            EnvironmentAction::DeleteWorker => todo!(),
+            EnvironmentAction::ViewWorker => todo!(),
+            EnvironmentAction::UpdateWorker => todo!(),
+        };
+
+        if !is_allowed {
+            Err(AuthorizationError::EnvironmentActionNotAllowed(action))?
+        };
+
+        Ok(())
+    }
+}
+
+fn has_any_role<T: Eq + Hash>(roles: &HashSet<T>, allowed: &[T]) -> bool {
+    allowed.iter().any(|r| roles.contains(r))
 }
 
 #[cfg(test)]
@@ -356,5 +667,97 @@ mod test {
     #[test]
     async fn conflict_both_uuid_invalid_bearer_auth_non_openapi() {
         conflict_both_uuid_invalid_bearer_auth(make_non_openapi()).await;
+    }
+}
+
+mod protobuf {
+    use super::{AuthCtx, AuthorizationError, UserAuthCtx};
+    use golem_common::model::auth::AccountRole;
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::UserAuthCtx> for UserAuthCtx {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::UserAuthCtx,
+        ) -> Result<Self, Self::Error> {
+            Ok(Self {
+                account_id: value.account_id.ok_or("missing account id")?.try_into()?,
+                account_plan_id: value.plan_id.ok_or("missing plan id")?.try_into()?,
+                account_roles: value
+                    .account_roles
+                    .into_iter()
+                    .map(|ar| {
+                        golem_api_grpc::proto::golem::auth::AccountRole::try_from(ar)
+                            .map_err(|e| format!("Failed converting account role: {e}"))
+                            .map(AccountRole::from)
+                    })
+                    .collect::<Result<_, _>>()?,
+            })
+        }
+    }
+
+    impl From<UserAuthCtx> for golem_api_grpc::proto::golem::auth::UserAuthCtx {
+        fn from(value: UserAuthCtx) -> Self {
+            Self {
+                account_id: Some(value.account_id.into()),
+                plan_id: Some(value.account_plan_id.into()),
+                account_roles: value
+                    .account_roles
+                    .into_iter()
+                    .map(|ar| golem_api_grpc::proto::golem::auth::AccountRole::from(ar) as i32)
+                    .collect(),
+            }
+        }
+    }
+
+    impl TryFrom<golem_api_grpc::proto::golem::auth::AuthCtx> for AuthCtx {
+        type Error = String;
+        fn try_from(
+            value: golem_api_grpc::proto::golem::auth::AuthCtx,
+        ) -> Result<Self, Self::Error> {
+            match value.value {
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(_)) => {
+                    Ok(AuthCtx::System)
+                }
+                Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(user)) => {
+                    Ok(AuthCtx::User(user.try_into()?))
+                }
+                None => Err("No auth_ctx value present".to_string()),
+            }
+        }
+    }
+
+    impl From<AuthCtx> for golem_api_grpc::proto::golem::auth::AuthCtx {
+        fn from(value: AuthCtx) -> Self {
+            match value {
+                AuthCtx::System => Self {
+                    value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::System(
+                        golem_api_grpc::proto::golem::common::Empty {},
+                    )),
+                },
+                AuthCtx::User(user) => Self {
+                    value: Some(golem_api_grpc::proto::golem::auth::auth_ctx::Value::User(
+                        user.into(),
+                    )),
+                },
+            }
+        }
+    }
+
+    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::WorkerError {
+        fn from(error: AuthorizationError) -> Self {
+            Self {
+                error: Some(error.into()),
+            }
+        }
+    }
+
+    impl From<AuthorizationError> for golem_api_grpc::proto::golem::worker::v1::worker_error::Error {
+        fn from(error: AuthorizationError) -> Self {
+            use golem_api_grpc::proto::golem::common::ErrorBody;
+
+            Self::Unauthorized(ErrorBody {
+                error: error.to_string(),
+            })
+        }
     }
 }

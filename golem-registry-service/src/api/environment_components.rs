@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::ApiResult;
-use crate::model::auth::AuthCtx;
 use crate::services::auth::AuthService;
 use crate::services::component::{ComponentService, ComponentWriteService};
 use golem_common::api::Page;
@@ -24,6 +23,7 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::Path;

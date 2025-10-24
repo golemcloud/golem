@@ -49,8 +49,8 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     SearchOplogResponse, UpdateWorkerRequest, UpdateWorkerResponse,
 };
 use golem_common::grpc::{
-    proto_account_id_string, proto_component_id_string, proto_idempotency_key_string,
-    proto_promise_id_string, proto_worker_id_string,
+    proto_component_id_string, proto_idempotency_key_string, proto_promise_id_string,
+    proto_worker_id_string,
 };
 use golem_common::metrics::api::record_new_grpc_api_active_stream;
 use golem_common::model::account::AccountId;
@@ -69,6 +69,7 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
+use golem_service_base::model::auth::AuthCtx;
 use golem_wasm::protobuf::Val;
 use golem_wasm::ValueAndType;
 use std::cmp::min;
@@ -205,11 +206,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
 
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
+
         if let Some(limits) = request.account_limits {
+            let account_id = request
+                .component_owner_account_id
+                .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?
+                .try_into()
+                .map_err(|e| {
+                    WorkerExecutorError::invalid_request(format!("Invalid account id: {e}"))
+                })?;
+
             Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
         }
 
@@ -231,7 +248,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let worker = Worker::get_or_create_suspended(
             self,
-            &account_id,
+            auth_ctx.account_id(),
             &owned_worker_id,
             Some(args),
             Some(env),
@@ -314,8 +331,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
             .await
@@ -323,7 +347,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             let worker = Worker::get_or_create_suspended(
                 self,
-                &account_id,
+                auth_ctx.account_id(),
                 &owned_worker_id,
                 None,
                 None,
@@ -353,7 +377,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         request: ForkWorkerRequest,
     ) -> Result<ForkWorkerResponse, WorkerExecutorError> {
         let account_id_proto = request
-            .account_id
+            .component_owner_account_id
             .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
 
         let account_id: AccountId = account_id_proto.try_into().map_err(|e| {
@@ -414,12 +438,21 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let target = request
             .target
             .ok_or(WorkerExecutorError::invalid_request("target not found"))?;
+
         let target = target
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
@@ -430,7 +463,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             Some(_) => {
                 let worker = Worker::get_or_create_suspended(
                     self,
-                    &account_id,
+                    auth_ctx.account_id(),
                     &owned_worker_id,
                     None,
                     None,
@@ -455,8 +488,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<bool, WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let idempotency_key = request
             .idempotency_key
@@ -479,7 +520,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             let worker = Worker::get_or_create_suspended(
                 self,
-                &account_id,
+                auth_ctx.account_id(),
                 &owned_worker_id,
                 None,
                 None,
@@ -508,8 +549,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await;
 
@@ -531,7 +580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     debug!("Marking suspended worker as interrupted");
                     let worker = Worker::get_or_create_suspended(
                         self,
-                        &account_id,
+                        auth_ctx.account_id(),
                         &owned_worker_id,
                         None,
                         None,
@@ -551,7 +600,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     debug!("Marking worker scheduled to be retried as interrupted");
                     let worker = Worker::get_or_create_suspended(
                         self,
-                        &account_id,
+                        auth_ctx.account_id(),
                         &owned_worker_id,
                         None,
                         None,
@@ -570,7 +619,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 WorkerStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
                         self,
-                        &account_id,
+                        auth_ctx.account_id(),
                         &owned_worker_id,
                         None,
                         None,
@@ -604,8 +653,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let force_resume = request.force.unwrap_or(false);
 
@@ -625,7 +682,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 );
                 let _ = Worker::get_or_create_running(
                     &self.services,
-                    &account_id,
+                    auth_ctx.account_id(),
                     &owned_worker_id,
                     None,
                     None,
@@ -644,7 +701,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 );
                 let _ = Worker::get_or_create_running(
                     &self.services,
-                    &account_id,
+                    auth_ctx.account_id(),
                     &owned_worker_id,
                     None,
                     None,
@@ -724,9 +781,10 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let worker_id = request.worker_id()?;
         let project_id = request.environment_id()?;
 
-        let account_id: AccountId = request.account_id()?;
         let owned_worker_id = OwnedWorkerId::new(&project_id, &worker_id);
         self.ensure_worker_belongs_to_this_executor(&worker_id)?;
+
+        let auth_ctx = request.auth_ctx()?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id).await;
 
@@ -735,7 +793,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
 
         if let Some(limits) = request.account_limits() {
-            Ctx::record_last_known_limits(self, &account_id, &limits.into()).await?;
+            Ctx::record_last_known_limits(self, &request.component_account_id()?, &limits.into())
+                .await?;
         }
 
         let invocation_context = request
@@ -744,7 +803,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         Worker::get_or_create_suspended(
             self,
-            &account_id,
+            auth_ctx.account_id(),
             &owned_worker_id,
             request.args(),
             request.env(),
@@ -944,8 +1003,17 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
             .await
@@ -1007,7 +1075,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         debug!("Activating worker for update",);
                         let worker = Worker::get_or_create_suspended(
                             self,
-                            &account_id,
+                            auth_ctx.account_id(),
                             &owned_worker_id,
                             None,
                             None,
@@ -1030,7 +1098,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         // to begin the update.
                         let worker = Worker::get_or_create_suspended(
                             self,
-                            &account_id,
+                            auth_ctx.account_id(),
                             &owned_worker_id,
                             None,
                             None,
@@ -1067,7 +1135,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
                 let worker = Worker::get_or_create_suspended(
                     self,
-                    &account_id,
+                    auth_ctx.account_id(),
                     &owned_worker_id,
                     None,
                     None,
@@ -1092,8 +1160,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> ResponseResult<<Self as WorkerExecutor>::ConnectWorkerStream> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let metadata = Worker::<Ctx>::get_latest_metadata(self, &owned_worker_id)
             .await
@@ -1106,7 +1182,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         if metadata.last_known_status.status != WorkerStatus::Interrupted {
             let event_service = Worker::get_or_create_suspended(
                 self,
-                &account_id,
+                auth_ctx.account_id(),
                 &owned_worker_id,
                 None,
                 None,
@@ -1413,8 +1489,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
+
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let plugin_priority: PluginPriority = PluginPriority(request.plugin_priority);
 
@@ -1446,7 +1530,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     {
                         let worker = Worker::get_or_create_suspended(
                             self,
-                            &account_id,
+                            auth_ctx.account_id(),
                             &owned_worker_id,
                             None,
                             None,
@@ -1477,8 +1561,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<(), WorkerExecutorError> {
         let owned_worker_id =
             extract_owned_worker_id(&request, |r| &r.worker_id, |r| &r.environment_id)?;
-        let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
+
+        let auth_ctx: AuthCtx = request
+            .auth_ctx
+            .ok_or(WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(|e| {
+                WorkerExecutorError::invalid_request(format!("failed converting auth_ctx: {e}"))
+            })?;
 
         let plugin_priority = PluginPriority(request.plugin_priority);
 
@@ -1512,7 +1603,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             {
                 let worker = Worker::get_or_create_suspended(
                     self,
-                    &account_id,
+                    auth_ctx.account_id(),
                     &owned_worker_id,
                     None,
                     None,
@@ -1658,8 +1749,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "create_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
-            component_version = request.component_version,
-            account_id = proto_account_id_string(&request.account_id),
+            component_version = request.component_version
         );
 
         match self
@@ -1700,7 +1790,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_and_await_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            account_id = proto_account_id_string(&request.account_id),
         );
 
         match self.invoke_and_await_worker_internal_proto(&request).instrument(record.span.clone()).await {
@@ -1739,7 +1828,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_and_await_worker_typed",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            account_id = proto_account_id_string(&request.account_id),
         );
 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
@@ -1780,7 +1868,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
-            account_id = proto_account_id_string(&request.account_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
         );
 
@@ -1822,7 +1909,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_and_await_worker_json",
             worker_id = proto_worker_id_string(&request.worker_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
-            account_id = proto_account_id_string(&request.account_id),
         );
 
         match self.invoke_and_await_worker_internal_typed(&request).instrument(record.span.clone()).await {
@@ -1863,7 +1949,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             "invoke_worker_json",
             worker_id = proto_worker_id_string(&request.worker_id),
             function = request.name,
-            account_id = proto_account_id_string(&request.account_id),
             idempotency_key = proto_idempotency_key_string(&request.idempotency_key),
         );
 
@@ -1906,7 +1991,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let record = recorded_grpc_api_request!(
             "connect_worker",
             worker_id = proto_worker_id_string(&request.worker_id),
-            account_id = proto_account_id_string(&request.account_id)
         );
 
         self.connect_worker_internal(request)
@@ -2688,16 +2772,4 @@ fn extract_owned_worker_id<T>(
         .map_err(WorkerExecutorError::invalid_request)?;
 
     Ok(OwnedWorkerId::new(&environment_id, &worker_id))
-}
-
-fn extract_account_id<T>(
-    request: &T,
-    get_account_id: impl FnOnce(&T) -> &Option<golem::common::AccountId>,
-) -> Result<AccountId, WorkerExecutorError> {
-    let account_id = get_account_id(request)
-        .as_ref()
-        .ok_or(WorkerExecutorError::invalid_request("account_id not found"))?;
-    (*account_id)
-        .try_into()
-        .map_err(|e| WorkerExecutorError::invalid_request(format!("Invalid account id: {e}")))
 }

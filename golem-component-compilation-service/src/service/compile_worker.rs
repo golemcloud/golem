@@ -26,9 +26,9 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::RetryConfig;
 use golem_common::retries::with_retries;
-use golem_service_base::grpc::authorised_grpc_request;
 use golem_service_base::grpc::is_grpc_retriable;
 use golem_service_base::grpc::GrpcError;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
 use std::time::Instant;
@@ -37,7 +37,6 @@ use tokio::task::spawn_blocking;
 use tonic::codec::CompressionEncoding;
 use tonic::transport::Channel;
 use tracing::{info, warn, Instrument};
-use uuid::Uuid;
 use wasmtime::component::Component;
 use wasmtime::Engine;
 
@@ -50,7 +49,7 @@ pub struct CompileWorker {
     // Resources
     engine: Engine,
     compiled_component_service: Arc<dyn CompiledComponentService>,
-    client: Arc<Mutex<Option<ClientWithToken>>>,
+    client: Arc<Mutex<Option<GrpcClient<ComponentServiceClient<Channel>>>>>,
 }
 
 impl CompileWorker {
@@ -125,7 +124,6 @@ impl CompileWorker {
             config.host, config.port
         );
 
-        let access_token = config.access_token;
         let max_component_size = self.config.max_component_size;
         let client = GrpcClient::new(
             "component_service",
@@ -141,10 +139,7 @@ impl CompileWorker {
                 connect_timeout: self.config.connect_timeout,
             },
         );
-        self.client.lock().await.replace(ClientWithToken {
-            client,
-            access_token,
-        });
+        self.client.lock().await.replace(client);
     }
 
     async fn compile_component(
@@ -178,8 +173,7 @@ impl CompileWorker {
 
         if let Some(client) = &*self.client.lock().await {
             let bytes = download_via_grpc(
-                &client.client,
-                &client.access_token,
+                client,
                 &self.config.retries,
                 &component_with_version.id,
                 component_with_version.version,
@@ -224,7 +218,6 @@ impl CompileWorker {
 
 async fn download_via_grpc(
     client: &GrpcClient<ComponentServiceClient<Channel>>,
-    access_token: &Uuid,
     retry_config: &RetryConfig,
     component_id: &ComponentId,
     component_version: ComponentRevision,
@@ -234,24 +227,17 @@ async fn download_via_grpc(
         "download",
         Some(format!("{component_id}@{component_version}")),
         retry_config,
-        &(
-            client.clone(),
-            component_id.clone(),
-            access_token.to_owned(),
-        ),
-        |(client, component_id, access_token)| {
+        &(client.clone(), component_id.clone()),
+        |(client, component_id)| {
             Box::pin(async move {
                 let component_id = component_id.clone();
-                let access_token = *access_token;
                 let response = client
                     .call("download_component", move |client| {
-                        let request = authorised_grpc_request(
-                            DownloadComponentRequest {
-                                component_id: Some(component_id.clone().into()),
-                                version: Some(component_version.0),
-                            },
-                            &access_token,
-                        );
+                        let request = DownloadComponentRequest {
+                            component_id: Some(component_id.clone().into()),
+                            version: Some(component_version.0),
+                            auth_ctx: Some(AuthCtx::System.into()),
+                        };
                         Box::pin(client.download_component(request))
                     })
                     .await?
@@ -283,9 +269,4 @@ async fn download_via_grpc(
         tracing::error!("Failed to download component {component_id}@{component_version}: {error}");
         CompilationError::ComponentDownloadFailed(error.to_string())
     })
-}
-
-struct ClientWithToken {
-    client: GrpcClient<ComponentServiceClient<Channel>>,
-    access_token: Uuid,
 }

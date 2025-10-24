@@ -7468,6 +7468,7 @@ components:
       - installedPlugins
       - env
       - wasmHash
+      - environmentRolesFromShares
       properties:
         id:
           type: string
@@ -7511,6 +7512,10 @@ components:
         wasmHash:
           type: string
           format: hash
+        environmentRolesFromShares:
+          type: array
+          items:
+            $ref: '#/components/schemas/EnvironmentRole'
     ComponentFileOptions:
       type: object
       title: ComponentFileOptions

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::ApiResult;
-use crate::model::auth::AuthCtx;
 use crate::services::account::AccountService;
 use crate::services::auth::AuthService;
 use crate::services::plan::PlanService;
@@ -25,6 +24,7 @@ use golem_common::model::auth::AccountRole;
 use golem_common::model::plugin_registration::{PluginRegistrationCreation, PluginRegistrationDto};
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use golem_service_base::poem::TempFileUpload;
 use poem_openapi::param::Path;

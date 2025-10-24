@@ -14,16 +14,16 @@
 
 use super::account::{AccountError, AccountService};
 use super::component::{ComponentError, ComponentService};
-use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::model::audit::ImmutableAuditFields;
 use crate::repo::model::plugin::PluginRecord;
 use crate::repo::plugin::PluginRepo;
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::AccountAction;
 use golem_common::model::plugin_registration::{
     OplogProcessorPluginSpec, PluginRegistrationCreation, PluginRegistrationId, PluginSpecDto,
 };
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::AccountAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::model::plugin_registration::{
     AppPluginSpec, LibraryPluginSpec, PluginRegistration, PluginSpec,
 };
@@ -163,7 +163,7 @@ impl PluginRegistrationService {
             deleted: false,
         };
 
-        let audit = ImmutableAuditFields::new(auth.account_id.0);
+        let audit = ImmutableAuditFields::new(auth.account_id().0);
 
         let record = PluginRecord::from_model(registration, audit);
 
@@ -188,7 +188,7 @@ impl PluginRegistrationService {
 
         let plugin = self
             .plugin_repo
-            .delete(&plugin_id.0, &auth.account_id.0)
+            .delete(&plugin_id.0, &auth.account_id().0)
             .await?
             .ok_or(PluginRegistrationError::PluginRegistrationNotFound(
                 plugin_id.clone(),

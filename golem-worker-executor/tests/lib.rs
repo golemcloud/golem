@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::model::{AccountId, ProjectId};
+use golem_common::model::account::AccountId;
+use golem_common::model::environment::EnvironmentId;
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::service::initial_component_files::InitialComponentFilesService;
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;

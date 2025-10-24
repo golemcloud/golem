@@ -15,11 +15,7 @@
 use crate::repo::deployment::DeploymentRepo;
 use crate::repo::model::deployment::{DeployRepoError, DeployValidationError};
 use crate::repo::model::hash::SqlBlake3Hash;
-use crate::{
-    model::auth::{AuthCtx, AuthorizationError},
-    services::environment::{EnvironmentError, EnvironmentService},
-};
-use golem_common::model::auth::EnvironmentAction;
+use crate::services::environment::{EnvironmentError, EnvironmentService};
 use golem_common::model::deployment::{DeploymentPlan, DeploymentRevision};
 use golem_common::{
     SafeDisplay, error_forwarding,
@@ -28,6 +24,8 @@ use golem_common::{
         environment::EnvironmentId,
     },
 };
+use golem_service_base::model::auth::EnvironmentAction;
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::sync::Arc;
 
@@ -129,7 +127,7 @@ impl DeploymentService {
         let deployment: Deployment = self
             .deployment_repo
             .deploy(
-                &auth.account_id.0,
+                &auth.account_id().0,
                 &environment_id.0,
                 new_deployment
                     .current_deployment_revision

@@ -24,7 +24,8 @@ use golem_api_grpc::proto::golem::worker::v1::worker_service_server::WorkerServi
 use golem_api_grpc::proto::golem::worker::v1::{
     worker_error, worker_execution_error, WorkerError, WorkerExecutionError,
 };
-use golem_common::model::{ComponentFilePath, WorkerId};
+use golem_common::model::component::ComponentFilePath;
+use golem_common::model::WorkerId;
 use golem_wasm::json::OptionallyValueAndTypeJson;
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
@@ -63,7 +64,6 @@ pub async fn start_grpc_server(
                     WorkerServiceServer::new(WorkerGrpcApi::new(
                         services.component_service.clone(),
                         services.worker_service.clone(),
-                        services.worker_auth_service.clone(),
                     ))
                     .send_compressed(CompressionEncoding::Gzip)
                     .accept_compressed(CompressionEncoding::Gzip),
@@ -89,15 +89,6 @@ pub fn validate_protobuf_worker_id(
         component_id: worker_id.component_id,
         worker_name: worker_id.worker_name,
     })
-}
-
-pub fn validate_protobuf_plugin_installation_id(
-    plugin_installation_id: Option<golem_api_grpc::proto::golem::common::PluginInstallationId>,
-) -> Result<golem_common::model::PluginInstallationId, WorkerError> {
-    plugin_installation_id
-        .ok_or_else(|| bad_request_error("Missing plugin installation id"))?
-        .try_into()
-        .map_err(|e| bad_request_error(format!("Invalid plugin installation id: {e}")))
 }
 
 pub fn validate_component_file_path(file_path: String) -> Result<ComponentFilePath, WorkerError> {

@@ -15,7 +15,6 @@
 use super::ApiResult;
 use super::error::ApiError;
 use crate::bootstrap::login::{LoginSystem, LoginSystemEnabled};
-use crate::model::auth::AuthCtx;
 use crate::services::token::{TokenError, TokenService};
 use golem_common::model::Empty;
 use golem_common::model::auth::{Token, TokenWithSecret};
@@ -26,6 +25,7 @@ use golem_common::model::login::{
 };
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
+use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::GolemSecurityScheme;
 use poem_openapi::param::Query;
 use poem_openapi::payload::Json;

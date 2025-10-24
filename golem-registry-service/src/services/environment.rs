@@ -13,17 +13,17 @@
 // limitations under the License.
 
 use super::application::ApplicationService;
-use crate::model::auth::{AuthCtx, AuthorizationError};
 use crate::repo::environment::{EnvironmentRepo, EnvironmentRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::environment::EnvironmentRepoError;
 use crate::services::application::ApplicationError;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::{AccountAction, EnvironmentAction};
 use golem_common::model::environment::{
     Environment, EnvironmentCreation, EnvironmentId, EnvironmentName, EnvironmentUpdate,
 };
 use golem_common::{SafeDisplay, error_forwarding};
+use golem_service_base::model::auth::{AccountAction, EnvironmentAction};
+use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -103,7 +103,7 @@ impl EnvironmentService {
 
         auth.authorize_account_action(&application.account_id, AccountAction::CreateEnvironment)?;
 
-        let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id.clone());
+        let record = EnvironmentRevisionRecord::from_new_model(data, auth.account_id().clone());
 
         let result = self
             .environment_repo
@@ -141,7 +141,7 @@ impl EnvironmentService {
             environment.name = new_name
         };
 
-        let audit = DeletableRevisionAuditFields::new(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::new(auth.account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         let result = self
@@ -178,7 +178,7 @@ impl EnvironmentService {
         let current_revision = environment.revision;
         environment.revision = current_revision.next()?;
 
-        let audit = DeletableRevisionAuditFields::deletion(auth.account_id.0);
+        let audit = DeletableRevisionAuditFields::deletion(auth.account_id().0);
         let record = EnvironmentRevisionRecord::from_model(environment, audit);
 
         self.environment_repo
@@ -203,7 +203,7 @@ impl EnvironmentService {
             .environment_repo
             .get_by_id(
                 &environment_id.0,
-                &auth.account_id.0,
+                &auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -235,7 +235,7 @@ impl EnvironmentService {
             .get_by_name(
                 &application_id.0,
                 &name.0,
-                &auth.account_id.0,
+                &auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?
@@ -285,7 +285,7 @@ impl EnvironmentService {
             .environment_repo
             .list_by_app(
                 &application_id.0,
-                &auth.account_id.0,
+                &auth.account_id().0,
                 auth.should_override_storage_visibility_rules(),
             )
             .await?

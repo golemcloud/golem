@@ -14,7 +14,6 @@
 
 use super::ComponentError;
 use super::component_transformer_plugin_caller::ComponentTransformerPluginCaller;
-use crate::model::auth::AuthCtx;
 use crate::model::component::Component;
 use crate::model::component::{FinalizedComponentRevision, NewComponentRevision};
 use crate::repo::component::ComponentRepo;
@@ -31,7 +30,6 @@ use crate::services::plugin_registration::PluginRegistrationService;
 use crate::services::run_cpu_bound_work;
 use anyhow::{Context, anyhow};
 use golem_common::model::account::AccountId;
-use golem_common::model::auth::EnvironmentAction;
 use golem_common::model::component::PluginPriority;
 use golem_common::model::component::{
     ComponentCreation, ComponentFileOptions, ComponentFilePath, ComponentFilePermissions,
@@ -42,6 +40,8 @@ use golem_common::model::component::{ComponentId, PluginInstallation};
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::widen_infallible;
+use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::EnvironmentAction;
 use golem_service_base::model::plugin_registration::{
     AppPluginSpec, LibraryPluginSpec, PluginSpec,
 };
@@ -172,7 +172,7 @@ impl ComponentWriteService {
             .await?;
 
         let record =
-            ComponentRevisionRecord::from_model(finalized_revision.clone(), &auth.account_id);
+            ComponentRevisionRecord::from_model(finalized_revision.clone(), auth.account_id());
 
         let stored_component: Component = self
             .component_repo
@@ -189,7 +189,11 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(environment.application_id, environment.owner_account_id)?;
+            .try_into_model(
+                environment.application_id,
+                environment.owner_account_id,
+                environment.roles_from_shares,
+            )?;
 
         account_usage.ack();
 
@@ -231,6 +235,7 @@ impl ComponentWriteService {
         let component = component_record.try_into_model(
             environment.application_id.clone(),
             environment.owner_account_id.clone(),
+            environment.roles_from_shares.clone(),
         )?;
 
         // Fast path. If the current revision does not match we will reject it later anyway
@@ -307,7 +312,7 @@ impl ComponentWriteService {
             .finalize_new_component_revision(&environment_id, new_revision, wasm)
             .await?;
 
-        let record = ComponentRevisionRecord::from_model(finalized_revision, &auth.account_id);
+        let record = ComponentRevisionRecord::from_model(finalized_revision, auth.account_id());
 
         let stored_component: Component = self
             .component_repo
@@ -320,7 +325,11 @@ impl ComponentWriteService {
                 }
                 other => other.into(),
             })?
-            .try_into_model(environment.application_id, environment.owner_account_id)?;
+            .try_into_model(
+                environment.application_id,
+                environment.owner_account_id,
+                environment.roles_from_shares,
+            )?;
 
         if let Some(mut account_usage) = account_usage {
             account_usage.ack();
