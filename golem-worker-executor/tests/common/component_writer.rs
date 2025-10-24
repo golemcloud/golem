@@ -404,7 +404,7 @@ fn metadata_filename(component_id: &ComponentId, component_version: ComponentRev
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalFileSystemComponentMetadata {
+pub(super) struct LocalFileSystemComponentMetadata {
     pub component_id: ComponentId,
     pub version: ComponentRevision,
     pub environment_id: EnvironmentId,
