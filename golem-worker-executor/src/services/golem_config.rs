@@ -27,7 +27,7 @@ use http::Uri;
 use serde::{Deserialize, Serialize};
 use std::fmt::Write;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use std::time::Duration;
 use url::Url;
 
@@ -234,31 +234,7 @@ impl SafeDisplay for Limits {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "type", content = "config")]
-pub enum PluginServiceConfig {
-    Grpc(PluginServiceGrpcConfig),
-    Local(PluginServiceLocalConfig),
-}
-
-impl SafeDisplay for PluginServiceConfig {
-    fn to_safe_string(&self) -> String {
-        let mut result = String::new();
-        match self {
-            PluginServiceConfig::Grpc(grpc) => {
-                let _ = writeln!(&mut result, "grpc:");
-                let _ = writeln!(&mut result, "{}", grpc.to_safe_string_indented());
-            }
-            PluginServiceConfig::Local(local) => {
-                let _ = writeln!(&mut result, "local:");
-                let _ = writeln!(&mut result, "{}", local.to_safe_string_indented());
-            }
-        }
-        result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginServiceGrpcConfig {
+pub struct PluginServiceConfig {
     pub host: String,
     pub port: u16,
     pub access_token: String,
@@ -268,7 +244,17 @@ pub struct PluginServiceGrpcConfig {
     pub connect_timeout: Duration,
 }
 
-impl SafeDisplay for PluginServiceGrpcConfig {
+impl PluginServiceConfig {
+    pub fn url(&self) -> Url {
+        build_url("plugin", &self.host, self.port)
+    }
+
+    pub fn uri(&self) -> Uri {
+        build_uri("plugin", &self.host, self.port)
+    }
+}
+
+impl SafeDisplay for PluginServiceConfig {
     fn to_safe_string(&self) -> String {
         let mut result = String::new();
         let _ = writeln!(&mut result, "host: {}", self.host);
@@ -279,17 +265,6 @@ impl SafeDisplay for PluginServiceGrpcConfig {
         let _ = writeln!(&mut result, "retries:");
         let _ = writeln!(&mut result, "{}", self.retries.to_safe_string_indented());
         result
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PluginServiceLocalConfig {
-    pub root: PathBuf,
-}
-
-impl SafeDisplay for PluginServiceLocalConfig {
-    fn to_safe_string(&self) -> String {
-        format!("root: {:?}", self.root)
     }
 }
 
@@ -396,16 +371,6 @@ impl GolemConfig {
                 }
             }
         }
-    }
-}
-
-impl PluginServiceGrpcConfig {
-    pub fn url(&self) -> Url {
-        build_url("plugin", &self.host, self.port)
-    }
-
-    pub fn uri(&self) -> Uri {
-        build_uri("plugin", &self.host, self.port)
     }
 }
 
@@ -1023,12 +988,6 @@ impl Default for Limits {
 }
 
 impl Default for PluginServiceConfig {
-    fn default() -> Self {
-        Self::Grpc(PluginServiceGrpcConfig::default())
-    }
-}
-
-impl Default for PluginServiceGrpcConfig {
     fn default() -> Self {
         Self {
             host: "localhost".to_string(),

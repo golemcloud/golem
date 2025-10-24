@@ -14,6 +14,7 @@
 
 pub mod component_service;
 pub mod component_writer;
+pub mod plugins;
 
 use crate::{LastUniqueId, WorkerExecutorTestDependencies};
 use anyhow::Error;
