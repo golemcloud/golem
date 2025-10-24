@@ -106,7 +106,8 @@ impl Bootstrap<TestWorkerCtx> for RegularWorkerExecutorBootstrap {
     ) -> anyhow::Result<All<TestWorkerCtx>> {
         let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(
             ResourceLimitsDisabledConfig {},
-        ));
+        ))
+        .await;
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(
                 worker_proxy.clone(),

@@ -4,6 +4,9 @@ world golem-rust {
   import golem:api/host@1.1.7;
   import golem:api/oplog@1.1.7;
   import golem:api/context@1.1.7;
+
+  import golem:agent/host;
+
   import golem:durability/durability@1.2.1;
   import golem:rdbms/mysql@0.0.1;
   import golem:rdbms/postgres@0.0.1;
@@ -40,4 +43,9 @@ world golem-rust-save-snapshot {
 world golem-rust-oplog-processor {
     include golem-rust;
     export golem:api/oplog-processor@1.1.7;
+}
+
+world golem-agentic {
+   include golem-rust;
+   export golem:agent/guest;
 }

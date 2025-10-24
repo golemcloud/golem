@@ -330,7 +330,7 @@ pub mod directive {
             warn("h2"),
             warn("hyper"),
             warn("tower"),
-            warn("fred"),
+            error("fred"),
             warn("wac_graph"),
             warn("wasmtime_environ"),
             warn("wit_parser"),

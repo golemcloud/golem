@@ -304,6 +304,7 @@ pub struct ResolvedWitApplication {
     interface_package_to_component: HashMap<PackageName, AppComponentName>,
     component_order: Vec<AppComponentName>,
     agent_types: BTreeMap<AppComponentName, ExtractedAgentTypes>,
+    enable_wasmtime_fs_cache: bool,
 }
 
 impl ResolvedWitApplication {
@@ -311,6 +312,7 @@ impl ResolvedWitApplication {
         app: &Application,
         profile: Option<&BuildProfileName>,
         tools_with_ensured_common_deps: &ToolsWithEnsuredCommonDeps,
+        enable_wasmtime_fs_cache: bool,
     ) -> ValidatedResult<Self> {
         log_action("Resolving", "application wit directories");
         let _indent = LogIndent::new();
@@ -322,6 +324,7 @@ impl ResolvedWitApplication {
             interface_package_to_component: Default::default(),
             component_order: Default::default(),
             agent_types: BTreeMap::new(),
+            enable_wasmtime_fs_cache,
         };
 
         let mut validation = ValidationBuilder::new();
@@ -366,9 +369,11 @@ impl ResolvedWitApplication {
                 Err(anyhow!("Component {} is not an agent", app_component_name))
             }
             Some(ExtractedAgentTypes::ToBeExtracted) => {
-                let agent_types =
-                    crate::model::agent::extraction::extract_agent_types(compiled_wasm_path)
-                        .await?;
+                let agent_types = crate::model::agent::extraction::extract_agent_types(
+                    compiled_wasm_path,
+                    self.enable_wasmtime_fs_cache,
+                )
+                .await?;
                 self.agent_types.insert(
                     app_component_name.clone(),
                     ExtractedAgentTypes::Extracted(agent_types.clone()),

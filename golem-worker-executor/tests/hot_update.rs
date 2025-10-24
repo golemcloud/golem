@@ -26,7 +26,7 @@ use log::info;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::sync::Arc;
-use test_r::{flaky, inherit_test_dep, test};
+use test_r::{inherit_test_dep, test};
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tracing::{debug, Instrument};
@@ -267,7 +267,6 @@ async fn auto_update_on_idle(
 
 #[test]
 #[tracing::instrument]
-#[flaky(10)] // TODO: remove when the test is stabilized
 async fn failing_auto_update_on_idle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,

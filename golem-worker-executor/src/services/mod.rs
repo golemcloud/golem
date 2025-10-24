@@ -22,7 +22,6 @@ pub mod golem_config;
 pub mod key_value;
 pub mod oplog;
 pub mod plugins;
-// pub mod projects;
 pub mod promise;
 pub mod rdbms;
 pub mod resource_limits;

@@ -37,10 +37,17 @@ pub async fn extract_agent_types_with_streams(
     stdout: Option<impl StdoutStream + 'static>,
     stderr: Option<impl StdoutStream + 'static>,
     fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
     let mut config = wasmtime::Config::default();
     config.async_support(true);
     config.wasm_component_model(true);
+
+    if enable_fs_cache {
+        config.cache(Some(
+            wasmtime::Cache::new(wasmtime::CacheConfig::new()).expect("Failed to initialize cache"),
+        ));
+    }
 
     let engine = Engine::new(&config)?;
     let mut linker: Linker<Host> = Linker::new(&engine);
@@ -133,12 +140,14 @@ pub async fn extract_agent_types_with_streams(
 pub async fn extract_agent_types(
     wasm_path: &Path,
     fail_on_missing_discover_method: bool,
+    enable_fs_cache: bool,
 ) -> anyhow::Result<Vec<AgentType>> {
     extract_agent_types_with_streams(
         wasm_path,
         None::<pipe::MemoryOutputPipe>,
         None::<pipe::MemoryOutputPipe>,
         fail_on_missing_discover_method,
+        enable_fs_cache,
     )
     .await
 }
@@ -338,8 +347,12 @@ mod tests {
 
     #[test]
     async fn can_extract_agent_types_from_component_with_dynamic_rpc() -> anyhow::Result<()> {
-        let result =
-            extract_agent_types(&PathBuf::from_str("../test-components/caller.wasm")?, false).await;
+        let result = extract_agent_types(
+            &PathBuf::from_str("../test-components/caller.wasm")?,
+            false,
+            false,
+        )
+        .await;
         assert!(let Ok(_) = result);
         Ok(())
     }

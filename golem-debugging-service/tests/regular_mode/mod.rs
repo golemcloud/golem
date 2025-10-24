@@ -27,14 +27,6 @@ pub async fn start_regular_worker_executor(
     redis_monitor.assert_valid();
 
     let admin_account_id = deps.cloud_service.admin_account_id();
-    let admin_default_project_id = deps
-        .cloud_service
-        .get_default_project(&deps.cloud_service.admin_token())
-        .await?;
-    let admin_default_project_name = deps
-        .cloud_service
-        .get_project_name(&admin_default_project_id)
-        .await?;
 
     let prometheus = golem_worker_executor::metrics::register_all();
     let config = get_golem_config(
@@ -43,8 +35,6 @@ pub async fn start_regular_worker_executor(
         context.grpc_port(),
         context.http_port(),
         admin_account_id,
-        admin_default_project_id,
-        admin_default_project_name,
     );
     let handle = Handle::current();
 

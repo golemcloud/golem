@@ -123,9 +123,9 @@ impl Oplog for EphemeralOplog {
         state.add(entry).await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         record_oplog_call("drop_prefix");
-        self.target.drop_prefix(last_dropped_id).await;
+        self.target.drop_prefix(last_dropped_id).await
     }
 
     async fn commit(&self, level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {

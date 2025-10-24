@@ -498,7 +498,7 @@ impl OplogArchive for BlobOplogArchive {
             .unwrap_or_else(|| OplogIndex::from_u64(0))
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.ensure_is_created().await;
 
         let mut entries = self.entries.write().await;
@@ -509,6 +509,7 @@ impl OplogArchive for BlobOplogArchive {
             .cloned()
             .collect::<Vec<_>>();
 
+        let drop_count = idx_to_drop.len();
         let to_drop = idx_to_drop
             .iter()
             .map(|idx| {
@@ -559,6 +560,8 @@ impl OplogArchive for BlobOplogArchive {
                 *created = false;
             }
         }
+
+        drop_count as u64
     }
 
     async fn length(&self) -> u64 {

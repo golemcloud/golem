@@ -13,7 +13,6 @@
 // limitations under the License.
 
 pub mod all;
-pub mod stubs;
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
 use golem_service_base::clients::limit::LimitService;
@@ -44,5 +43,5 @@ fn tracing() -> Tracing {
 
 #[test_dep]
 fn stub_limit_service() -> Arc<dyn LimitService> {
-    Arc::new(self::stubs::StubLimitService)
+    Arc::new(all::stubs::StubLimitService)
 }

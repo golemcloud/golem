@@ -45,7 +45,11 @@ async fn custom_durability_1(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let response = Arc::new(AtomicU32::new(0));
     let response_clone = response.clone();
@@ -100,7 +104,11 @@ async fn custom_durability_1(
 
     drop(executor);
 
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let result2 = executor
         .invoke_and_await(
@@ -128,7 +136,11 @@ async fn lazy_pollable(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
 
@@ -234,7 +246,11 @@ async fn lazy_pollable(
     signal_tx.send(()).unwrap();
 
     drop(executor);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     signal_tx.send(()).unwrap();
 

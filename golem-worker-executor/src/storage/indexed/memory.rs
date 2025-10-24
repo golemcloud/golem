@@ -15,14 +15,13 @@
 use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace, ScanCursor};
 use async_trait::async_trait;
 use bytes::Bytes;
-use dashmap::DashMap;
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
 use std::time::Duration;
 
 #[derive(Debug)]
 pub struct InMemoryIndexedStorage {
-    data: DashMap<String, BTreeMap<u64, Vec<u8>>>,
+    data: scc::HashMap<String, BTreeMap<u64, Vec<u8>>>,
 }
 
 impl Default for InMemoryIndexedStorage {
@@ -34,7 +33,7 @@ impl Default for InMemoryIndexedStorage {
 impl InMemoryIndexedStorage {
     pub fn new() -> Self {
         Self {
-            data: DashMap::new(),
+            data: scc::HashMap::new(),
         }
     }
 
@@ -71,7 +70,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
     ) -> Result<bool, String> {
         let composite_key = Self::composite_key(namespace, key);
-        Ok(self.data.contains_key(&composite_key))
+        Ok(self.data.contains_async(&composite_key).await)
     }
 
     async fn scan(
@@ -93,17 +92,24 @@ impl IndexedStorage for InMemoryIndexedStorage {
             let prefix = &composite_pattern[0..composite_pattern.len() - 1];
             let mut idx = 0;
             let mut has_more = false;
-            for entry in &self.data {
-                idx += 1;
-                if idx > cursor && entry.key().starts_with(prefix) {
-                    result.push(entry.key()[composite_prefix.len()..].to_string());
 
-                    if (result.len() as u64) == count {
-                        has_more = true;
-                        break;
+            self.data
+                .iter_async(|key, _| {
+                    idx += 1;
+                    if idx > cursor && key.starts_with(prefix) {
+                        result.push(key[composite_prefix.len()..].to_string());
+
+                        if (result.len() as u64) == count {
+                            has_more = true;
+                            false
+                        } else {
+                            true
+                        }
+                    } else {
+                        true
                     }
-                }
-            }
+                })
+                .await;
 
             if has_more {
                 Ok((idx, result))
@@ -126,12 +132,16 @@ impl IndexedStorage for InMemoryIndexedStorage {
         value: &[u8],
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
-        let mut entry = self.data.entry(composite_key.clone()).or_default();
+        let mut entry = self
+            .data
+            .entry_async(composite_key.clone())
+            .await
+            .or_default();
         if let std::collections::btree_map::Entry::Vacant(e) = entry.entry(id) {
             e.insert(value.to_vec());
             Ok(())
         } else {
-            return Err("Key already exists".to_string());
+            Err("Key already exists".to_string())
         }
     }
 
@@ -143,10 +153,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
     ) -> Result<u64, String> {
         let composite_key = Self::composite_key(namespace, key);
-        match self.data.get(&composite_key) {
-            Some(entry) => Ok(entry.len() as u64),
-            None => Ok(0),
-        }
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| entry.len() as u64)
+            .await
+            .unwrap_or_default())
     }
 
     async fn delete(
@@ -157,7 +168,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
-        self.data.remove(&composite_key);
+        self.data.remove_async(&composite_key).await;
         Ok(())
     }
 
@@ -172,16 +183,17 @@ impl IndexedStorage for InMemoryIndexedStorage {
         end_id: u64,
     ) -> Result<Vec<(u64, Bytes)>, String> {
         let composite_key = Self::composite_key(namespace, key);
-        if let Some(entry) = self.data.get(&composite_key) {
-            let mut result = Vec::new();
-            for (id, value) in entry.range((Included(start_id), Included(end_id))) {
-                result.push((*id, Bytes::from(value.clone())));
-            }
-
-            Ok(result)
-        } else {
-            Ok(Vec::new())
-        }
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                let mut result = Vec::new();
+                for (id, value) in entry.range((Included(start_id), Included(end_id))) {
+                    result.push((*id, Bytes::from(value.clone())));
+                }
+                result
+            })
+            .await
+            .unwrap_or_default())
     }
 
     async fn first(
@@ -193,12 +205,14 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
     ) -> Result<Option<(u64, Bytes)>, String> {
         let composite_key = Self::composite_key(namespace, key);
-        if let Some(entry) = self.data.get(&composite_key) {
-            let first = entry.first_key_value();
-            Ok(first.map(|(id, value)| (*id, Bytes::from(value.clone()))))
-        } else {
-            Ok(None)
-        }
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                let first = entry.first_key_value();
+                first.map(|(id, value)| (*id, Bytes::from(value.clone())))
+            })
+            .await
+            .flatten())
     }
 
     async fn last(
@@ -210,12 +224,14 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
     ) -> Result<Option<(u64, Bytes)>, String> {
         let composite_key = Self::composite_key(namespace, key);
-        if let Some(entry) = self.data.get(&composite_key) {
-            let last = entry.last_key_value();
-            Ok(last.map(|(id, value)| (*id, Bytes::from(value.clone()))))
-        } else {
-            Ok(None)
-        }
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                let last = entry.last_key_value();
+                last.map(|(id, value)| (*id, Bytes::from(value.clone())))
+            })
+            .await
+            .flatten())
     }
 
     async fn closest(
@@ -228,15 +244,16 @@ impl IndexedStorage for InMemoryIndexedStorage {
         id: u64,
     ) -> Result<Option<(u64, Bytes)>, String> {
         let composite_key = Self::composite_key(namespace, key);
-        if let Some(entry) = self.data.get(&composite_key) {
-            if let Some(key) = entry.keys().find(|k| **k >= id) {
-                Ok(Some((*key, Bytes::from(entry[key].clone()))))
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
+        Ok(self
+            .data
+            .read_async(&composite_key, |_, entry| {
+                entry
+                    .keys()
+                    .find(|k| **k >= id)
+                    .map(|key| (*key, Bytes::from(entry[key].clone())))
+            })
+            .await
+            .flatten())
     }
 
     async fn drop_prefix(
@@ -248,9 +265,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         last_dropped_id: u64,
     ) -> Result<(), String> {
         let composite_key = Self::composite_key(namespace, key);
-        if let Some(mut entry) = self.data.get_mut(&composite_key) {
-            entry.value_mut().retain(|k, _| *k > last_dropped_id);
-        }
+        self.data
+            .update_async(&composite_key, |_, entry| {
+                entry.retain(|k, _| *k > last_dropped_id);
+            })
+            .await;
         Ok(())
     }
 }

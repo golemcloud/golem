@@ -31,7 +31,6 @@ use url::Url;
 // pub mod component_service;
 pub mod blob_storage;
 mod docker;
-pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;

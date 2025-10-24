@@ -15,14 +15,13 @@
 use crate::storage::keyvalue::{KeyValueStorage, KeyValueStorageNamespace};
 use async_trait::async_trait;
 use bytes::Bytes;
-use dashmap::mapref::entry::Entry;
-use dashmap::{DashMap, DashSet};
+use scc::hash_map::Entry;
 
 #[derive(Debug)]
 pub struct InMemoryKeyValueStorage {
-    kvs: DashMap<String, Vec<u8>>,
-    sets: DashMap<String, DashSet<Vec<u8>>>,
-    sorted_sets: DashMap<String, Vec<(f64, Vec<u8>)>>,
+    kvs: scc::HashMap<String, Vec<u8>>,
+    sets: scc::HashMap<String, scc::HashSet<Vec<u8>>>,
+    sorted_sets: scc::HashMap<String, Vec<(f64, Vec<u8>)>>,
 }
 
 impl Default for InMemoryKeyValueStorage {
@@ -34,21 +33,21 @@ impl Default for InMemoryKeyValueStorage {
 impl InMemoryKeyValueStorage {
     pub fn new() -> Self {
         Self {
-            kvs: DashMap::new(),
-            sets: DashMap::new(),
-            sorted_sets: DashMap::new(),
+            kvs: scc::HashMap::new(),
+            sets: scc::HashMap::new(),
+            sorted_sets: scc::HashMap::new(),
         }
     }
 
-    pub fn kvs(&self) -> &DashMap<String, Vec<u8>> {
+    pub fn kvs(&self) -> &scc::HashMap<String, Vec<u8>> {
         &self.kvs
     }
 
-    pub fn sets(&self) -> &DashMap<String, DashSet<Vec<u8>>> {
+    pub fn sets(&self) -> &scc::HashMap<String, scc::HashSet<Vec<u8>>> {
         &self.sets
     }
 
-    pub fn sorted_sets(&self) -> &DashMap<String, Vec<(f64, Vec<u8>)>> {
+    pub fn sorted_sets(&self) -> &scc::HashMap<String, Vec<(f64, Vec<u8>)>> {
         &self.sorted_sets
     }
 
@@ -69,7 +68,8 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         value: &[u8],
     ) -> Result<(), String> {
         self.kvs
-            .insert(Self::composite_key(&namespace, key), value.to_vec());
+            .upsert_async(Self::composite_key(&namespace, key), value.to_vec())
+            .await;
         Ok(())
     }
 
@@ -83,7 +83,8 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
     ) -> Result<(), String> {
         for (key, value) in pairs {
             self.kvs
-                .insert(Self::composite_key(&namespace, key), value.to_vec());
+                .upsert_async(Self::composite_key(&namespace, key), value.to_vec())
+                .await;
         }
         Ok(())
     }
@@ -97,10 +98,14 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<bool, String> {
-        match self.kvs.entry(Self::composite_key(&namespace, key)) {
+        match self
+            .kvs
+            .entry_async(Self::composite_key(&namespace, key))
+            .await
+        {
             Entry::Occupied(_) => Ok(false),
             Entry::Vacant(entry) => {
-                entry.insert(value.to_vec());
+                entry.insert_entry(value.to_vec());
                 Ok(true)
             }
         }
@@ -114,10 +119,12 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<Bytes>, String> {
-        match self.kvs.get(&Self::composite_key(&namespace, key)) {
-            Some(value) => Ok(Some(Bytes::from(value.value().clone()))),
-            None => Ok(None),
-        }
+        Ok(self
+            .kvs
+            .read_async(&Self::composite_key(&namespace, key), |_, value| {
+                Bytes::from(value.clone())
+            })
+            .await)
     }
 
     async fn get_many(
@@ -145,7 +152,9 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<(), String> {
-        self.kvs.remove(&Self::composite_key(&namespace, key));
+        self.kvs
+            .remove_async(&Self::composite_key(&namespace, key))
+            .await;
         Ok(())
     }
 
@@ -170,7 +179,10 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<bool, String> {
-        Ok(self.kvs.contains_key(&Self::composite_key(&namespace, key)))
+        Ok(self
+            .kvs
+            .contains_async(&Self::composite_key(&namespace, key))
+            .await)
     }
 
     async fn keys(
@@ -180,17 +192,16 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<String>, String> {
         let prefix = Self::composite_key(&namespace, "");
-        Ok(self
-            .kvs
-            .iter()
-            .filter_map(|item| {
-                if item.key().starts_with(&prefix) {
-                    Some(item.key()[prefix.len()..].to_string())
-                } else {
-                    None
+        let mut result = Vec::new();
+        self.kvs
+            .iter_async(|key, _| {
+                if key.starts_with(&prefix) {
+                    result.push(key[prefix.len()..].to_string());
                 }
+                true
             })
-            .collect())
+            .await;
+        Ok(result)
     }
 
     async fn add_to_set(
@@ -204,9 +215,10 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
     ) -> Result<(), String> {
         let set = self
             .sets
-            .entry(Self::composite_key(&namespace, key))
+            .entry_async(Self::composite_key(&namespace, key))
+            .await
             .or_default();
-        set.insert(value.to_vec());
+        let _ = set.replace_async(value.to_vec()).await;
         Ok(())
     }
 
@@ -219,13 +231,17 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         key: &str,
         value: &[u8],
     ) -> Result<(), String> {
-        match self.sets.get_mut(&Self::composite_key(&namespace, key)) {
-            Some(mut entry) => {
-                entry.value_mut().remove(value);
-                Ok(())
+        match self
+            .sets
+            .entry_async(Self::composite_key(&namespace, key))
+            .await
+        {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().remove_async(value).await;
             }
-            None => Ok(()),
+            Entry::Vacant(_) => {}
         }
+        Ok(())
     }
 
     async fn members_of_set(
@@ -236,12 +252,21 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<Bytes>, String> {
-        match self.sets.get(&Self::composite_key(&namespace, key)) {
-            Some(entry) => Ok(entry
-                .value()
-                .iter()
-                .map(|v| Bytes::from(v.clone()))
-                .collect()),
+        match self
+            .sets
+            .get_async(&Self::composite_key(&namespace, key))
+            .await
+        {
+            Some(entry) => {
+                let mut result = Vec::new();
+                entry
+                    .iter_async(|v| {
+                        result.push(Bytes::from(v.clone()));
+                        true
+                    })
+                    .await;
+                Ok(result)
+            }
             None => Ok(Vec::new()),
         }
     }
@@ -258,7 +283,8 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
     ) -> Result<(), String> {
         let mut entry = self
             .sorted_sets
-            .entry(Self::composite_key(&namespace, key))
+            .entry_async(Self::composite_key(&namespace, key))
+            .await
             .or_default();
         entry.retain(|(_, v)| v != value);
         entry.push((score, value.to_vec()));
@@ -277,7 +303,8 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
     ) -> Result<(), String> {
         let mut entry = self
             .sorted_sets
-            .entry(Self::composite_key(&namespace, key))
+            .entry_async(Self::composite_key(&namespace, key))
+            .await
             .or_default();
         entry.retain(|(_, v)| v != value);
         entry.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
@@ -292,13 +319,16 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        match self.sorted_sets.get(&Self::composite_key(&namespace, key)) {
-            Some(entry) => Ok(entry
-                .iter()
-                .map(|(score, value)| (*score, Bytes::from(value.clone())))
-                .collect()),
-            None => Ok(Vec::new()),
-        }
+        Ok(self
+            .sorted_sets
+            .read_async(&Self::composite_key(&namespace, key), |_, entry| {
+                entry
+                    .iter()
+                    .map(|(score, value)| (*score, Bytes::from(value.clone())))
+                    .collect::<Vec<_>>()
+            })
+            .await
+            .unwrap_or_default())
     }
 
     async fn query_sorted_set(
@@ -311,13 +341,16 @@ impl KeyValueStorage for InMemoryKeyValueStorage {
         min: f64,
         max: f64,
     ) -> Result<Vec<(f64, Bytes)>, String> {
-        match self.sorted_sets.get(&Self::composite_key(&namespace, key)) {
-            Some(entry) => Ok(entry
-                .iter()
-                .filter(|(score, _)| *score >= min && *score <= max)
-                .map(|(score, value)| (*score, Bytes::from(value.clone())))
-                .collect()),
-            None => Ok(Vec::new()),
-        }
+        Ok(self
+            .sorted_sets
+            .read_async(&Self::composite_key(&namespace, key), |_, entry| {
+                entry
+                    .iter()
+                    .filter(|(score, _)| *score >= min && *score <= max)
+                    .map(|(score, value)| (*score, Bytes::from(value.clone())))
+                    .collect()
+            })
+            .await
+            .unwrap_or_default())
     }
 }

@@ -85,16 +85,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
             debug!("Invocation queue loop preparing the instance");
 
-            let mut final_decision = if let Some(final_decision) =
-                self.recover_instance_state(&instance, &store).await
-            {
-                final_decision
-            } else {
-                // early return, can't retry a failed instance preparation
-                break;
-            };
+            let mut final_decision = self.recover_instance_state(&instance, &store).await;
 
-            if final_decision == RetryDecision::None {
+            if final_decision.is_none() {
                 let mut inner_loop = InnerInvocationLoop {
                     receiver: &mut self.receiver,
                     active: self.active.clone(),
@@ -104,33 +97,28 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     instance: &instance,
                     store: &store,
                 };
-                if let Some(inner_final_decision) = inner_loop.run().await {
-                    final_decision = inner_final_decision;
-                } else {
-                    // early return, can't retry
-                    break;
-                }
+                final_decision = inner_loop.run().await;
             }
 
             self.suspend_worker(&store).await;
 
             match final_decision {
-                RetryDecision::Immediate => {
+                None | Some(RetryDecision::None) => {
+                    debug!("Invocation queue loop notifying parent about being stopped");
+                    self.parent.stop_internal(true, None).await;
+                    break;
+                }
+                Some(RetryDecision::Immediate) => {
                     debug!("Invocation queue loop triggering restart immediately");
                     continue;
                 }
-                RetryDecision::Delayed(delay) => {
+                Some(RetryDecision::Delayed(delay)) => {
                     debug!("Invocation queue loop sleeping for {delay:?} for delayed restart");
                     tokio::time::sleep(delay).await;
                     debug!("Invocation queue loop restarting after delay");
                     continue;
                 }
-                RetryDecision::None => {
-                    debug!("Invocation queue loop notifying parent about being stopped");
-                    self.parent.stop_internal(true, None).await;
-                    break;
-                }
-                RetryDecision::ReacquirePermits => {
+                Some(RetryDecision::ReacquirePermits) => {
                     let delay = get_delay(self.parent.oom_retry_config(), self.oom_retry_count);
                     debug!("Invocation queue loop dropping memory permits and triggering restart with a delay of {delay:?}");
                     let _ = Worker::restart_on_oom(
@@ -198,14 +186,14 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
         match prepare_result {
             Ok(decision) => {
                 debug!("Recovery decision from prepare_instance: {decision:?}");
-                Some(decision)
+                decision
             }
             Err(err) => {
                 warn!("Failed to start the worker: {err}");
                 store.data().set_suspended();
 
                 self.parent.stop_internal(true, Some(err)).await;
-                None // early return, we can't retry this
+                Some(RetryDecision::None) // early return, we can't retry this
             }
         }
     }
@@ -239,7 +227,7 @@ struct InnerInvocationLoop<'a, Ctx: WorkerCtx> {
 }
 
 impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
-    /// The inner invocation loop, started when the worker instance state is fully restored
+    /// The inner invocation loop started when the worker instance state is fully restored
     /// and the worker is ready to take invocations.
     ///
     /// This loop exits when the unbounded message queue owned by the RunningWorker is dropped,
@@ -248,15 +236,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     /// The inner loop only runs if the retry decision coming from `recover_instance_state` is `None`,
     /// meaning there were no errors during the instance preparation. The inner loop can override this
     /// decision in the following way:
-    /// - If it returns `None`, it means it is not possible to retry the outer loop and the whole invocation loop should be stopped.
-    /// - Otherwise it returns either `RetryDecision::None` if there were no errors, otherwise the retry decision coming from the
+    /// - If it returns `RetryDecision::None`, it means it is not possible to retry the outer loop and the whole invocation loop should be stopped.
+    /// - Otherwise it returns either `None` if there were no errors, otherwise the retry decision coming from the
     ///   underlying retry logic.
     ///
-    /// The outer loop should either break, or use the returned retry decision after the inner loop quits.
+    /// The outer loop should either break or use the returned retry decision after the inner loop quits.
     pub async fn run(&mut self) -> Option<RetryDecision> {
         debug!("Invocation queue loop started");
 
-        let mut final_decision = Some(RetryDecision::None);
+        let mut final_decision = None;
 
         // Exits when RunningWorker is dropped
         self.waiting_for_command.store(true, Ordering::Release);
@@ -277,7 +265,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             };
             match outcome {
                 CommandOutcome::BreakOuterLoop => {
-                    final_decision = None;
+                    final_decision = Some(RetryDecision::None);
                     break;
                 }
                 CommandOutcome::BreakInnerLoop(decision) => {
@@ -291,7 +279,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
         self.waiting_for_command.store(false, Ordering::Release);
 
-        debug!("Invocation queue loop finished");
+        debug!(final_decision = ?final_decision, "Invocation queue loop finished");
 
         final_decision
     }
@@ -306,8 +294,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         let resume_replay_result = Ctx::resume_replay(&mut *store, self.instance, true).await;
 
         match resume_replay_result {
-            Ok(RetryDecision::None) => CommandOutcome::Continue,
-            Ok(decision) => CommandOutcome::BreakInnerLoop(decision),
+            Ok(None) => CommandOutcome::Continue,
+            Ok(Some(decision)) => CommandOutcome::BreakInnerLoop(decision),
             Err(err) => {
                 warn!("Failed to resume replay: {err}");
                 store.data().set_suspended();

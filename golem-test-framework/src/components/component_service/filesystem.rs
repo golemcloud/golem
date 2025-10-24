@@ -128,7 +128,7 @@ impl FileSystemComponentService {
         let agent_types = if skip_analysis {
             vec![]
         } else {
-            extract_agent_types(&target_path, false)
+            extract_agent_types(&target_path, false, true)
                 .await
                 .map_err(|err| {
                     AddComponentError::Other(format!("Failed analyzing component: {err}"))
@@ -142,9 +142,11 @@ impl FileSystemComponentService {
             })?
             .len();
 
+        let project_id = project_id_override.unwrap_or_else(|| self.default_project_id.clone());
+
         let metadata = LocalFileSystemComponentMetadata {
             account_id: self.account_id.clone(),
-            project_id: project_id_override.unwrap_or_else(|| self.default_project_id.clone()),
+            project_id: project_id.clone(),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -189,7 +191,7 @@ impl FileSystemComponentService {
                 agent_types: vec![],
             }),
             account_id: Some(self.account_id.clone().into()),
-            project_id: Some(self.default_project_id.clone().into()),
+            project_id: Some(project_id.into()),
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),

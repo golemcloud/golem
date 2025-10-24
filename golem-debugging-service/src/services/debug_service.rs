@@ -754,7 +754,7 @@ mod tests {
             unimplemented!()
         }
 
-        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) {
+        async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
             unimplemented!()
         }
 

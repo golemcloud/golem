@@ -22,6 +22,12 @@ mod compose;
 mod stub_wasm;
 mod wit;
 
+tag_suite!(add_dep, group1);
+tag_suite!(cargo, group1);
+tag_suite!(compose, group1);
+tag_suite!(stub_wasm, group1);
+tag_suite!(wit, group1);
+
 tag_suite!(cargo, uses_cargo);
 tag_suite!(compose, uses_cargo);
 tag_suite!(stub_wasm, uses_cargo);

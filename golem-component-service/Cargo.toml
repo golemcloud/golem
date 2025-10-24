@@ -38,7 +38,6 @@ bytes = { workspace = true }
 chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 console-subscriber = { workspace = true }
-dashmap = { workspace = true }
 darling = { workspace = true }
 figment = { workspace = true }
 futures = { workspace = true }

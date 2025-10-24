@@ -20,7 +20,7 @@ test_r::enable!();
 mod app;
 mod stubgen;
 
-tag_suite!(app, app);
+tag_suite!(stubgen, group1);
 
 #[derive(Debug)]
 pub struct Tracing;

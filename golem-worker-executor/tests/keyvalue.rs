@@ -32,7 +32,11 @@ async fn readwrite_get_returns_the_value_that_was_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-1";
@@ -85,7 +89,11 @@ async fn readwrite_get_fails_if_the_value_was_not_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-2";
@@ -118,7 +126,11 @@ async fn readwrite_set_replaces_the_value_if_it_was_already_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-3";
@@ -184,7 +196,11 @@ async fn readwrite_delete_removes_the_value_if_it_was_already_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-4";
@@ -242,7 +258,11 @@ async fn readwrite_exists_returns_true_if_the_value_was_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-5";
@@ -288,7 +308,11 @@ async fn readwrite_exists_returns_false_if_the_value_was_not_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-6";
@@ -321,7 +345,11 @@ async fn readwrite_buckets_can_be_shared_between_workers(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_id_1 = executor
@@ -379,7 +407,11 @@ async fn batch_get_many_gets_multiple_values(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-9";
@@ -458,7 +490,11 @@ async fn batch_get_many_fails_if_any_value_was_not_set(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-10";
@@ -517,7 +553,11 @@ async fn batch_set_many_sets_multiple_values(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-11";
@@ -614,7 +654,11 @@ async fn batch_delete_many_deletes_multiple_values(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-12";
@@ -724,7 +768,11 @@ async fn batch_get_keys_returns_multiple_keys(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("key-value-service").store().await;
     let worker_name = "key-value-service-13";

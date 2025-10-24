@@ -105,7 +105,7 @@ impl Bootstrap<Context> for ServerBootstrap {
         oplog_processor_plugin: Arc<dyn OplogProcessorPlugin>,
         agent_type_service: Arc<dyn AgentTypesService>,
     ) -> anyhow::Result<All<Context>> {
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
 
         let additional_deps = NoAdditionalDeps {};
 

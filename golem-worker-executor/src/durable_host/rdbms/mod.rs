@@ -269,7 +269,8 @@ where
         .state
         .rdbms_service
         .rdbms_type_service()
-        .remove(&pool_key, &worker_id);
+        .remove(&pool_key, &worker_id)
+        .await;
 
     ctx.as_wasi_view()
         .table()

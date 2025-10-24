@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod docker;
-pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
@@ -558,6 +556,20 @@ impl CloudService for AdminOnlyStubCloudService {
             Err(anyhow!("StubCloudService received unexpected project ID"))?
         }
         Ok(self.admin_default_project_name.clone())
+    }
+
+    async fn create_project(
+        &self,
+        _token: &Uuid,
+        _name: String,
+        _owner_account_id: AccountId,
+        _description: String,
+    ) -> crate::Result<ProjectId> {
+        // We allow calling create_project and just generate a new ProjectID.
+        // This can be used together with worker executor's `ProjectServiceDisabled` mode which allows arbitrary project IDs to
+        // be used in order to better separate parallel tests.
+
+        Ok(ProjectId::new_v4())
     }
 
     fn admin_token(&self) -> Uuid {

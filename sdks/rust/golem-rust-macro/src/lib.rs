@@ -14,8 +14,12 @@
 
 use proc_macro::TokenStream;
 
-use crate::transaction::golem_operation_impl;
+use crate::{
+    agentic::{agent_definition_impl, agent_implementation_impl},
+    transaction::golem_operation_impl,
+};
 
+mod agentic;
 mod transaction;
 mod value;
 
@@ -29,8 +33,23 @@ pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
     value::derive_from_value_and_type(input)
 }
 
+#[proc_macro_derive(AgentArg)]
+pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
+    agentic::derive_agent_arg(input)
+}
+
 /// Defines a function as an `Operation` that can be used in transactions
 #[proc_macro_attribute]
 pub fn golem_operation(attr: TokenStream, item: TokenStream) -> TokenStream {
     golem_operation_impl(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn agent_definition(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agent_definition_impl(attr, item)
+}
+
+#[proc_macro_attribute]
+pub fn agent_implementation(attr: TokenStream, item: TokenStream) -> TokenStream {
+    agent_implementation_impl(attr, item)
 }

@@ -172,7 +172,7 @@ impl Bootstrap<DebugContext> for ServerBootstrap {
 
         let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
 
-        let resource_limits = resource_limits::configured(&golem_config.resource_limits);
+        let resource_limits = resource_limits::configured(&golem_config.resource_limits).await;
 
         // When it comes to fork, we need the original oplog service
         let worker_fork = Arc::new(DefaultWorkerFork::new(
