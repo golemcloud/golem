@@ -23,37 +23,6 @@ impl<I: Image> ContainerHandle<I> {
         Self(Arc::new(Mutex::new(Some(container_async))))
     }
 
-    pub(super) async fn stop(&self) {
-        let guard = self.0.lock().await;
-        if let Some(ref container) = *guard {
-            container.stop().await.expect("failed to stop container");
-        } else {
-            panic!("container was already removed");
-        }
-    }
-
-    pub(super) async fn start(&self) {
-        let guard = self.0.lock().await;
-        if let Some(ref container) = *guard {
-            container.start().await.expect("failed to start container");
-        } else {
-            panic!("container was already removed");
-        }
-    }
-
-    pub(super) async fn restart(&self) {
-        let guard = self.0.lock().await;
-        if let Some(ref container) = *guard {
-            container.stop().await.expect("failed to stop container");
-            container
-                .start()
-                .await
-                .expect("failed to start the container again");
-        } else {
-            panic!("container was already removed");
-        }
-    }
-
     pub(super) async fn kill(&self) {
         if let Some(container) = self.0.lock().await.take() {
             let id = container.id().to_string();
