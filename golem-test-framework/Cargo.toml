@@ -16,13 +16,10 @@ harness = false
 golem-api-grpc = { workspace = true }
 golem-client = { workspace = true }
 golem-common = { workspace = true }
-golem-rib = { workspace = true }
 golem-service-base = { workspace = true }
 golem-wasm = { workspace = true }
 
 anyhow = { workspace = true }
-async-dropper = { workspace = true, features = ["simple", "tokio"] }
-async-dropper-simple = { workspace = true, features = ["no-default-bound", "tokio"] }
 async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 bytes = { workspace = true }
@@ -32,10 +29,6 @@ cli-table = { workspace = true }
 colored = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
-k8s-openapi = { workspace = true }
-kill_tree = { workspace = true, features = ["tokio"] }
-kube = { workspace = true }
-postgres = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
