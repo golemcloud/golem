@@ -789,6 +789,84 @@ jobs:
         if: matrix.cfg.os == 'windows-latest'
       - run: mv ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }} ./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
         if: matrix.cfg.os != 'windows-latest'
+
+      - name: Import Code Signing Certificate
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          # Create temporary keychain
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          
+          # Create and unlock keychain
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          
+          # Import certificate
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          echo "$CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+          security import "$CERTIFICATE_PATH" -P "$CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          
+          # Add keychain to search list
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          
+          # Set partition list to allow codesign to access the certificate
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+      - name: Code Sign Binary
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+          
+          # Sign with hardened runtime
+          codesign --force \
+            --options runtime \
+            --timestamp \
+            --sign "Developer ID Application: $APPLE_TEAM_ID" \
+            "$BINARY_PATH"
+          
+          # Verify signature
+          codesign --verify --verbose "$BINARY_PATH"
+          codesign --display --verbose=4 "$BINARY_PATH"
+
+      - name: Create Notarization Archive
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        run: |
+          BINARY_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}
+          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+          
+          # Create zip for notarization
+          zip -j "$ZIP_PATH" "$BINARY_PATH"
+
+      - name: Submit for Notarization
+        if: contains(matrix.cfg.rust-target, 'apple-darwin')
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          ZIP_PATH=./target/${{ matrix.cfg.rust-target }}/release/${{ matrix.project }}-${{ matrix.cfg.rust-target }}.zip
+          
+          # Submit for notarization (async - no wait)
+          xcrun notarytool submit "$ZIP_PATH" \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD" \
+            --wait false
+          
+          echo "Notarization submitted. Check status in Apple Developer portal."
+
+      - name: Cleanup Keychain
+        if: contains(matrix.cfg.rust-target, 'apple-darwin') && always()
+        run: |
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          security delete-keychain "$KEYCHAIN_PATH" || true
+
       - name: Login GH CLI
         shell: bash
         run: gh auth login --with-token < <(echo ${{ secrets.GITHUB_TOKEN }})
