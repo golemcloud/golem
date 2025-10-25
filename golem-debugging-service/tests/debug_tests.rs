@@ -7,9 +7,9 @@ use golem_common::model::{Timestamp, WorkerId};
 use golem_debugging_service::model::params::PlaybackOverride;
 use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_test_framework::dsl::TestDsl;
-use golem_wasm_ast::analysis::analysed_type::{record, str, variant};
-use golem_wasm_ast::analysis::{NameOptionTypePair, NameTypePair};
-use golem_wasm_rpc::{IntoValueAndType, Record, Value, ValueAndType};
+use golem_wasm::analysis::analysed_type::{record, str, variant};
+use golem_wasm::analysis::{NameOptionTypePair, NameTypePair};
+use golem_wasm::{IntoValueAndType, Record, Value, ValueAndType};
 use test_r::{inherit_test_dep, test};
 
 inherit_test_dep!(RegularWorkerExecutorTestDependencies);

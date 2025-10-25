@@ -65,8 +65,8 @@ use golem_common::model::{
 };
 use golem_common::{model as common_model, recorded_grpc_api_request};
 use golem_service_base::error::worker_executor::*;
-use golem_wasm_rpc::protobuf::Val;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::protobuf::Val;
+use golem_wasm::ValueAndType;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -374,43 +374,32 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let account_id = extract_account_id(&request, |r| &r.account_id)?;
         self.ensure_worker_belongs_to_this_executor(&owned_worker_id)?;
 
-        if let Some(metadata) =
-            Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id).await
+        if Worker::<Ctx>::get_latest_metadata(&self.services, &owned_worker_id)
+            .await
+            .is_some()
         {
-            let should_interrupt = match &metadata.last_known_status.status {
-                WorkerStatus::Idle
-                | WorkerStatus::Running
-                | WorkerStatus::Suspended
-                | WorkerStatus::Retrying => true,
-                WorkerStatus::Exited | WorkerStatus::Failed | WorkerStatus::Interrupted => false,
-            };
+            let worker = Worker::get_or_create_suspended(
+                self,
+                &account_id,
+                &owned_worker_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                &InvocationContextStack::fresh(),
+            )
+            .await?;
 
-            if should_interrupt {
-                let worker = Worker::get_or_create_suspended(
-                    self,
-                    &account_id,
-                    &owned_worker_id,
-                    None,
-                    None,
-                    None,
-                    None,
-                    None,
-                    &InvocationContextStack::fresh(),
-                )
-                .await?;
+            worker.start_deleting().await?;
 
-                if let Some(mut await_interrupted) =
-                    worker.set_interrupting(InterruptKind::Interrupt).await
-                {
-                    await_interrupted.recv().await.unwrap();
-                }
-
-                worker.stop().await;
-            }
-
-            Ctx::on_worker_deleted(self, &owned_worker_id.worker_id).await?;
             self.worker_service().remove(&owned_worker_id).await;
-            self.active_workers().remove(&owned_worker_id.worker_id);
+            self.active_workers()
+                .remove(&owned_worker_id.worker_id)
+                .await;
+
+            // ensure we are holding the worker while we are doing cleanup.
+            drop(worker);
         }
 
         Ok(())
@@ -610,7 +599,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers()
+                        .remove(&owned_worker_id.worker_id)
+                        .await;
                 }
                 WorkerStatus::Retrying => {
                     debug!("Marking worker scheduled to be retried as interrupted");
@@ -628,7 +619,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                     worker.set_interrupting(InterruptKind::Interrupt).await;
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers()
+                        .remove(&owned_worker_id.worker_id)
+                        .await;
                 }
                 WorkerStatus::Running => {
                     let worker = Worker::get_or_create_suspended(
@@ -652,7 +645,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .await;
 
                     // Explicitly drop from the active worker cache - this will drop websocket connections etc.
-                    self.active_workers().remove(&owned_worker_id.worker_id);
+                    self.active_workers()
+                        .remove(&owned_worker_id.worker_id)
+                        .await;
                 }
             }
         }
@@ -730,7 +725,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) -> Result<Option<Val>, WorkerExecutorError> {
         let result = self.invoke_and_await_worker_internal_typed(request).await?;
         let value = result
-            .map(golem_wasm_rpc::Value::try_from)
+            .map(golem_wasm::Value::try_from)
             .transpose()
             .map_err(|e| WorkerExecutorError::unknown(e.to_string()))?
             .map(|value| value.into());
@@ -802,6 +797,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let invocation_context = request
             .maybe_invocation_context()
             .unwrap_or_else(InvocationContextStack::fresh);
+
         Worker::get_or_create_suspended(
             self,
             &account_id,
@@ -858,7 +854,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         self.shard_service().revoke_shards(&shard_ids)?;
 
-        for (worker_id, worker_details) in self.active_workers().snapshot() {
+        for (worker_id, worker_details) in self.active_workers().snapshot().await {
             if self.shard_service().check_worker(&worker_id).is_err() {
                 if let Some(mut await_interrupted) = worker_details
                     .set_interrupting(InterruptKind::Restart)
@@ -1137,7 +1133,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     &InvocationContextStack::fresh(),
                 )
                 .await?;
-                worker.enqueue_manual_update(request.target_version).await;
+                worker.enqueue_manual_update(request.target_version).await?;
             }
         }
 
@@ -2720,12 +2716,6 @@ impl WorkerEventStream {
         WorkerEventStream {
             inner: Box::pin(receiver.to_stream()),
         }
-    }
-}
-
-impl Drop for WorkerEventStream {
-    fn drop(&mut self) {
-        info!("Client disconnected");
     }
 }
 

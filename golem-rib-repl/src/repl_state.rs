@@ -14,7 +14,7 @@
 
 use crate::worker_name_gen::ReplWorkerNameGen;
 use crate::{RawRibScript, WorkerFunctionInvoke};
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use rib::{InstructionId, RibCompiler};
 use std::collections::HashMap;
 use std::path::PathBuf;

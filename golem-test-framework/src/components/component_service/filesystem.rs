@@ -29,7 +29,7 @@ use golem_common::model::{
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::testing::LocalFileSystemComponentMetadata;
-use golem_wasm_ast::analysis::AnalysedExport;
+use golem_wasm::analysis::AnalysedExport;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -128,7 +128,7 @@ impl FileSystemComponentService {
         let agent_types = if skip_analysis {
             vec![]
         } else {
-            extract_agent_types(&target_path, false)
+            extract_agent_types(&target_path, false, true)
                 .await
                 .map_err(|err| {
                     AddComponentError::Other(format!("Failed analyzing component: {err}"))
@@ -142,9 +142,11 @@ impl FileSystemComponentService {
             })?
             .len();
 
+        let project_id = project_id_override.unwrap_or_else(|| self.default_project_id.clone());
+
         let metadata = LocalFileSystemComponentMetadata {
             account_id: self.account_id.clone(),
-            project_id: project_id_override.unwrap_or_else(|| self.default_project_id.clone()),
+            project_id: project_id.clone(),
             component_id: component_id.clone(),
             component_name: component_name.to_string(),
             version: component_version,
@@ -157,6 +159,8 @@ impl FileSystemComponentService {
             wasm_filename,
             env: env.clone(),
             agent_types,
+            root_package_name: raw_component_metadata.root_package_name.clone(),
+            root_package_version: raw_component_metadata.root_package_version.clone(),
         };
         write_metadata_to_file(
             metadata,
@@ -187,7 +191,7 @@ impl FileSystemComponentService {
                 agent_types: vec![],
             }),
             account_id: Some(self.account_id.clone().into()),
-            project_id: Some(self.default_project_id.clone().into()),
+            project_id: Some(project_id.into()),
             created_at: Some(SystemTime::now().into()),
             component_type: Some(component_type as i32),
             files: files.iter().map(|file| file.clone().into()).collect(),
@@ -204,16 +208,7 @@ impl FileSystemComponentService {
 
         let exports = raw_component_metadata.exports.to_vec();
 
-        let linear_memories: Vec<LinearMemory> = raw_component_metadata
-            .memories
-            .iter()
-            .cloned()
-            .map(|mem| LinearMemory {
-                initial: mem.mem_type.limits.min * 65536,
-                maximum: mem.mem_type.limits.max.map(|m| m * 65536),
-            })
-            .collect::<Vec<_>>();
-
+        let linear_memories: Vec<LinearMemory> = raw_component_metadata.memories.clone();
         Ok((raw_component_metadata, linear_memories, exports))
     }
 

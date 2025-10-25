@@ -257,7 +257,7 @@ mod internal {
         ActualType, AmbiguousTypeError, ArmPattern, ExpectedType, Expr, InferredType,
         InvalidPatternMatchError, Path, TypeInternal, TypeMismatchError, VariableId,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
+    use golem_wasm::analysis::AnalysedType;
     use std::collections::VecDeque;
     use std::ops::Deref;
 

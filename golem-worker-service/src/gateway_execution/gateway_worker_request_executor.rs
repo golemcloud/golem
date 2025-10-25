@@ -16,11 +16,10 @@ use crate::gateway_execution::GatewayResolvedWorkerRequest;
 use crate::service::component::ComponentService;
 use crate::service::worker::WorkerService;
 use async_trait::async_trait;
-use golem_common::model::agent::AgentId;
 use golem_common::model::auth::{AuthCtx, TokenSecret};
 use golem_common::model::WorkerId;
 use golem_common::SafeDisplay;
-use golem_wasm_rpc::ValueAndType;
+use golem_wasm::ValueAndType;
 use std::collections::BTreeMap;
 use std::fmt::Display;
 use std::sync::Arc;
@@ -98,24 +97,19 @@ impl GatewayWorkerRequestExecutor for GatewayWorkerRequestExecutorDefault {
             )
             .await
             .map_err(|err| WorkerRequestExecutorError(err.to_safe_string()))?;
-        let raw_worker_name = resolved_worker_request.worker_name.to_string();
-        let worker_name = AgentId::parse(resolved_worker_request.worker_name, &component.metadata)
-            .ok()
-            .map(|agent_id| agent_id.to_string())
-            .unwrap_or(raw_worker_name);
 
-        WorkerId::validate_worker_name(&worker_name)?;
+        let worker_id = WorkerId::from_component_metadata_and_worker_id(
+            component.versioned_component_id.component_id.clone(),
+            &component.metadata,
+            resolved_worker_request.worker_name,
+        )?;
+
         debug!(
             component_id = resolved_worker_request.component_id.to_string(),
             function_name = resolved_worker_request.function_name,
-            worker_name = worker_name,
+            worker_name = worker_id.worker_name.clone(),
             "Executing invocation",
         );
-
-        let worker_id = WorkerId {
-            component_id: resolved_worker_request.component_id.clone(),
-            worker_name,
-        };
 
         let type_annotated_value = self
             .worker_service

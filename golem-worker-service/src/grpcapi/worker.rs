@@ -16,7 +16,7 @@ use super::error::WorkerTraceErrorKind;
 use super::{
     bad_request_error, bad_request_errors, error_to_status, parse_json_invoke_parameters,
     validate_component_file_path, validate_protobuf_plugin_installation_id,
-    validate_protobuf_worker_id, validated_worker_id,
+    validate_protobuf_worker_id,
 };
 use crate::service::auth::AuthService;
 use crate::service::component::ComponentService;
@@ -770,7 +770,7 @@ impl WorkerGrpcApi {
 
         let latest_component = self
             .component_service
-            .get_latest(&component_id, &auth)
+            .get_latest_by_id(&component_id, &auth)
             .await
             .tap_err(|error| tracing::error!("Error getting latest component: {:?}", error))
             .map_err(|_| GrpcWorkerError {
@@ -779,7 +779,10 @@ impl WorkerGrpcApi {
                 })),
             })?;
 
-        let worker_id = validated_worker_id(component_id, request.name)?;
+        let worker_id = WorkerId {
+            component_id,
+            worker_name: request.name,
+        };
 
         let namespace = self
             .auth_service

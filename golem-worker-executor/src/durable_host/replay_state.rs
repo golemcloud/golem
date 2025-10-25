@@ -20,7 +20,7 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{ComponentVersion, IdempotencyKey, OwnedWorkerId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use metrohash::MetroHash128;
 use std::collections::HashSet;
 use std::hash::Hasher;
@@ -452,7 +452,7 @@ impl ReplayState {
                         invocation_context: spans,
                         ..
                     } => {
-                        let request: Vec<golem_wasm_rpc::protobuf::Val> = self
+                        let request: Vec<golem_wasm::protobuf::Val> = self
                             .oplog
                             .get_payload_of_entry(&oplog_entry)
                             .await

@@ -59,8 +59,8 @@ use golem_service_base::service::initial_component_files::InitialComponentFilesS
 use golem_service_base::service::plugin_wasm_files::PluginWasmFilesService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::BlobStorage;
-use golem_wasm_ast::analysis::analysed_type::{str, u64};
-use golem_wasm_ast::analysis::{AnalysedExport, AnalysedInstance};
+use golem_wasm::analysis::analysed_type::{str, u64};
+use golem_wasm::analysis::{AnalysedExport, AnalysedInstance};
 use http::StatusCode;
 use rib::{FullyQualifiedFunctionName, FunctionName, InterfaceName, PackageName};
 use std::collections::{HashMap, HashSet};

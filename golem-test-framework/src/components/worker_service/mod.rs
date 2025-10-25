@@ -12,9 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod docker;
 pub mod forwarding;
-pub mod k8s;
 pub mod provided;
 pub mod spawned;
 
@@ -79,7 +77,7 @@ use golem_common::model::worker::WasiConfigVars;
 use golem_common::model::WorkerEvent;
 use golem_common::model::{ProjectId, PromiseId};
 use golem_service_base::clients::authorised_request;
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::{Value, ValueAndType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
@@ -1476,6 +1474,7 @@ async fn env_vars(
         )
         .with("GOLEM__WORKER_GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__PORT", http_port.to_string())
+        .with("GOLEM__ENGINE__ENABLE_FS_CACHE", "true".to_string())
         .with_all(rdb.info().env("golem_worker", rdb_private_connection))
         .build()
 }

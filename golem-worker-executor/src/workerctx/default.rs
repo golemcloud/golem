@@ -60,11 +60,11 @@ use golem_common::model::{
 use golem_service_base::error::worker_executor::{
     GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
 };
-use golem_wasm_rpc::golem_rpc_0_2_x::types::{
+use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{
     CancellationTokenEntry, HostWasmRpc, RpcError, Uri, Value, ValueAndType, WitValue,
 };
 use std::collections::{BTreeMap, HashSet};
@@ -322,7 +322,7 @@ impl ExternalOperations<Context> for Context {
         store: &mut (impl AsContextMut<Data = Context> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Context>::resume_replay(store, instance, refresh_replay_target).await
     }
 
@@ -330,7 +330,7 @@ impl ExternalOperations<Context> for Context {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Context>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -343,13 +343,6 @@ impl ExternalOperations<Context> for Context {
         this.resource_limits()
             .update_last_known_limits(&project_owner, last_known_limits)
             .await
-    }
-
-    async fn on_worker_deleted<T: HasAll<Context> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Context>::on_worker_deleted(this, worker_id).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<Context> + Send + Sync + 'static>(
@@ -428,10 +421,7 @@ impl FileSystemReading for Context {
 }
 
 impl HostWasmRpc for Context {
-    async fn new(
-        &mut self,
-        worker_id: golem_wasm_rpc::AgentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
 
@@ -552,8 +542,11 @@ impl InvocationContextManagement for Context {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

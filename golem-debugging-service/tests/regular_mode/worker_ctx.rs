@@ -11,12 +11,12 @@ use golem_common::model::{
     OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::golem_rpc_0_2_x::types::{
+use golem_wasm::golem_rpc_0_2_x::types::{
     CancellationToken, Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
-use golem_wasm_rpc::{Value, ValueAndType};
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{HostWasmRpc, RpcError, Uri, WitValue};
+use golem_wasm::{Value, ValueAndType};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -208,7 +208,6 @@ impl ResourceLimiterAsync for TestWorkerCtx {
         let current_known = self.durable_ctx.total_linear_memory_size();
         let delta = (desired as u64).saturating_sub(current_known);
         if delta > 0 {
-            debug!("CURRENT KNOWN: {current_known} DESIRED: {desired} DELTA: {delta}");
             self.durable_ctx.increase_memory(delta).await?;
             Ok(true)
         } else {
@@ -250,10 +249,7 @@ impl FileSystemReading for TestWorkerCtx {
 }
 
 impl HostWasmRpc for TestWorkerCtx {
-    async fn new(
-        &mut self,
-        worker_id: golem_wasm_rpc::AgentId,
-    ) -> anyhow::Result<Resource<WasmRpc>> {
+    async fn new(&mut self, worker_id: golem_wasm::AgentId) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
 
@@ -401,7 +397,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::resume_replay(store, instance, refresh_replay_target)
             .await
     }
@@ -410,7 +406,7 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = TestWorkerCtx> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<TestWorkerCtx>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -425,13 +421,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
             last_known_limits,
         )
         .await
-    }
-
-    async fn on_worker_deleted<T: HasAll<TestWorkerCtx> + Send + Sync>(
-        this: &T,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<TestWorkerCtx>::on_worker_deleted(this, worker_id).await
     }
 
     async fn on_shard_assignment_changed<T: HasAll<TestWorkerCtx> + Send + Sync + 'static>(
@@ -575,8 +564,11 @@ impl InvocationContextManagement for TestWorkerCtx {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

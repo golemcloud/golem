@@ -30,7 +30,7 @@ use golem_test_framework::components::worker_executor::provided::ProvidedWorkerE
 use golem_test_framework::components::worker_executor::WorkerExecutor;
 use golem_test_framework::components::worker_service::forwarding::ForwardingWorkerService;
 use golem_test_framework::components::worker_service::WorkerService;
-use golem_wasm_ast::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
+use golem_wasm::analysis::wit_parser::{AnalysedTypeResolve, SharedAnalysedTypeResolve};
 use std::fmt::{Debug, Formatter};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU16;
@@ -52,7 +52,6 @@ pub mod http;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
-pub mod measure_test_component_mem;
 pub mod observability;
 pub mod rdbms;
 pub mod rdbms_service;
@@ -77,11 +76,10 @@ tag_suite!(wasi, group2);
 tag_suite!(revert, group2);
 tag_suite!(durability, group2);
 tag_suite!(observability, group2);
-
-tag_suite!(scalability, group3);
-tag_suite!(hot_update, group3);
-tag_suite!(rust_rpc, group3);
-tag_suite!(rust_rpc_stubless, group3);
+tag_suite!(scalability, group2);
+tag_suite!(hot_update, group2);
+tag_suite!(rust_rpc, group2);
+tag_suite!(rust_rpc_stubless, group2);
 
 tag_suite!(rdbms_service, rdbms_service);
 

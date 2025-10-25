@@ -358,9 +358,9 @@ mod internal {
         RibComponentFunctionInvoke, RibFunctionInvokeResult, RibInterpreterResult, TypeHint,
         VariableId,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_ast::analysis::TypeResult;
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::analysis::AnalysedType;
+    use golem_wasm::analysis::TypeResult;
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
 
     use crate::interpreter::instruction_cursor::RibByteCodeCursor;
     use crate::interpreter::rib_runtime_error::{
@@ -371,7 +371,7 @@ mod internal {
     };
     use crate::type_inference::GetTypeHint;
     use async_trait::async_trait;
-    use golem_wasm_ast::analysis::analysed_type::{s16, s32, s64, s8, str, u16, u32, u64, u8};
+    use golem_wasm::analysis::analysed_type::{s16, s32, s64, s8, str, u16, u32, u64, u8};
     use std::ops::Deref;
 
     pub(crate) struct NoopRibFunctionInvoke;
@@ -1532,12 +1532,12 @@ mod tests {
         CustomInstanceSpec, Expr, GlobalVariableTypeSpec, InferredType, InstructionId,
         InterfaceName, Path, RibCompiler, RibCompilerConfig, VariableId,
     };
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         bool, case, f32, field, list, option, r#enum, record, result, result_err, result_ok, s32,
         str, tuple, u32, u64, u8, unit_case, variant,
     };
-    use golem_wasm_ast::analysis::AnalysedType;
-    use golem_wasm_rpc::{IntoValue, IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::analysis::AnalysedType;
+    use golem_wasm::{IntoValue, IntoValueAndType, Value, ValueAndType};
 
     #[test]
     async fn test_interpreter_for_literal() {
@@ -2385,7 +2385,7 @@ mod tests {
             .unwrap();
 
         let expected = r#"["foo", "bar"]"#;
-        let expected_value = golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
+        let expected_value = golem_wasm::parse_value_and_type(&list(str()), expected).unwrap();
 
         assert_eq!(result, expected_value);
     }
@@ -2417,7 +2417,7 @@ mod tests {
 
         let expected = r#"[]"#;
         let expected_value_and_type =
-            golem_wasm_rpc::parse_value_and_type(&list(str()), expected).unwrap();
+            golem_wasm::parse_value_and_type(&list(str()), expected).unwrap();
 
         assert_eq!(result, expected_value_and_type);
     }
@@ -4887,15 +4887,15 @@ mod tests {
             RibInput,
         };
         use async_trait::async_trait;
-        use golem_wasm_ast::analysis::analysed_type::{
+        use golem_wasm::analysis::analysed_type::{
             case, f32, field, handle, list, option, r#enum, record, result, s32, str, tuple, u32,
             u64, unit_case, variant,
         };
-        use golem_wasm_ast::analysis::{
+        use golem_wasm::analysis::{
             AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
             AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
         };
-        use golem_wasm_rpc::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
+        use golem_wasm::{print_value_and_type, IntoValueAndType, Value, ValueAndType};
         use std::sync::Arc;
         use uuid::Uuid;
 
@@ -5371,7 +5371,7 @@ mod tests {
             analysed_type: &AnalysedType,
             wasm_wave_str: &str,
         ) -> ValueAndType {
-            golem_wasm_rpc::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
+            golem_wasm::parse_value_and_type(analysed_type, wasm_wave_str).unwrap()
         }
 
         pub(crate) fn interpreter_with_noop_function_invoke(

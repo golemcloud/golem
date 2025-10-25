@@ -20,10 +20,8 @@ use golem_common::model::OplogIndex;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
 use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::TestDslUnsafe;
-use golem_wasm_ast::analysis::{
-    AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
-};
-use golem_wasm_rpc::{IntoValue, IntoValueAndType, ValueAndType};
+use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
+use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use log::info;
 use test_r::{inherit_test_dep, test};
 
@@ -39,7 +37,11 @@ async fn revert_successful_invocations(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("counters").store().await;
     let worker_id = executor
@@ -159,7 +161,11 @@ async fn revert_failed_worker(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -217,7 +223,11 @@ async fn revert_failed_worker_to_invoke_of_failed_inocation(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("failing-component").store().await;
     let worker_id = executor
@@ -282,7 +292,11 @@ async fn revert_auto_update(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let component_id = executor.component("update-test-v1").unique().store().await;
     let worker_id = executor

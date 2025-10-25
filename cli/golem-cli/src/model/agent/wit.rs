@@ -18,8 +18,8 @@ use golem_common::model::agent::wit_naming::ToWitNaming;
 use golem_common::model::agent::{
     AgentType, DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas,
 };
-use golem_wasm_ast::analysis::analysed_type::{case, variant};
-use golem_wasm_ast::analysis::AnalysedType;
+use golem_wasm::analysis::analysed_type::{case, variant};
+use golem_wasm::analysis::AnalysedType;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write;
 use std::path::Path;
@@ -766,7 +766,7 @@ mod tests {
         AgentConstructor, AgentMethod, AgentType, BinaryDescriptor, ComponentModelElementSchema,
         DataSchema, ElementSchema, NamedElementSchema, NamedElementSchemas, TextDescriptor,
     };
-    use golem_wasm_ast::analysis::analysed_type::{
+    use golem_wasm::analysis::analysed_type::{
         case, field, option, r#enum, record, str, u32, unit_case, variant,
     };
     use indoc::indoc;
@@ -1347,6 +1347,58 @@ mod tests {
                   get-definition: func() -> agent-type;
                 
                   fun-either: func(either: result<string, string>) -> result<string, string>;
+                }
+            "#},
+        )
+    }
+
+    #[test]
+    pub fn multimodal_untagged_variant_in_out() {
+        let component_name = "test:agent".into();
+        let agent_types = test::multimodal_untagged_variant_in_out();
+
+        let wit = super::generate_agent_wrapper_wit(&component_name, &agent_types)
+            .unwrap()
+            .single_file_wrapper_wit_source;
+        println!("{wit}");
+        assert_wit(
+            &wit,
+            indoc! { r#"
+                package test:agent;
+
+                interface types {
+                  use golem:agent/common.{text-reference, binary-reference};
+
+                  record image {
+                    val: list<u8>,
+                  }
+
+                  record text {
+                    val: string,
+                  }
+
+                  variant foo-input {
+                    text(text),
+                    image(image),
+                  }
+
+                  variant foo-output {
+                    text(text),
+                    image(image),
+                  }
+                }
+
+                /// Test
+                interface test-agent {
+                  use golem:agent/common.{agent-type, binary-reference, text-reference};
+                  use types.{foo-input, foo-output};
+
+                  /// Constructor
+                  initialize: func();
+
+                  get-definition: func() -> agent-type;
+
+                  foo: func(input: list<foo-input>) -> list<foo-output>;
                 }
             "#},
         )

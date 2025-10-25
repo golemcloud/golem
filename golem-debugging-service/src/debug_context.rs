@@ -26,12 +26,12 @@ use golem_common::model::{
     OwnedWorkerId, PluginInstallationId, ProjectId, WorkerId, WorkerStatusRecord,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::golem_rpc_0_2_x::types::{
+use golem_wasm::golem_rpc_0_2_x::types::{
     Datetime, FutureInvokeResult, HostFutureInvokeResult, Pollable, WasmRpc,
 };
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{CancellationTokenEntry, Value, ValueAndType};
-use golem_wasm_rpc::{HostWasmRpc, RpcError, Uri, WitValue};
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{CancellationTokenEntry, Value, ValueAndType};
+use golem_wasm::{HostWasmRpc, RpcError, Uri, WitValue};
 use golem_worker_executor::durable_host::{
     DurableWorkerCtx, DurableWorkerCtxView, PublicDurableWorkerState,
 };
@@ -125,7 +125,7 @@ impl ExternalOperations<Self> for DebugContext {
         store: &mut (impl AsContextMut<Data = Self> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::resume_replay(store, instance, refresh_replay_target).await
     }
 
@@ -133,7 +133,7 @@ impl ExternalOperations<Self> for DebugContext {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::prepare_instance(worker_id, instance, store).await
     }
 
@@ -144,13 +144,6 @@ impl ExternalOperations<Self> for DebugContext {
     ) -> Result<(), WorkerExecutorError> {
         DurableWorkerCtx::<Self>::record_last_known_limits(this, project_id, last_known_limits)
             .await
-    }
-
-    async fn on_worker_deleted<This: HasAll<Self> + Send + Sync>(
-        this: &This,
-        worker_id: &WorkerId,
-    ) -> Result<(), WorkerExecutorError> {
-        DurableWorkerCtx::<Self>::on_worker_deleted(this, worker_id).await
     }
 
     async fn on_shard_assignment_changed<This: HasAll<Self> + Send + Sync + 'static>(
@@ -343,7 +336,7 @@ impl ResourceLimiterAsync for DebugContext {
 impl HostWasmRpc for DebugContext {
     async fn new(
         &mut self,
-        worker_id: golem_wasm_rpc::golem_rpc_0_2_x::types::AgentId,
+        worker_id: golem_wasm::golem_rpc_0_2_x::types::AgentId,
     ) -> anyhow::Result<Resource<WasmRpc>> {
         self.durable_ctx.new(worker_id).await
     }
@@ -465,8 +458,11 @@ impl InvocationContextManagement for DebugContext {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, invocation_context::AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<invocation_context::InvocationContextSpan>, WorkerExecutorError> {
-        self.durable_ctx.start_span(initial_attributes).await
+        self.durable_ctx
+            .start_span(initial_attributes, activate)
+            .await
     }
 
     async fn start_child_span(

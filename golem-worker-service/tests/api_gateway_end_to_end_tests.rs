@@ -2583,12 +2583,12 @@ mod internal {
     use golem_common::model::component_metadata::ComponentMetadata;
     use golem_common::model::{ComponentId, IdempotencyKey};
     use golem_common::virtual_exports::http_incoming_handler::IncomingHttpRequest;
-    use golem_wasm_ast::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::analysed_type::{field, handle, record, result, str, tuple, u32};
+    use golem_wasm::analysis::{
         AnalysedExport, AnalysedFunction, AnalysedFunctionParameter, AnalysedFunctionResult,
         AnalysedInstance, AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle,
     };
-    use golem_wasm_rpc::{IntoValueAndType, Value, ValueAndType};
+    use golem_wasm::{IntoValueAndType, Value, ValueAndType};
     use golem_worker_service::gateway_api_definition::http::{
         CompiledHttpApiDefinition, ComponentDetails, ComponentMetadataDictionary,
     };
@@ -2671,7 +2671,7 @@ mod internal {
                     "urn:worker:71a31a33-28a5-4978-8a58-83424a149c8b/{}",
                     resolved_worker_request.worker_name
                 );
-                let handle = golem_wasm_rpc::Value::Handle {
+                let handle = golem_wasm::Value::Handle {
                     uri,
                     resource_id: 0,
                 };
@@ -2689,19 +2689,17 @@ mod internal {
             }
 
             if function_name.clone() == "bigw:shopping/api.{get-user-name}" {
-                let value_and_type = ValueAndType::new(
-                    golem_wasm_rpc::Value::String("test-user".to_string()),
-                    str(),
-                );
+                let value_and_type =
+                    ValueAndType::new(golem_wasm::Value::String("test-user".to_string()), str());
 
                 return Ok(WorkerResponse::new(Some(value_and_type)));
             }
 
             if function_name == "bigw:shopping/api.{store.get-currency}" {
                 let value_and_type = ValueAndType::new(
-                    golem_wasm_rpc::Value::Result(Ok(Some(Box::new(
-                        golem_wasm_rpc::Value::String("USD".to_string()),
-                    )))),
+                    golem_wasm::Value::Result(Ok(Some(Box::new(golem_wasm::Value::String(
+                        "USD".to_string(),
+                    ))))),
                     result(str(), str()),
                 );
 
@@ -2710,7 +2708,7 @@ mod internal {
 
             if function_name == "bigw:shopping/api.{store.add-user}" {
                 let value_and_type = ValueAndType::new(
-                    golem_wasm_rpc::Value::String("test-user-generated".to_string()),
+                    golem_wasm::Value::String("test-user-generated".to_string()),
                     str(),
                 );
 

@@ -31,7 +31,6 @@ pub mod cloud_service;
 pub mod component_compilation_service;
 pub mod component_service;
 mod docker;
-pub mod k8s;
 pub mod rdb;
 pub mod redis;
 pub mod redis_monitor;

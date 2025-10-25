@@ -459,6 +459,10 @@ mod filesystem {
                 .metadata
                 .values()
                 .map(|local_metadata| {
+                    warn!(
+                        "all_cached_metadata returning: {} ({})",
+                        local_metadata.component_id, local_metadata.component_name
+                    );
                     golem_service_base::model::Component::from(local_metadata.clone())
                 })
                 .collect()
@@ -878,6 +882,8 @@ mod grpc {
         async fn all_cached_metadata(&self) -> Vec<golem_service_base::model::Component> {
             self.component_metadata_cache
                 .iter()
+                .await
+                .into_iter()
                 .map(|(_, v)| v)
                 .collect()
         }

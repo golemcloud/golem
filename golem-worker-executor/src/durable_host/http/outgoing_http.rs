@@ -68,7 +68,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             .collect();
 
         let span = self
-            .start_span(&outgoing_http_request_span_attributes(&uri, &method))
+            .start_span(&outgoing_http_request_span_attributes(&uri, &method), false)
             .await
             .map_err(|err| HttpError::trap(anyhow!(err)))?;
 

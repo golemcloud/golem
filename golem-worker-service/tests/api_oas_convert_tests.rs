@@ -33,6 +33,9 @@ use golem_worker_service::service::gateway::{ComponentView, ConversionContext};
 use rib::{Expr, RibByteCode, RibInputTypeInfo};
 use std::collections::HashMap;
 use std::str::FromStr;
+use test_r::test;
+
+test_r::enable!();
 
 // Helper function to create test namespace
 fn test_namespace() -> Namespace {
@@ -124,7 +127,7 @@ fn assert_basic_openapi_properties(yaml: &serde_yaml::Value, id: &str, version: 
 }
 
 // Test 1: Simple conversion
-#[tokio::test]
+#[test]
 async fn test_simple_conversion() {
     // Create a simple CompiledHttpApiDefinition with no routes
     let compiled_api_definition = CompiledHttpApiDefinition {
@@ -187,7 +190,7 @@ async fn test_simple_conversion() {
 
 // Test 2: CORS preflight route
 // Test cors-preflight is converted to rib valid response string
-#[tokio::test]
+#[test]
 async fn test_cors_preflight_response_formatting() {
     // Create a CORS configuration using the constructor
     let cors = HttpCors::new(
@@ -260,7 +263,7 @@ async fn test_cors_preflight_response_formatting() {
 }
 
 // Test 3: SwaggerUI, FileServer, HttpHandler binding types
-#[tokio::test]
+#[test]
 async fn test_other_binding_types() {
     // Create a compiled route with SwaggerUI binding
     let swagger_ui_route = CompiledRoute {
@@ -407,7 +410,7 @@ async fn test_other_binding_types() {
 }
 
 // Test 4: Security conversion
-#[tokio::test]
+#[test]
 async fn test_security_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
@@ -602,11 +605,11 @@ x-golem-api-definition-version: 0.1.0
 }
 
 // Test 5: Multiple component binding
-#[tokio::test]
+#[test]
 async fn test_multi_component_binding() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
+    use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32};
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
     use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
     use std::collections::HashMap;
@@ -814,11 +817,11 @@ async fn test_multi_component_binding() {
 }
 
 // Test 6: Basic types and record conversion
-#[tokio::test]
+#[test]
 async fn test_basic_types_and_record_conversion() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameTypePair, TypeBool, TypeEnum, TypeRecord, TypeStr, TypeU32, TypeU64,
     };
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
@@ -1100,11 +1103,11 @@ async fn test_basic_types_and_record_conversion() {
 }
 
 // Test 7: Complete todo structure with optional and oneOf
-#[tokio::test]
+#[test]
 async fn test_complete_todo_structure_with_optional_and_oneof() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameTypePair, TypeEnum, TypeOption, TypeRecord, TypeResult, TypeS64, TypeStr,
         TypeU64,
     };
@@ -1347,11 +1350,11 @@ async fn test_complete_todo_structure_with_optional_and_oneof() {
 }
 
 // Test 8: Variant output structure
-#[tokio::test]
+#[test]
 async fn test_variant_output_structure() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameOptionTypePair, NameTypePair, TypeRecord, TypeStr, TypeU64, TypeVariant,
     };
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
@@ -1512,11 +1515,11 @@ async fn test_variant_output_structure() {
 }
 
 // Test 9: Complete integration test with full YAML comparison
-#[tokio::test]
+#[test]
 async fn test_oas_conversion_full_structure_shopping_cart() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameTypePair, TypeF32, TypeList, TypeRecord, TypeStr, TypeU32, TypeU64,
     };
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled}; //WorkerNameCompiled
@@ -1786,13 +1789,11 @@ x-golem-api-definition-version: 0.0.1
 }
 
 // Test 10: Path, Query, and Header Parameter Combinations Test
-#[tokio::test]
+#[test]
 async fn test_path_query_header_parameter_combinations() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
-        AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64,
-    };
+    use golem_wasm::analysis::{AnalysedType, NameTypePair, TypeRecord, TypeStr, TypeU32, TypeU64};
     use golem_worker_service::gateway_binding::{ResponseMappingCompiled, WorkerBindingCompiled};
     use rib::{Expr, RibByteCode, RibInputTypeInfo, RibOutputTypeInfo};
     use std::collections::HashMap;
@@ -2113,11 +2114,11 @@ async fn test_path_query_header_parameter_combinations() {
 }
 
 // Test 11: Comprehensive AnalysedType Coverage Test (10 Routes)
-#[tokio::test]
+#[test]
 async fn test_comprehensive_analysed_type_coverage() {
     use golem_common::base_model::ComponentId;
     use golem_common::model::component::VersionedComponentId;
-    use golem_wasm_ast::analysis::{
+    use golem_wasm::analysis::{
         AnalysedType, NameOptionTypePair, NameTypePair, TypeBool, TypeChr, TypeEnum, TypeF32,
         TypeF64, TypeFlags, TypeList, TypeOption, TypeRecord, TypeResult, TypeS32, TypeS64,
         TypeStr, TypeTuple, TypeU32, TypeU64, TypeVariant,

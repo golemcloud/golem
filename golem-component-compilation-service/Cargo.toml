@@ -17,7 +17,7 @@ test = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
-golem-common = { workspace = true, default-features = true }
+golem-common = { workspace = true }
 golem-service-base = { workspace = true }
 golem-worker-executor = { workspace = true }
 

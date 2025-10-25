@@ -103,8 +103,8 @@ use golem_common::model::{
 };
 use golem_common::retries::get_delay;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_wasm_rpc::wasmtime::{ResourceStore, ResourceTypeId};
-use golem_wasm_rpc::{Uri, Value, ValueAndType};
+use golem_wasm::wasmtime::{ResourceStore, ResourceTypeId};
+use golem_wasm::{Uri, Value, ValueAndType};
 use replay_state::ReplayEvent;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -580,8 +580,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             // Must switch to live mode before failing to be able to commit an Error entry
                             self.state.replay_state.switch_to_live().await;
                             Err(WorkerExecutorError::runtime(
-                                    "Non-idempotent remote write operation was not completed, cannot retry",
-                                ))
+                                "Non-idempotent remote write operation was not completed, cannot retry",
+                            ))
                         }
                         OplogEntryLookupResult::NotFound {
                             violates_for_all: false,
@@ -957,7 +957,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
     pub async fn finalize_pending_snapshot_update(
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> RetryDecision {
+    ) -> Option<RetryDecision> {
         let pending_update = store
             .as_context_mut()
             .data_mut()
@@ -1072,7 +1072,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 .data_mut()
                                 .on_worker_update_failed(target_version, Some(error))
                                 .await;
-                            RetryDecision::Immediate
+                            Some(RetryDecision::Immediate)
                         } else {
                             let component_metadata =
                                 store.as_context().data().component_metadata().clone();
@@ -1091,7 +1091,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                     ),
                                 )
                                 .await;
-                            RetryDecision::None
+                            None
                         }
                     }
                     Ok(None) => {
@@ -1103,7 +1103,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                                 Some("Failed to find snapshot data for update".to_string()),
                             )
                             .await;
-                        RetryDecision::Immediate
+                        Some(RetryDecision::Immediate)
                     }
                     Err(error) => {
                         store
@@ -1111,7 +1111,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> DurableWorkerCtx<Ctx> {
                             .data_mut()
                             .on_worker_update_failed(target_version, Some(error))
                             .await;
-                        RetryDecision::Immediate
+                        Some(RetryDecision::Immediate)
                     }
                 }
             }
@@ -1344,7 +1344,7 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         function_input: &Vec<Value>,
     ) -> Result<(), WorkerExecutorError> {
         if self.state.snapshotting_mode.is_none() {
-            let proto_function_input: Vec<golem_wasm_rpc::protobuf::Val> = function_input
+            let proto_function_input: Vec<golem_wasm::protobuf::Val> = function_input
                 .iter()
                 .map(|value| value.clone().into())
                 .collect();
@@ -1446,7 +1446,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             trap_type,
         );
 
-        debug!("Recovery decision: {:?}", decision);
+        debug!(
+            "Recovery decision for {trap_type:?} with {:?} retries: {:?}",
+            latest_status.current_retry_count, decision
+        );
 
         decision
     }
@@ -1603,10 +1606,13 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
     async fn start_span(
         &mut self,
         initial_attributes: &[(String, AttributeValue)],
+        activate: bool,
     ) -> Result<Arc<InvocationContextSpan>, WorkerExecutorError> {
         let span_id = self.state.current_span_id.clone();
         let span = self.start_child_span(&span_id, initial_attributes).await?;
-        self.state.current_span_id = span.span_id().clone();
+        if activate {
+            self.state.current_span_id = span.span_id().clone();
+        }
         Ok(span)
     }
 
@@ -1625,7 +1631,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
         let span = if is_live {
             self.state
                 .invocation_context
-                .start_span(current_span_id, None)
+                .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         } else if let Some((_, entry)) = self
             .state
@@ -1643,14 +1649,14 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
             let span = InvocationContextSpan::local()
                 .with_span_id(span_id)
                 .with_start(timestamp)
-                .with_parent(self.state.invocation_context.get(current_span_id).unwrap())
+                .with_parent(self.state.invocation_context.get(parent).unwrap())
                 .build();
             self.state.invocation_context.add_span(span.clone());
             span
         } else {
             self.state
                 .invocation_context
-                .start_span(current_span_id, None)
+                .start_span(parent, None)
                 .map_err(WorkerExecutorError::runtime)?
         };
 
@@ -1681,7 +1687,7 @@ impl<Ctx: WorkerCtx> InvocationContextManagement for DurableWorkerCtx<Ctx> {
                 .add_and_commit_oplog(OplogEntry::start_span(
                     span.start().unwrap_or(Timestamp::now_utc()),
                     span.span_id().clone(),
-                    Some(current_span_id.clone()),
+                    Some(parent.clone()),
                     span.linked_context().map(|link| link.span_id().clone()),
                     HashMap::from_iter(initial_attributes.iter().cloned()),
                 ))
@@ -1791,7 +1797,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         let mut number_of_replayed_functions = 0;
 
         if refresh_replay_target {
@@ -1814,8 +1820,15 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .set_replay_target(new_target);
         }
 
+        let (component_type, is_agent) = {
+            let component = store.as_context().data().component_metadata();
+            (component.component_type, component.metadata.is_agent())
+        };
+
         let resume_result = loop {
-            let cont = store.as_context().data().durable_ctx().state.is_replay();
+            let cont = store.as_context().data().durable_ctx().state.is_replay() && // replay while not live
+                    (component_type == ComponentType::Durable || // durable components are fully replayed
+                        (number_of_replayed_functions == 0 && is_agent)); // ephemeral agents replay the first (initialize), other ephemerals nothing (deprecated)
 
             if cont {
                 let oplog_entry = store
@@ -1836,7 +1849,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                             .durable_ctx_mut()
                             .process_pending_replay_events()
                             .await?;
-                        break Ok(RetryDecision::None);
+                        break Ok(None);
                     }
                     Ok(Some(replay_state::ExportedFunctionInvoked {
                         function_name,
@@ -1994,14 +2007,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                         if decision == RetryDecision::None {
                                             // Cannot retry so we need to fail
                                             match trap_type {
-                                                TrapType::Interrupt(interrupt_kind) => {
-                                                    if interrupt_kind == InterruptKind::Interrupt {
-                                                        break Err(WorkerExecutorError::runtime(
-                                                            "Interrupted via the Golem API",
-                                                        ));
-                                                    } else {
-                                                        break Err(WorkerExecutorError::runtime(format!("The worker could not finish replaying a function {function_name}")));
-                                                    }
+                                                TrapType::Interrupt(_interrupt_kind) => {
+                                                    // In case of an interrupt, we return with RetryDecision::None
+                                                    // as it is not an error.
                                                 }
                                                 TrapType::Exit => {
                                                     break Err(WorkerExecutorError::runtime(
@@ -2025,9 +2033,9 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                                             }
                                         }
 
-                                        decision
+                                        Some(decision)
                                     }
-                                    None => RetryDecision::None,
+                                    None => None,
                                 };
 
                                 break Ok(decision);
@@ -2042,7 +2050,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                     .durable_ctx_mut()
                     .process_pending_replay_events()
                     .await?;
-                break Ok(RetryDecision::None);
+                break Ok(None);
             }
         };
 
@@ -2055,12 +2063,12 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Ctx> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         debug!("Starting prepare_instance");
         let start = Instant::now();
         store.as_context_mut().data_mut().set_running();
 
-        if store
+        let prepare_result = if store
             .as_context()
             .data()
             .component_metadata()
@@ -2069,26 +2077,34 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         {
             // Ephemeral workers cannot be recovered
 
-            // Moving to the end of the oplog
-            store
-                .as_context_mut()
-                .data_mut()
-                .durable_ctx_mut()
-                .state
-                .replay_state
-                .switch_to_live()
-                .await;
+            // We have to replay the initialize call for agents:
+            let replay_decision = Self::resume_replay(store, instance, false).await;
+            record_resume_worker(start.elapsed());
 
-            // Appending a Restart marker
-            store
-                .as_context_mut()
-                .data_mut()
-                .get_public_state()
-                .oplog()
-                .add(OplogEntry::restart())
-                .await;
+            if replay_decision == Ok(None) {
+                // Moving to the end of the oplog
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .durable_ctx_mut()
+                    .state
+                    .replay_state
+                    .switch_to_live()
+                    .await;
 
-            Ok(RetryDecision::None)
+                // Appending a Restart marker
+                store
+                    .as_context_mut()
+                    .data_mut()
+                    .get_public_state()
+                    .oplog()
+                    .add(OplogEntry::restart())
+                    .await;
+
+                Ok(None)
+            } else {
+                replay_decision
+            }
         } else {
             let pending_update = store
                 .as_context_mut()
@@ -2100,7 +2116,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
                 .await
                 .clone();
 
-            let prepare_result = match pending_update {
+            match pending_update {
                 Some(timestamped_update) => {
                     match &timestamped_update.description {
                         UpdateDescription::SnapshotBased { .. } => {
@@ -2145,7 +2161,7 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                                             debug!("Retrying prepare_instance after failed update attempt");
 
-                                            Ok(RetryDecision::Immediate)
+                                            Ok(Some(RetryDecision::Immediate))
                                         }
                                         _ => Err(error),
                                     }
@@ -2161,18 +2177,18 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
 
                     result
                 }
-            };
-            match prepare_result {
-                Ok(RetryDecision::None) => {
-                    store.as_context_mut().data_mut().set_suspended();
-                    Ok(RetryDecision::None)
-                }
-                Ok(other) => Ok(other),
-                Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
-                    worker_id.clone(),
-                    error,
-                )),
             }
+        };
+        match prepare_result {
+            Ok(None) => {
+                store.as_context_mut().data_mut().set_suspended();
+                Ok(None)
+            }
+            Ok(other) => Ok(other),
+            Err(error) => Err(WorkerExecutorError::failed_to_resume_worker(
+                worker_id.clone(),
+                error,
+            )),
         }
     }
 
@@ -2180,13 +2196,6 @@ impl<Ctx: WorkerCtx + DurableWorkerCtxView<Ctx>> ExternalOperations<Ctx> for Dur
         _this: &T,
         _project_id: &ProjectId,
         _last_known_limits: &CurrentResourceLimits,
-    ) -> Result<(), WorkerExecutorError> {
-        Ok(())
-    }
-
-    async fn on_worker_deleted<T: HasAll<Ctx> + Send + Sync>(
-        _this: &T,
-        _worker_id: &WorkerId,
     ) -> Result<(), WorkerExecutorError> {
         Ok(())
     }

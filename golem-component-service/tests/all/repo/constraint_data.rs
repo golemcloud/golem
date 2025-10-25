@@ -17,8 +17,8 @@ use golem_common::model::component_constraint::FunctionUsageConstraint;
 use golem_common::model::component_constraint::{FunctionConstraints, FunctionSignature};
 use golem_common::model::ComponentId;
 use golem_component_service::model::ComponentConstraints;
-use golem_wasm_ast::analysis::analysed_type::{f32, list, record, str, u32, u64};
-use golem_wasm_ast::analysis::NameTypePair;
+use golem_wasm::analysis::analysed_type::{f32, list, record, str, u32, u64};
+use golem_wasm::analysis::NameTypePair;
 use rib::{FullyQualifiedFunctionName, FunctionName, InterfaceName, PackageName};
 
 pub(crate) fn get_shopping_cart_worker_functions_constraint1() -> FunctionConstraints {
