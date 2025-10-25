@@ -12,9 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use agent_arg::*;
+pub use agent_registry::*;
+
 use golem_wasm::AgentId;
 
 mod agent;
+mod agent_arg;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;
