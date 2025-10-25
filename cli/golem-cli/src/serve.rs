@@ -23,20 +23,13 @@ use std::process::Stdio;
 
 use anyhow::{ anyhow, Context, Result };
 use axum::{ extract::State, routing::post, Json, Router };
-use axum::http::StatusCode;
 use serde::{ Deserialize, Serialize };
 use serde_json::Value;
 use tokio::io::{ AsyncBufReadExt, BufReader };
 use tokio::process::Command;
 use tokio::task::JoinSet;
 
-#[derive(serde::Serialize)]
-struct McpTool {
-    name: String,
-    description: String,
-    // JSON Schema (as raw value) describing the tool's "arguments"
-    input_schema: serde_json::Value,
-}
+
 
 #[derive(Debug, Deserialize, schemars::JsonSchema, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -44,18 +37,6 @@ struct GolemRunInput {
     args: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
-}
-fn build_tools_registry() -> Vec<McpTool> {
-    use schemars::schema_for;
-
-    let run_schema = schema_for!(GolemRunInput);
-    let run_schema_json = serde_json::to_value(&run_schema.schema).expect("schema to JSON");
-
-    vec![McpTool {
-        name: "golem.run".to_string(),
-        description: "Execute the Golem CLI with validated top-level subcommand allowlist.".to_string(),
-        input_schema: run_schema_json,
-    }]
 }
 
 // ---------- Models: JSON‑RPC 2.0 ------------------------------------------------
@@ -74,7 +55,7 @@ struct RpcRequest {
 #[derive(Serialize, Deserialize)]
 struct RpcResponse {
     #[serde(rename = "jsonrpc")]
-    jsonrpc: &'static str,  // "2.0"
+    jsonrpc: &'static str, // "2.0"
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -100,7 +81,12 @@ fn rpc_ok(id: Value, result: impl Serialize) -> axum::Json<RpcResponse> {
     })
 }
 
-fn rpc_err(id: Value, code: i32, message: impl Into<String>, data: Option<Value>) -> axum::Json<RpcResponse> {
+fn rpc_err(
+    id: Value,
+    code: i32,
+    message: impl Into<String>,
+    data: Option<Value>
+) -> axum::Json<RpcResponse> {
     axum::Json(RpcResponse {
         jsonrpc: "2.0",
         id: Some(id),
@@ -129,32 +115,12 @@ struct Capabilities {
     resources: bool,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolList {
-    tools: Vec<ToolSpec>,
-}
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolSpec {
-    name: String,
-    description: String,
-    input_schema: schemars::schema::RootSchema,
-}
-
 #[derive(Deserialize, Clone, Debug)]
 struct ToolCallParams {
     name: String,
     arguments: GolemRunInput, // typed; so `.arguments.args` compiles
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ToolArgs {
-    args: Vec<String>,
-    #[serde(default)]
-    cwd: Option<PathBuf>,
-}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -255,61 +221,95 @@ async fn handle(State(state): State<AppState>, Json(req): Json<RpcRequest>) -> J
             rpc_ok(req.id, result)
         }
         "tools/list" => {
-            // ← Generate from your registry so list == call
-            let tools = build_tools_registry();
-            let tools_json: Vec<_> = tools
+            // Surface available golem commands instead of just exposing `golem.run`
+            let cmds = available_golem_commands();
+
+            // The MCP spec for tools/list expects an object with "tools": [...]
+            // where each tool has name/description/inputSchema.
+            // We'll model each CLI command as a "tool" with no required args schema
+            // beyond "args: string[]". If you want a thinner payload (just strings),
+            // see note below.
+
+            let command_schema =
+                serde_json::json!({
+        "type": "object",
+        "properties": {
+            "args": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments passed after this command, same as CLI"
+            }
+        },
+        "required": ["args"]
+    });
+
+            let tools_json: Vec<_> = cmds
                 .into_iter()
-                .map(
-                    |t|
-                        serde_json::json!({
-            "name": t.name,
-            "description": t.description,
-            "inputSchema": t.input_schema
-        })
-                )
+                .map(|cmd| {
+                    serde_json::json!({
+                "name": cmd,
+                "description": format!("Golem CLI command '{}'", cmd),
+                "inputSchema": command_schema
+            })
+                })
                 .collect();
 
-            let result = serde_json::json!({ "tools": tools_json, "nextCursor": null });
-            rpc_ok(req.id, result)
+            rpc_ok(req.id, serde_json::json!({
+        "tools": tools_json
+    }))
         }
+
         "tools/call" => {
-            // Parse the whole params object (name + arguments, typed)
+            // 1. Parse params from the request body
             let params: ToolCallParams = match serde_json::from_value(req.params.clone()) {
                 Ok(p) => p,
                 Err(e) => {
-                    return rpc_err(req.id, -32602, format!("Invalid params: {e}"), None);
+                    return rpc_err(
+                        req.id,
+                        -32602,
+                        "Invalid params",
+                        Some(serde_json::json!({ "reason": e.to_string() }))
+                    );
                 }
             };
 
-            // Optional: Only allow tools that appear in tools/list (keeps contract tight)
-            {
-                use std::collections::BTreeSet;
-                let allowed_tool_names: BTreeSet<_> = build_tools_registry()
-                    .into_iter()
-                    .map(|t| t.name)
-                    .collect();
-                if !allowed_tool_names.contains(&params.name) {
-                    return rpc_err(req.id, -32601, format!("Unknown tool '{}'", params.name), None);
-                }
-            }
+            // 2. The top-level command is the tool name (e.g. "cloud", "app", "profile")
+            //    The request only passed trailing args in `params.arguments.args`.
+            //    We need to build the *full* argv ("cloud", "project", "list", ...).
+            let mut full_args = Vec::with_capacity(1 + params.arguments.args.len());
+            full_args.push(params.name.clone());
+            full_args.extend(params.arguments.args.clone());
 
-            // Dispatch to your existing runner (signature: &AppState, ToolCallParams)
-            match params.name.as_str() {
-                "golem.run" => {
-                    match run_golem(&state, params).await {
-                        Ok(res) => {
-                            let val = serde_json
-                                ::to_value(res)
-                                .map_err(|e| anyhow::anyhow!("serialize ToolCallResult: {e}"))
-                                .unwrap_or_else(
-                                    |e| serde_json::json!({ "serializationError": e.to_string() })
-                                );
-                            rpc_ok(req.id, val)
-                        }
-                        Err(e) => rpc_err(req.id, 1, format!("Command failed: {e:#}"), None),
+            // 3. Build the call we actually want to execute
+            let patched_params = ToolCallParams {
+                name: params.name.clone(),
+                arguments: GolemRunInput {
+                    args: full_args,
+                    cwd: params.arguments.cwd.clone(),
+                },
+            };
+
+            // 4. Run it
+            match run_golem(&state, patched_params).await {
+                Ok(result) => {
+                    match serde_json::to_value(result) {
+                        Ok(val) => rpc_ok(req.id, val),
+                        Err(e) =>
+                            rpc_err(
+                                req.id,
+                                -32001,
+                                "Serialization error",
+                                Some(serde_json::json!({ "reason": e.to_string() }))
+                            ),
                     }
                 }
-                _ => rpc_err(req.id, -32601, "Method not found", None),
+                Err(e) =>
+                    rpc_err(
+                        req.id,
+                        -32000,
+                        "Tool call failed",
+                        Some(serde_json::json!({ "reason": e.to_string() }))
+                    ),
             }
         }
 
@@ -355,65 +355,67 @@ async fn handle(State(state): State<AppState>, Json(req): Json<RpcRequest>) -> J
 // ---------- Tools ----------------------------------------------------------------
 
 async fn handle_tools_list() -> anyhow::Result<serde_json::Value> {
-    let tools = build_tools_registry();
-    Ok(
+    let cmds = available_golem_commands();
+
+    let command_schema =
         serde_json::json!({
-        "tools": tools.iter().map(|t| {
-            serde_json::json!({
-                "name": t.name,
-                "description": t.description,
-                "inputSchema": t.input_schema
-            })
-        }).collect::<Vec<_>>()
-    })
-    )
-}
-async fn handle_tools_call(
-    state: &AppState,
-    params: ToolCallParams
-) -> anyhow::Result<serde_json::Value> {
-    use std::collections::BTreeSet;
+        "type": "object",
+        "properties": {
+            "args": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments passed after this command, same as CLI"
+            }
+        },
+        "required": ["args"]
+    });
 
-    // Contract: name must be listed
-    let allowed_tool_names: BTreeSet<_> = build_tools_registry()
+    let tools_json: Vec<_> = cmds
         .into_iter()
-        .map(|t| t.name)
+        .map(|cmd| {
+            serde_json::json!({
+                "name": cmd,
+                "description": format!("Golem CLI command '{}'", cmd),
+                "inputSchema": command_schema
+            })
+        })
         .collect();
-    if !allowed_tool_names.contains(&params.name) {
-        anyhow::bail!("Unknown tool '{}'", params.name);
-    }
 
-    match params.name.as_str() {
-        "golem.run" => {
-            let result = run_golem(state, params).await?; // ToolCallResult
-            Ok(serde_json::to_value(result)?) // back to Value for JSON-RPC
-        }
-        _ => anyhow::bail!("Unknown tool"),
-    }
+    Ok(serde_json::json!({
+        "tools": tools_json
+    }))
 }
 
 async fn run_golem(state: &AppState, params: ToolCallParams) -> Result<ToolCallResult> {
-    if params.name.as_str() != "golem.run" {
-        return Err(anyhow::anyhow!("Unknown tool '{}'", params.name));
-    }
-
-    let (first, rest) = params.arguments.args
+    // Expect: params.arguments.args is already the FULL argv for `golem`,
+    // e.g. ["cloud", "project", "list", "--json"]
+    let (first, rest) = params
+        .arguments
+        .args
         .split_first()
         .ok_or_else(|| anyhow!("args is empty"))?;
 
-    let allowed = allowed_top_level_subcommands(); // Clap-derived when feature on; conservative fallback otherwise
+    // Security gate: only allow blessed top-level commands and reject disallowed ones.
+    let allowed = allowed_top_level_subcommands();
     let disallowed = disallowed_list();
-
     if !allowed.contains(first) || disallowed.contains(first) {
         anyhow::bail!("Disallowed or unknown subcommand '{first}'");
     }
 
-    let workdir = params.arguments.cwd.as_deref().map(Path::new).unwrap_or(&state.cwd);
-    let mut cmd = tokio::process::Command::new("golem");
-    cmd.current_dir(workdir).arg(first);
-    for a in rest {
-        cmd.arg(a);
-    }
+    // Resolve working directory:
+    // prefer client-supplied cwd, else fall back to server state cwd
+    let workdir: PathBuf = if let Some(cwd_str) = &params.arguments.cwd {
+        PathBuf::from(cwd_str)
+    } else {
+        state.cwd.clone()
+    };
+
+    // Build the process: `golem <first> <rest...>`
+    let mut cmd = Command::new("golem");
+    cmd.current_dir(&workdir);
+    cmd.args(std::iter::once(first).chain(rest.iter()));
+
+    // Make sure child dies with us, capture stdout/stderr.
     cmd.kill_on_drop(true);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
@@ -421,7 +423,7 @@ async fn run_golem(state: &AppState, params: ToolCallParams) -> Result<ToolCallR
 
     let mut child = cmd.spawn().context("spawn golem")?;
 
-    // Concurrently read stdout & stderr line-by-line
+    // Concurrently read stdout & stderr line by line
     let mut logs: Vec<LogLine> = Vec::new();
     let mut set = JoinSet::new();
 
@@ -430,17 +432,24 @@ async fn run_golem(state: &AppState, params: ToolCallParams) -> Result<ToolCallR
         set.spawn(async move {
             let mut lines: Vec<LogLine> = Vec::new();
             while let Ok(Some(line)) = reader.next_line().await {
-                lines.push(LogLine { stream: "stdout", line });
+                lines.push(LogLine {
+                    stream: "stdout",
+                    line,
+                });
             }
             lines
         });
     }
+
     if let Some(err) = child.stderr.take() {
         let mut reader = BufReader::new(err).lines();
         set.spawn(async move {
             let mut lines: Vec<LogLine> = Vec::new();
             while let Ok(Some(line)) = reader.next_line().await {
-                lines.push(LogLine { stream: "stderr", line });
+                lines.push(LogLine {
+                    stream: "stderr",
+                    line,
+                });
             }
             lines
         });
@@ -467,6 +476,7 @@ async fn run_golem(state: &AppState, params: ToolCallParams) -> Result<ToolCallR
     })
 }
 
+
 // ---------- Allowed/Disallowed subcommands --------------------------------------
 
 const DISALLOWED: &[&str] = &["system", "exec"];
@@ -481,26 +491,102 @@ fn disallowed_list() -> BTreeSet<String> {
 fn allowed_top_level_subcommands() -> BTreeSet<String> {
     use clap::CommandFactory;
     use golem_cli::command;
-    // `serve.rs` is in the same crate as `command.rs`, so use `crate::…`
     type Root = command::GolemCliCommand;
 
-    Root::command()
+    // Start with whatever clap says are real top-level subcommands.
+    let mut allowed: BTreeSet<String> = Root::command()
         .get_subcommands()
         .map(|sc| sc.get_name().to_string())
-        .collect()
+        .collect();
+
+    // Explicitly extend with the list we want exposed to MCP:
+    let extras = [
+        "app",
+        "application",
+        "component",
+        "agent",
+        "api",
+        "plugin",
+        "profile",
+        "server",
+        "cloud",
+        "repl",
+        "completion",
+        "help",
+    ];
+
+    for cmd in extras {
+        allowed.insert(cmd.to_string());
+    }
+
+    allowed
 }
 
 #[cfg(not(feature = "mcp-introspect-clap"))]
 fn allowed_top_level_subcommands() -> BTreeSet<String> {
-    // Fallback list if you don't enable the feature.
-    BTreeSet::from_iter([
-        "version".to_string(),
-        "profile".to_string(),
-        "component".to_string(),
-        "worker".to_string(),
-        "cloud".to_string(),
-        "rib-repl".to_string(),
-    ])
+    let mut allowed: BTreeSet<String> = BTreeSet::new();
+
+    // Fallback build (no clap introspection). We still allow exactly what you asked for.
+    let extras = [
+        "app",
+        "application",
+        "component",
+        "agent",
+        "api",
+        "plugin",
+        "profile",
+        "server",
+        "cloud",
+        "repl",
+        "completion",
+        "help",
+    ];
+
+    for cmd in extras {
+        allowed.insert(cmd.to_string());
+    }
+
+    allowed
+}
+
+fn available_golem_commands() -> Vec<String> {
+    use std::collections::BTreeSet;
+
+    // Start from whatever the server currently allows
+    let mut cmds: BTreeSet<String> = allowed_top_level_subcommands();
+
+    // Normalize/alias:
+    // - Historically the CLI exposed "worker", but UX calls it "agent".
+    if cmds.remove("worker") {
+        cmds.insert("agent".to_string());
+    }
+
+    // We want "application" as an alias for "app".
+    if cmds.contains("app") {
+        cmds.insert("application".to_string());
+    }
+
+    // We also want to expose "repl" even if it's not registered
+    // as a normal top-level clap subcommand. The code for that lives in
+    // `command_handler/interactive.rs` and `rib_repl.rs`, so just force-add.
+    cmds.insert("repl".to_string());
+
+    // We also want to make sure these are present even if clap / fallback
+    // doesn't list them explicitly.
+    cmds.insert("completion".to_string());
+    cmds.insert("help".to_string());
+
+    // And finally, anything else you explicitly asked for:
+    cmds.insert("plugin".to_string());
+    cmds.insert("profile".to_string());
+    cmds.insert("server".to_string());
+    cmds.insert("cloud".to_string());
+    cmds.insert("api".to_string());
+    cmds.insert("component".to_string());
+    cmds.insert("app".to_string());
+
+    // Convert to Vec in deterministic (sorted) order
+    cmds.into_iter().collect()
 }
 
 // ---------- Resources ------------------------------------------------------------
