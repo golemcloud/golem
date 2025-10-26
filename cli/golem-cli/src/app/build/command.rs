@@ -582,7 +582,7 @@ pub async fn ensure_common_deps_for_tool(
                 .await
         }
 
-        _ => Ok(())
+        _ => Ok(()),
     }
 }
 
