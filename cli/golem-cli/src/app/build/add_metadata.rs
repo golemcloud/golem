@@ -61,6 +61,7 @@ pub async fn add_metadata_to_selected_components(
                         component_name.as_str().log_color_highlight()
                     ),
                 );
+                dbg!("the root package name is {}", &root_package_name);
                 add_metadata(&linked_wasm, root_package_name, &final_linked_wasm)
             }
             .await,

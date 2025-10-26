@@ -344,12 +344,16 @@ impl ResolvedWitApplication {
     }
 
     pub fn is_agent(&self, app_component_name: &AppComponentName) -> bool {
-        !matches!(
+        let result = !matches!(
             self.agent_types
                 .get(app_component_name)
                 .unwrap_or(&ExtractedAgentTypes::NotAnAgent),
             ExtractedAgentTypes::NotAnAgent
-        )
+        );
+
+        dbg!("is it an agent?: {}", result);
+
+        result
     }
 
     pub async fn get_extracted_agent_types(
@@ -571,6 +575,10 @@ impl ResolvedWitApplication {
                 .any(|c| c.as_os_str() == OsStr::new("node_modules"))
             {
                 ensure_common_deps_for_tool(tools_with_ensured_common_deps, "node").await?;
+            } else {
+                if source_wit_dir.components().any(|c| c.as_os_str() == OsStr::new("wasm32-wasip1")) {
+                    ensure_common_deps_for_tool(tools_with_ensured_common_deps, "cargo").await?;
+                }
             }
         }
 

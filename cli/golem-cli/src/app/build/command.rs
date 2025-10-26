@@ -575,7 +575,14 @@ pub async fn ensure_common_deps_for_tool(
             })
             .await
         }
-        _ => Ok(()),
+        "cargo" => {
+            Command::new("cargo")
+                .args(["component", "build"])
+                .stream_and_run("cargo")
+                .await
+        }
+
+        _ => Ok(())
     }
 }
 

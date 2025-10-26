@@ -17,6 +17,9 @@ use crate::{
     golem_agentic::exports::golem::agent::guest::{AgentError, AgentType, DataValue, Guest},
 };
 
+use crate::load_snapshot::exports::golem::api::load_snapshot::Guest as LoadSnapshotGuest;
+use crate::save_snapshot::exports::golem::api::save_snapshot::Guest as SaveSnapshotGuest;
+
 use crate::agentic::agent_registry;
 
 use golem_wasm::analysis::analysed_type::str;
@@ -95,4 +98,18 @@ impl Guest for Component {
     }
 }
 
+impl LoadSnapshotGuest for Component {
+    fn load(_bytes: Vec<u8>) -> Result<(), String> {
+        Err("Load snapshot not implemented".to_string())
+    }
+}
+
+impl SaveSnapshotGuest for Component {
+    fn save() -> Vec<u8> {
+        vec![]
+    }
+}
+
 crate::golem_agentic::export_golem_agentic!(Component with_types_in crate::golem_agentic);
+crate::save_snapshot::export_save_snapshot!(Component with_types_in crate::save_snapshot);
+crate::load_snapshot::export_load_snapshot!(Component with_types_in crate::load_snapshot);
