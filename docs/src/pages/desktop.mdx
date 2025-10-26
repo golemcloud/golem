@@ -17,7 +17,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
   <Tabs.Tab>
     <Tabs items={['Windows Installer']}>
       <Tabs.Tab>
-        1. Download the `.exe` installer from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.0-rc8)
+        1. Download the `.exe` installer from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.1)
         2. When you run the installer, Windows may show a SmartScreen warning
         3. Click "More info" and then "Run anyway" to proceed with installation
         4. Follow the on-screen instructions to complete installation
@@ -27,7 +27,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
   <Tabs.Tab>
     <Tabs items={['Intel Mac', 'Apple Silicon (M-Chip)', 'Older macOS Versions']}>
       <Tabs.Tab>
-        1. Download the Intel x64 `.dmg` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.0-rc8)
+        1. Download the Intel x64 `.dmg` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.1)
         2. Open the downloaded `.dmg` file
         3. Drag the application to your Applications folder
         4. When first launching, macOS may block the app with a message "Golem is damaged and can’t be opened. You should move it to the Trash"
@@ -40,7 +40,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
            - The app should now open and subsequent launches won't require these steps
       </Tabs.Tab>
       <Tabs.Tab>
-        1. Download the ARM64 `.dmg` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.0-rc8)
+        1. Download the ARM64 `.dmg` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.1)
         2. Open the downloaded `.dmg` file
         3. Drag the application to your Applications folder
         4. When first launching, macOS may block the app with a message "Golem is damaged and can’t be opened. You should move it to the Trash"
@@ -54,7 +54,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
       </Tabs.Tab>
       <Tabs.Tab>
         For older macOS versions (pre-Catalina), you may need to adjust your security settings:
-        
+
         1. After downloading and attempting to open the app, go to **System Preferences** → **Security & Privacy**
         2. In the **General** tab, you should see a message about Golem being blocked
         3. Click the **Open Anyway** button (you may need to unlock the settings with the padlock icon first)
@@ -68,7 +68,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
   <Tabs.Tab>
     <Tabs items={['Debian/Ubuntu', 'Fedora/RHEL', 'Arch Linux']}>
       <Tabs.Tab>
-        1. Download the `.deb` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.0-rc8)
+        1. Download the `.deb` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.1)
 
         ```bash
         # Install the downloaded .deb file
@@ -79,7 +79,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
         ```
       </Tabs.Tab>
       <Tabs.Tab>
-        1. Download the `.rpm` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.0-rc8)
+        1. Download the `.rpm` file from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.1)
 
         ```bash
         # Install the downloaded .rpm file
@@ -90,7 +90,7 @@ Golem Desktop provides a native application experience across Windows, Linux, an
         ```
       </Tabs.Tab>
       <Tabs.Tab>
-        1. Download the Linux `.AppImage` from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.0-rc8)
+        1. Download the Linux `.AppImage` from the [release page](https://github.com/golemcloud/golem/releases/tag/v1.3.1)
 
         ```bash
         # Make the AppImage executable
@@ -112,13 +112,13 @@ export function PlatformDetector() {
       const tabButtons = document.querySelectorAll('[role="tab"]');
       if (tabButtons.length > 0) {
         let osTabIndex = 0;
-        
+
         if (platform.includes('mac') || userAgent.includes('mac') || userAgent.includes('darwin')) {
           osTabIndex = 1;
         } else if (platform.includes('linux') || platform.includes('x11')) {
           osTabIndex = 2;
         }
-        
+
         if (tabButtons[osTabIndex]) {
           setTimeout(() => {
             tabButtons[osTabIndex].click();
@@ -127,18 +127,18 @@ export function PlatformDetector() {
               setTimeout(() => {
                 const macTabs = document.querySelectorAll('[role="tabpanel"]:not([hidden]) [role="tab"]');
                 if (macTabs.length > 0) {
-                  const isAppleSilicon = 
-                    /arm|aarch64/i.test(navigator.platform) || 
-                    (userAgent.includes('mac') && 
-                     (/macbookpro1[78]|macbookair1[01]|macmini9|imac2[34]/i.test(userAgent) || 
-                      (typeof window.navigator.hardwareConcurrency !== 'undefined' && 
+                  const isAppleSilicon =
+                    /arm|aarch64/i.test(navigator.platform) ||
+                    (userAgent.includes('mac') &&
+                     (/macbookpro1[78]|macbookair1[01]|macmini9|imac2[34]/i.test(userAgent) ||
+                      (typeof window.navigator.hardwareConcurrency !== 'undefined' &&
                        window.navigator.hardwareConcurrency >= 8))) ||
-                    (typeof navigator.cpuClass !== 'undefined' && 
+                    (typeof navigator.cpuClass !== 'undefined' &&
                      navigator.cpuClass === 'arm64');
-                  
+
                   console.log("Is Apple Silicon:", isAppleSilicon);
                   const archIndex = isAppleSilicon ? 1 : 0;
-                  
+
                   if (macTabs[archIndex]) {
                     macTabs[archIndex].click();
                   }
@@ -152,7 +152,7 @@ export function PlatformDetector() {
       }
     }
   }, []);
-  
+
   return null;
 }
 
