@@ -2,7 +2,7 @@
 // Implements ServerHandler trait for MCP protocol
 
 use crate::context::Context;
-use crate::mcp_server::tools;
+use crate::mcp_server::{tools, resources};
 use rmcp::{
     handler::server::ServerHandler,
     model::*,
@@ -167,6 +167,57 @@ impl ServerHandler for GolemMcpServer {
                 None
             )),
         }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        // Discover manifests from current working directory
+        let current_dir = std::env::current_dir()
+            .map_err(|e| McpError::internal_error(
+                format!("Cannot determine current directory: {}", e),
+                None
+            ))?;
+
+        let resources = resources::discover_manifests(&current_dir)
+            .await
+            .map_err(|e| McpError::internal_error(
+                format!("Failed to discover manifests: {}", e),
+                None
+            ))?;
+
+        Ok(ListResourcesResult {
+            resources,
+            next_cursor: None,
+        })
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        let uri = request.uri.to_string();
+
+        let contents = resources::read_manifest(&uri)
+            .await
+            .map_err(|e| McpError::invalid_params(
+                format!("Failed to read resource: {}", e),
+                None
+            ))?;
+
+        Ok(ReadResourceResult {
+            contents: vec![
+                ResourceContents::TextResourceContents {
+                    uri: uri.clone(),
+                    mime_type: Some("application/x-yaml".to_string()),
+                    text: contents,
+                    meta: None,
+                }
+            ],
+        })
     }
 }
 
