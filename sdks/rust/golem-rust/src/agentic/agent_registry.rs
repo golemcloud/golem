@@ -41,6 +41,7 @@ pub fn register_agent_type(type_name: String, agent_type: AgentType) {
 }
 
 pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
+    dbg!("Registering agent instance {}");
     AGENT_INSTANCE.with(|instance| {
         *instance.borrow_mut() = Some(resolved_agent);
     });

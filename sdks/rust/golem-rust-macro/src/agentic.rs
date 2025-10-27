@@ -22,17 +22,13 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
 
     let agent_type = get_agent_type(&item_trait);
 
-    let trait_name = item_trait.ident.clone();
-
-    let trait_name_str = trait_name.to_string();
-
     let register_fn_name = get_register_function_ident(&item_trait);
 
     let register_fn = quote! {
         #[::ctor::ctor]
         fn #register_fn_name() {
             golem_rust::agentic::register_agent_type(
-               #trait_name_str.to_string(),
+               #agent_type.type_name.to_string(),
                #agent_type
             );
         }
@@ -463,9 +459,11 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
         }
     };
 
+    let kebab_case_type_name = to_kebab_case(&type_name);
+
     quote! {
         ::golem_rust::golem_agentic::golem::agent::common::AgentType {
-            type_name: #type_name.to_string(),
+            type_name: #kebab_case_type_name.to_string(),
             description: "".to_string(),
             methods: vec![#(#methods),*],
             dependencies: vec![],

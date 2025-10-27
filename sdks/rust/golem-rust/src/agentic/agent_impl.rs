@@ -46,6 +46,7 @@ impl Guest for Component {
                 .as_str(),
             );
 
+        // the agent_type is already lower cased kebab case
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
         let initiate_result =
