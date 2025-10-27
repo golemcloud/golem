@@ -125,6 +125,24 @@ pub mod save_snapshot {
     pub use __export_golem_rust_save_snapshot_impl as export_save_snapshot;
 }
 
+#[cfg(feature = "export_golem_agentic")]
+pub mod golem_agentic {
+    use wit_bindgen::generate;
+
+    generate!({
+        path: "wit",
+        world: "golem-agentic",
+        generate_all,
+        generate_unused_types: true,
+        pub_export_macro: true,
+        with: {
+            "golem:rpc/types@0.2.2": golem_wasm_rpc::golem_rpc_0_2_x::types,
+        }
+    });
+
+    pub use __export_golem_agentic_impl as export_golem_agentic;
+}
+
 #[cfg(feature = "export_oplog_processor")]
 pub mod oplog_processor {
     use wit_bindgen::generate;
@@ -170,6 +188,9 @@ pub mod oplog_processor {
 
     pub use __export_golem_rust_oplog_processor_impl as export_oplog_processor;
 }
+
+#[cfg(feature = "export_golem_agentic")]
+pub mod agentic;
 
 #[cfg(feature = "durability")]
 pub mod durability;

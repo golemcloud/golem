@@ -60,6 +60,9 @@ max_jitter_factor = 0.15
 min_delay = "100ms"
 multiplier = 3.0
 
+[engine]
+enable_fs_cache = false
+
 [indexed_storage]
 type = "KVStoreRedis"
 
@@ -323,6 +326,9 @@ without_time = false
 # min_delay = "100ms"
 # multiplier = 3.0
 # 
+# [engine]
+# enable_fs_cache = false
+# 
 # [indexed_storage]
 # type = "Redis"
 # 
@@ -558,6 +564,9 @@ without_time = false
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
+# 
+# [engine]
+# enable_fs_cache = false
 # 
 # [indexed_storage]
 # type = "InMemory"

@@ -160,7 +160,8 @@ impl Bootstrap<DebugContext> for TestDebuggingServerBootStrap {
         let addition_deps = AdditionalDeps::new(auth_service, debug_sessions);
         let resource_limits = resource_limits::configured(&ResourceLimitsConfig::Disabled(
             ResourceLimitsDisabledConfig {},
-        ));
+        ))
+        .await;
 
         let worker_fork = Arc::new(DefaultWorkerFork::new(
             Arc::new(RemoteInvocationRpc::new(

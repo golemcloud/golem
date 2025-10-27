@@ -32,12 +32,16 @@ skip_core_tasks = true       # we are not using the predefined cargo-make flows,
 [env]
 JUNIT_OPTS = ""
 AWS_EC2_METADATA_DISABLED = "true"
+PROFILE = "dev"
 
 [env.ci]
 CARGO_INCREMENTAL = "false"
-# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
-JUNIT_OPTS = "--format junit --logfile target/report.xml"
+#CARGO_PROFILE_dev_STRIP = "debuginfo"
+#CARGO_PROFILE_test_STRIP = "debuginfo"
+JUNIT_OPTS = "--format ctrf --logfile target/ctrf.json"
+PROFILE = "dev-ci"
 CI = "true"
+# CARGO_LOG="cargo::core::compiler::fingerprint=trace"
 
 [tasks.default]
 description = "This is the task that gets executed by 'cargo make' when no task is specified"
@@ -214,6 +218,17 @@ description = "Builds everything in debug mode"
 command = "cargo"
 args = ["build", "--workspace", "--all-targets"]
 
+[tasks.build-all-bins-including-tests]
+dependencies = ["wit"]
+description = "Builds all executables in debug mode, including the single-executable golem and all tests"
+
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo build --profile %{PROFILE}
+exec --fail-on-error cargo test --no-run --profile %{PROFILE}
+'''
+
+
 [tasks.build-bins]
 dependencies = ["wit"]
 description = "Builds all executables in debug mode"
@@ -234,6 +249,11 @@ description = "Builds all executables in debug mode, including the single-execut
 command = "cargo"
 args = ["build", "--workspace", "--bins", "--exclude", "integration-tests"]
 
+[tasks.build-bins-all-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-bins-all"] }]
+
 [tasks.build-bins-non-ci]
 private = true
 condition = { env_not_set = ["CI"] }
@@ -250,31 +270,15 @@ private = true
 condition = { env_not_set = ["CI"] }
 run_task = [{ name = ["build-worker-service"] }]
 
-[tasks.build-component-service]
-dependencies = ["wit"]
-description = "Builds the component-service"
-command = "cargo"
-args = ["build", "-p", "golem-component-service"]
-
-[tasks.build-component-service-non-ci]
-private = true
-condition = { env_not_set = ["CI"] }
-run_task = [{ name = ["build-component-service"] }]
-
-[tasks.build-cloud-service]
-description = "Builds cloud service"
-command = "cargo"
-args = ["build", "-p", "cloud-service"]
-
-[tasks.build-cloud-service-non-ci]
-private = true
-condition = { env_not_set = ["CI"] }
-run_task = [{ name = ["build-cloud-service"] }]
-
 [tasks.build-registry-service]
 description = "Builds registry service"
 command = "cargo"
 args = ["build", "-p", "golem-registry-service"]
+
+[tasks.build-registry-service-non-ci]
+private = true
+condition = { env_not_set = ["CI"] }
+run_task = [{ name = ["build-registry-service"] }]
 
 [tasks.build-release]
 description = """This is the top-level task that builds everything in release mode. PLATFORM_OVERRIDE env variable can be used
@@ -399,7 +403,7 @@ dependencies = [
 dependencies = ["wit"]
 description = "Runs unit tests only"
 script = '''
-cargo test --workspace --lib --all-features --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --workspace --lib --exclude golem-wasm-derive -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests]
@@ -417,44 +421,29 @@ args = [
     "--nocapture",
 ]
 
-[tasks.worker-executor-tests-untagged]
+[tasks.worker-executor-tests-misc]
 dependencies = ["wit"]
-description = "Runs only untagged worker-executor-tests"
+description = "Runs only untagged and rdbms worker-executor-tests"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
-'''
-
-[tasks.worker-executor-tests-rdbms-service]
-dependencies = ["wit"]
-description = "Runs only untagged worker-executor-tests"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:rdbms-service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag: -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:rdbms_service -- --flaky-run=5 --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group1]
 dependencies = ["wit"]
-description = "Runs worker executor tests only (group 1/8)"
+description = "Runs worker executor tests only (group 1/2)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:group1 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.worker-executor-tests-group2]
 dependencies = ["wit"]
-description = "Runs worker executor tests only (group 2/8)"
+description = "Runs worker executor tests only (group 2/2)"
 env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script = '''
-cargo test --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
-'''
-
-[tasks.worker-executor-tests-group3]
-dependencies = ["wit"]
-description = "Runs worker executor tests only (group 3/8)"
-env = { "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
-script = '''
-cargo test --package golem-worker-executor --test integration :tag:group3 -- --report-time --nocapture $JUNIT_OPTS
+cargo-test-r run --package golem-worker-executor --test integration :tag:group2 -- --report-time --nocapture $JUNIT_OPTS
 '''
 
 [tasks.integration-tests]
@@ -463,68 +452,73 @@ dependencies = [
     "integration-tests-group1",
     "integration-tests-group2",
     "integration-tests-group3",
-    "integration-tests-group4",
-    "integration-tests-group5",
     "cli-integration-tests",
 ]
 
 [tasks.integration-tests-group1]
-description = "Runs integration tests only"
-dependencies = ["build-bins"]
-env = { "RUST_LOG" = "debug", "RUST_BACKTRACE" = "1" }
+description = "Runs integration tests (group 1/3)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo test --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time
+cargo-test-r run --package integration-tests --test integration -- --nocapture --test-threads=1 --report-time $JUNIT_OPTS
 '''
-# cargo test --package integration-tests --test integration -- --nocapture --report-time $JUNIT_OPTS
 
 [tasks.integration-tests-group2]
-description = "Runs component service integration tests only"
+description = "Runs integration tests (group 2/3)"
 dependencies = ["wit"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo test --package golem-component-service --test tests -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-service-base --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-worker-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package golem-debugging-service --test '*' -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.integration-tests-group3]
-description = "Runs worker service integration tests only"
-dependencies = ["wit"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
+description = "Runs integration tests (group 3/3)"
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script = '''
-cargo test --package golem-worker-service --test services_tests -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-worker-service --test api_gateway_end_to_end_tests -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-worker-service --test api_oas_convert_tests -- --nocapture
-'''
-
-[tasks.integration-tests-group4]
-description = "Runs golem-service-base integration tests only"
-dependencies = ["wit"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
-script = '''
-cargo test --package golem-service-base --test integration -- --nocapture --report-time $JUNIT_OPTS
-cargo test --package golem-registry-service --test '*' -- --nocapture --report-time $JUNIT_OPTS
-# TODO: cargo test --package golem-debugging-service --test 'integration' -- --report-time $JUNIT_OPTS
-'''
-
-[tasks.integration-tests-group5]
-description = "Runs sharding integration tests only"
-dependencies = ["build-bins"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1" }
-script = '''
-cargo test --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test sharding -- --report-time $JUNIT_OPTS
 '''
 
 [tasks.cli-integration-tests]
-dependencies = ["build-bins-all"]
-description = "Run CLI integration tests"
+description = "Runs all CLI integration tests"
+dependencies = [
+    "cli-integration-tests-group1",
+    "cli-integration-tests-group2",
+    "cli-integration-tests-group3",
+]
+
+[tasks.cli-integration-tests-group1]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests (1/3)"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo test --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-cli :tag:app --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo test --package golem-cli :tag:uses_cargo --test integration -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group2]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group2 --test integration -- --report-time %{JUNIT_OPTS}
+'''
+
+[tasks.cli-integration-tests-group3]
+dependencies = ["build-bins-all-non-ci"]
+description = "Run CLI integration tests"
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group3 --test integration -- --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.sharding-tests-debug]
-dependencies = ["build-bins"]
+dependencies = ["build-bins-non-ci"]
 script = '''
 rm -rf logs data
 mkdir -pv logs data
@@ -535,7 +529,7 @@ export GOLEM__TRACING__FILE_DIR=../logs
 export GOLEM__TRACING__FILE_TRUNCATE=false
 export GOLEM__TRACING__FILE__ENABLED=true
 
-cargo test \
+cargo-test-r run \
 --package integration-tests \
 --test sharding ${@} \
 -- --nocapture --test-threads=1
@@ -547,18 +541,18 @@ dependencies = ["api-tests-http", "api-tests-grpc"]
 
 [tasks.api-tests-http]
 description = "Runs API HTTP tests only"
-dependencies = ["build-bins"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http" }
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "http", "QUIET" = "true" }
 script = '''
-cargo test --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test api -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.api-tests-grpc]
 description = "Runs API GRPC tests only"
-dependencies = ["build-bins"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc" }
+dependencies = ["build-bins-non-ci"]
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "GOLEM_CLIENT_PROTOCOL" = "grpc", "QUIET" = "true" }
 script = '''
-cargo test --package integration-tests --test api -- :tag: --nocapture --report-time $JUNIT_OPTS
+cargo-test-r run --package integration-tests --test api  :tag: -- --nocapture --report-time $JUNIT_OPTS
 '''
 
 [tasks.registry-repo-coverage]
@@ -645,17 +639,8 @@ script = [
 [tasks.publish]
 description = "Publishes packages to crates.io"
 dependencies = [
-    "build-release",
     "publish-golem-wasm-derive",
     "publish-golem-wasm",
-    "publish-golem-api-grpc",
-    "publish-golem-rib",
-    "publish-golem-common",
-    "publish-golem-client",
-    "publish-golem-service-base",
-    "publish-golem-test-framework",
-    "publish-golem-rib-repl",
-    "publish-golem-cli",
 ]
 
 [tasks.set-version]
@@ -704,101 +689,6 @@ args = [
     "publish",
     "-p",
     "golem-wasm",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-client]
-description = "Publishes golem-client package to crates.io"
-command = "cargo"
-args = ["publish", "-p", "golem-client", "--all-features", "--allow-dirty"]
-
-[tasks.publish-golem-api-grpc]
-description = "Publishes golem-api-grpc package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-api-grpc",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-common]
-description = "Publishes golem-common package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-common",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-service-base]
-description = "Publishes golem-service-base package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-service-base",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-test-framework]
-description = "Publishes golem-test-framework package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-test-framework",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-rib]
-description = "Publishes golem-rib package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-rib",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-rib-repl]
-description = "Publishes golem-rib package to crates.io"
-command = "cargo"
-args = ["publish", "-p", "golem-rib-repl", "--allow-dirty", "--no-verify"]
-
-[tasks.publish-golem-templates]
-description = "Publishes golem-templates package to crates.io"
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-templates",
-    "--all-features",
-    "--allow-dirty",
-    "--no-verify",
-]
-
-[tasks.publish-golem-cli]
-description = "Publishes golem-cli package to crates.io"
-dependencies = ["publish-golem-templates"]
-command = "cargo"
-args = [
-    "publish",
-    "-p",
-    "golem-cli",
     "--all-features",
     "--allow-dirty",
     "--no-verify",

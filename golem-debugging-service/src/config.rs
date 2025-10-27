@@ -20,8 +20,8 @@ use golem_service_base::clients::RemoteServiceConfig;
 use golem_service_base::config::BlobStorageConfig;
 use golem_worker_executor::services::golem_config::{
     ActiveWorkersConfig, AgentTypesServiceConfig, CompiledComponentServiceConfig,
-    ComponentCacheConfig, ComponentServiceConfig, ComponentServiceGrpcConfig, GolemConfig,
-    IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig,
+    ComponentCacheConfig, ComponentServiceConfig, ComponentServiceGrpcConfig, EngineConfig,
+    GolemConfig, IndexedStorageConfig, KeyValueStorageConfig, Limits, MemoryConfig, OplogConfig,
     PluginServiceConfig, ProjectServiceConfig, RdbmsConfig, ResourceLimitsConfig, SchedulerConfig,
     ShardManagerServiceConfig, ShardManagerServiceSingleShardConfig, SuspendConfig,
     WorkerServiceGrpcConfig,
@@ -56,6 +56,7 @@ pub struct DebugConfig {
     pub component_cache: ComponentCacheConfig,
     pub project_service: ProjectServiceConfig,
     pub agent_types_service: AgentTypesServiceConfig,
+    pub engine: EngineConfig,
     pub resource_limits: ResourceLimitsConfig,
 
     // debug service specific fields
@@ -88,6 +89,7 @@ impl DebugConfig {
             component_cache: self.component_cache,
             project_service: self.project_service,
             agent_types_service: self.agent_types_service,
+            engine: self.engine,
             // unused
             grpc_address: default_golem_config.grpc_address,
             // unused
@@ -147,6 +149,7 @@ impl Default for DebugConfig {
             component_service: ComponentServiceGrpcConfig::default(),
             project_service: ProjectServiceConfig::default(),
             agent_types_service: AgentTypesServiceConfig::default(),
+            engine: EngineConfig::default(),
             resource_limits: ResourceLimitsConfig::default(),
             cors_origin_regex: "https://*.golem.cloud".to_string(),
         }
