@@ -311,6 +311,34 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 error,
                 fallback_command,
             } => {
+                // Check if MCP server mode is requested, even if parsing failed
+                if let Some(port) = fallback_command.global_flags.serve {
+                    init_tracing(fallback_command.global_flags.verbosity(), false);
+                    eprintln!("🚀 Starting Golem CLI MCP Server on port {}...", port);
+
+                    match Self::new_with_init_hint_error_handler(
+                        fallback_command.global_flags.clone(),
+                        None,
+                        hooks,
+                    ).await {
+                        Ok(handler) => {
+                            let ctx = handler.ctx.clone();
+                            match crate::mcp_server::serve(ctx, port).await {
+                                Ok(()) => return ExitCode::SUCCESS,
+                                Err(e) => {
+                                    eprintln!("❌ MCP Server error: {}", e);
+                                    return ExitCode::FAILURE;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Failed to initialize MCP server context: {}", e);
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+
+                // Normal error handling if not --serve
                 init_tracing(fallback_command.global_flags.verbosity(), false);
                 debug_log_parse_error(&error, &fallback_command);
                 error.print().unwrap();

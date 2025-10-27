@@ -11,7 +11,7 @@ use rmcp::{
 };
 use rmcp_actix_web::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use actix_web::{App, HttpServer};
+use actix_web::{web, App, HttpServer};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
@@ -242,7 +242,9 @@ pub async fn serve(
 
     HttpServer::new(move || {
         App::new()
-            .service(http_service.clone().scope())
+            .service(
+                web::scope("/mcp").service(http_service.clone().scope())
+            )
     })
     .bind(("127.0.0.1", port))?
     .run()
@@ -270,7 +272,9 @@ pub async fn serve_with_shutdown(
 
     let server = HttpServer::new(move || {
         App::new()
-            .service(http_service.clone().scope())
+            .service(
+                web::scope("/mcp").service(http_service.clone().scope())
+            )
     })
     .bind(("127.0.0.1", port))?
     .run();
