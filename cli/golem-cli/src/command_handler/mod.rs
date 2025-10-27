@@ -206,6 +206,36 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
 
                 init_tracing(verbosity, pretty_mode);
 
+                // Check if MCP server mode is requested
+                if let Some(port) = command.global_flags.serve {
+                    // Start MCP server instead of normal CLI command
+                    eprintln!("🚀 Starting Golem CLI MCP Server on port {}...", port);
+
+                    // Create minimal context for MCP server
+                    match Self::new_with_init_hint_error_handler(
+                        command.global_flags.clone(),
+                        None,
+                        hooks.clone(),
+                    )
+                    .await
+                    {
+                        Ok(handler) => {
+                            let ctx = handler.ctx.clone();
+                            match crate::mcp_server::serve(ctx, port).await {
+                                Ok(()) => return ExitCode::SUCCESS,
+                                Err(e) => {
+                                    eprintln!("❌ MCP Server error: {}", e);
+                                    return ExitCode::FAILURE;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("❌ Failed to initialize MCP server context: {}", e);
+                            return ExitCode::FAILURE;
+                        }
+                    }
+                }
+
                 match Self::new_with_init_hint_error_handler(
                     command.global_flags.clone(),
                     None,
