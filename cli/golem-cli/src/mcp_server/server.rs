@@ -80,6 +80,11 @@ impl ServerHandler for GolemMcpServer {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         // Execute CLI command via subprocess
+        // Note: Streaming output is available via executor::execute_cli_command_streaming()
+        // for long-running operations like builds, deployments, etc.
+        // Current implementation uses simple execution for all commands.
+        // Future enhancement: Detect long-running commands and use streaming automatically.
+
         let tool_name = request.name.to_string();
 
         // Execute the command

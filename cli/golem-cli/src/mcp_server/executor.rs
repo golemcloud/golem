@@ -3,6 +3,7 @@
 
 use std::process::Stdio;
 use tokio::process::Command;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use serde_json::Value;
 
 /// Execute a golem-cli command and return the output
@@ -35,6 +36,80 @@ pub async fn execute_cli_command(
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         anyhow::bail!("Command failed: {}", stderr)
+    }
+}
+
+/// Execute a golem-cli command with streaming output for long-running operations
+/// Returns a stream of output lines as they are produced
+pub async fn execute_cli_command_streaming(
+    tool_name: &str,
+    arguments: &Option<serde_json::Map<String, Value>>,
+    mut progress_callback: impl FnMut(String) -> (),
+) -> anyhow::Result<String> {
+    // Convert Map to Value for processing
+    let args_value = arguments.as_ref().map(|m| Value::Object(m.clone()));
+
+    // Build command args from tool name and arguments
+    let args = build_command_args(tool_name, &args_value)?;
+
+    // Get the current executable path
+    let cli_path = std::env::current_exe()?;
+
+    // Spawn command with piped outputs
+    let mut child = Command::new(cli_path)
+        .args(&args)
+        .arg("--format")
+        .arg("json")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    // Capture stdout for streaming
+    let stdout = child.stdout.take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stdout"))?;
+
+    let stderr = child.stderr.take()
+        .ok_or_else(|| anyhow::anyhow!("Failed to capture stderr"))?;
+
+    let mut stdout_reader = BufReader::new(stdout).lines();
+    let mut stderr_reader = BufReader::new(stderr).lines();
+
+    let mut output_lines = Vec::new();
+    let mut error_lines = Vec::new();
+
+    // Read stdout line by line and send progress updates
+    loop {
+        tokio::select! {
+            line = stdout_reader.next_line() => {
+                match line? {
+                    Some(line) => {
+                        // Send progress update
+                        progress_callback(format!("[OUT] {}", line));
+                        output_lines.push(line);
+                    }
+                    None => break,
+                }
+            }
+            line = stderr_reader.next_line() => {
+                match line? {
+                    Some(line) => {
+                        // Send progress update for stderr
+                        progress_callback(format!("[ERR] {}", line));
+                        error_lines.push(line);
+                    }
+                    None => {}
+                }
+            }
+        }
+    }
+
+    // Wait for command to complete
+    let status = child.wait().await?;
+
+    if status.success() {
+        Ok(output_lines.join("\n"))
+    } else {
+        anyhow::bail!("Command failed: {}", error_lines.join("\n"))
     }
 }
 
