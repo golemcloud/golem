@@ -2,14 +2,20 @@
 // Implements ServerHandler trait for MCP protocol
 
 use crate::context::Context;
-use rmcp::prelude::*;
+use rmcp::{
+    handler::server::ServerHandler,
+    model::*,
+    service::{RequestContext, RoleServer},
+    ErrorData as McpError,
+};
 use rmcp_actix_web::transport::StreamableHttpService;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
-use actix_web::{App, HttpServer, web};
+use actix_web::{App, HttpServer};
 use std::{sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
 /// Main Golem MCP Server structure
+#[derive(Clone)]
 pub struct GolemMcpServer {
     context: Arc<Context>,
     client_id: Arc<Mutex<Option<String>>>,
@@ -25,7 +31,6 @@ impl GolemMcpServer {
 }
 
 /// Implement MCP ServerHandler trait
-#[tool_handler]
 impl ServerHandler for GolemMcpServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
@@ -37,6 +42,9 @@ impl ServerHandler for GolemMcpServer {
             server_info: Implementation {
                 name: "golem-cli".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
+                title: Some("Golem CLI MCP Server".to_string()),
+                website_url: Some("https://golem.cloud".to_string()),
+                icons: Some(vec![]),
             },
             instructions: Some(
                 "Golem CLI MCP Server. Exposes CLI commands as tools and manifest files as resources."
@@ -63,7 +71,7 @@ pub async fn serve(
         anyhow::bail!("Invalid port number: {}", port);
     }
 
-    let mcp_service = Arc::new(GolemMcpServer::new(context));
+    let mcp_service = GolemMcpServer::new(context);
     let http_service = StreamableHttpService::builder()
         .service_factory(Arc::new(move || Ok(mcp_service.clone())))
         .session_manager(Arc::new(LocalSessionManager::default()))
@@ -71,11 +79,11 @@ pub async fn serve(
         .sse_keep_alive(Duration::from_secs(30))
         .build();
 
-    eprintln!("🚀 Golem CLI MCP Server starting on http://localhost:{}/mcp", port);
+    eprintln!("🚀 Golem CLI MCP Server starting on http://localhost:{}", port);
 
     HttpServer::new(move || {
         App::new()
-            .service(web::scope("/mcp").service(http_service.clone().scope()))
+            .service(http_service.clone().scope())
     })
     .bind(("127.0.0.1", port))?
     .run()
@@ -93,7 +101,7 @@ pub async fn serve_with_shutdown(
         anyhow::bail!("Invalid port number: {}", port);
     }
 
-    let mcp_service = Arc::new(GolemMcpServer::new(context));
+    let mcp_service = GolemMcpServer::new(context);
     let http_service = StreamableHttpService::builder()
         .service_factory(Arc::new(move || Ok(mcp_service.clone())))
         .session_manager(Arc::new(LocalSessionManager::default()))
@@ -103,7 +111,7 @@ pub async fn serve_with_shutdown(
 
     let server = HttpServer::new(move || {
         App::new()
-            .service(web::scope("/mcp").service(http_service.clone().scope()))
+            .service(http_service.clone().scope())
     })
     .bind(("127.0.0.1", port))?
     .run();

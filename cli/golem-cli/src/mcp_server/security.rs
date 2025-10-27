@@ -1,7 +1,7 @@
 // Security validation for MCP server
 // Input sanitization and path validation
 
-use rmcp::prelude::McpError;
+use rmcp::ErrorData as McpError;
 use std::path::PathBuf;
 
 /// Validate component name to prevent path traversal
