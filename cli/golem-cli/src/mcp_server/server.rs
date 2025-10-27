@@ -2,6 +2,7 @@
 // Implements ServerHandler trait for MCP protocol
 
 use crate::context::Context;
+use crate::mcp_server::tools;
 use rmcp::{
     handler::server::ServerHandler,
     model::*,
