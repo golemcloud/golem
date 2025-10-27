@@ -15,6 +15,11 @@ pub trait AgentArg: ToValue + FromWitValue + ToWitType {
         FromWitValue::from_wit_value(value)
     }
 
+    fn to_wit_value(&self) -> WitValue {
+        let value = ToValue::to_value(self);
+        WitValue::from(value)
+    }
+
     fn get_wit_type() -> WitType
     where
         Self: Sized,

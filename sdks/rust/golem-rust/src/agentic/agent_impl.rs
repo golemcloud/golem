@@ -48,10 +48,12 @@ impl Guest for Component {
 
         let agent_type_name = AgentTypeName(agent_type.type_name.clone());
 
-        let agent_initiator = agent_registry::get_agent_initiator(&agent_type_name);
+        let initiate_result =
+            agent_registry::with_agent_initiator(&agent_type_name, |agent_initiator| {
+                agent_initiator.initiate(input)
+            });
 
-        if let Some(agent) = agent_initiator {
-            agent.initiate(input);
+        if let Some(_) = initiate_result {
             Ok(())
         } else {
             Err(AgentError::CustomError(
@@ -68,10 +70,11 @@ impl Guest for Component {
     }
 
     fn invoke(method_name: String, input: DataValue) -> Result<DataValue, AgentError> {
-        let resolved_agent = agent_registry::get_agent_instance();
-
-        if let Some(agent) = resolved_agent {
-            Ok(agent.agent.invoke(method_name, input))
+        let result = agent_registry::with_agent_instance(|resolved_agent| {
+            resolved_agent.agent.invoke(method_name, input)
+        });
+        if let Some(result) = result {
+            Ok(result)
         } else {
             Err(AgentError::CustomError(
                 golem_wasm::ValueAndType::new(
@@ -84,10 +87,12 @@ impl Guest for Component {
     }
 
     fn get_definition() -> AgentType {
-        let resolved_agent = agent_registry::get_agent_instance();
+        let agent_type = agent_registry::with_agent_instance(|resolved_agent| {
+            resolved_agent.agent.get_definition()
+        });
 
-        if let Some(agent) = resolved_agent {
-            agent.agent.get_definition()
+        if let Some(agent) = agent_type {
+            agent
         } else {
             panic!("No agent instance found");
         }

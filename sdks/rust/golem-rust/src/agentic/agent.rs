@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use crate::golem_agentic::exports::golem::agent::guest::{AgentType, DataValue};
-
 // A simple Agent that every agent abstraction has to extend
 // This is auto implemented when using `agent_implementation` attribute.
 // Implementation detail: Once the agent_impl trait has an instance of `Agent`,

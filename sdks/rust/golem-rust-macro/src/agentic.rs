@@ -15,7 +15,7 @@
 use proc_macro::TokenStream;
 use proc_macro2::Ident;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput, Fields, ItemTrait};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, ItemTrait, ReturnType, Type};
 
 pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
@@ -48,7 +48,220 @@ pub fn agent_definition_impl(_attrs: TokenStream, item: TokenStream) -> TokenStr
 }
 
 pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> TokenStream {
-    item // TODO: implement agent implementation processing
+    let item_cloned = item.clone();
+    let impl_block = syn::parse_macro_input!(item_cloned as syn::ItemImpl);
+
+    let generics = &impl_block.generics;
+    let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
+
+    let trait_name = if let Some((_bang, path, _for_token)) = &impl_block.trait_ {
+        &path.segments.last().unwrap().ident
+    } else {
+        return syn::Error::new_spanned(
+            &impl_block.self_ty,
+            "Expected an implementation of a trait, but found none.",
+        )
+        .to_compile_error()
+        .into();
+    };
+
+    let trait_name_str_raw = trait_name.to_string();
+
+    let self_ty = &impl_block.self_ty;
+
+    let mut match_arms = Vec::new();
+
+    let mut constructor_method: Option<&syn::ImplItemFn> = None;
+
+    // Build the match arms for each method to be invoked through dynamic dispatch
+    for item in &impl_block.items {
+        if let syn::ImplItem::Fn(method) = item {
+            let returns_self = match &method.sig.output {
+                ReturnType::Type(_, ty) => match &**ty {
+                    Type::Path(tp) => tp.path.segments.last().unwrap().ident == "Self",
+                    _ => false,
+                },
+                _ => false,
+            };
+
+            if returns_self {
+                constructor_method = Some(method);
+                continue;
+            }
+
+            let param_idents: Vec<_> = method
+                .sig
+                .inputs
+                .iter()
+                .filter_map(|arg| {
+                    if let syn::FnArg::Typed(pat_ty) = arg {
+                        if let syn::Pat::Ident(pat_ident) = &*pat_ty.pat {
+                            Some(pat_ident.ident.clone())
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let method_param_extraction = param_idents.iter().enumerate().map(|(i, ident)| {
+                quote! {
+                    // Currently support only wit value tuple as input
+                    let element_value = match &input {
+                        golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                            values.get(#i).expect("missing argument").clone()
+                        },
+                        _ => panic!("expected tuple input"),
+                    };
+
+                    let wit_value = match element_value {
+                        golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => wit_value,
+                        _ => panic!("Currently only ComponentModel ElementValue is supported"),
+                    };
+
+                    let #ident = golem_rust::agentic::AgentArg::from_wit_value(
+                        wit_value
+                    ).expect("internal error, failed to convert wit value to expected type");
+                }
+            });
+
+            // When pattern matching on a dynamic method name, SDK needs to convert method names to kebab-case
+            let method_name = to_kebab_case(&method.sig.ident.to_string());
+
+            let ident = &method.sig.ident;
+
+            match_arms.push(quote! {
+                #method_name => {
+                    #(#method_param_extraction)*
+                    let result = self.#ident(#(#param_idents),*);
+                    let wit_value = <_ as golem_rust::agentic::AgentArg>::to_wit_value(&result);
+                    let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
+                    golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
+                }
+            });
+        }
+    }
+
+    // Constructor method is always required
+    let constructor_method = match constructor_method {
+        Some(m) => m,
+        None => {
+            return syn::Error::new_spanned(
+                &impl_block.self_ty,
+                "No constructor found (a function returning Self is required)",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let ctor_ident = &constructor_method.sig.ident;
+
+    let ctor_params: Vec<_> = constructor_method
+        .sig
+        .inputs
+        .iter()
+        .filter_map(|arg| {
+            if let syn::FnArg::Typed(pat_ty) = arg {
+                if let syn::Pat::Ident(pat_ident) = &*pat_ty.pat {
+                    Some(pat_ident.ident.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let base_agent_impl = quote! {
+        impl #impl_generics golem_rust::agentic::Agent for #self_ty #ty_generics #where_clause {
+            fn get_id(&self) -> String {
+                todo!("Unimplemented get_id method")
+            }
+
+            fn invoke(&self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
+                -> golem_rust::golem_agentic::golem::agent::common::DataValue {
+                match method_name.as_str() {
+                    #(#match_arms,)*
+                    _ =>  panic!("failed"),
+                }
+            }
+
+            fn get_definition(&self)
+                -> ::golem_rust::golem_agentic::golem::agent::common::AgentType {
+                golem_rust::agentic::get_agent_type_by_name(&#trait_name_str_raw)
+                    .expect("Agent definition not found")
+            }
+        }
+    };
+
+    let constructor_param_extraction = ctor_params.iter().enumerate().map(|(i, ident)| {
+        quote! {
+            let element_value = match &params {
+                golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
+                    values.get(#i).expect("missing argument").clone()
+                },
+                _ => panic!("expected tuple input"),
+            };
+
+            let wit_value = match element_value {
+                golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value) => wit_value,
+                _ => panic!("Currently only ComponentModel ElementValue is supported"),
+            };
+
+            let #ident = golem_rust::agentic::AgentArg::from_wit_value(wit_value).expect("internal error, failed to convert constructor argument");
+        }
+    });
+
+    let initiator = format_ident!("{}Initiator", trait_name);
+
+    let base_initiator_impl = quote! {
+        struct #initiator;
+
+        impl golem_rust::agentic::AgentInitiator for #initiator {
+            fn initiate(&self, params: golem_rust::golem_agentic::golem::agent::common::DataValue) {
+
+                #(#constructor_param_extraction)*
+
+                let instance = ::std::boxed::Box::new(<#self_ty>::#ctor_ident(#(#ctor_params),*));
+
+                let resolved = golem_rust::agentic::ResolvedAgent {
+                    agent: instance,
+                };
+
+                golem_rust::agentic::register_agent_instance(
+                    resolved
+                );
+            }
+        }
+    };
+
+    let trait_name_str_kebab = to_kebab_case(&trait_name_str_raw);
+
+    let register_initiator_fn_name =
+        format_ident!("register_agent_initiator_{}", trait_name_str_kebab);
+
+    let register_initiator_fn = quote! {
+        #[::ctor::ctor]
+        fn #register_initiator_fn_name() {
+            golem_rust::agentic::register_agent_initiator(
+                #trait_name_str_kebab.to_string().as_str(),
+                ::std::boxed::Box::new(#initiator)
+            );
+        }
+    };
+
+    let result = quote! {
+        #impl_block
+        #base_agent_impl
+        #base_initiator_impl
+        #register_initiator_fn
+    };
+
+    result.into()
 }
 
 pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
@@ -165,6 +378,14 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
 
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
+            if let syn::ReturnType::Type(_, ty) = &trait_fn.sig.output {
+                if let syn::Type::Path(type_path) = &**ty {
+                    if type_path.path.segments.last().unwrap().ident == "Self" {
+                        return None;
+                    }
+                }
+            }
+
             let name = &trait_fn.sig.ident;
             let method_name = &name.to_string();
 
@@ -251,4 +472,19 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
             constructor: #agent_constructor,
         }
     }
+}
+
+fn to_kebab_case(s: &str) -> String {
+    let mut result = String::new();
+    for (i, ch) in s.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i != 0 {
+                result.push('-');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
 }

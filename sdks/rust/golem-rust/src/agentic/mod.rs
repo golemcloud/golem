@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+pub use agent::*;
 pub use agent_arg::*;
+pub use agent_initiator::*;
 pub use agent_registry::*;
-
-use golem_wasm::AgentId;
 
 mod agent;
 mod agent_arg;
@@ -26,5 +26,4 @@ mod agent_type_name;
 
 pub struct ResolvedAgent {
     pub agent: Box<dyn agent::Agent>,
-    pub id: AgentId,
 }

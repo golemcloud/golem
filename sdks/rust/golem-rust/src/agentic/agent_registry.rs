@@ -12,8 +12,24 @@ thread_local! {
     Lazy::new(|| RefCell::new(HashMap::new()));
 }
 
+// Agent instance at any point in time is only one
+thread_local! {
+    static AGENT_INSTANCE: RefCell<Option<ResolvedAgent>> = RefCell::new(None);
+}
+
+// agent initiator registry is for each agent type name, we have an initiator instance
+thread_local! {
+    static AGENT_INITIATOR_REGISTRY: Lazy<RefCell<HashMap<AgentTypeName, Box<dyn AgentInitiator>>>> =
+    Lazy::new(|| RefCell::new(HashMap::new()));
+}
+
 pub fn get_all_agent_types() -> Vec<AgentType> {
     AGENT_TYPE_REGISTRY.with(|registry| registry.borrow().values().cloned().collect())
+}
+
+pub fn get_agent_type_by_name(type_name: &str) -> Option<AgentType> {
+    let agent_type_name = AgentTypeName(type_name.to_string());
+    AGENT_TYPE_REGISTRY.with(|registry| registry.borrow().get(&agent_type_name).cloned())
 }
 
 pub fn register_agent_type(type_name: String, agent_type: AgentType) {
@@ -24,16 +40,35 @@ pub fn register_agent_type(type_name: String, agent_type: AgentType) {
     });
 }
 
-// The registry should hold the initiator instances for each agent type
-// TODO; Implement registration of initiators and retrieval
-pub fn get_agent_initiator(agent_type_name: &AgentTypeName) -> Option<Box<dyn AgentInitiator>> {
-    todo!(
-        "Unimplemented function to get agent initiator of type {}",
-        agent_type_name.0
-    )
+pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
+    AGENT_INSTANCE.with(|instance| {
+        *instance.borrow_mut() = Some(resolved_agent);
+    });
 }
 
-// At any point, there should be only one active agent instance
-pub fn get_agent_instance() -> Option<ResolvedAgent> {
-    todo!("Unimplemented function to get the active agent instance")
+pub fn with_agent_instance<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&ResolvedAgent) -> R,
+{
+    AGENT_INSTANCE.with(|instance| instance.borrow().as_ref().map(|agent| f(agent)))
+}
+
+pub fn register_agent_initiator(agent_type_name: &str, initiator: Box<dyn AgentInitiator>) {
+    let agent_type_name = AgentTypeName(agent_type_name.to_string());
+    AGENT_INITIATOR_REGISTRY.with(|registry| {
+        registry.borrow_mut().insert(agent_type_name, initiator);
+        ()
+    });
+}
+
+pub fn with_agent_initiator<F, R>(type_name: &AgentTypeName, f: F) -> Option<R>
+where
+    F: FnOnce(&Box<dyn AgentInitiator>) -> R,
+{
+    AGENT_INITIATOR_REGISTRY.with(|registry| {
+        registry
+            .borrow()
+            .get(type_name)
+            .map(|initiator| f(initiator))
+    })
 }
