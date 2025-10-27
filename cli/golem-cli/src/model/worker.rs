@@ -179,15 +179,12 @@ impl WorkerMetadata {
             last_error: value.last_error,
             component_size: value.component_size,
             total_linear_memory_size: value.total_linear_memory_size,
-            exported_resource_instances:  // TODO: atomic
-            /*
-            HashMap::from_iter(
-            value.exported_resource_instances.into_iter().map(|desc| {
-                let key = desc.key.resource_id.to_string();
-                (key, desc.description)
-            }),
-             */
-            todo!(),
+            exported_resource_instances: HashMap::from_iter(
+                value
+                    .exported_resource_instances
+                    .into_iter()
+                    .map(|desc| (desc.key.resource_id.to_string(), desc.description)),
+            ),
         }
     }
 }
