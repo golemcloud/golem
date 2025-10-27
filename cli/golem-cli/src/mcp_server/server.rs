@@ -61,6 +61,113 @@ impl ServerHandler for GolemMcpServer {
     ) -> Result<InitializeResult, McpError> {
         Ok(self.get_info())
     }
+
+    async fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListToolsResult, McpError> {
+        let tools = tools::generate_tool_list();
+        Ok(ListToolsResult {
+            tools,
+            next_cursor: None,
+        })
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<CallToolResult, McpError> {
+        // Phase 2 GREEN: Mock responses to demonstrate MCP protocol working
+        // TODO Phase 3: Implement actual CLI command execution
+        let tool_name = request.name.to_string();
+        match tool_name.as_str() {
+            "component_list" => {
+                // Parse optional project parameter
+                let _project = request.arguments
+                    .as_ref()
+                    .and_then(|args| args.get("project"))
+                    .and_then(|v| v.as_str());
+
+                // Mock component list output (JSON format as CLI would return)
+                let output = serde_json::json!({
+                    "components": [
+                        {
+                            "name": "example-component",
+                            "version": 1,
+                            "size": 12345,
+                            "component_type": "ephemeral"
+                        },
+                        {
+                            "name": "another-component",
+                            "version": 3,
+                            "size": 67890,
+                            "component_type": "durable"
+                        }
+                    ]
+                });
+
+                Ok(CallToolResult::success(vec![
+                    RawContent::text(
+                        serde_json::to_string_pretty(&output)
+                            .unwrap_or_else(|_| "Error formatting output".to_string())
+                    ).optional_annotate(None)
+                ]))
+            }
+            "worker_list" => {
+                // Parse optional component parameter
+                let component = request.arguments
+                    .as_ref()
+                    .and_then(|args| args.get("component"))
+                    .and_then(|v| v.as_str());
+
+                // Mock worker list output
+                let output = if let Some(comp) = component {
+                    serde_json::json!({
+                        "workers": [
+                            {
+                                "worker_id": "worker-001",
+                                "component_name": comp,
+                                "status": "running"
+                            },
+                            {
+                                "worker_id": "worker-002",
+                                "component_name": comp,
+                                "status": "idle"
+                            }
+                        ]
+                    })
+                } else {
+                    serde_json::json!({
+                        "workers": [
+                            {
+                                "worker_id": "worker-001",
+                                "component_name": "example-component",
+                                "status": "running"
+                            },
+                            {
+                                "worker_id": "worker-002",
+                                "component_name": "another-component",
+                                "status": "idle"
+                            }
+                        ]
+                    })
+                };
+
+                Ok(CallToolResult::success(vec![
+                    RawContent::text(
+                        serde_json::to_string_pretty(&output)
+                            .unwrap_or_else(|_| "Error formatting output".to_string())
+                    ).optional_annotate(None)
+                ]))
+            }
+            _ => Err(McpError::invalid_params(
+                format!("Unknown tool: {}", request.name),
+                None
+            )),
+        }
+    }
 }
 
 /// Start MCP server on specified port
