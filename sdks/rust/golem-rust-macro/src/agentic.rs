@@ -63,6 +63,8 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
     let trait_name_str_raw = trait_name.to_string();
 
+    let trait_name_str_kebab = to_kebab_case(&trait_name_str_raw);
+
     let self_ty = &impl_block.self_ty;
 
     let mut match_arms = Vec::new();
@@ -188,7 +190,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
 
             fn get_definition(&self)
                 -> ::golem_rust::golem_agentic::golem::agent::common::AgentType {
-                golem_rust::agentic::get_agent_type_by_name(&#trait_name_str_raw)
+                golem_rust::agentic::get_agent_type_by_name(&#trait_name_str_kebab)
                     .expect("Agent definition not found")
             }
         }
