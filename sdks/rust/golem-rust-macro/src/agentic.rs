@@ -134,7 +134,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                 #method_name => {
                     #(#method_param_extraction)*
                     let result = self.#ident(#(#param_idents),*);
-                    let wit_value = <_ as golem_rust::agentic::AgentArg>::to_wit_value(&result);
+                    let wit_value = <_ as golem_rust::agentic::AgentArg>::to_wit_value(result);
                     let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
                     golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                 }
@@ -320,26 +320,22 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
     let field_count = field_idents_vec.len();
 
     let expanded = quote! {
-     impl golem_agentic::ToWitType for #struct_name {
-         fn get_wit_type() -> golem_wasm::WitType {
-             let analysed_type = golem_wasm::analysis::analysed_type::record(vec![
-                 #(#wit_type_fields),*
-             ]);
-             golem_wasm::WitType::from(analysed_type)
-         }
-     }
-
-     impl golem_agentic::ToValue for #struct_name {
+     impl golem_wasm::IntoValue for #struct_name {
          fn to_value(&self) -> golem_wasm::Value {
             golem_wasm::Value::Record(vec![
                  #(#to_value_fields),*
              ])
          }
+
+         fn get_type() -> golem_wasm::WitType {
+            golem_wasm::analysis::analysed_type::record(vec![
+                #(#wit_type_fields),*
+            ])
+        }
      }
 
-     impl golem_agentic::FromWitValue for #struct_name {
-         fn from_wit_value(value: golem_wasm::WitValue) -> Result<Self, String> {
-             let value = golem_wasm::Value::from(value);
+     impl golem_agentic::FromValue for #struct_name {
+         fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
              match value {
                  golem_wasm::Value::Record(values) => {
                      if values.len() != #field_count {
@@ -434,7 +430,6 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
                             syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
                             _ => "_".to_string(), // fallback for patterns like destructuring
                         };
-                        
                         let ty = &pat_type.ty;
                         parameter_types.push(quote! {
                             (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
