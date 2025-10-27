@@ -37,6 +37,12 @@ golem-rib-repl = { workspace = true }
 golem-wasm = { workspace = true }
 golem-wasm-derive = { workspace = true }
 
+# MCP Server dependencies
+rmcp = { version = "0.8", features = ["server"] }
+rmcp-actix-web = "0.8"
+actix-web = "4"
+actix-rt = "2"
+
 # External deps
 anyhow = { workspace = true }
 assert2 = { workspace = true }

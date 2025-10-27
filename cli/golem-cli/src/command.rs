@@ -142,6 +142,10 @@ pub struct GolemCliGlobalFlags {
     #[arg(long, global = true, display_order = 112)]
     pub template_group: Option<String>,
 
+    /// Start MCP server on specified port (Model Context Protocol for AI agents)
+    #[arg(long, global = true, display_order = 113)]
+    pub serve: Option<u16>,
+
     #[command(flatten)]
     pub verbosity: Verbosity,
 

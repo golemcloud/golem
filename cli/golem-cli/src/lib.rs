@@ -22,6 +22,7 @@ use tracing_subscriber::{EnvFilter, FmtSubscriber};
 pub mod app;
 pub mod auth;
 pub mod command;
+pub mod mcp_server;
 pub mod command_handler;
 pub mod config;
 pub mod context;
