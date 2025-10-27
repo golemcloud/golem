@@ -198,7 +198,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         quote! {
             let element_value = match &params {
                 golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(values) => {
-                    values.get(#i).expect("missing argument").clone()
+                    values.get(#i).expect(format!("Missing arguments to construct the agent. Pos: {}", #i).as_str()).clone()
                 },
                 _ => panic!("expected tuple input"),
             };
@@ -372,6 +372,21 @@ fn get_register_function_ident(item_trait: &ItemTrait) -> Ident {
 fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
     let type_name = item_trait.ident.to_string();
 
+    let mut constructor_methods = vec![];
+
+    // Capture constructor methods (returning Self)
+    for item in &item_trait.items {
+        if let syn::TraitItem::Fn(trait_fn) = item {
+            if let syn::ReturnType::Type(_, ty) = &trait_fn.sig.output {
+                if let syn::Type::Path(type_path) = &**ty {
+                    if type_path.path.segments.last().unwrap().ident == "Self" {
+                        constructor_methods.push(trait_fn.clone());
+                    }
+                }
+            }
+        }
+    }
+
     let methods = item_trait.items.iter().filter_map(|item| {
         if let syn::TraitItem::Fn(trait_fn) = item {
             if let syn::ReturnType::Type(_, ty) = &trait_fn.sig.output {
@@ -413,9 +428,14 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
             if let syn::TraitItem::Fn(trait_fn) = item {
                 for input in &trait_fn.sig.inputs {
                     if let syn::FnArg::Typed(pat_type) = input {
+                        let param_name = match &*pat_type.pat {
+                            syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
+                            _ => "_".to_string(), // fallback for patterns like destructuring
+                        };
+                        
                         let ty = &pat_type.ty;
                         parameter_types.push(quote! {
-                            ("foo".to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
+                            (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
                         });
                     }
                 }
@@ -449,12 +469,30 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
         }
     });
 
+    let mut constructor_parameter_types = vec![];
+
+    if let Some(ctor_fn) = &constructor_methods.first().as_mut() {
+        for input in &ctor_fn.sig.inputs {
+            if let syn::FnArg::Typed(pat_type) = input {
+                let param_name = match &*pat_type.pat {
+                    syn::Pat::Ident(pat_ident) => pat_ident.ident.to_string(),
+                    _ => "_".to_string(), // fallback for patterns like destructuring
+                };
+
+                let ty = &pat_type.ty;
+                constructor_parameter_types.push(quote! {
+                    (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
+                });
+            }
+        }
+    }
+
     let agent_constructor = quote! { golem_rust::golem_agentic::golem::agent::common::AgentConstructor {
             name: None,
             description: "".to_string(),
             prompt_hint: None,
             input_schema: ::golem_rust::golem_agentic::golem::agent::common::DataSchema::Tuple(
-                vec![]
+                vec![#(#constructor_parameter_types),*]
             ),
         }
     };
