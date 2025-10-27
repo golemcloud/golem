@@ -33,6 +33,7 @@ pub struct ApplicationConfig {
     pub steps_filter: HashSet<AppBuildStep>,
     pub golem_rust_override: RustDependencyOverride,
     pub dev_mode: bool,
+    pub enable_wasmtime_fs_cache: bool,
 }
 
 impl ApplicationConfig {

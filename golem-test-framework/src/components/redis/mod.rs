@@ -17,8 +17,6 @@ use redis::RedisResult;
 use std::time::{Duration, Instant};
 use tracing::info;
 
-pub mod docker;
-pub mod k8s;
 pub mod provided;
 pub mod spawned;
 

@@ -2553,8 +2553,8 @@ async fn rdbms_test<T: RdbmsType + 'static>(
 
     check_test_results::<T>(&worker_id, test, results);
 
-    let _ = rdbms.remove(&pool_key, &worker_id);
-    let exists = rdbms.exists(&pool_key, &worker_id);
+    let _ = rdbms.remove(&pool_key, &worker_id).await;
+    let exists = rdbms.exists(&pool_key, &worker_id).await;
     check!(!exists);
 }
 
@@ -2887,7 +2887,7 @@ async fn rdbms_query_err_test<T: RdbmsType>(
         pool_key
     );
 
-    let _ = rdbms.remove(&pool_key, &worker_id);
+    let _ = rdbms.remove(&pool_key, &worker_id).await;
 }
 
 async fn rdbms_execute_err_test<T: RdbmsType>(
@@ -2919,7 +2919,7 @@ async fn rdbms_execute_err_test<T: RdbmsType>(
         pool_key
     );
 
-    let _ = rdbms.remove(&pool_key, &worker_id);
+    let _ = rdbms.remove(&pool_key, &worker_id).await;
 }
 
 #[test]
@@ -3014,7 +3014,7 @@ async fn create_test_databases<T: RdbmsType + 'static>(
         values.push(address);
     }
 
-    let _ = rdbms.remove(&pool_key, &worker_id);
+    let _ = rdbms.remove(&pool_key, &worker_id).await;
 
     values
 }
@@ -3076,10 +3076,10 @@ async fn rdbms_par_test<T: RdbmsType + 'static>(
         }
     }
 
-    let rdbms_status = rdbms.status();
+    let rdbms_status = rdbms.status().await;
 
     for (worker_id, pool_key) in workers_pools.clone() {
-        let _ = rdbms.remove(&pool_key, &worker_id);
+        let _ = rdbms.remove(&pool_key, &worker_id).await;
     }
 
     check!(rdbms_status.pools.len() == db_addresses.len());

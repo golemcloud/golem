@@ -42,7 +42,11 @@ async fn http_client(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
@@ -99,7 +103,11 @@ async fn http_client_using_reqwest(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -166,7 +174,11 @@ async fn http_client_using_reqwest_async(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let captured_body: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let captured_body_clone = captured_body.clone();
 
@@ -239,7 +251,11 @@ async fn http_client_using_reqwest_async_parallel(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
     let captured_body: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let captured_body_clone = captured_body.clone();
 
@@ -350,7 +366,11 @@ async fn outgoing_http_contains_idempotency_key(
     _tracing: &Tracing,
 ) {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await.unwrap().into_admin().await;
+    let executor = start(deps, &context)
+        .await
+        .unwrap()
+        .into_admin_with_unique_project()
+        .await;
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:0").await.unwrap();
     let host_http_port = listener.local_addr().unwrap().port();
