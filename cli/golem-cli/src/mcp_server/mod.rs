@@ -5,6 +5,7 @@ pub mod server;
 pub mod tools;
 pub mod resources;
 pub mod security;
+pub mod executor;
 
 pub use server::{GolemMcpServer, serve, serve_with_shutdown};
 
