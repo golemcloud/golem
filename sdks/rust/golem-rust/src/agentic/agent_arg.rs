@@ -1,4 +1,4 @@
-use golem_wasm::analysis::analysed_type::{str, u32, u64};
+use golem_wasm::analysis::analysed_type::*;
 use golem_wasm::analysis::AnalysedType;
 use golem_wasm::WitValue;
 use golem_wasm::{Value, WitType};
@@ -61,6 +61,12 @@ impl ToValue for bool {
 impl ToValue for u64 {
     fn to_value(&self) -> Value {
         golem_wasm::Value::U64(*self)
+    }
+}
+
+impl ToValue for i32 {
+    fn to_value(&self) -> Value {
+        golem_wasm::Value::S32(*self)
     }
 }
 
@@ -136,6 +142,13 @@ impl ToWitType for u64 {
     }
 }
 
+impl ToWitType for i32 {
+    fn get_wit_type() -> WitType {
+        let analysed_type = s32();
+        WitType::from(analysed_type)
+    }
+}
+
 pub trait FromWitValue {
     fn from_wit_value(value: WitValue) -> Result<Self, String>
     where
@@ -191,6 +204,20 @@ impl FromWitValue for u64 {
         match value {
             golem_wasm::Value::U64(n) => Ok(n),
             _ => Err("Expected a u32 WitValue".to_string()),
+        }
+    }
+}
+
+impl FromWitValue for i32 {
+    fn from_wit_value(value: WitValue) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        let value = golem_wasm::Value::from(value);
+
+        match value {
+            golem_wasm::Value::S32(n) => Ok(n),
+            _ => Err("Expected a i32 WitValue".to_string()),
         }
     }
 }

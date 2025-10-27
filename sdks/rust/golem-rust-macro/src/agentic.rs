@@ -180,7 +180,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                 todo!("Unimplemented get_id method")
             }
 
-            fn invoke(&self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
+            fn invoke(&mut self, method_name: String, input: golem_rust::golem_agentic::golem::agent::common::DataValue)
                 -> golem_rust::golem_agentic::golem::agent::common::DataValue {
                 match method_name.as_str() {
                     #(#match_arms,)*

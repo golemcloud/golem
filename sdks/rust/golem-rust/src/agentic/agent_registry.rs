@@ -48,9 +48,9 @@ pub fn register_agent_instance(resolved_agent: ResolvedAgent) {
 
 pub fn with_agent_instance<F, R>(f: F) -> Option<R>
 where
-    F: FnOnce(&ResolvedAgent) -> R,
+    F: FnOnce(&mut ResolvedAgent) -> R,
 {
-    AGENT_INSTANCE.with(|instance| instance.borrow().as_ref().map(|agent| f(agent)))
+    AGENT_INSTANCE.with(|instance| instance.borrow_mut().as_mut().map(|agent| f(agent)))
 }
 
 pub fn register_agent_initiator(agent_type_name: &str, initiator: Box<dyn AgentInitiator>) {

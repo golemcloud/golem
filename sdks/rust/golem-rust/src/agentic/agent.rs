@@ -37,6 +37,6 @@ use crate::golem_agentic::exports::golem::agent::guest::{AgentType, DataValue};
 // There is no need to implement `Agent` anywhere, as it is automatically implemented by the `[agent_implementation]` attribute.
 pub trait Agent {
     fn get_id(&self) -> String;
-    fn invoke(&self, method_name: String, input: DataValue) -> DataValue;
+    fn invoke(&mut self, method_name: String, input: DataValue) -> DataValue;
     fn get_definition(&self) -> AgentType;
 }
