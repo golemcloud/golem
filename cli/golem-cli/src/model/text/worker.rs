@@ -337,8 +337,8 @@ impl TextView for PublicOplogEntry {
                 logln(format!("{pad}initial active plugins:"));
                 for plugin in &params.initial_active_plugins {
                     logln(format!(
-                        "{pad}  - installation id: {}",
-                        format_id(&plugin.installation_id)
+                        "{pad}  - priority: {}",
+                        format_id(&plugin.plugin_priority.0)
                     ));
                     let inner_pad = format!("{pad}    ");
                     log_plugin_description(&inner_pad, plugin);
@@ -600,8 +600,8 @@ impl TextView for PublicOplogEntry {
                 logln(format!("{pad}new active plugins:"));
                 for plugin in &params.new_active_plugins {
                     logln(format!(
-                        "{pad}  - installation id: {}",
-                        format_id(&plugin.installation_id),
+                        "{pad}  - priority: {}",
+                        format_id(&plugin.plugin_priority.0),
                     ));
                     let inner_pad = format!("{pad}    ");
                     log_plugin_description(&inner_pad, plugin);
@@ -674,8 +674,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}installation id:   {}",
-                    format_id(&params.plugin.installation_id),
+                    "{pad}priority:   {}",
+                    format_id(&params.plugin.plugin_priority.0),
                 ));
                 log_plugin_description(pad, &params.plugin);
             }
@@ -686,8 +686,8 @@ impl TextView for PublicOplogEntry {
                     format_id(&params.timestamp)
                 ));
                 logln(format!(
-                    "{pad}installation id:   {}",
-                    format_id(&params.plugin.installation_id),
+                    "{pad}priority:   {}",
+                    format_id(&params.plugin.plugin_priority.0),
                 ));
                 log_plugin_description(pad, &params.plugin);
             }
