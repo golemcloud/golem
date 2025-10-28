@@ -218,162 +218,6 @@ paths:
       security:
       - Cookie: []
       - Token: []
-  /v1/components/{component_id}/workers/{worker_name}:
-    get:
-      tags:
-      - Worker
-      summary: Get metadata of a worker
-      description: |-
-        Returns metadata about an existing worker:
-        - `workerId` is a combination of the used component and the worker's user specified name
-        - `accountId` the account the worker is created by
-        - `args` is the provided command line arguments passed to the worker
-        - `env` is the provided map of environment variables passed to the worker
-        - `componentVersion` is the version of the component used by the worker
-        - `retryCount` is the number of retries the worker did in case of a failure
-        - `status` is the worker's current status, one of the following:
-        - `Running` if the worker is currently executing
-        - `Idle` if the worker is waiting for an invocation
-        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
-        - `Interrupted` if the worker was interrupted by the user
-        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
-        - `Failed` if the worker failed and there are no more retries scheduled for it
-        - `Exited` if the worker explicitly exited using the exit WASI function
-      operationId: get_worker_metadata
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/WorkerMetadata'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-    delete:
-      tags:
-      - Worker
-      summary: Delete a worker
-      description: Interrupts and deletes an existing worker.
-      operationId: delete_worker
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/DeleteWorkerResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
   /v1/components/{component_id}/workers/{worker_name}/invoke-and-await:
     post:
       tags:
@@ -513,99 +357,6 @@ paths:
             application/json; charset=utf-8:
               schema:
                 $ref: '#/components/schemas/InvokeResult'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/invoke:
-    post:
-      tags:
-      - Worker
-      summary: Invoke a function
-      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
-      operationId: invoke_function
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: header
-        name: Idempotency-Key
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: function
-        description: name of the exported function to be invoked
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: form
-      requestBody:
-        content:
-          application/json; charset=utf-8:
-            schema:
-              $ref: '#/components/schemas/InvokeParameters'
-        required: true
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/InvokeResponse'
         '400':
           description: ''
           content:
@@ -1348,166 +1099,6 @@ paths:
               schema:
                 type: string
                 format: binary
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/activate-plugin:
-    post:
-      tags:
-      - Worker
-      summary: Activate a plugin
-      description: The plugin must be one of the installed plugins for the worker's current component version.
-      operationId: activate_plugin
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: plugin-installation-id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: form
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ActivatePluginResponse'
-        '400':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorsBody'
-        '401':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '403':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '404':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '409':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBody'
-        '500':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
-      security:
-      - Cookie: []
-      - Token: []
-  /v1/components/{component_id}/workers/{worker_name}/deactivate-plugin:
-    post:
-      tags:
-      - Worker
-      summary: Deactivate a plugin
-      description: The plugin must be one of the installed plugins for the worker's current component version.
-      operationId: deactivate_plugin
-      parameters:
-      - in: path
-        name: component_id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: simple
-      - in: path
-        name: worker_name
-        required: true
-        deprecated: false
-        schema:
-          type: string
-        explode: true
-        style: simple
-      - in: query
-        name: plugin-installation-id
-        required: true
-        deprecated: false
-        schema:
-          type: string
-          format: uuid
-        explode: true
-        style: form
-      responses:
-        '200':
-          description: ''
-          content:
-            application/json; charset=utf-8:
-              schema:
-                $ref: '#/components/schemas/DeactivatePluginResponse'
         '400':
           description: ''
           content:
@@ -8514,6 +8105,421 @@ paths:
       security:
       - Cookie: []
       - Token: []
+  /v1/components/{component_id}/workers/{worker_name}:
+    get:
+      tags:
+      - Worker
+      summary: Get metadata of a worker
+      description: |-
+        Returns metadata about an existing worker:
+        - `workerId` is a combination of the used component and the worker's user specified name
+        - `accountId` the account the worker is created by
+        - `args` is the provided command line arguments passed to the worker
+        - `env` is the provided map of environment variables passed to the worker
+        - `componentVersion` is the version of the component used by the worker
+        - `retryCount` is the number of retries the worker did in case of a failure
+        - `status` is the worker's current status, one of the following:
+        - `Running` if the worker is currently executing
+        - `Idle` if the worker is waiting for an invocation
+        - `Suspended` if the worker was running but is now waiting to be resumed by an event (such as end of a sleep, a promise, etc)
+        - `Interrupted` if the worker was interrupted by the user
+        - `Retrying` if the worker failed, and an automatic retry was scheduled for it
+        - `Failed` if the worker failed and there are no more retries scheduled for it
+        - `Exited` if the worker explicitly exited using the exit WASI function
+      operationId: get_worker_metadata
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/FlatWorkerMetadata'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+    delete:
+      tags:
+      - Worker
+      summary: Delete a worker
+      description: Interrupts and deletes an existing worker.
+      operationId: delete_worker
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeleteWorkerResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/invoke:
+    post:
+      tags:
+      - Worker
+      summary: Invoke a function
+      description: A simpler version of the previously defined invoke and await endpoint just triggers the execution of a function and immediately returns.
+      operationId: invoke_function
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: header
+        name: Idempotency-Key
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: function
+        description: name of the exported function to be invoked
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      requestBody:
+        content:
+          application/json; charset=utf-8:
+            schema:
+              $ref: '#/components/schemas/InvokeParameters'
+        required: true
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/InvokeResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/activate-plugin:
+    post:
+      tags:
+      - Worker
+      summary: Activate a plugin
+      description: The plugin must be one of the installed plugins for the worker's current component version.
+      operationId: activate_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: plugin-priority
+        required: true
+        deprecated: false
+        schema:
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
+          type: integer
+          format: int32
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ActivatePluginResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
+  /v1/components/{component_id}/workers/{worker_name}/deactivate-plugin:
+    post:
+      tags:
+      - Worker
+      summary: Deactivate a plugin
+      description: The plugin must be one of the installed plugins for the worker's current component version.
+      operationId: deactivate_plugin
+      parameters:
+      - in: path
+        name: component_id
+        required: true
+        deprecated: false
+        schema:
+          type: string
+          format: uuid
+        explode: true
+        style: simple
+      - in: path
+        name: worker_name
+        required: true
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: simple
+      - in: query
+        name: plugin-priority
+        required: true
+        deprecated: false
+        schema:
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
+          type: integer
+          format: int32
+        explode: true
+        style: form
+      responses:
+        '200':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/DeactivatePluginResponse'
+        '400':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorsBody'
+        '401':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '403':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '404':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '409':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBody'
+        '500':
+          description: ''
+          content:
+            application/json; charset=utf-8:
+              schema:
+                $ref: '#/components/schemas/ErrorBodyWithOptionalWorkerError'
+      security:
+      - Cookie: []
+      - Token: []
 components:
   schemas:
     ActivatePluginParameters:
@@ -9056,59 +9062,6 @@ components:
       - timestamp
       - key
       - parameters
-    CreateParameters:
-      title: CreateParameters
-      type: object
-      properties:
-        timestamp:
-          type: string
-          format: date-time
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        componentVersion:
-          type: integer
-          format: uint64
-        args:
-          type: array
-          items:
-            type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        projectId:
-          type: string
-          format: uuid
-        createdBy:
-          type: string
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
-        parent:
-          $ref: '#/components/schemas/WorkerId'
-        componentSize:
-          type: integer
-          format: uint64
-        initialTotalLinearMemorySize:
-          type: integer
-          format: uint64
-        initialActivePlugins:
-          type: array
-          items:
-            $ref: '#/components/schemas/PluginInstallationDescription'
-      required:
-      - timestamp
-      - workerId
-      - componentVersion
-      - args
-      - env
-      - projectId
-      - createdBy
-      - wasiConfigVars
-      - componentSize
-      - initialTotalLinearMemorySize
-      - initialActivePlugins
     DataValue:
       discriminator:
         propertyName: type
@@ -9435,17 +9388,6 @@ components:
           format: uint64
       required:
       - resourceId
-    ExportedResourceMetadata:
-      title: ExportedResourceMetadata
-      type: object
-      properties:
-        key:
-          $ref: '#/components/schemas/ExportedResourceInstanceKey'
-        description:
-          $ref: '#/components/schemas/ExportedResourceInstanceDescription'
-      required:
-      - key
-      - description
     FailedUpdate:
       title: FailedUpdate
       type: object
@@ -9934,29 +9876,6 @@ components:
       - PersistNothing
       - PersistRemoteSideEffects
       - Smart
-    PluginInstallationDescription:
-      title: PluginInstallationDescription
-      type: object
-      properties:
-        installationId:
-          type: string
-          format: uuid
-        pluginName:
-          type: string
-        pluginVersion:
-          type: string
-        registered:
-          type: boolean
-        parameters:
-          type: object
-          additionalProperties:
-            type: string
-      required:
-      - installationId
-      - pluginName
-      - pluginVersion
-      - registered
-      - parameters
     Provider:
       type: string
       enum:
@@ -10082,101 +10001,6 @@ components:
       - start
       - attributes
       - inherited
-    PublicOplogEntry:
-      description: |-
-        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
-
-        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
-        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
-
-        The rest of the system will always use `OplogEntry` internally - the only point where the
-        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
-        before exposing an oplog entry through a public API.
-      discriminator:
-        propertyName: type
-        mapping:
-          Create: '#/components/schemas/PublicOplogEntry_CreateParameters'
-          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
-          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
-          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
-          Suspend: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          Error: '#/components/schemas/PublicOplogEntry_ErrorParameters'
-          NoOp: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          Jump: '#/components/schemas/PublicOplogEntry_JumpParameters'
-          Interrupted: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          Exited: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
-          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
-          PendingUpdate: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
-          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
-          FailedUpdate: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
-          GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
-          CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-          DescribeResource: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
-          Log: '#/components/schemas/PublicOplogEntry_LogParameters'
-          Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-          ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
-          DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
-          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
-          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
-          StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
-          FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
-          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
-          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
-          BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
-          PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-          CreateAgentInstance: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
-          DropAgentInstance: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_ErrorParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_JumpParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DescribeResourceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
-      - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_CreateAgentInstanceParameters'
-      - $ref: '#/components/schemas/PublicOplogEntry_DropAgentInstanceParameters'
     PublicOplogEntryWithIndex:
       title: PublicOplogEntryWithIndex
       type: object
@@ -11184,13 +11008,6 @@ components:
           type: string
       required:
       - value
-    StringFilterComparator:
-      type: string
-      enum:
-      - Equal
-      - NotEqual
-      - Like
-      - NotLike
     SuccessfulUpdate:
       title: SuccessfulUpdate
       type: object
@@ -11448,54 +11265,6 @@ components:
             $ref: '#/components/schemas/NameOptionTypePair'
       required:
       - cases
-    UpdateRecord:
-      discriminator:
-        propertyName: type
-        mapping:
-          pendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
-          successfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
-          failedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
-      type: object
-      oneOf:
-      - $ref: '#/components/schemas/UpdateRecord_PendingUpdate'
-      - $ref: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
-      - $ref: '#/components/schemas/UpdateRecord_FailedUpdate'
-    UpdateRecord_FailedUpdate:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: failedUpdate
-            type: string
-            enum:
-            - failedUpdate
-        required:
-        - type
-      - $ref: '#/components/schemas/FailedUpdate'
-    UpdateRecord_PendingUpdate:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: pendingUpdate
-            type: string
-            enum:
-            - pendingUpdate
-        required:
-        - type
-      - $ref: '#/components/schemas/PendingUpdate'
-    UpdateRecord_SuccessfulUpdate:
-      allOf:
-      - type: object
-        properties:
-          type:
-            example: successfulUpdate
-            type: string
-            enum:
-            - successfulUpdate
-        required:
-        - type
-      - $ref: '#/components/schemas/SuccessfulUpdate'
     UpdateWorkerRequest:
       title: UpdateWorkerRequest
       type: object
@@ -11974,18 +11743,6 @@ components:
           format: uint64
         precise:
           type: boolean
-    WorkersMetadataResponse:
-      title: WorkersMetadataResponse
-      type: object
-      properties:
-        workers:
-          type: array
-          items:
-            $ref: '#/components/schemas/WorkerMetadata'
-        cursor:
-          $ref: '#/components/schemas/ScanCursor'
-      required:
-      - workers
     WriteRemoteBatchedParameters:
       title: WriteRemoteBatchedParameters
       type: object
@@ -13843,6 +13600,364 @@ components:
       - interfaceName
       - componentName
       - componentType
+    CreateParameters:
+      title: CreateParameters
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        componentVersion:
+          type: integer
+          format: uint64
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        environmentId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        parent:
+          $ref: '#/components/schemas/WorkerId'
+        componentSize:
+          type: integer
+          format: uint64
+        initialTotalLinearMemorySize:
+          type: integer
+          format: uint64
+        initialActivePlugins:
+          type: array
+          items:
+            $ref: '#/components/schemas/PluginInstallationDescription'
+      required:
+      - timestamp
+      - workerId
+      - componentVersion
+      - args
+      - env
+      - environmentId
+      - createdBy
+      - wasiConfigVars
+      - componentSize
+      - initialTotalLinearMemorySize
+      - initialActivePlugins
+    ExportedResourceMetadata:
+      title: ExportedResourceMetadata
+      type: object
+      properties:
+        key:
+          type: integer
+          format: uint64
+        description:
+          $ref: '#/components/schemas/WorkerResourceDescription'
+      required:
+      - key
+      - description
+    FlatWorkerMetadata:
+      title: FlatWorkerMetadata
+      type: object
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        environmentId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        status:
+          $ref: '#/components/schemas/WorkerStatus'
+        componentVersion:
+          type: integer
+          format: uint64
+        retryCount:
+          type: integer
+          format: uint32
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateRecord'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
+        activePlugins:
+          type: array
+          items:
+            title: |-
+              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+              There can only be a single plugin with a given priority installed to a component.
+            type: integer
+            format: int32
+        skippedRegions:
+          description: |-
+            Oplog regions that are skipped during the worker's state recovery, but describe
+            the history of the worker. For example if an atomic region gets restarted, its partially
+            recorded oplog entries will be skipped on retry.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+        deletedRegions:
+          description: Oplog regions permanently deleted from the workers using the revert functionality.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+      required:
+      - workerId
+      - environmentId
+      - createdBy
+      - args
+      - env
+      - wasiConfigVars
+      - status
+      - componentVersion
+      - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - exportedResourceInstances
+      - activePlugins
+      - skippedRegions
+      - deletedRegions
+    PluginInstallationDescription:
+      title: PluginInstallationDescription
+      type: object
+      properties:
+        pluginPriority:
+          title: |-
+            Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+            There can only be a single plugin with a given priority installed to a component.
+          type: integer
+          format: int32
+        pluginName:
+          type: string
+        pluginVersion:
+          type: string
+        registered:
+          type: boolean
+        parameters:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+      - pluginPriority
+      - pluginName
+      - pluginVersion
+      - registered
+      - parameters
+    PublicOplogEntry:
+      description: |-
+        A mirror of the core `OplogEntry` type, without the undefined arbitrary payloads.
+
+        Instead, it encodes all payloads with wasm-rpc `Value` types. This makes this the base type
+        for exposing oplog entries through various APIs such as gRPC, REST and WIT.
+
+        The rest of the system will always use `OplogEntry` internally - the only point where the
+        oplog payloads are decoded and re-encoded as `Value` is in this module, and it should only be used
+        before exposing an oplog entry through a public API.
+      discriminator:
+        propertyName: type
+        mapping:
+          Create: '#/components/schemas/PublicOplogEntry_CreateParameters'
+          ImportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
+          ExportedFunctionInvoked: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
+          ExportedFunctionCompleted: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
+          Suspend: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Error: '#/components/schemas/PublicOplogEntry_ErrorParameters'
+          NoOp: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Jump: '#/components/schemas/PublicOplogEntry_JumpParameters'
+          Interrupted: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          Exited: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          ChangeRetryPolicy: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
+          BeginAtomicRegion: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          EndAtomicRegion: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+          BeginRemoteWrite: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          EndRemoteWrite: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+          PendingWorkerInvocation: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
+          PendingUpdate: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
+          SuccessfulUpdate: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
+          FailedUpdate: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
+          GrowMemory: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
+          CreateResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+          DropResource: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+          Log: '#/components/schemas/PublicOplogEntry_LogParameters'
+          Restart: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+          ActivatePlugin: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
+          DeactivatePlugin: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+          Revert: '#/components/schemas/PublicOplogEntry_RevertParameters'
+          CancelInvocation: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+          StartSpan: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+          FinishSpan: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+          SetSpanAttribute: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+          ChangePersistenceLevel: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+          BeginRemoteTransaction: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
+          PreCommitRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          PreRollbackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          CommittedRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+          RolledBackRemoteTransaction: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/PublicOplogEntry_CreateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ImportedFunctionInvokedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionInvokedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ExportedFunctionCompletedParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ErrorParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_JumpParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangeRetryPolicyParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_EndRegionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_PendingWorkerInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_PendingUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SuccessfulUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FailedUpdateParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_GrowMemoryParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ResourceParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_LogParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_TimestampParameter'
+      - $ref: '#/components/schemas/PublicOplogEntry_ActivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_DeactivatePluginParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RevertParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_CancelInvocationParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_StartSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_FinishSpanParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_SetSpanAttributeParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_ChangePersistenceLevelParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_BeginRemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+      - $ref: '#/components/schemas/PublicOplogEntry_RemoteTransactionParameters'
+    StringFilterComparator:
+      type: string
+      enum:
+      - Equal
+      - NotEqual
+      - Like
+      - NotLike
+      - StartsWith
+    UpdateRecord:
+      discriminator:
+        propertyName: type
+        mapping:
+          PendingUpdate: '#/components/schemas/UpdateRecord_PendingUpdate'
+          SuccessfulUpdate: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+          FailedUpdate: '#/components/schemas/UpdateRecord_FailedUpdate'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/UpdateRecord_PendingUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_SuccessfulUpdate'
+      - $ref: '#/components/schemas/UpdateRecord_FailedUpdate'
+    UpdateRecord_FailedUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FailedUpdate
+            type: string
+            enum:
+            - FailedUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/FailedUpdate'
+    UpdateRecord_PendingUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: PendingUpdate
+            type: string
+            enum:
+            - PendingUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/PendingUpdate'
+    UpdateRecord_SuccessfulUpdate:
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: SuccessfulUpdate
+            type: string
+            enum:
+            - SuccessfulUpdate
+        required:
+        - type
+      - $ref: '#/components/schemas/SuccessfulUpdate'
+    WorkerResourceDescription:
+      title: WorkerResourceDescription
+      type: object
+      properties:
+        createdAt:
+          type: string
+          format: date-time
+        resourceOwner:
+          type: string
+        resourceName:
+          type: string
+      required:
+      - createdAt
+      - resourceOwner
+      - resourceName
+    WorkersMetadataResponse:
+      title: WorkersMetadataResponse
+      type: object
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlatWorkerMetadata'
+        cursor:
+          $ref: '#/components/schemas/ScanCursor'
+      required:
+      - workers
   securitySchemes:
     Cookie:
       type: apiKey

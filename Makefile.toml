@@ -159,6 +159,7 @@ array_push ${components} promise
 array_push ${components} rdbms-service
 array_push ${components} rpc
 array_push ${components} runtime-service
+array_push ${components} rust-service/rpc
 array_push ${components} scheduled-invocation
 array_push ${components} shopping-cart
 array_push ${components} update-test-env-var
@@ -595,6 +596,14 @@ script = '''
       echo "Run cargo make generate-openapi to generate new spec." 1>&2
       exit 1
   fi
+  if diff openapi/golem-worker-service.yaml target/golem-worker-service.yaml  >/dev/null 2>&1
+    then
+      echo "Latest Golem Worker Service OpenAPI spec version detected."
+    else
+      echo "openapi/golem-worker-service.yaml is not the same as produced by golem-worker-service." 1>&2
+      echo "Run cargo make generate-openapi to generate new spec." 1>&2
+      exit 1
+  fi
 '''
 
 ## ** GENERATE-OPENAPI **
@@ -612,9 +621,19 @@ mkdir -pv ../data
 ./golem-registry-service --dump-openapi-yaml > ../golem-registry-service.yaml
 '''
 
+[tasks.generate-worker-service-openapi]
+description = "Generates openapi spec for worker service"
+dependencies = ["build-worker-service-non-ci"]
+cwd = "./target/debug"
+script = '''
+mkdir -pv ../data
+./golem-worker-service --dump-openapi-yaml > ../golem-worker-service.yaml
+'''
+
 [tasks.merge-openapi]
 dependencies = [
     "generate-registry-service-openapi",
+    "generate-worker-service-openapi"
 ]
 install_crate = { crate_name = "golem-openapi-client-generator", version = "=0.0.16" }
 command = "golem-openapi-client-generator"
@@ -622,6 +641,7 @@ args = [
     "merge",
     "--spec-yaml",
     "./target/golem-registry-service.yaml",
+    "./target/golem-worker-service.yaml",
     "./golem-not-yet-ported-temp.yaml",
     "--output-yaml",
     "./target/golem-service.yaml",
@@ -633,6 +653,7 @@ dependencies = ["merge-openapi"]
 script = [
     "cp -v ./target/golem-service.yaml ./openapi/golem-service.yaml",
     "cp -v ./target/golem-registry-service.yaml ./openapi/",
+    "cp -v ./target/golem-worker-service.yaml ./openapi/",
 ]
 
 ## ** PUBLISH **
