@@ -264,6 +264,24 @@ impl TestContext {
         let test_dir = TempDir::new().unwrap();
         let working_dir = test_dir.path().to_path_buf();
 
+        let mut env = HashMap::new();
+
+        env.insert(
+            "GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(),
+            "true".to_string(),
+        );
+
+        for key in [
+            "GOLEM_RUST_PATH",
+            "GOLEM_RUST_VERSION",
+            "GOLEM_TS_PACKAGES_PATH",
+            "GOLEM_TS_VERSION",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                env.insert(key.to_string(), val);
+            }
+        }
+
         let ctx = Self {
             golem_path: PathBuf::from("../../target/debug/golem")
                 .canonicalize()
@@ -286,9 +304,7 @@ impl TestContext {
             data_dir: TempDir::new().unwrap(),
             working_dir,
             server_process: None,
-            env: HashMap::from_iter(vec![
-                ("GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(), "true".to_string())
-            ]),
+            env,
         };
 
         info!(ctx = ?ctx ,"Created test context");
