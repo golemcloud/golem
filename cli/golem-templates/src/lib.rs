@@ -269,13 +269,7 @@ fn instantiate_directory(
                     )?;
                 }
                 DirEntry::File(file) => {
-                    let file_name = file
-                        .path()
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy();
-
-                    let content_transform = match (template.kind.is_common(), file_name.as_ref()) {
+                    let content_transform = match (template.kind.is_common(), name.as_str()) {
                         (true, "golem.yaml") => vec![Transform::ManifestHints],
                         (true, "package.json") => vec![Transform::TsSdk],
                         (true, "Cargo.toml") => vec![Transform::RustSdk],
