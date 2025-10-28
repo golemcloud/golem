@@ -575,6 +575,8 @@ impl ResolvedWitApplication {
                 .components()
                 .any(|c| c.as_os_str() == OsStr::new("wasm32-wasip1"))
             {
+                // For rust the base wasm is the component itself, and this ensures it
+                // May be there is a better approach.
                 ensure_common_deps_for_tool(tools_with_ensured_common_deps, "cargo").await?;
             }
         }

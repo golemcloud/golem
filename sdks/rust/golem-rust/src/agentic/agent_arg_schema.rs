@@ -1,6 +1,6 @@
-use golem_wasm::IntoValue;
-use golem_wasm::WitType;
-use golem_wasm::WitValue;
+use crate::wasm_rpc::IntoValue;
+use crate::wasm_rpc::WitType;
+use crate::wasm_rpc::WitValue;
 
 pub trait Schema: IntoValue + FromValue {
     fn to_value(self) -> golem_wasm::Value

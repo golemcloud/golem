@@ -300,9 +300,9 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
     let wit_type_fields: Vec<_> = field_idents_vec.iter().zip(field_types.iter()).map(|(ident, ty)| {
         let name = ident.to_string();
         quote! {
-            golem_wasm::analysis::NameTypePair {
+            golem_rust::wasm_rpc::analysis::NameTypePair {
                 name: #name.to_string(),
-                typ: golem_wasm::analysis::AnalysedType::from(<#ty as golem_rust::agentic::Schema>::get_wit_type()),
+                typ: golem_rust::wasm_rpc::analysis::AnalysedType::from(<#ty as golem_rust::agentic::Schema>::get_wit_type()),
             }
         }
     }).collect();
@@ -323,24 +323,24 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
     let field_count = field_idents_vec.len();
 
     let expanded = quote! {
-     impl golem_wasm::IntoValue for #struct_name {
-         fn into_value(self) -> golem_wasm::Value {
-            golem_wasm::Value::Record(vec![
+     impl golem_rust::wasm_rpc::IntoValue for #struct_name {
+         fn into_value(self) -> golem_rust::wasm_rpc::Value {
+            golem_rust::wasm_rpc::Value::Record(vec![
                  #(#to_value_fields),*
              ])
          }
 
-         fn get_type() -> golem_wasm::analysis::AnalysedType {
-            golem_wasm::analysis::analysed_type::record(vec![
+         fn get_type() -> golem_rust::wasm_rpc::analysis::AnalysedType {
+            golem_rust::wasm_rpc::analysis::analysed_type::record(vec![
                 #(#wit_type_fields),*
             ])
         }
      }
 
      impl golem_rust::agentic::FromValue for #struct_name {
-         fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
+         fn from_value(value: golem_rust::wasm_rpc::Value) -> Result<Self, String> {
              match value {
-                 golem_wasm::Value::Record(values) => {
+                 golem_rust::wasm_rpc::Value::Record(values) => {
                      if values.len() != #field_count {
                          return Err(format!("Expected {} fields", #field_count));
                      }
