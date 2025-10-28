@@ -339,11 +339,27 @@ scene_04() {
 
 # Cleanup and exit tmux
 cleanup_tmux() {
-    echo -e "\n${BLUE}# Stopping server...${NC}"
-    tmux send-keys -t "$TMUX_SESSION:0.0" C-c
-    sleep 2
+    if [ -n "$DEMO_RUNNER_INTERNAL" ]; then
+        # We're inside tmux, don't try to kill ourselves
+        return
+    fi
+
+    echo -e "\n${BLUE}# Stopping server and cleaning up...${NC}"
+
+    # Send Ctrl+C to server pane multiple times to ensure it stops
+    tmux send-keys -t "$TMUX_SESSION:0.0" C-c 2>/dev/null || true
+    sleep 1
+    tmux send-keys -t "$TMUX_SESSION:0.0" C-c 2>/dev/null || true
+    sleep 1
+
+    # Kill the session
     tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+
+    # Cleanup temp files
     rm -f /tmp/demo-headers.txt 2>/dev/null || true
+
+    # Also kill any stray golem-cli processes
+    pkill -f "golem-cli --serve" 2>/dev/null || true
 }
 
 # Main execution
@@ -416,6 +432,12 @@ main() {
 
             # Attach to session to watch
             tmux attach-session -t "$TMUX_SESSION"
+
+            # When we detach/exit, cleanup
+            cleanup_tmux
+
+            echo -e "\n${GREEN}✓ Cleanup complete${NC}"
+            echo -e "${BLUE}If server is still running, use: pkill -f 'golem-cli --serve'${NC}"
             ;;
         *)
             echo "Usage: $0 [options] [scene]"
