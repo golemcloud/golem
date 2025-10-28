@@ -380,10 +380,20 @@ main() {
                 scene_03
                 scene_04
                 echo -e "\n${CYAN}Demo complete!${NC}"
-                echo -e "${CYAN}Waiting 30 seconds, then shutting down...${NC}"
-                sleep 30
-                echo -e "\n${YELLOW}Stopping server and cleaning up...${NC}"
-                # Exit this shell, which will trigger cleanup
+                echo -e "${CYAN}Waiting 5 seconds, then shutting down...${NC}"
+                sleep 5
+                echo -e "\n${YELLOW}Stopping server...${NC}"
+
+                # Stop the server in the top pane
+                tmux send-keys -t "$TMUX_SESSION:0.0" C-c
+                sleep 2
+
+                echo -e "${GREEN}✓ Server stopped${NC}"
+                echo -e "${YELLOW}Closing tmux session in 3 seconds...${NC}"
+                sleep 3
+
+                # Kill the tmux session entirely - this closes everything
+                tmux kill-session -t "$TMUX_SESSION"
                 exit 0
                 ;;
         esac
