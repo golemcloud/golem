@@ -1,352 +1,227 @@
-# Claude Code Configuration - SPARC Development Environment
+# CLAUDE.md
 
-## 🚨 CRITICAL: CONCURRENT EXECUTION & FILE MANAGEMENT
-
-**ABSOLUTE RULES**:
-1. ALL operations MUST be concurrent/parallel in a single message
-2. **NEVER save working files, text/mds and tests to the root folder**
-3. ALWAYS organize files in appropriate subdirectories
-4. **USE CLAUDE CODE'S TASK TOOL** for spawning agents concurrently, not just MCP
-
-### ⚡ GOLDEN RULE: "1 MESSAGE = ALL RELATED OPERATIONS"
-
-**MANDATORY PATTERNS:**
-- **TodoWrite**: ALWAYS batch ALL todos in ONE call (5-10+ todos minimum)
-- **Task tool (Claude Code)**: ALWAYS spawn ALL agents in ONE message with full instructions
-- **File operations**: ALWAYS batch ALL reads/writes/edits in ONE message
-- **Bash commands**: ALWAYS batch ALL terminal operations in ONE message
-- **Memory operations**: ALWAYS batch ALL memory store/retrieve in ONE message
-
-### 🎯 CRITICAL: Claude Code Task Tool for Agent Execution
-
-**Claude Code's Task tool is the PRIMARY way to spawn agents:**
-```javascript
-// ✅ CORRECT: Use Claude Code's Task tool for parallel agent execution
-[Single Message]:
-  Task("Research agent", "Analyze requirements and patterns...", "researcher")
-  Task("Coder agent", "Implement core features...", "coder")
-  Task("Tester agent", "Create comprehensive tests...", "tester")
-  Task("Reviewer agent", "Review code quality...", "reviewer")
-  Task("Architect agent", "Design system architecture...", "system-architect")
-```
-
-**MCP tools are ONLY for coordination setup:**
-- `mcp__claude-flow__swarm_init` - Initialize coordination topology
-- `mcp__claude-flow__agent_spawn` - Define agent types for coordination
-- `mcp__claude-flow__task_orchestrate` - Orchestrate high-level workflows
-
-### 📁 File Organization Rules
-
-**NEVER save to root folder. Use these directories:**
-- `/src` - Source code files
-- `/tests` - Test files
-- `/docs` - Documentation and markdown files
-- `/config` - Configuration files
-- `/scripts` - Utility scripts
-- `/examples` - Example code
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Project Overview
 
-This project uses SPARC (Specification, Pseudocode, Architecture, Refinement, Completion) methodology with Claude-Flow orchestration for systematic Test-Driven Development.
+Golem is a distributed cloud platform for running WebAssembly components. This is a **Rust monorepo** with 25+ workspace members including services, CLI tools, SDKs, and integration tests.
 
-## SPARC Commands
+**Key Documentation:**
+- Developer guide: [CONTRIBUTING.md](CONTRIBUTING.md)
+- REST API changes: Auto-generated OpenAPI specs (must regenerate after API changes)
+- MCP Server: [MCP-SERVER-IMPLEMENTATION.md](MCP-SERVER-IMPLEMENTATION.md)
 
-### Core Commands
-- `npx claude-flow sparc modes` - List available modes
-- `npx claude-flow sparc run <mode> "<task>"` - Execute specific mode
-- `npx claude-flow sparc tdd "<feature>"` - Run complete TDD workflow
-- `npx claude-flow sparc info <mode>` - Get mode details
+## Build System
 
-### Batchtools Commands
-- `npx claude-flow sparc batch <modes> "<task>"` - Parallel execution
-- `npx claude-flow sparc pipeline "<task>"` - Full pipeline processing
-- `npx claude-flow sparc concurrent <mode> "<tasks-file>"` - Multi-task processing
+**Primary build tool**: `cargo-make` (not standard cargo commands)
 
-### Build Commands
-- `npm run build` - Build project
-- `npm run test` - Run tests
-- `npm run lint` - Linting
-- `npm run typecheck` - Type checking
-
-## SPARC Workflow Phases
-
-1. **Specification** - Requirements analysis (`sparc run spec-pseudocode`)
-2. **Pseudocode** - Algorithm design (`sparc run spec-pseudocode`)
-3. **Architecture** - System design (`sparc run architect`)
-4. **Refinement** - TDD implementation (`sparc tdd`)
-5. **Completion** - Integration (`sparc run integration`)
-
-## Code Style & Best Practices
-
-- **Modular Design**: Files under 500 lines
-- **Environment Safety**: Never hardcode secrets
-- **Test-First**: Write tests before implementation
-- **Clean Architecture**: Separate concerns
-- **Documentation**: Keep updated
-
-## 🚀 Available Agents (54 Total)
-
-### Core Development
-`coder`, `reviewer`, `tester`, `planner`, `researcher`
-
-### Swarm Coordination
-`hierarchical-coordinator`, `mesh-coordinator`, `adaptive-coordinator`, `collective-intelligence-coordinator`, `swarm-memory-manager`
-
-### Consensus & Distributed
-`byzantine-coordinator`, `raft-manager`, `gossip-coordinator`, `consensus-builder`, `crdt-synchronizer`, `quorum-manager`, `security-manager`
-
-### Performance & Optimization
-`perf-analyzer`, `performance-benchmarker`, `task-orchestrator`, `memory-coordinator`, `smart-agent`
-
-### GitHub & Repository
-`github-modes`, `pr-manager`, `code-review-swarm`, `issue-tracker`, `release-manager`, `workflow-automation`, `project-board-sync`, `repo-architect`, `multi-repo-swarm`
-
-### SPARC Methodology
-`sparc-coord`, `sparc-coder`, `specification`, `pseudocode`, `architecture`, `refinement`
-
-### Specialized Development
-`backend-dev`, `mobile-dev`, `ml-developer`, `cicd-engineer`, `api-docs`, `system-architect`, `code-analyzer`, `base-template-generator`
-
-### Testing & Validation
-`tdd-london-swarm`, `production-validator`
-
-### Migration & Planning
-`migration-planner`, `swarm-init`
-
-## 🎯 Claude Code vs MCP Tools
-
-### Claude Code Handles ALL EXECUTION:
-- **Task tool**: Spawn and run agents concurrently for actual work
-- File operations (Read, Write, Edit, MultiEdit, Glob, Grep)
-- Code generation and programming
-- Bash commands and system operations
-- Implementation work
-- Project navigation and analysis
-- TodoWrite and task management
-- Git operations
-- Package management
-- Testing and debugging
-
-### MCP Tools ONLY COORDINATE:
-- Swarm initialization (topology setup)
-- Agent type definitions (coordination patterns)
-- Task orchestration (high-level planning)
-- Memory management
-- Neural features
-- Performance tracking
-- GitHub integration
-
-**KEY**: MCP coordinates the strategy, Claude Code's Task tool executes with real agents.
-
-## 🚀 Quick Setup
+### Essential Commands
 
 ```bash
-# Add MCP servers (Claude Flow required, others optional)
-claude mcp add claude-flow npx claude-flow@alpha mcp start
-claude mcp add ruv-swarm npx ruv-swarm mcp start  # Optional: Enhanced coordination
-claude mcp add flow-nexus npx flow-nexus@latest mcp start  # Optional: Cloud features
+# Development workflow (recommended)
+cargo make dev-flow              # Fix format/clippy + build (no tests)
+cargo make                       # Same as dev-flow (default task)
+
+# Building
+cargo make build                 # Debug build (all workspace members)
+cargo make build-release         # Release build
+cargo build -p <crate-name>      # Build single crate during development
+
+# Code quality
+cargo make fix                   # Auto-fix rustfmt + clippy issues
+cargo make check                 # Check without applying fixes
+
+# Testing
+cargo make unit-tests            # Unit tests only
+cargo make worker-executor-tests # Worker executor tests (requires redis)
+cargo make integration-tests     # Integration tests (requires docker + redis)
+cargo make cli-integration-tests # CLI tests
+cargo make test                  # ALL tests (unit + worker + integration)
+
+# Run specific test
+cargo test -p golem-worker-executor api::promise -- --report-time
+
+# API/Config management
+cargo make generate-openapi      # Regenerate after REST API changes (REQUIRED)
+cargo make generate-configs      # Regenerate after config struct changes (REQUIRED)
+cargo make check-openapi         # Verify OpenAPI is up-to-date (CI check)
+cargo make check-configs         # Verify configs are up-to-date (CI check)
+
+# WIT dependencies
+cargo make wit                   # Fetch WIT dependencies from wit/deps.toml
+cargo make check-wit             # Verify WIT deps are up-to-date
+
+# Local development
+cargo make run                   # Run all services locally (requires lnav, nginx, redis)
 ```
 
-## MCP Tool Categories
+### Memory Constraints
 
-### Coordination
-`swarm_init`, `agent_spawn`, `task_orchestrate`
+If cargo runs out of memory during builds, create `~/.cargo/config.toml`:
 
-### Monitoring
-`swarm_status`, `agent_list`, `agent_metrics`, `task_status`, `task_results`
-
-### Memory & Neural
-`memory_usage`, `neural_status`, `neural_train`, `neural_patterns`
-
-### GitHub Integration
-`github_swarm`, `repo_analyze`, `pr_enhance`, `issue_triage`, `code_review`
-
-### System
-`benchmark_run`, `features_detect`, `swarm_monitor`
-
-### Flow-Nexus MCP Tools (Optional Advanced Features)
-Flow-Nexus extends MCP capabilities with 70+ cloud-based orchestration tools:
-
-**Key MCP Tool Categories:**
-- **Swarm & Agents**: `swarm_init`, `swarm_scale`, `agent_spawn`, `task_orchestrate`
-- **Sandboxes**: `sandbox_create`, `sandbox_execute`, `sandbox_upload` (cloud execution)
-- **Templates**: `template_list`, `template_deploy` (pre-built project templates)
-- **Neural AI**: `neural_train`, `neural_patterns`, `seraphina_chat` (AI assistant)
-- **GitHub**: `github_repo_analyze`, `github_pr_manage` (repository management)
-- **Real-time**: `execution_stream_subscribe`, `realtime_subscribe` (live monitoring)
-- **Storage**: `storage_upload`, `storage_list` (cloud file management)
-
-**Authentication Required:**
-- Register: `mcp__flow-nexus__user_register` or `npx flow-nexus@latest register`
-- Login: `mcp__flow-nexus__user_login` or `npx flow-nexus@latest login`
-- Access 70+ specialized MCP tools for advanced orchestration
-
-## 🚀 Agent Execution Flow with Claude Code
-
-### The Correct Pattern:
-
-1. **Optional**: Use MCP tools to set up coordination topology
-2. **REQUIRED**: Use Claude Code's Task tool to spawn agents that do actual work
-3. **REQUIRED**: Each agent runs hooks for coordination
-4. **REQUIRED**: Batch all operations in single messages
-
-### Example Full-Stack Development:
-
-```javascript
-// Single message with all agent spawning via Claude Code's Task tool
-[Parallel Agent Execution]:
-  Task("Backend Developer", "Build REST API with Express. Use hooks for coordination.", "backend-dev")
-  Task("Frontend Developer", "Create React UI. Coordinate with backend via memory.", "coder")
-  Task("Database Architect", "Design PostgreSQL schema. Store schema in memory.", "code-analyzer")
-  Task("Test Engineer", "Write Jest tests. Check memory for API contracts.", "tester")
-  Task("DevOps Engineer", "Setup Docker and CI/CD. Document in memory.", "cicd-engineer")
-  Task("Security Auditor", "Review authentication. Report findings via hooks.", "reviewer")
-  
-  // All todos batched together
-  TodoWrite { todos: [...8-10 todos...] }
-  
-  // All file operations together
-  Write "backend/server.js"
-  Write "frontend/App.jsx"
-  Write "database/schema.sql"
+```toml
+[build]
+jobs = 4  # Limit parallel compilation jobs
 ```
 
-## 📋 Agent Coordination Protocol
+## Architecture
 
-### Every Agent Spawned via Task Tool MUST:
+### Service Structure
 
-**1️⃣ BEFORE Work:**
+**Core Services** (microservices architecture):
+- `golem-worker-executor` - Executes WASM components in isolated environments
+- `golem-worker-service` - Worker lifecycle management and API
+- `golem-component-service` - Component registry and versioning
+- `golem-component-compilation-service` - WASM compilation pipeline
+- `golem-shard-manager` - Distributed system coordination
+- `golem-debugging-service` - Debug worker instances
+- `cloud-service` - Cloud platform orchestration
+
+**CLI Tools**:
+- `cli/golem-cli` - Main CLI with MCP server (`golem-cli --serve 8080`)
+- `cli/golem` - Single-binary distribution
+- `cli/golem-templates` - Project templates and scaffolding
+
+**Libraries**:
+- `golem-common` - Shared types and utilities
+- `golem-api-grpc` - gRPC protocol definitions
+- `golem-client` - Generated OpenAPI client (auto-generated, DO NOT edit manually)
+- `golem-service-base` - Common service infrastructure
+- `golem-wasm` - WASM runtime abstractions
+- `golem-rib` - Golem's expression language (RIB - Rust In Bytecode)
+
+**SDKs**:
+- `sdks/rust/golem-rust` - Rust SDK for building Golem components
+- `sdks/ts` - TypeScript SDK
+
+### Key Patterns
+
+1. **OpenAPI-First REST APIs**: All REST APIs use `poem-openapi` crate. Specs are generated from Rust code, not written manually.
+
+2. **WIT Dependencies**: WebAssembly Interface Types managed in `wit/deps.toml`, copied to workspace members via `cargo make wit`.
+
+3. **Configuration**: Service configs generated from Rust structs using `figment` crate.
+
+4. **Testing**: Uses `test-r` library. Tests organized into groups for parallel CI execution.
+
+5. **Wasmtime Fork**: Uses custom Wasmtime fork (`golem-wasmtime-v33.0.0` branch) with Golem-specific patches.
+
+## MCP Server Integration
+
+The CLI includes an MCP (Model Context Protocol) server:
+
 ```bash
-npx claude-flow@alpha hooks pre-task --description "[task]"
-npx claude-flow@alpha hooks session-restore --session-id "swarm-[id]"
+golem-cli --serve 8080  # Start MCP server on port 8080
 ```
 
-**2️⃣ DURING Work:**
+**Capabilities**:
+- **96 tools**: All CLI commands exposed as MCP tools (16 sensitive commands filtered)
+- **Resources**: Discovers `golem.yaml` manifests in current/parent/child directories
+- **Transport**: HTTP JSON-RPC with Server-Sent Events (SSE)
+- **Endpoint**: `http://localhost:8080/mcp`
+- **Implementation**: `cli/golem-cli/src/mcp_server/`
+
+See [MCP-SERVER-IMPLEMENTATION.md](MCP-SERVER-IMPLEMENTATION.md) for details.
+
+## Development Workflow
+
+### Before Opening PR
+
+1. **Fix code quality issues**:
+   ```bash
+   cargo make fix
+   ```
+
+2. **If you modified REST API** (any `poem-openapi` changes):
+   ```bash
+   cargo make generate-openapi
+   git add openapi/
+   ```
+
+3. **If you modified service configs** (changed config structs):
+   ```bash
+   cargo make generate-configs
+   git add */config/
+   ```
+
+4. **Verify CI checks will pass**:
+   ```bash
+   cargo make check           # rustfmt + clippy
+   cargo make check-openapi   # OpenAPI up-to-date
+   cargo make check-configs   # Configs up-to-date
+   cargo make check-wit       # WIT deps up-to-date
+   ```
+
+### Test Organization
+
+**Worker Executor Tests** are split into groups:
+- `cargo make worker-executor-tests-group1` - Group 1/2
+- `cargo make worker-executor-tests-group2` - Group 2/2
+- `cargo make worker-executor-tests-misc` - Untagged + RDBMS tests
+
+**Integration Tests** are split into groups:
+- `cargo make integration-tests-group1` - Main integration tests
+- `cargo make integration-tests-group2` - Service-specific tests
+- `cargo make integration-tests-group3` - Sharding tests
+
+**CLI Tests** are split into groups:
+- `cargo make cli-integration-tests-group1` - Untagged + Group 1
+- `cargo make cli-integration-tests-group2` - Group 2
+- `cargo make cli-integration-tests-group3` - Group 3
+
+## Common Pitfalls
+
+1. **Don't manually edit generated files**:
+   - `golem-client/src/` - Generated from OpenAPI spec
+   - `openapi/*.yaml` - Generated from Rust code
+   - Service config files in `*/config/` - Generated from Rust structs
+
+2. **Always regenerate after changes**:
+   - Modified REST API → `cargo make generate-openapi`
+   - Modified config structs → `cargo make generate-configs`
+   - Modified WIT deps → `cargo make wit`
+
+3. **Use cargo-make, not plain cargo** for most tasks:
+   - ❌ `cargo test` (won't run all test groups)
+   - ✅ `cargo make test` (runs all test groups in sequence)
+
+4. **Debugger setup**: Use `--nocapture` flag when debugging tests to prevent child process spawning.
+
+5. **Prerequisites**: Ensure `protoc` (version 28+), `redis`, and `docker` are installed.
+
+## Rust Toolchain
+
+**Required**:
+- Rust stable (latest)
+- `wasm32-wasip1` target
+- `cargo-make` installed globally
+- `protoc` v28+ (Protocol Buffers compiler)
+
+**Installation**:
 ```bash
-npx claude-flow@alpha hooks post-edit --file "[file]" --memory-key "swarm/[agent]/[step]"
-npx claude-flow@alpha hooks notify --message "[what was done]"
+rustup update stable
+rustup default stable
+rustup target add wasm32-wasip1
+cargo install --force cargo-make
 ```
 
-**3️⃣ AFTER Work:**
-```bash
-npx claude-flow@alpha hooks post-task --task-id "[task]"
-npx claude-flow@alpha hooks session-end --export-metrics true
-```
+## Project-Specific Patterns
 
-## 🎯 Concurrent Execution Examples
+### Service Configuration
+All services use `figment` for config management with three sources (priority order):
+1. Environment variables (highest)
+2. Config files (TOML)
+3. Code defaults (lowest)
 
-### ✅ CORRECT WORKFLOW: MCP Coordinates, Claude Code Executes
+### Error Handling
+- Services use `anyhow::Result` for error propagation
+- Public APIs use typed error enums with `thiserror`
 
-```javascript
-// Step 1: MCP tools set up coordination (optional, for complex tasks)
-[Single Message - Coordination Setup]:
-  mcp__claude-flow__swarm_init { topology: "mesh", maxAgents: 6 }
-  mcp__claude-flow__agent_spawn { type: "researcher" }
-  mcp__claude-flow__agent_spawn { type: "coder" }
-  mcp__claude-flow__agent_spawn { type: "tester" }
+### Async Runtime
+- All services use `tokio` runtime
+- No `async-std` or other runtimes
 
-// Step 2: Claude Code Task tool spawns ACTUAL agents that do the work
-[Single Message - Parallel Agent Execution]:
-  // Claude Code's Task tool spawns real agents concurrently
-  Task("Research agent", "Analyze API requirements and best practices. Check memory for prior decisions.", "researcher")
-  Task("Coder agent", "Implement REST endpoints with authentication. Coordinate via hooks.", "coder")
-  Task("Database agent", "Design and implement database schema. Store decisions in memory.", "code-analyzer")
-  Task("Tester agent", "Create comprehensive test suite with 90% coverage.", "tester")
-  Task("Reviewer agent", "Review code quality and security. Document findings.", "reviewer")
-  
-  // Batch ALL todos in ONE call
-  TodoWrite { todos: [
-    {id: "1", content: "Research API patterns", status: "in_progress", priority: "high"},
-    {id: "2", content: "Design database schema", status: "in_progress", priority: "high"},
-    {id: "3", content: "Implement authentication", status: "pending", priority: "high"},
-    {id: "4", content: "Build REST endpoints", status: "pending", priority: "high"},
-    {id: "5", content: "Write unit tests", status: "pending", priority: "medium"},
-    {id: "6", content: "Integration tests", status: "pending", priority: "medium"},
-    {id: "7", content: "API documentation", status: "pending", priority: "low"},
-    {id: "8", content: "Performance optimization", status: "pending", priority: "low"}
-  ]}
-  
-  // Parallel file operations
-  Bash "mkdir -p app/{src,tests,docs,config}"
-  Write "app/package.json"
-  Write "app/src/server.js"
-  Write "app/tests/server.test.js"
-  Write "app/docs/API.md"
-```
-
-### ❌ WRONG (Multiple Messages):
-```javascript
-Message 1: mcp__claude-flow__swarm_init
-Message 2: Task("agent 1")
-Message 3: TodoWrite { todos: [single todo] }
-Message 4: Write "file.js"
-// This breaks parallel coordination!
-```
-
-## Performance Benefits
-
-- **84.8% SWE-Bench solve rate**
-- **32.3% token reduction**
-- **2.8-4.4x speed improvement**
-- **27+ neural models**
-
-## Hooks Integration
-
-### Pre-Operation
-- Auto-assign agents by file type
-- Validate commands for safety
-- Prepare resources automatically
-- Optimize topology by complexity
-- Cache searches
-
-### Post-Operation
-- Auto-format code
-- Train neural patterns
-- Update memory
-- Analyze performance
-- Track token usage
-
-### Session Management
-- Generate summaries
-- Persist state
-- Track metrics
-- Restore context
-- Export workflows
-
-## Advanced Features (v2.0.0)
-
-- 🚀 Automatic Topology Selection
-- ⚡ Parallel Execution (2.8-4.4x speed)
-- 🧠 Neural Training
-- 📊 Bottleneck Analysis
-- 🤖 Smart Auto-Spawning
-- 🛡️ Self-Healing Workflows
-- 💾 Cross-Session Memory
-- 🔗 GitHub Integration
-
-## Integration Tips
-
-1. Start with basic swarm init
-2. Scale agents gradually
-3. Use memory for context
-4. Monitor progress regularly
-5. Train patterns from success
-6. Enable hooks automation
-7. Use GitHub tools first
-
-## Support
-
-- Documentation: https://github.com/ruvnet/claude-flow
-- Issues: https://github.com/ruvnet/claude-flow/issues
-- Flow-Nexus Platform: https://flow-nexus.ruv.io (registration required for cloud features)
-
----
-
-Remember: **Claude Flow coordinates, Claude Code creates!**
-
-# important-instruction-reminders
-Do what has been asked; nothing more, nothing less.
-NEVER create files unless they're absolutely necessary for achieving your goal.
-ALWAYS prefer editing an existing file to creating a new one.
-NEVER proactively create documentation files (*.md) or README files. Only create documentation files if explicitly requested by the User.
-Never save working files, text/mds and tests to the root folder.
+### Logging
+- `tracing` crate for structured logging
+- File logging configured via `GOLEM__TRACING__FILE_DIR`
+- Use `lnav` for merged log viewing during local development
