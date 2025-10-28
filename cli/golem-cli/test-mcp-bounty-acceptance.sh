@@ -15,6 +15,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLI_PATH="$SCRIPT_DIR/../../target/release/golem-cli"
 TEST_PORT=18080
 SERVER_PID=""
+COOKIE_JAR="/tmp/mcp-test-cookies.txt"
 
 # Colors for output
 GREEN='\033[0;32m'
@@ -50,6 +51,9 @@ echo ""
 pkill -f "golem-cli --serve" 2>/dev/null || true
 sleep 1
 
+# Clear cookie jar
+rm -f $COOKIE_JAR
+
 # TEST 1: Server starts with --serve flag and port parameter
 echo -e "${YELLOW}TEST 1: Server starts with --serve flag and port parameter${NC}"
 $CLI_PATH --serve $TEST_PORT > /tmp/mcp-test.log 2>&1 &
@@ -66,10 +70,12 @@ else
 fi
 echo ""
 
-# TEST 2: HTTP JSON-RPC endpoint responds to requests
+# TEST 2: HTTP JSON-RPC endpoint responds to requests (with session cookie)
 echo -e "${YELLOW}TEST 2: HTTP JSON-RPC endpoint responds to requests${NC}"
 RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
+    -c $COOKIE_JAR -b $COOKIE_JAR \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":1,
@@ -81,9 +87,12 @@ RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         }
     }')
 
-if echo "$RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
+# Extract JSON from SSE format (remove "data: " prefix)
+JSON_RESPONSE=$(echo "$RESPONSE" | sed 's/^data: //')
+
+if echo "$JSON_RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ PASS: Server responds to JSON-RPC requests${NC}"
-    echo "Response: $(echo "$RESPONSE" | jq -c '.result.serverInfo')"
+    echo "Response: $(echo "$JSON_RESPONSE" | jq -c '.result.serverInfo')"
 else
     echo -e "${RED}✗ FAIL: Server did not respond correctly${NC}"
     echo "Response: $RESPONSE"
@@ -93,8 +102,12 @@ echo ""
 
 # TEST 3: tools/list exposes ALL CLI commands (90+)
 echo -e "${YELLOW}TEST 3: tools/list exposes ALL CLI commands as MCP tools${NC}"
+# Note: Server is already initialized from TEST 2, but some MCP servers are stateless
+# If this fails, we may need to send initialize again or keep session state
 TOOLS_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
+    -c $COOKIE_JAR -b $COOKIE_JAR \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":2,
@@ -102,12 +115,14 @@ TOOLS_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         "params":{}
     }')
 
-TOOL_COUNT=$(echo "$TOOLS_RESPONSE" | jq '.result.tools | length')
+# Extract JSON from SSE format
+TOOLS_JSON=$(echo "$TOOLS_RESPONSE" | sed 's/^data: //')
+TOOL_COUNT=$(echo "$TOOLS_JSON" | jq '.result.tools | length')
 
 if [ "$TOOL_COUNT" -ge 90 ]; then
     echo -e "${GREEN}✓ PASS: Exposed $TOOL_COUNT tools (expected ≥90)${NC}"
     echo "Sample tools:"
-    echo "$TOOLS_RESPONSE" | jq -r '.result.tools[:5] | .[] | "  - \(.name): \(.description)"'
+    echo "$TOOLS_JSON" | jq -r '.result.tools[:5] | .[] | "  - \(.name): \(.description)"'
 else
     echo -e "${RED}✗ FAIL: Only exposed $TOOL_COUNT tools (expected ≥90)${NC}"
     exit 1
@@ -117,7 +132,9 @@ echo ""
 # TEST 4: tools/call executes CLI commands successfully
 echo -e "${YELLOW}TEST 4: tools/call executes CLI commands successfully${NC}"
 CALL_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
+    -c $COOKIE_JAR -b $COOKIE_JAR \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":3,
@@ -128,9 +145,12 @@ CALL_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         }
     }')
 
-if echo "$CALL_RESPONSE" | jq -e '.result.content' > /dev/null 2>&1; then
+# Extract JSON from SSE format
+CALL_JSON=$(echo "$CALL_RESPONSE" | sed 's/^data: //')
+
+if echo "$CALL_JSON" | jq -e '.result.content' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ PASS: Successfully executed component_list tool${NC}"
-    echo "Response type: $(echo "$CALL_RESPONSE" | jq -r '.result.content[0].type')"
+    echo "Response type: $(echo "$CALL_JSON" | jq -r '.result.content[0].type')"
 else
     echo -e "${RED}✗ FAIL: Tool execution failed${NC}"
     echo "Response: $CALL_RESPONSE"
@@ -141,7 +161,9 @@ echo ""
 # TEST 5: resources/list finds manifest files
 echo -e "${YELLOW}TEST 5: resources/list exposes manifest files${NC}"
 RESOURCES_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
+    -c $COOKIE_JAR -b $COOKIE_JAR \
     -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":4,
@@ -149,12 +171,15 @@ RESOURCES_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         "params":{}
     }')
 
-if echo "$RESOURCES_RESPONSE" | jq -e '.result.resources' > /dev/null 2>&1; then
-    RESOURCE_COUNT=$(echo "$RESOURCES_RESPONSE" | jq '.result.resources | length')
+# Extract JSON from SSE format
+RESOURCES_JSON=$(echo "$RESOURCES_RESPONSE" | sed 's/^data: //')
+
+if echo "$RESOURCES_JSON" | jq -e '.result.resources' > /dev/null 2>&1; then
+    RESOURCE_COUNT=$(echo "$RESOURCES_JSON" | jq '.result.resources | length')
     echo -e "${GREEN}✓ PASS: resources/list endpoint functional (found $RESOURCE_COUNT resources)${NC}"
     if [ "$RESOURCE_COUNT" -gt 0 ]; then
         echo "Sample resources:"
-        echo "$RESOURCES_RESPONSE" | jq -r '.result.resources[:3] | .[] | "  - \(.uri)"'
+        echo "$RESOURCES_JSON" | jq -r '.result.resources[:3] | .[] | "  - \(.uri)"'
     fi
 else
     echo -e "${RED}✗ FAIL: resources/list endpoint failed${NC}"
@@ -166,10 +191,12 @@ echo ""
 # TEST 6: resources/read returns manifest content (if resources exist)
 if [ "$RESOURCE_COUNT" -gt 0 ]; then
     echo -e "${YELLOW}TEST 6: resources/read returns manifest content${NC}"
-    FIRST_URI=$(echo "$RESOURCES_RESPONSE" | jq -r '.result.resources[0].uri')
+    FIRST_URI=$(echo "$RESOURCES_JSON" | jq -r '.result.resources[0].uri')
 
     READ_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
+        -c $COOKIE_JAR -b $COOKIE_JAR \
         -H "Content-Type: application/json" \
+        -H "Accept: application/json, text/event-stream" \
         --data-raw "{
             \"jsonrpc\":\"2.0\",
             \"id\":5,
@@ -179,9 +206,12 @@ if [ "$RESOURCE_COUNT" -gt 0 ]; then
             }
         }")
 
-    if echo "$READ_RESPONSE" | jq -e '.result.contents' > /dev/null 2>&1; then
+    # Extract JSON from SSE format
+    READ_JSON=$(echo "$READ_RESPONSE" | sed 's/^data: //')
+
+    if echo "$READ_JSON" | jq -e '.result.contents' > /dev/null 2>&1; then
         echo -e "${GREEN}✓ PASS: Successfully read resource: $FIRST_URI${NC}"
-        CONTENT_TYPE=$(echo "$READ_RESPONSE" | jq -r '.result.contents[0].mimeType')
+        CONTENT_TYPE=$(echo "$READ_JSON" | jq -r '.result.contents[0].mimeType')
         echo "Content type: $CONTENT_TYPE"
     else
         echo -e "${RED}✗ FAIL: Failed to read resource${NC}"
