@@ -405,10 +405,10 @@ fn transform(
     let transform_rust_sdk = |str: &str| -> String {
         let path_or_version = {
             if let Some(rust_path) = &parameters.sdk_overrides.rust_path {
-                format!(r#"path: "{}""#, rust_path)
+                format!(r#"path = "{}""#, rust_path)
             } else {
                 format!(
-                    r#"version: "{}""#,
+                    r#"version = "{}""#,
                     parameters
                         .sdk_overrides
                         .rust_version
