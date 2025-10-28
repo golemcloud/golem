@@ -571,13 +571,11 @@ impl ResolvedWitApplication {
                 .any(|c| c.as_os_str() == OsStr::new("node_modules"))
             {
                 ensure_common_deps_for_tool(tools_with_ensured_common_deps, "node").await?;
-            } else {
-                if source_wit_dir
-                    .components()
-                    .any(|c| c.as_os_str() == OsStr::new("wasm32-wasip1"))
-                {
-                    ensure_common_deps_for_tool(tools_with_ensured_common_deps, "cargo").await?;
-                }
+            } else if source_wit_dir
+                .components()
+                .any(|c| c.as_os_str() == OsStr::new("wasm32-wasip1"))
+            {
+                ensure_common_deps_for_tool(tools_with_ensured_common_deps, "cargo").await?;
             }
         }
 
