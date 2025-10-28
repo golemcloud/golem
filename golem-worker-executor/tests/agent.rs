@@ -22,8 +22,7 @@ use golem_api_grpc::proto::golem::worker::v1::{
 };
 use golem_api_grpc::proto::golem::worker::{UnknownError, WorkerError};
 use golem_common::model::WorkerId;
-use golem_test_framework::config::TestDependencies;
-use golem_test_framework::dsl::TestDslUnsafe;
+use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
 use std::collections::{BTreeMap, HashMap};
@@ -39,18 +38,17 @@ async fn agent_self_rpc_is_not_allowed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("golem_it_agent_self_rpc").store().await;
+    let component = executor
+        .component(&executor.environment_id, "golem_it_agent_self_rpc")
+        .store()
+        .await?;
     let worker_id = executor
-        .start_worker(&component_id, "self-rpc-agent(\"worker-name\")")
-        .await;
+        .start_worker(&component.id, "self-rpc-agent(\"worker-name\")")
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -58,7 +56,7 @@ async fn agent_self_rpc_is_not_allowed(
             "golem-it:agent-self-rpc/self-rpc-agent.{self-rpc}",
             vec![],
         )
-        .await;
+        .await?;
 
     let_assert!(
         Err(Error::InternalError(WorkerExecutionError {
@@ -79,6 +77,8 @@ async fn agent_self_rpc_is_not_allowed(
         })) = result
     );
     assert!(error_details.contains("RPC calls to the same agent are not supported"));
+
+    Ok(())
 }
 
 #[test]
@@ -87,23 +87,20 @@ async fn agent_await_parallel_rpc_calls(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("golem_it_agent_rpc")
+    let component = executor
+        .component(&executor.environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .store()
-        .await;
+        .await?;
+
     let unique_id = context.redis_prefix();
     let worker_id = executor
-        .start_worker(&component_id, &format!("test-agent(\"{unique_id}\")"))
-        .await;
+        .start_worker(&component.id, &format!("test-agent(\"{unique_id}\")"))
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -111,11 +108,12 @@ async fn agent_await_parallel_rpc_calls(
             "golem-it:agent-rpc/test-agent.{run}",
             vec![20f64.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check!(result.is_ok());
+    Ok(())
 }
 
 #[test]
@@ -124,24 +122,19 @@ async fn agent_env_inheritance(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("golem_it_agent_rpc")
+    let component = executor
+        .component(&executor.environment_id, "golem_it_agent_rpc")
         .name("golem-it:agent-rpc")
         .with_env(vec![
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "2".to_string()),
         ])
-        .unique()
         .store()
-        .await;
+        .await?;
     let unique_id = context.redis_prefix();
 
     let mut env = HashMap::new();
@@ -150,15 +143,13 @@ async fn agent_env_inheritance(
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             &format!("test-agent(\"{unique_id}\")"),
             vec![],
             env,
             vec![],
         )
-        .await;
-
-    executor.log_output(&worker_id).await;
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -166,22 +157,17 @@ async fn agent_env_inheritance(
             "golem-it:agent-rpc/test-agent.{env-var-test}",
             vec![],
         )
-        .await;
+        .await?;
 
     let child_worker_id = WorkerId {
         component_id: worker_id.component_id.clone(),
         worker_name: "child-agent(0)".to_string(),
     };
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-    executor.check_oplog_is_queryable(&child_worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    executor.check_oplog_is_queryable(&child_worker_id).await?;
 
-    let (mut child_metadata, _) = executor
-        .get_worker_metadata(&child_worker_id)
-        .await
-        .expect("Could not get child metadata");
-
-    child_metadata.env.sort_by_key(|(k, _)| k.clone());
+    let child_metadata = executor.get_worker_metadata(&child_worker_id).await?;
 
     let mut parent_env_vars = BTreeMap::new();
     let mut child_env_vars = BTreeMap::new();
@@ -271,7 +257,7 @@ async fn agent_env_inheritance(
     );
     assert_eq!(
         child_metadata.env,
-        vec![
+        HashMap::from_iter(vec![
             ("ENV1".to_string(), "1".to_string()),
             ("ENV2".to_string(), "22".to_string()),
             ("ENV3".to_string(), "33".to_string()),
@@ -289,6 +275,8 @@ async fn agent_env_inheritance(
                 "GOLEM_WORKER_NAME".to_string(),
                 child_worker_id.worker_name.to_string()
             ),
-        ]
+        ])
     );
+
+    Ok(())
 }

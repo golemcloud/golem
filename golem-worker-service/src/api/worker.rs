@@ -28,7 +28,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::error::{ErrorBody, ErrorsBody};
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::public_oplog::OplogCursor;
-use golem_common::model::worker::WorkerCreationRequest;
+use golem_common::model::worker::{FlatWorkerMetadata, WorkerCreationRequest};
 use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter, WorkerId};
 use golem_common::{recorded_http_api_request, SafeDisplay};
 use golem_service_base::api_tags::ApiTags;
@@ -559,7 +559,7 @@ impl WorkerApi {
         component_id: Path<ComponentId>,
         worker_name: Path<String>,
         token: GolemSecurityScheme,
-    ) -> Result<Json<model::WorkerMetadata>> {
+    ) -> Result<Json<FlatWorkerMetadata>> {
         let auth = self.auth_service.authenticate_token(token.secret()).await?;
 
         let worker_id = self
@@ -581,7 +581,7 @@ impl WorkerApi {
         &self,
         worker_id: WorkerId,
         auth: AuthCtx,
-    ) -> Result<Json<model::WorkerMetadata>> {
+    ) -> Result<Json<FlatWorkerMetadata>> {
         let component = self
             .component_service
             .get_latest_by_id(&worker_id.component_id, &auth)

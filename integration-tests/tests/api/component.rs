@@ -28,6 +28,7 @@ use golem_common::model::plugin_registration::{
 };
 use golem_common::model::Empty;
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
+use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use test_r::{inherit_test_dep, test};

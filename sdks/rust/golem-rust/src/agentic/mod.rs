@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_wasm_rpc::AgentId;
+use golem_wasm::AgentId;
 
 mod agent;
 mod agent_impl;
