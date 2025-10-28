@@ -19,7 +19,6 @@ use crate::services::rdbms::{
     RdbmsTransactionStatus, RdbmsType,
 };
 use async_trait::async_trait;
-use dashmap::DashMap;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::StreamExt;
@@ -45,7 +44,7 @@ where
     rdbms_type: T,
     config: RdbmsConfig,
     pool_cache: Cache<RdbmsPoolKey, (), Arc<Pool<DB>>, Error>,
-    pool_workers_cache: DashMap<RdbmsPoolKey, HashSet<WorkerId>>,
+    pool_workers_cache: scc::HashMap<RdbmsPoolKey, HashSet<WorkerId>>,
 }
 
 impl<T, DB> SqlxRdbms<T, DB>
@@ -70,7 +69,7 @@ where
             },
             cache_name,
         );
-        let pool_workers_cache = DashMap::new();
+        let pool_workers_cache = scc::HashMap::new();
         Self {
             rdbms_type,
             config,
@@ -113,8 +112,10 @@ where
             .await?;
 
         self.pool_workers_cache
-            .entry(key.clone())
+            .entry_async(key.clone())
+            .await
             .or_default()
+            .get_mut()
             .insert(worker_id.clone());
 
         Ok(pool)
@@ -122,7 +123,7 @@ where
 
     #[allow(dead_code)]
     pub(crate) async fn remove_pool(&self, key: &RdbmsPoolKey) -> Result<bool, Error> {
-        let _ = self.pool_workers_cache.remove(key);
+        let _ = self.pool_workers_cache.remove_async(key).await;
         let pool = self.pool_cache.try_get(key).await;
         if let Some(pool) = pool {
             self.pool_cache.remove(key).await;
@@ -190,17 +191,18 @@ where
         self.record_metrics("create-connection", start, result)
     }
 
-    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
-        match self.pool_workers_cache.get_mut(key) {
-            Some(mut workers) => (*workers).remove(worker_id),
-            None => false,
-        }
+    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+        self.pool_workers_cache
+            .update_async(key, |_, workers| workers.remove(worker_id))
+            .await
+            .is_some()
     }
 
-    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
+    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool {
         self.pool_workers_cache
-            .get(key)
-            .is_some_and(|workers| workers.contains(worker_id))
+            .read_async(key, |_, workers| workers.contains(worker_id))
+            .await
+            .unwrap_or_default()
     }
 
     async fn execute(
@@ -423,12 +425,16 @@ where
         self.record_metrics("cleanup-transaction", start, result)
     }
 
-    fn status(&self) -> RdbmsStatus {
-        let pools: HashMap<RdbmsPoolKey, HashSet<WorkerId>> = self
-            .pool_workers_cache
-            .iter()
-            .map(|kv| (kv.key().clone(), kv.value().clone()))
-            .collect();
+    async fn status(&self) -> RdbmsStatus {
+        let mut pools = HashMap::new();
+
+        self.pool_workers_cache
+            .iter_async(|pool_key, worker_ids| {
+                pools.insert(pool_key.clone(), worker_ids.clone());
+                true
+            })
+            .await;
+
         RdbmsStatus { pools }
     }
 }

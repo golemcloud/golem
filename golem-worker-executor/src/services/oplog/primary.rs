@@ -231,16 +231,16 @@ impl OplogService for PrimaryOplogService {
         record_oplog_call("get_last_index");
 
         OplogIndex::from_u64(
-        self.indexed_storage
-            .with_entity("oplog", "get_last_index", "entry")
-            .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
-            .await
-            .unwrap_or_else(|err| {
-                panic!(
-                    "failed to get last oplog index for worker {owned_worker_id} from indexed storage: {err}"
-                )
-            })
-            .unwrap_or_default()
+            self.indexed_storage
+                .with_entity("oplog", "get_last_index", "entry")
+                .last_id(IndexedStorageNamespace::OpLog, &Self::oplog_key(&owned_worker_id.worker_id))
+                .await
+                .unwrap_or_else(|err| {
+                    panic!(
+                        "failed to get last oplog index for worker {owned_worker_id} from indexed storage: {err}"
+                    )
+                })
+                .unwrap_or_default()
         )
     }
 
@@ -633,13 +633,15 @@ impl Oplog for PrimaryOplog {
         state.add(entry).await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         let state = self.state.lock().await;
+        let before = state.length().await;
         state.drop_prefix(last_dropped_id).await;
         let remaining = state.length().await;
         if remaining == 0 {
             state.delete().await;
         }
+        before - remaining
     }
 
     async fn commit(&self, _level: CommitLevel) -> BTreeMap<OplogIndex, OplogEntry> {

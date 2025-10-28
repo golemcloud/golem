@@ -22,6 +22,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::common::{Empty, ResourceLimits};
+use golem_api_grpc::proto::golem::component::v1::GetLatestComponentRequest;
 use golem_api_grpc::proto::golem::worker::v1::{
     revert_worker_response, CancelInvocationRequest, CancelInvocationResponse,
     ConnectWorkerRequest, DeleteWorkerRequest, DeleteWorkerResponse, ForkWorkerRequest,
@@ -103,7 +104,16 @@ impl WorkerService for ForwardingWorkerService {
         request: LaunchNewWorkerRequest,
     ) -> crate::Result<LaunchNewWorkerResponse> {
         let account_id = self.cloud_service.get_account_id(token).await?;
-        let project_id = self.cloud_service.get_default_project(token).await?;
+        let component = self
+            .component_service
+            .get_latest_component_metadata(
+                token,
+                GetLatestComponentRequest {
+                    component_id: request.component_id,
+                },
+            )
+            .await?;
+        let project_id = component.project_id;
 
         let component_id = (*request
             .component_id
@@ -129,7 +139,7 @@ impl WorkerService for ForwardingWorkerService {
                 .await?
                 .create_worker(CreateWorkerRequest {
                     worker_id: Some(worker_id.clone()),
-                    project_id: Some(project_id.clone().into()),
+                    project_id,
                     component_version: latest_component_version,
                     args: request.args.clone(),
                     env: request.env.clone(),

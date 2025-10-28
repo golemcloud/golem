@@ -153,7 +153,6 @@ convert_case = "0.8.0"
 criterion = "0.5"
 crossterm = "0.28.1"
 darling = "0.20.11"
-dashmap = "6.1.0"
 derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 dir-diff = "0.3.3"
 dirs = "4.0.0"
@@ -283,7 +282,7 @@ system-interface = "0.27.3"
 tap = "1.0.1"
 tempfile = "3.18.0"
 terminal_size = "0.4.2"
-test-r = { version = "2.2.2", default-features = true }
+test-r = { version = "2.3.1", default-features = true }
 testcontainers = { version = "0.23.3" }
 testcontainers-modules = { version = "0.11.6", features = ["postgres", "redis", "minio", "mysql", ] }
 textwrap = "0.16.1"
@@ -345,6 +344,11 @@ wasmtime-wasi-http = { git = "https://github.com/golemcloud/wasmtime.git", branc
 
 [profile.dev]
 panic = "abort"
+
+[profile.dev-ci]
+inherits = "dev"
+incremental = false
+strip = "debuginfo"
 
 [profile.release]
 panic = "abort"

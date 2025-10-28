@@ -1385,37 +1385,34 @@ mod test {
             new_active_plugins: &HashSet<PluginInstallationId>,
         ) -> Self {
             let old_status = self.entries.first().unwrap().expected_status.clone();
-            self.add(
-                rounded(OplogEntry::successful_update(
-                    *update_description.target_version(),
-                    new_component_size,
-                    new_active_plugins.clone(),
-                )),
-                move |mut status| {
-                    let pending = status.pending_updates.pop_front();
-                    status.successful_updates.push(SuccessfulUpdateRecord {
-                        timestamp: pending.unwrap().timestamp,
-                        target_version: *update_description.target_version(),
-                    });
-                    status.component_size = new_component_size;
-                    status.component_version = *update_description.target_version();
-                    status.active_plugins = new_active_plugins.clone();
+            let entry = rounded(OplogEntry::successful_update(
+                *update_description.target_version(),
+                new_component_size,
+                new_active_plugins.clone(),
+            ));
+            self.add(entry.clone(), move |mut status| {
+                let _ = status.pending_updates.pop_front();
+                status.successful_updates.push(SuccessfulUpdateRecord {
+                    timestamp: entry.timestamp(),
+                    target_version: *update_description.target_version(),
+                });
+                status.component_size = new_component_size;
+                status.component_version = *update_description.target_version();
+                status.active_plugins = new_active_plugins.clone();
 
-                    if status.skipped_regions.is_overridden() {
-                        status.skipped_regions.merge_override();
-                        status.total_linear_memory_size = old_status.total_linear_memory_size;
-                        status.owned_resources = HashMap::new();
-                    }
+                if status.skipped_regions.is_overridden() {
+                    status.skipped_regions.merge_override();
+                    status.total_linear_memory_size = old_status.total_linear_memory_size;
+                    status.owned_resources = HashMap::new();
+                }
 
-                    if let UpdateDescription::SnapshotBased { target_version, .. } =
-                        update_description
-                    {
-                        status.component_version_for_replay = target_version;
-                    };
+                if let UpdateDescription::SnapshotBased { target_version, .. } = update_description
+                {
+                    status.component_version_for_replay = target_version;
+                };
 
-                    status
-                },
-            )
+                status
+            })
         }
 
         pub fn failed_update(self, update_description: UpdateDescription) -> Self {
