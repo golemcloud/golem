@@ -877,7 +877,6 @@ async fn multilayer_transfers_entries_after_limit_reached(
         if primary_length == expected_1 && secondary_length == expected_2 {
             break;
         }
-
         let elapsed = start.elapsed();
         if elapsed.as_secs() > 120 {
             panic!("Timeout");

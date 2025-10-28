@@ -2719,12 +2719,6 @@ impl WorkerEventStream {
     }
 }
 
-impl Drop for WorkerEventStream {
-    fn drop(&mut self) {
-        info!("Client disconnected");
-    }
-}
-
 impl Stream for WorkerEventStream {
     type Item = Result<golem::worker::LogEvent, Status>;
 

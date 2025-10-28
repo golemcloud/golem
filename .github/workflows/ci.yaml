@@ -14,166 +14,261 @@ concurrency:
 permissions:
   checks: write
   pull-requests: write
+  actions: read
+  contents: read
 
 env:
   BUILD_TARGET: "x86_64-unknown-linux-gnu"
 
 jobs:
-  build:
+  build-and-store:
     env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
           shared-key: debug
           cache-all-crates: true
           save-if: true
       - uses: davidB/rust-cargo-make@v1
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: nextest
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
       - name: Building all executables
         env:
           QUIET: true
-        run: cargo make --profile ci build
-        timeout-minutes: 45
-      - name: Check openapi is up to date
-        run: cargo make --profile ci check-openapi
-      - name: Check configs are up to date
-        run: cargo make --profile ci check-configs
+        run: cargo make --profile ci build-all-bins-including-tests
+        timeout-minutes: 15
+
+#      - name: Mount binary store
+#        uses: useblacksmith/stickydisk@v1
+#        with:
+#          key: golem-binaries-${{ github.run_id }}
+#          path: ~/golem-binaries-cache
+
+      - name: Packaging all binaries with cargo-nextest
+        run: |
+          mkdir -pv tmp
+          cargo nextest -v archive --archive-file tmp/golem-binaries.tar.zst --zstd-level -7 --cargo-profile dev-ci
+        timeout-minutes: 5
+
+      - name: Extract archive
+        run: |
+          mkdir tmp/golem-binaries
+          tar --zstd -xvf tmp/golem-binaries.tar.zst -C tmp/golem-binaries
+        timeout-minutes: 2
+
+#      - name: Move archive to sticky disk
+#        run: mv tmp/golem-binaries.tar.zst ~/golem-binaries-cache/golem-binaries.tar.zst
+
+      - name: Save packaged binaries to cache
+        uses: actions/cache/save@v4
+        with:
+          path: tmp/golem-binaries
+          key: golem-binaries-${{ github.run_id }}
+
+  check-clippy-and-format:
+    env:
+      CARGO_BUILD_JOBS: 10
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+      - name: Setup Rust
+        run: rustup update stable --no-self-update && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: v3-rust
+          shared-key: debug
+          cache-all-crates: true
+          save-if: false
+      - uses: davidB/rust-cargo-make@v1
+      - name: Purge v8 from cache
+        run: cargo make --profile ci clear-v8
+
       - name: Check formatting and clippy rules
         run: cargo make --profile ci check
 
   unit-tests-and-checks:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
+    timeout-minutes: 5
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: tmp/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/golem-binaries
+          key: golem-binaries-${{ github.run_id }}
+#      - name: Mount binary store
+#        uses: useblacksmith/stickydisk@v1
+#        with:
+#          key: golem-binaries-${{ github.run_id }}
+#          path: ~/golem-binaries-cache
+
+      - name: Apply binary archive
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+
+      - name: Copy required binaries to target # TODO: this should be encoded in the makefile
+        run: |
+          mkdir -pv target/debug
+          find target/nextest-archive
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/          
+
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
+      - name: Check openapi is up to date
+        run: cargo make --profile ci check-openapi
+      - name: Check configs are up to date
+        run: cargo make --profile ci check-configs
       - name: Unit tests
         run: cargo make --profile ci unit-tests
       - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v5
+        uses: ctrf-io/github-test-reporter@v1
         if: always()
         with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
+          report-path: "**/target/ctrf-*.json"
+          summary: true
+          summary-report: true
+          failed-report: true
+          slowest-report: true
+          github-report: true
+          # pull-request-report: true
+          flaky-report: true
+          collapse-large-reports: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   worker-tests:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: blacksmith-8vcpu-ubuntu-2204
+    needs: build-and-store
     strategy:
       fail-fast: false
       matrix:
         group:
-          - name: untagged
-          - name: rdbms-service
+          - name: misc
           - name: group1
           - name: group2
-          - name: group3
     name: worker-tests-${{ matrix.group.name }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
         with:
           redis-version: latest
           auto-start: false
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: tmp/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/golem-binaries
+          key: golem-binaries-${{ github.run_id }}
+#      - name: Mount binary store
+#        uses: useblacksmith/stickydisk@v1
+#        with:
+#          key: golem-binaries-${{ github.run_id }}
+#          path: ~/golem-binaries-cache
+
+      - name: Apply binary archive
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
+
       - name: Worker Executor integration tests
         run: cargo make --profile ci worker-executor-tests-${{ matrix.group.name }}
-        timeout-minutes: 40
+        timeout-minutes: 10
       - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v5
+        uses: ctrf-io/github-test-reporter@v1
         if: always()
         with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
+          report-path: "**/target/ctrf-*.json"
+          summary: true
+          summary-report: true
+          failed-report: true
+          slowest-report: true
+          github-report: true
+          # pull-request-report: true
+          flaky-report: true
+          collapse-large-reports: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   it:
     env:
       CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+    runs-on: ${{ matrix.group.runner || 'blacksmith-8vcpu-ubuntu-2204' }}
+    needs: build-and-store
     strategy:
       fail-fast: false
       matrix:
         group:
           - name: integration-tests-group1
-            description: "Full integration tests"
+            description: "IT #1"
           - name: integration-tests-group2
-            description: "Component service integration tests"
+            description: "IT #2"
           - name: integration-tests-group3
-            description: "Worker service integration tests"
-          - name: integration-tests-group4
-            description: "Base service integration tests"
-          - name: integration-tests-group5
-            description: "Sharding tests"
+            description: "IT #3"
           - name: api-tests
             description: "API tests"
-          - name: cli-integration-tests
-            description: "CLI tests"
+          - name: cli-integration-tests-group1
+            description: "CLI tests #1"
+          - name: cli-integration-tests-group2
+            description: "CLI tests #2"
+            runner: blacksmith-16vcpu-ubuntu-2204
+          - name: cli-integration-tests-group3
+            description: "CLI tests #3"
+            runner: blacksmith-16vcpu-ubuntu-2204
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
-        with:
-          prefix-key: v3-rust
-          shared-key: debug
-          cache-all-crates: true
-          save-if: false
       - uses: davidB/rust-cargo-make@v1
       - name: Setup Redis
         uses: shogo82148/actions-setup-redis@v1.35.1
@@ -182,16 +277,42 @@ jobs:
           auto-start: false
 
       - uses: cargo-bins/cargo-binstall@main
-        if: matrix.group.name == 'cli-integration-tests'
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
       - name: Install cargo-component
-        if: matrix.group.name == 'cli-integration-tests'
-        run: cargo install cargo-component@0.21.1
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
+        run: cargo binstall --force cargo-component@0.21.1
       - name: Install wasm-tools
-        if: matrix.group.name == 'cli-integration-tests'
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wasm-tools@1.227.1
       - name: Install wit-bindgen
-        if: matrix.group.name == 'cli-integration-tests'
+        if: startsWith(matrix.group.name, 'cli-integration-tests')
         run: cargo binstall --force --locked wit-bindgen-cli@0.40.0
+
+      - name: Install cargo-test-r
+        run: cargo install -f --locked --git https://github.com/vigoo/test-r --branch cargo-test-r cargo-test-r # TODO: use cargo-binstall
+#      - name: Restore binary archive
+#        uses: actions/download-artifact@v4
+#        with:
+#          name: all-bins-including-tests
+#          path: tmp/golem-binaries.tar.zst
+      - name: Restore packaged binaries to cache
+        uses: actions/cache/restore@v4
+        with:
+          path: tmp/golem-binaries
+          key: golem-binaries-${{ github.run_id }}
+#      - name: Mount binary store
+#        uses: useblacksmith/stickydisk@v1
+#        with:
+#          key: golem-binaries-${{ github.run_id }}
+#          path: ~/golem-binaries-cache
+
+      - name: Apply binary archive
+        run: cargo-test-r reuse-nextest-archive --archive-file tmp/golem-binaries
+
+      - name: Copy required binaries to target # TODO: this should be encoded in the makefile
+        run: |
+          mkdir -pv target/debug
+          find target/nextest-archive/target/dev-ci -maxdepth 1 -type f | xargs mv -t target/debug/
 
       - name: Purge v8 from cache
         run: cargo make --profile ci clear-v8
@@ -199,14 +320,35 @@ jobs:
         env:
           QUIET: true
         run: cargo make --profile ci ${{ matrix.group.name }}
-        timeout-minutes: 45
+        timeout-minutes: 15
       - name: Publish Test Report
-        uses: mikepenz/action-junit-report@v5
+        uses: ctrf-io/github-test-reporter@v1
         if: always()
         with:
-          report_paths: "**/target/report-*.xml"
-          detailed_summary: true
-          include_passed: true
+          report-path: "**/target/ctrf-*.json"
+          summary: true
+          summary-report: true
+          failed-report: true
+          slowest-report: true
+          github-report: true
+          # pull-request-report: true
+          flaky-report: true
+          collapse-large-reports: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+#  cleanup:
+#    runs-on: blacksmith
+#    needs:
+#      - worker-tests
+#      - it
+#      - unit-tests-and-checks
+#    if: always()
+#    steps:
+#      - name: Delete sticky disk
+#        uses: useblacksmith/stickydisk-delete@v1
+#        with:
+#          delete-key: golem-binaries-${{ github.run_id }}
 
   wasm-rpc-stub:
     runs-on: blacksmith
@@ -214,17 +356,15 @@ jobs:
       CARGO_BUILD_JOBS: 10
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
-      - name: Fetch tag
-        run: git fetch origin --deepen=1
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
+      - uses: cargo-bins/cargo-binstall@main
       - name: Install cargo-component
-        run: cargo install --force --locked cargo-component@0.21.1
-      - uses: useblacksmith/rust-cache@v3
+        run: cargo binstall --force cargo-component@0.21.1
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
           shared-key: debug
@@ -241,8 +381,8 @@ jobs:
   build-golem-rust:
     runs-on: blacksmith
     steps:
-      - uses: actions/checkout@v4
-      - uses: useblacksmith/rust-cache@v3
+      - uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-golem-rust
           shared-key: debug
@@ -266,7 +406,7 @@ jobs:
   build-golem-ts:
     runs-on: blacksmith
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: actions/setup-node@v4
         with:
           node-version: "20.x"
@@ -306,12 +446,12 @@ jobs:
     name: docker-targets-build (${{ matrix.platform.platform }})
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+
       - name: Prepare
         run: |
           platform=${{ matrix.platform.platform }}
@@ -321,7 +461,7 @@ jobs:
       - uses: davidB/rust-cargo-make@v1
       - name: Install Rust Target
         run: rustup target add ${{ matrix.platform.target }}
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
           shared-key: debug
@@ -342,7 +482,6 @@ jobs:
         env:
           PLATFORM_OVERRIDE: ${{ matrix.platform.name }}
         run: cargo make --profile ci package-release
-
       - uses: actions/upload-artifact@v4
         name: Upload Targets
         with:
@@ -356,12 +495,12 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -461,12 +600,12 @@ jobs:
     if: github.event_name == 'push' && github.ref_type == 'tag'
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+
       - name: Prepare
         run: |
           echo "PLATFORMS=linux/amd64,linux/arm64" >> $GITHUB_ENV
@@ -547,26 +686,26 @@ jobs:
 
   publish:
     needs:
-      - build
+      - check-clippy-and-format
       - unit-tests-and-checks
       - wasm-rpc-stub
       - worker-tests
       - it
     if: "startsWith(github.ref, 'refs/tags/v')"
     env:
-      CARGO_BUILD_JOBS: 10
-    runs-on: blacksmith-16vcpu-ubuntu-2204
+      CARGO_BUILD_JOBS: 20
+    runs-on: blacksmith-32vcpu-ubuntu-2204
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v3-rust
           shared-key: release
@@ -593,9 +732,9 @@ jobs:
           - golem
         cfg:
           - rust-target: x86_64-unknown-linux-gnu
-            os: blacksmith-16vcpu-ubuntu-2204
+            os: blacksmith-32vcpu-ubuntu-2204
           - rust-target: aarch64-unknown-linux-gnu
-            os: blacksmith-16vcpu-ubuntu-2204
+            os: blacksmith-32vcpu-ubuntu-2204
             cross: true
           - rust-target: x86_64-apple-darwin
             os: macos-latest
@@ -611,18 +750,18 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
-          submodules: recursive
       - name: Fetch tag
         run: git fetch origin --deepen=1
+
       - name: Setup Rust
         run: rustup update stable --no-self-update && rustup default stable && rustup target add ${{ matrix.cfg.rust-target }}
       - uses: davidB/rust-cargo-make@v1
-      - uses: useblacksmith/rust-cache@v3
+      - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: "v0-rust"
           shared-key: release-${{ matrix.cfg.rust-target }}

@@ -125,7 +125,7 @@ impl ExternalOperations<Self> for DebugContext {
         store: &mut (impl AsContextMut<Data = Self> + Send),
         instance: &Instance,
         refresh_replay_target: bool,
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::resume_replay(store, instance, refresh_replay_target).await
     }
 
@@ -133,7 +133,7 @@ impl ExternalOperations<Self> for DebugContext {
         worker_id: &WorkerId,
         instance: &Instance,
         store: &mut (impl AsContextMut<Data = Self> + Send),
-    ) -> Result<RetryDecision, WorkerExecutorError> {
+    ) -> Result<Option<RetryDecision>, WorkerExecutorError> {
         DurableWorkerCtx::<Self>::prepare_instance(worker_id, instance, store).await
     }
 

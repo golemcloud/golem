@@ -231,11 +231,15 @@ mod tests {
         let rx1_events = Arc::new(Mutex::new(Vec::<InternalWorkerEvent>::new()));
         let rx2_events = Arc::new(Mutex::new(Vec::<InternalWorkerEvent>::new()));
 
+        let (gate1_tx, gate1_rx) = tokio::sync::oneshot::channel();
+
         let svc1 = svc.clone();
         let rx1_events_clone = rx1_events.clone();
         let task1 = tokio::task::spawn(
             async move {
                 let rx1 = svc1.receiver();
+                gate1_tx.send(()).unwrap();
+
                 drop(svc1);
                 rx1.to_stream()
                     .for_each(|item| async {
@@ -247,6 +251,8 @@ mod tests {
             }
             .in_current_span(),
         );
+
+        gate1_rx.await.unwrap();
 
         for b in 1..=4u8 {
             svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);
@@ -262,12 +268,12 @@ mod tests {
 
         let svc2 = svc.clone();
         let rx2_events_clone = rx2_events.clone();
-        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let (gate2_tx, gate2_rx) = tokio::sync::oneshot::channel();
         let task2 = tokio::task::spawn(
             async move {
                 let rx2 = svc2.receiver();
                 drop(svc2);
-                ready_tx.send(()).unwrap();
+                gate2_tx.send(()).unwrap();
                 rx2.to_stream()
                     .for_each(|item| async {
                         if let Ok(event) = item {
@@ -279,7 +285,7 @@ mod tests {
             .in_current_span(),
         );
 
-        ready_rx.await.unwrap();
+        gate2_rx.await.unwrap();
 
         for b in 5..=8u8 {
             svc.emit_event(InternalWorkerEvent::stdout(vec![b]), true);

@@ -514,11 +514,11 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .join(format!("{wasm_name}.wasm"));
         let component_name = if unique {
             let uuid = Uuid::new_v4();
-            format!("{name}-{uuid}")
+            format!("{name}---{uuid}")
         } else {
             match component_type {
                 ComponentType::Durable => name.to_string(),
-                ComponentType::Ephemeral => format!("{name}-ephemeral"),
+                ComponentType::Ephemeral => format!("{name}---ephemeral"),
             }
         };
         let dynamic_linking = HashMap::from_iter(
@@ -537,6 +537,10 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
         } else {
             source_path
         };
+
+        // Even though the APIs accept `Option<ProjectId>`, applying `self.default_project_id`
+        // here makes it possible to force a different default in tests (for example, one per test case)
+        let project_id = Some(project_id.unwrap_or_else(|| self.default_project_id.clone()));
 
         let component = {
             if unique {
@@ -695,12 +699,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesDsl<Deps> {
             .map_item(|i| i.map_err(widen_infallible))
             .map_error(widen_infallible);
 
-        let project_id = self
-            .deps
-            .cloud_service()
-            .get_default_project(&self.token)
-            .await
-            .expect("Failed to get default project");
+        let project_id = self.default_project_id.clone();
         self.deps
             .initial_component_files_service()
             .put_if_not_exists(&project_id, stream)
