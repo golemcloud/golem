@@ -236,7 +236,7 @@ pub fn render_template_instructions(
     transform(
         &template.instructions,
         parameters,
-        &vec![Transform::PackageAndComponent],
+        &[Transform::PackageAndComponent],
     )
 }
 
@@ -463,7 +463,7 @@ fn transform(
 }
 
 fn file_name_transform(str: impl AsRef<str>, parameters: &TemplateParameters) -> String {
-    transform(str, parameters, &vec![Transform::PackageAndComponent])
+    transform(str, parameters, &[Transform::PackageAndComponent])
         .replace("Cargo.toml._", "Cargo.toml")
     // HACK because cargo package ignores every subdirectory containing a Cargo.toml
 }
