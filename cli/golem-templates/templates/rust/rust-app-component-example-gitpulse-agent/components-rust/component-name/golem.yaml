@@ -58,5 +58,3 @@ httpApi:
   #   - host: localhost:9006
   #     definitions:
   #     - component-name
-
-  # golem-app-manifest-component-hints

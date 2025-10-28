@@ -52,7 +52,7 @@ use golem_client::api::{AccountClientLive as AccountClientCloud, LoginClientLive
 use golem_client::{Context as ContextCloud, Security};
 use golem_common::model::component_metadata::ComponentMetadata;
 use golem_rib_repl::ReplComponentDependencies;
-use golem_templates::model::{ComposableAppGroupName, GuestLanguage};
+use golem_templates::model::{ComposableAppGroupName, GuestLanguage, SdkOverrides};
 use golem_templates::ComposableAppTemplate;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -86,6 +86,7 @@ pub struct Context {
     dev_mode: bool,
     server_no_limit_change: bool,
     should_colorize: bool,
+    template_sdk_overrides: SdkOverrides,
     #[allow(unused)]
     start_local_server: Box<dyn Fn() -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>,
 
@@ -119,6 +120,15 @@ impl Context {
         let local_server_auto_start = global_flags.local_server_auto_start;
         let show_sensitive = global_flags.show_sensitive;
         let server_no_limit_change = global_flags.server_no_limit_change;
+        let template_sdk_overrides = SdkOverrides {
+            rust_path: global_flags
+                .golem_rust_path
+                .as_ref()
+                .map(|p| p.to_string_lossy().to_string()),
+            rust_version: global_flags.golem_rust_version.clone(),
+            ts_packages_path: global_flags.golem_ts_packages_path.clone(),
+            ts_version: global_flags.golem_ts_version.clone(),
+        };
 
         let mut yes = global_flags.yes;
         let dev_mode = global_flags.dev_mode;
@@ -231,6 +241,7 @@ impl Context {
             show_sensitive,
             server_no_limit_change,
             should_colorize: SHOULD_COLORIZE.should_colorize(),
+            template_sdk_overrides,
             start_local_server,
             client_config,
             golem_clients: tokio::sync::OnceCell::new(),
@@ -491,6 +502,10 @@ impl Context {
     ) -> &BTreeMap<GuestLanguage, BTreeMap<ComposableAppGroupName, ComposableAppTemplate>> {
         self.templates
             .get_or_init(|| golem_templates::all_composable_app_templates(dev_mode))
+    }
+
+    pub fn template_sdk_overrides(&self) -> &SdkOverrides {
+        &self.template_sdk_overrides
     }
 
     pub async fn select_account_by_email_or_error(

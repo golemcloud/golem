@@ -323,6 +323,3 @@ dependencies:
   ## Tavily
   # - type: wasm
   #   url: https://github.com/golemcloud/golem-ai/releases/download/v0.3.0/golem_web_search_tavily.wasm
-
-
-# golem-app-manifest-component-hints
