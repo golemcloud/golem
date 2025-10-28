@@ -119,7 +119,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                         _ => panic!("Currently only ComponentModel ElementValue is supported"),
                     };
 
-                    let #ident = golem_rust::agentic::AgentArg::from_wit_value(
+                    let #ident = golem_rust::agentic::Schema::from_wit_value(
                         wit_value
                     ).expect("internal error, failed to convert wit value to expected type");
                 }
@@ -134,7 +134,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                 #method_name => {
                     #(#method_param_extraction)*
                     let result = self.#ident(#(#param_idents),*);
-                    let wit_value = <_ as golem_rust::agentic::AgentArg>::to_wit_value(result);
+                    let wit_value = <_ as golem_rust::agentic::Schema>::to_wit_value(result);
                     let element_value = golem_rust::golem_agentic::golem::agent::common::ElementValue::ComponentModel(wit_value);
                     golem_rust::golem_agentic::golem::agent::common::DataValue::Tuple(vec![element_value])
                 }
@@ -210,7 +210,7 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
                 _ => panic!("Currently only ComponentModel ElementValue is supported"),
             };
 
-            let #ident = golem_rust::agentic::AgentArg::from_wit_value(wit_value).expect("internal error, failed to convert constructor argument");
+            let #ident = golem_rust::agentic::Schema::from_wit_value(wit_value).expect("internal error, failed to convert constructor argument");
         }
     });
 
@@ -237,10 +237,12 @@ pub fn agent_implementation_impl(_attrs: TokenStream, item: TokenStream) -> Toke
         }
     };
 
-    let trait_name_str_kebab = to_kebab_case(&trait_name_str_raw);
+    let trait_name_str_kebab = to_kebab_case(trait_name_str_raw.as_str());
 
-    let register_initiator_fn_name =
-        format_ident!("register_agent_initiator_{}", trait_name_str_kebab);
+    let register_initiator_fn_name = format_ident!(
+        "register_agent_initiator_{}",
+        trait_name_str_raw.to_lowercase()
+    );
 
     let register_initiator_fn = quote! {
         #[::ctor::ctor]
@@ -269,9 +271,9 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
     let fields = match &input.data {
         Data::Struct(data_struct) => match &data_struct.fields {
             Fields::Named(named_fields) => &named_fields.named,
-            _ => panic!("AgentArg can only be derived for structs with named fields"),
+            _ => panic!("Schema can only be derived for structs with named fields"),
         },
-        _ => panic!("AgentArg can only be derived for structs"),
+        _ => panic!("Schema can only be derived for structs"),
     };
 
     let field_idents_vec: Vec<proc_macro2::Ident> = fields
@@ -283,13 +285,14 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
         .iter()
         .map(|ident| ident.to_string())
         .collect();
+
     let field_types: Vec<_> = fields.iter().map(|f| &f.ty).collect();
 
     let to_value_fields: Vec<_> = field_idents_vec
         .iter()
         .map(|f| {
             quote! {
-                golem_rust::agentic::AgentArg::to_value(&self.#f)
+                golem_rust::agentic::Schema::to_value(self.#f)
             }
         })
         .collect();
@@ -299,7 +302,7 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
         quote! {
             golem_wasm::analysis::NameTypePair {
                 name: #name.to_string(),
-                typ: golem_wasm::analysis::AnalysedType::from(<#ty as golem_agentic::ToWitType>::get_wit_type()),
+                typ: golem_wasm::analysis::AnalysedType::from(<#ty as golem_rust::agentic::Schema>::get_wit_type()),
             }
         }
     }).collect();
@@ -311,7 +314,7 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
             let field_name = &field_names[i];
             let idx = syn::Index::from(i);
             quote! {
-                let #ident = golem_rust::agentic::FromValue::from_value(values[#idx].clone())
+                let #ident = golem_rust::agentic::Schema::from_value(values[#idx].clone())
                     .map_err(|_| format!("Failed to parse field '{}'", #field_name))?;
             }
         })
@@ -321,20 +324,20 @@ pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
 
     let expanded = quote! {
      impl golem_wasm::IntoValue for #struct_name {
-         fn to_value(&self) -> golem_wasm::Value {
+         fn into_value(self) -> golem_wasm::Value {
             golem_wasm::Value::Record(vec![
                  #(#to_value_fields),*
              ])
          }
 
-         fn get_type() -> golem_wasm::WitType {
+         fn get_type() -> golem_wasm::analysis::AnalysedType {
             golem_wasm::analysis::analysed_type::record(vec![
                 #(#wit_type_fields),*
             ])
         }
      }
 
-     impl golem_agentic::FromValue for #struct_name {
+     impl golem_rust::agentic::FromValue for #struct_name {
          fn from_value(value: golem_wasm::Value) -> Result<Self, String> {
              match value {
                  golem_wasm::Value::Record(values) => {
@@ -432,7 +435,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
                         };
                         let ty = &pat_type.ty;
                         parameter_types.push(quote! {
-                            (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
+                            (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::Schema>::get_wit_type()))
                         });
                     }
                 }
@@ -442,7 +445,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
                     syn::ReturnType::Default => (),
                     syn::ReturnType::Type(_, ty) => {
                         result_type.push(quote! {
-                            ("return-value".to_string(),   golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
+                            ("return-value".to_string(),   golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::Schema>::get_wit_type()))
                         });
                     }
                 };
@@ -478,7 +481,7 @@ fn get_agent_type(item_trait: &syn::ItemTrait) -> proc_macro2::TokenStream {
 
                 let ty = &pat_type.ty;
                 constructor_parameter_types.push(quote! {
-                    (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::AgentArg>::get_wit_type()))
+                    (#param_name.to_string(), golem_rust::golem_agentic::golem::agent::common::ElementSchema::ComponentModel(<#ty as ::golem_rust::agentic::Schema>::get_wit_type()))
                 });
             }
         }

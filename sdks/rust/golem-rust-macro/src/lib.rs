@@ -33,7 +33,7 @@ pub fn derive_from_value_and_type(input: TokenStream) -> TokenStream {
     value::derive_from_value_and_type(input)
 }
 
-#[proc_macro_derive(AgentArg)]
+#[proc_macro_derive(Schema)]
 pub fn derive_agent_arg(input: TokenStream) -> TokenStream {
     agentic::derive_agent_arg(input)
 }

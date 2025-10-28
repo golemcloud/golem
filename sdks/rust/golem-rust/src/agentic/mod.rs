@@ -13,12 +13,12 @@
 // limitations under the License.
 
 pub use agent::*;
-pub use agent_arg::*;
+pub use agent_arg_schema::*;
 pub use agent_initiator::*;
 pub use agent_registry::*;
 
 mod agent;
-mod agent_arg;
+mod agent_arg_schema;
 mod agent_impl;
 mod agent_initiator;
 mod agent_registry;

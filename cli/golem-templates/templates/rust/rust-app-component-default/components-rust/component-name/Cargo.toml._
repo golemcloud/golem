@@ -13,6 +13,7 @@ path = "src/lib.rs"
 
 ctor = { workspace = true }
 golem-rust = { workspace = true }
+golem-wasm = { workspace = true }
 reqwest = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

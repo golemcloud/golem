@@ -2,12 +2,19 @@ use golem_wasm::IntoValue;
 use golem_wasm::WitType;
 use golem_wasm::WitValue;
 
-pub trait AgentArg: IntoValue + FromValue {
+pub trait Schema: IntoValue + FromValue {
     fn to_value(self) -> golem_wasm::Value
     where
         Self: Sized,
     {
         IntoValue::into_value(self)
+    }
+
+    fn from_value(value: golem_wasm::Value) -> Result<Self, String>
+    where
+        Self: Sized,
+    {
+        FromValue::from_value(value)
     }
 
     fn from_wit_value(value: WitValue) -> Result<Self, String>
@@ -35,7 +42,7 @@ pub trait AgentArg: IntoValue + FromValue {
     }
 }
 
-impl<T: IntoValue + FromValue> AgentArg for T {}
+impl<T: IntoValue + FromValue> Schema for T {}
 
 pub trait FromValue {
     fn from_value(value: golem_wasm::Value) -> Result<Self, String>
