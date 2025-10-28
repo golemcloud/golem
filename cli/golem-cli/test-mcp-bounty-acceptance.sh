@@ -70,10 +70,11 @@ else
 fi
 echo ""
 
-# TEST 2: HTTP JSON-RPC endpoint responds to requests (with session cookie)
+# TEST 2: HTTP JSON-RPC endpoint responds to requests (capture session ID)
 echo -e "${YELLOW}TEST 2: HTTP JSON-RPC endpoint responds to requests${NC}"
-RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
-    -c $COOKIE_JAR -b $COOKIE_JAR \
+
+# Initialize and capture session ID from response header
+INIT_RESPONSE=$(curl -s -D /tmp/mcp-headers.txt -X POST http://localhost:$TEST_PORT/mcp \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
     --data-raw '{
@@ -87,8 +88,16 @@ RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         }
     }')
 
+# Extract session ID from response headers
+SESSION_ID=$(grep -i "mcp-session-id:" /tmp/mcp-headers.txt | cut -d: -f2 | tr -d ' \r\n')
+if [ -z "$SESSION_ID" ]; then
+    echo -e "${RED}✗ FAIL: No session ID returned${NC}"
+    exit 1
+fi
+echo "Session ID: $SESSION_ID"
+
 # Extract JSON from SSE format (remove "data: " prefix)
-JSON_RESPONSE=$(echo "$RESPONSE" | sed 's/^data: //')
+JSON_RESPONSE=$(echo "$INIT_RESPONSE" | sed 's/^data: //')
 
 if echo "$JSON_RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ PASS: Server responds to JSON-RPC requests${NC}"
@@ -100,14 +109,26 @@ else
 fi
 echo ""
 
-# TEST 3: tools/list exposes ALL CLI commands (90+)
-echo -e "${YELLOW}TEST 3: tools/list exposes ALL CLI commands as MCP tools${NC}"
-# Note: Server is already initialized from TEST 2, but some MCP servers are stateless
-# If this fails, we may need to send initialize again or keep session state
-TOOLS_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
-    -c $COOKIE_JAR -b $COOKIE_JAR \
+# Send initialized notification (required by MCP protocol)
+echo "Sending initialized notification..."
+curl -s -X POST http://localhost:$TEST_PORT/mcp \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
+    -H "mcp-session-id: $SESSION_ID" \
+    --data-raw '{
+        "jsonrpc":"2.0",
+        "method":"notifications/initialized",
+        "params":{}
+    }' > /dev/null
+echo "Initialized notification sent"
+echo ""
+
+# TEST 3: tools/list exposes ALL CLI commands (90+)
+echo -e "${YELLOW}TEST 3: tools/list exposes ALL CLI commands as MCP tools${NC}"
+TOOLS_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
+    -H "Content-Type: application/json" \
+    -H "Accept: application/json, text/event-stream" \
+    -H "mcp-session-id: $SESSION_ID" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":2,
@@ -132,9 +153,9 @@ echo ""
 # TEST 4: tools/call executes CLI commands successfully
 echo -e "${YELLOW}TEST 4: tools/call executes CLI commands successfully${NC}"
 CALL_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
-    -c $COOKIE_JAR -b $COOKIE_JAR \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
+    -H "mcp-session-id: $SESSION_ID" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":3,
@@ -161,9 +182,9 @@ echo ""
 # TEST 5: resources/list finds manifest files
 echo -e "${YELLOW}TEST 5: resources/list exposes manifest files${NC}"
 RESOURCES_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
-    -c $COOKIE_JAR -b $COOKIE_JAR \
     -H "Content-Type: application/json" \
     -H "Accept: application/json, text/event-stream" \
+    -H "mcp-session-id: $SESSION_ID" \
     --data-raw '{
         "jsonrpc":"2.0",
         "id":4,
@@ -194,9 +215,9 @@ if [ "$RESOURCE_COUNT" -gt 0 ]; then
     FIRST_URI=$(echo "$RESOURCES_JSON" | jq -r '.result.resources[0].uri')
 
     READ_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
-        -c $COOKIE_JAR -b $COOKIE_JAR \
         -H "Content-Type: application/json" \
         -H "Accept: application/json, text/event-stream" \
+        -H "mcp-session-id: $SESSION_ID" \
         --data-raw "{
             \"jsonrpc\":\"2.0\",
             \"id\":5,
