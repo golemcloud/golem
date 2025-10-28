@@ -96,8 +96,8 @@ if [ -z "$SESSION_ID" ]; then
 fi
 echo "Session ID: $SESSION_ID"
 
-# Extract JSON from SSE format (remove "data: " prefix)
-JSON_RESPONSE=$(echo "$INIT_RESPONSE" | sed 's/^data: //')
+# Extract JSON from SSE format (skip event ID line, extract data line)
+JSON_RESPONSE=$(echo "$INIT_RESPONSE" | grep '^data: ' | sed 's/^data: //')
 
 if echo "$JSON_RESPONSE" | jq -e '.result' > /dev/null 2>&1; then
     echo -e "${GREEN}✓ PASS: Server responds to JSON-RPC requests${NC}"
@@ -136,8 +136,8 @@ TOOLS_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         "params":{}
     }')
 
-# Extract JSON from SSE format
-TOOLS_JSON=$(echo "$TOOLS_RESPONSE" | sed 's/^data: //')
+# Extract JSON from SSE format (skip event ID line, extract data line)
+TOOLS_JSON=$(echo "$TOOLS_RESPONSE" | grep '^data: ' | sed 's/^data: //')
 TOOL_COUNT=$(echo "$TOOLS_JSON" | jq '.result.tools | length')
 
 if [ "$TOOL_COUNT" -ge 90 ]; then
@@ -161,16 +161,16 @@ CALL_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         "id":3,
         "method":"tools/call",
         "params":{
-            "name":"component_list",
+            "name":"component_templates",
             "arguments":{}
         }
     }')
 
-# Extract JSON from SSE format
-CALL_JSON=$(echo "$CALL_RESPONSE" | sed 's/^data: //')
+# Extract JSON from SSE format (skip event ID line, extract data line)
+CALL_JSON=$(echo "$CALL_RESPONSE" | grep '^data: ' | sed 's/^data: //')
 
 if echo "$CALL_JSON" | jq -e '.result.content' > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ PASS: Successfully executed component_list tool${NC}"
+    echo -e "${GREEN}✓ PASS: Successfully executed component_templates tool${NC}"
     echo "Response type: $(echo "$CALL_JSON" | jq -r '.result.content[0].type')"
 else
     echo -e "${RED}✗ FAIL: Tool execution failed${NC}"
@@ -192,8 +192,8 @@ RESOURCES_RESPONSE=$(curl -s -X POST http://localhost:$TEST_PORT/mcp \
         "params":{}
     }')
 
-# Extract JSON from SSE format
-RESOURCES_JSON=$(echo "$RESOURCES_RESPONSE" | sed 's/^data: //')
+# Extract JSON from SSE format (skip event ID line, extract data line)
+RESOURCES_JSON=$(echo "$RESOURCES_RESPONSE" | grep '^data: ' | sed 's/^data: //')
 
 if echo "$RESOURCES_JSON" | jq -e '.result.resources' > /dev/null 2>&1; then
     RESOURCE_COUNT=$(echo "$RESOURCES_JSON" | jq '.result.resources | length')
@@ -227,8 +227,8 @@ if [ "$RESOURCE_COUNT" -gt 0 ]; then
             }
         }")
 
-    # Extract JSON from SSE format
-    READ_JSON=$(echo "$READ_RESPONSE" | sed 's/^data: //')
+    # Extract JSON from SSE format (skip event ID line, extract data line)
+    READ_JSON=$(echo "$READ_RESPONSE" | grep '^data: ' | sed 's/^data: //')
 
     if echo "$READ_JSON" | jq -e '.result.contents' > /dev/null 2>&1; then
         echo -e "${GREEN}✓ PASS: Successfully read resource: $FIRST_URI${NC}"
