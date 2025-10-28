@@ -14,14 +14,14 @@
 
 // use crate::gateway_api_definition::{ApiDefinitionId, ApiVersion};
 // use crate::gateway_api_deployment::ApiSite;
-use golem_common::model::worker::FlatWorkerMetadata;
+use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::ScanCursor;
 use poem_openapi::Object;
 use std::fmt::Debug;
 
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, Object)]
 pub struct WorkersMetadataResponse {
-    pub workers: Vec<FlatWorkerMetadata>,
+    pub workers: Vec<WorkerMetadataDto>,
     pub cursor: Option<ScanCursor>,
 }
 

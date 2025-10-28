@@ -14,9 +14,10 @@
 
 use crate::compatibility::v1::{backward_compatible, backward_compatible_custom};
 use goldenfile::Mint;
-use golem_common::base_model::{
-    ComponentId, OplogIndex, PluginInstallationId, ProjectId, PromiseId, WorkerId,
-};
+use golem_common::base_model::{OplogIndex, PromiseId, WorkerId};
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentId, ComponentRevision, PluginPriority};
+use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
     AttributeValue, InvocationContextStack, SpanId, TraceId,
 };
@@ -26,8 +27,8 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{
-    AccountId, IdempotencyKey, OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp,
-    WorkerInvocation, WorkerResourceDescription,
+    IdempotencyKey, OwnedWorkerId, RetryConfig, ScheduledAction, Timestamp, WorkerInvocation,
+    WorkerResourceDescription,
 };
 use golem_common::serialization::deserialize;
 use golem_wasm::wasmtime::ResourceTypeId;
@@ -36,35 +37,27 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 use test_r::test;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 #[test]
 pub fn scheduled_action() {
     let sa1 = ScheduledAction::CompletePromise {
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
-        project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+        account_id: AccountId(uuid!("f863c027-9b07-4c58-b69b-c5968c7d9de1")),
+        environment_id: EnvironmentId(uuid!("63338367-fc09-4b7a-9fda-976df23d610e")),
         promise_id: PromiseId {
             worker_id: WorkerId {
-                component_id: ComponentId(
-                    Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-                ),
+                component_id: ComponentId(uuid!("4B29BF7C-13F6-4E37-AC03-830B81EAD478")),
                 worker_name: "worker_name".to_string(),
             },
             oplog_idx: OplogIndex::from_u64(100),
         },
     };
     let sa2 = ScheduledAction::ArchiveOplog {
-        account_id: AccountId {
-            value: "account_id".to_string(),
-        },
+        account_id: AccountId(uuid!("c1803a1f-ecb7-4278-aada-031467eff156")),
         owned_worker_id: OwnedWorkerId {
-            project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
+            environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
             worker_id: WorkerId {
-                component_id: ComponentId(
-                    Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-                ),
+                component_id: ComponentId(uuid!("4B29BF7C-13F6-4E37-AC03-830B81EAD478")),
                 worker_name: "worker_name".to_string(),
             },
         },
@@ -188,19 +181,19 @@ pub fn oplog_entry() {
     let oe17 = OplogEntry::PendingUpdate {
         timestamp: Timestamp::from(1724701938466),
         description: UpdateDescription::Automatic {
-            target_version: 100,
+            target_version: ComponentRevision(100),
         },
     };
 
     let oe19a = OplogEntry::FailedUpdate {
         timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
+        target_version: ComponentRevision(10),
         details: None,
     };
 
     let oe19b = OplogEntry::FailedUpdate {
         timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
+        target_version: ComponentRevision(10),
         details: Some("details".to_string()),
     };
 
@@ -252,34 +245,27 @@ pub fn oplog_entry() {
             ),
             worker_name: "worker_name".to_string(),
         },
-        component_version: 0,
+        component_version: ComponentRevision(0),
         args: vec!["hello".to_string(), "world".to_string()],
         env: vec![
             ("key1".to_string(), "value1".to_string()),
             ("key2".to_string(), "value2".to_string()),
         ],
         wasi_config_vars: BTreeMap::new(),
-        project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
-        created_by: AccountId {
-            value: "account_id".to_string(),
-        },
+        environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
+        created_by: AccountId(uuid!("1602e975-f3b4-4717-8a92-0207f9c6f14d")),
         parent: None,
         component_size: 100_000_000,
         initial_total_linear_memory_size: 100_000_000,
-        initial_active_plugins: HashSet::from_iter(vec![
-            PluginInstallationId(Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap()),
-            PluginInstallationId(Uuid::parse_str("339ED9E3-9D93-440C-BC07-377F56642ABB").unwrap()),
-        ]),
+        initial_active_plugins: HashSet::from_iter(vec![PluginPriority(0), PluginPriority(1)]),
     };
     let oe27b = OplogEntry::Create {
         timestamp: Timestamp::from(1724701938466),
         worker_id: WorkerId {
-            component_id: ComponentId(
-                Uuid::parse_str("4B29BF7C-13F6-4E37-AC03-830B81EAD478").unwrap(),
-            ),
+            component_id: ComponentId(uuid!("4B29BF7C-13F6-4E37-AC03-830B81EAD478")),
             worker_name: "worker_name".to_string(),
         },
-        component_version: 0,
+        component_version: ComponentRevision(0),
         args: vec!["hello".to_string(), "world".to_string()],
         env: vec![
             ("key1".to_string(), "value1".to_string()),
@@ -289,10 +275,8 @@ pub fn oplog_entry() {
             ("ckey1".to_string(), "cvalue1".to_string()),
             ("ckey2".to_string(), "cvalue2".to_string()),
         ]),
-        project_id: ProjectId(Uuid::parse_str("296aa41a-ff44-4882-8f34-08b7fe431aa4").unwrap()),
-        created_by: AccountId {
-            value: "account_id".to_string(),
-        },
+        environment_id: EnvironmentId(uuid!("296aa41a-ff44-4882-8f34-08b7fe431aa4")),
+        created_by: AccountId(uuid!("2e1fcfba-256f-4f80-af05-cb76e8fa7ced")),
         parent: Some(WorkerId {
             component_id: ComponentId(
                 Uuid::parse_str("90BB3957-2C4E-4711-A488-902B7018100F").unwrap(),
@@ -301,31 +285,21 @@ pub fn oplog_entry() {
         }),
         component_size: 100_000_000,
         initial_total_linear_memory_size: 100_000_000,
-        initial_active_plugins: HashSet::from_iter(vec![
-            PluginInstallationId(Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap()),
-            PluginInstallationId(Uuid::parse_str("339ED9E3-9D93-440C-BC07-377F56642ABB").unwrap()),
-        ]),
+        initial_active_plugins: HashSet::from_iter(vec![PluginPriority(0), PluginPriority(1)]),
     };
     let oe28 = OplogEntry::SuccessfulUpdate {
         timestamp: Timestamp::from(1724701938466),
-        target_version: 10,
+        target_version: ComponentRevision(10),
         new_component_size: 1234,
-        new_active_plugins: HashSet::from_iter(vec![
-            PluginInstallationId(Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap()),
-            PluginInstallationId(Uuid::parse_str("339ED9E3-9D93-440C-BC07-377F56642ABB").unwrap()),
-        ]),
+        new_active_plugins: HashSet::from_iter(vec![PluginPriority(0), PluginPriority(1)]),
     };
     let oe29 = OplogEntry::ActivatePlugin {
         timestamp: Timestamp::from(1724701938466),
-        plugin: PluginInstallationId(
-            Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap(),
-        ),
+        plugin_priority: PluginPriority(3),
     };
     let oe30 = OplogEntry::DeactivatePlugin {
         timestamp: Timestamp::from(1724701938466),
-        plugin: PluginInstallationId(
-            Uuid::parse_str("E7AA7893-B8F8-4DC7-B3AC-3A9E3472EA18").unwrap(),
-        ),
+        plugin_priority: PluginPriority(3),
     };
     let oe31 = OplogEntry::Revert {
         timestamp: Timestamp::from(1724701938466),
