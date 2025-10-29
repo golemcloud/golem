@@ -9,6 +9,38 @@ use uuid::Uuid;
 inherit_test_dep!(Tracing);
 
 #[test]
+async fn test_rust_counter() {
+    let mut ctx = TestContext::new();
+    let app_name = "counter";
+
+    ctx.start_server();
+
+    let outputs = ctx.cli([cmd::APP, cmd::NEW, app_name, "rust"]).await;
+    assert!(outputs.success());
+
+    ctx.cd(app_name);
+
+    let outputs = ctx
+        .cli([cmd::COMPONENT, cmd::NEW, "rust", "app:counter"])
+        .await;
+    assert!(outputs.success());
+
+    let uuid = Uuid::new_v4().to_string();
+    let outputs = ctx
+        .cli([
+            flag::YES,
+            cmd::AGENT,
+            cmd::INVOKE,
+            &format!("app:counter/counter({{ id: \"{uuid}\" }})"),
+            "increment",
+        ])
+        .await;
+    assert!(outputs.success());
+
+    assert!(outputs.stdout_contains("- 1"));
+}
+
+#[test]
 async fn test_ts_counter() {
     let mut ctx = TestContext::new();
     let app_name = "counter";
