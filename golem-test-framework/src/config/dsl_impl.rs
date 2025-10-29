@@ -253,7 +253,11 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         unimplemented!()
     }
 
-    async fn revert(&self, _worker_id: &WorkerId, _target: RevertWorkerTarget) -> anyhow::Result<()> {
+    async fn revert(
+        &self,
+        _worker_id: &WorkerId,
+        _target: RevertWorkerTarget,
+    ) -> anyhow::Result<()> {
         unimplemented!()
     }
 

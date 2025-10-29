@@ -17,7 +17,14 @@ use anyhow::anyhow;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    cancel_invocation_response, complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response, get_running_workers_metadata_response, get_workers_metadata_response, interrupt_worker_response, resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest
+    cancel_invocation_response, complete_promise_response, create_worker_response,
+    delete_worker_response, get_oplog_response, get_running_workers_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
+    revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest,
+    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest,
+    GetRunningWorkersMetadataRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest,
+    RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest,
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -443,14 +450,12 @@ impl TestDsl for TestWorkerExecutor {
         let response = self
             .client
             .clone()
-            .revert_worker(
-                RevertWorkerRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    environment_id: Some(latest_version.environment_id.into()),
-                    target: Some(target.into()),
-                    auth_ctx: Some(self.auth_ctx().into()),
-                },
-            )
+            .revert_worker(RevertWorkerRequest {
+                worker_id: Some(worker_id.clone().into()),
+                environment_id: Some(latest_version.environment_id.into()),
+                target: Some(target.into()),
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
             .await?
             .into_inner();
 

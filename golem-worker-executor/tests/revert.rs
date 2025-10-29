@@ -15,15 +15,16 @@
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::{check, let_assert};
+use golem_common::model::component::ComponentRevision;
 use golem_common::model::public_oplog::PublicOplogEntry;
 use golem_common::model::OplogIndex;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::{RevertLastInvocations, RevertToOplogIndex, RevertWorkerTarget};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::analysis::{AnalysedResourceId, AnalysedResourceMode, AnalysedType, TypeHandle};
 use golem_wasm::{IntoValue, IntoValueAndType, ValueAndType};
 use log::info;
 use test_r::{inherit_test_dep, test};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -39,7 +40,10 @@ async fn revert_successful_invocations(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let component = executor.component(&context.default_environment_id, "counters").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(&component.id, "revert_successful_invocations")
         .await?;
@@ -153,7 +157,10 @@ async fn revert_failed_worker(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let component = executor.component(&context.default_environment_id, "failing-component").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "failing-component")
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(&component.id, "revert_failed_worker")
         .await?;
@@ -211,7 +218,10 @@ async fn revert_failed_worker_to_invoke_of_failed_inocation(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let component = executor.component(&context.default_environment_id, "failing-component").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "failing-component")
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(&component.id, "revert_failed_worker")
         .await?;
@@ -278,7 +288,11 @@ async fn revert_auto_update(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let component = executor.component(&context.default_environment_id, "update-test-v1").unique().store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "update-test-v1")
+        .unique()
+        .store()
+        .await?;
     let worker_id = executor
         .start_worker(&component.id, "revert_auto_update")
         .await?;
@@ -288,7 +302,10 @@ async fn revert_auto_update(
         .update_component(&component.id, "update-test-v2-11")
         .await?;
 
-    info!("Updated component to version {}", updated_component.revision);
+    info!(
+        "Updated component to version {}",
+        updated_component.revision
+    );
 
     executor
         .auto_update_worker(&worker_id, updated_component.revision)
@@ -321,8 +338,8 @@ async fn revert_auto_update(
     // The traces of the update should be gone.
     check!(result1[0] == 0u64.into_value());
     check!(result2[0] != 0u64.into_value());
-    check!(metadata.component_version == 0);
-    check!(metadata.last_known_status.pending_updates.is_empty());
-    check!(metadata.last_known_status.failed_updates.is_empty());
-    check!(metadata.last_known_status.successful_updates.is_empty());
+    check!(metadata.component_version == ComponentRevision(0));
+    check!(update_counts(&metadata) == (0, 0, 0));
+
+    Ok(())
 }

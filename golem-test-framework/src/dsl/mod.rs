@@ -42,7 +42,7 @@ use golem_common::model::environment::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
-use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
 use golem_common::model::{
     IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
@@ -664,6 +664,22 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
             )
             .await
     }
+}
+
+pub fn update_counts(metadata: &WorkerMetadataDto) -> (usize, usize, usize) {
+    let mut pending_updates = 0;
+    let mut successful_updates = 0;
+    let mut failed_updates = 0;
+
+    for update in &metadata.updates {
+        match update {
+            UpdateRecord::PendingUpdate(_) => pending_updates += 1,
+            UpdateRecord::SuccessfulUpdate(_) => successful_updates += 1,
+            UpdateRecord::FailedUpdate(_) => failed_updates += 1,
+        }
+    }
+
+    (pending_updates, successful_updates, failed_updates)
 }
 
 pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {

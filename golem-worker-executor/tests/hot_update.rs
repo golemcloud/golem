@@ -19,8 +19,7 @@ use axum::routing::post;
 use axum::Router;
 use bytes::Bytes;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
-use golem_test_framework::dsl::TestDsl;
+use golem_test_framework::dsl::{update_counts, TestDsl};
 use golem_wasm::{IntoValueAndType, Value};
 use http::StatusCode;
 use log::info;
@@ -134,22 +133,6 @@ impl TestHttpServer {
             resume: resume_tx,
         }
     }
-}
-
-fn update_counts(metadata: &WorkerMetadataDto) -> (usize, usize, usize) {
-    let mut pending_updates = 0;
-    let mut successful_updates = 0;
-    let mut failed_updates = 0;
-
-    for update in &metadata.updates {
-        match update {
-            UpdateRecord::PendingUpdate(_) => pending_updates += 1,
-            UpdateRecord::SuccessfulUpdate(_) => successful_updates += 1,
-            UpdateRecord::FailedUpdate(_) => failed_updates += 1,
-        }
-    }
-
-    (pending_updates, successful_updates, failed_updates)
 }
 
 #[test]
