@@ -25,11 +25,11 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_common::config::RedisConfig;
-use golem_common::model::account::AccountId;
+use golem_common::model::account::{AccountId, PlanId};
 use golem_common::model::agent::AgentId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::EnvironmentRole;
-use golem_common::model::component::ComponentFilePath;
+use golem_common::model::auth::{AccountRole, EnvironmentRole};
+use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId, ComponentType};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::{
@@ -44,6 +44,7 @@ use golem_common::model::{
 };
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
 use golem_service_base::service::compiled_component::{
     CompiledComponentServiceConfig, CompiledComponentServiceEnabledConfig,
     DefaultCompiledComponentService,
@@ -115,7 +116,6 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock, Weak};
 use std::time::Duration;
 use tokio::runtime::Handle;
-use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tonic::transport::Channel;
 use tracing::{debug, info};
@@ -125,18 +125,54 @@ use wasmtime::{AsContextMut, Engine, ResourceLimiterAsync};
 use wasmtime_wasi::p2::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
+#[derive(Clone)]
 pub struct TestWorkerExecutor {
-    _join_set: Option<JoinSet<anyhow::Result<()>>>,
+    _join_set: Arc<JoinSet<anyhow::Result<()>>>,
     deps: WorkerExecutorTestDependencies,
-    client: Mutex<WorkerExecutorClient<Channel>>,
-    /// default account id to use during tests
+    client: WorkerExecutorClient<Channel>,
+    // default account id to use during tests
     pub account_id: AccountId,
+    // plan of the default account id
+    pub account_plan_id: PlanId,
+    // roles of the default plan
+    pub account_roles: HashSet<AccountRole>,
     // default application id to use during tests
     pub application_id: ApplicationId,
     // default environment id to use during tests
     pub environment_id: EnvironmentId,
     // shares for the default environment
     pub environment_roles_from_shares: HashSet<EnvironmentRole>,
+}
+
+impl TestWorkerExecutor {
+    pub fn auth_ctx(&self) -> AuthCtx {
+        AuthCtx::User(UserAuthCtx {
+            account_id: self.account_id.clone(),
+            account_plan_id: self.account_plan_id.clone(),
+            account_roles: self.account_roles.clone(),
+        })
+    }
+
+    pub async fn store_component_with_id(
+        &self,
+        name: &str,
+        component_id: &ComponentId,
+    ) -> anyhow::Result<ComponentDto> {
+        let source_path = self.deps.component_directory.join(format!("{name}.wasm"));
+        self.deps
+            .component_writer
+            .add_component_with_id(
+                &source_path,
+                component_id,
+                name,
+                ComponentType::Durable,
+                self.environment_id.clone(),
+                self.application_id.clone(),
+                self.account_id.clone(),
+                self.environment_roles_from_shares.clone(),
+            )
+            .await
+    }
 }
 
 pub struct TestContext {
@@ -233,16 +269,20 @@ pub async fn start_customized(
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
 
         let account_id = AccountId::new_v4();
+        let account_plan_id = PlanId::new_v4();
+        let account_roles = HashSet::new();
         let application_id = ApplicationId::new_v4();
         let environment_id = EnvironmentId::new_v4();
         let environment_roles_from_shares = HashSet::new();
 
         if let Ok(client) = client {
             break Ok(TestWorkerExecutor {
-                _join_set: Some(join_set),
+                _join_set: Arc::new(join_set),
                 deps: deps.clone(),
-                client: Mutex::new(client),
+                client,
                 account_id,
+                account_plan_id,
+                account_roles,
                 application_id,
                 environment_id,
                 environment_roles_from_shares,

@@ -12,12 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::redis::Redis;
 use crate::config::TestDependencies;
 use crate::dsl::{build_ifs_archive, rename_component_if_needed, TestDsl, TestDslExtended};
 use crate::model::IFSEntry;
 use applying::Apply;
 use async_trait::async_trait;
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error as WorkerGrpcError;
+use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::account::AccountId;
 use golem_common::model::auth::TokenSecret;
@@ -28,15 +29,19 @@ use golem_common::model::component::{
 };
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::worker::FlatWorkerMetadata;
+use golem_common::model::worker::WorkerMetadataDto;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::{OplogIndex, WorkerId};
+use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::fs::File;
+use tokio::sync::mpsc::UnboundedReceiver;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -49,6 +54,10 @@ pub struct TestDependenciesTestDsl<Deps> {
 
 #[async_trait]
 impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
+    fn redis(&self) -> Arc<dyn Redis> {
+        self.deps.redis()
+    }
+
     async fn store_component_with(
         &self,
         wasm_name: &str,
@@ -133,6 +142,13 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         Ok(component)
     }
 
+    async fn get_latest_component_version(
+        &self,
+        _component_id: &ComponentId,
+    ) -> anyhow::Result<ComponentDto> {
+        unimplemented!()
+    }
+
     async fn update_component_with(
         &self,
         component_id: &ComponentId,
@@ -203,24 +219,27 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         _args: Vec<String>,
         _env: HashMap<String, String>,
         _wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<Result<WorkerId, WorkerGrpcError>> {
+    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         unimplemented!()
     }
 
-    async fn invoke_and_await_custom_with_key(
+    async fn invoke_with_key(
         &self,
         _worker_id: &WorkerId,
         _idempotency_key: &IdempotencyKey,
         _function_name: &str,
         _params: Vec<ValueAndType>,
-    ) -> crate::Result<Result<Vec<Value>, WorkerGrpcError>> {
+    ) -> anyhow::Result<Result<(), WorkerExecutorError>> {
         unimplemented!()
     }
 
-    async fn get_worker_metadata(
+    async fn invoke_and_await_with_key(
         &self,
         _worker_id: &WorkerId,
-    ) -> anyhow::Result<FlatWorkerMetadata> {
+        _idempotency_key: &IdempotencyKey,
+        _function_name: &str,
+        _params: Vec<ValueAndType>,
+    ) -> crate::Result<Result<Vec<Value>, WorkerExecutorError>> {
         unimplemented!()
     }
 
@@ -229,6 +248,94 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         _worker_id: &WorkerId,
         _from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        unimplemented!()
+    }
+
+    async fn interrupt_with_optional_recovery(
+        &self,
+        _worker_id: &WorkerId,
+        _recover_immediately: bool,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn resume(&self, _worker_id: &WorkerId, _force: bool) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn complete_promise(
+        &self,
+        _promise_id: &PromiseId,
+        _data: Vec<u8>,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn capture_output(
+        &self,
+        _worker_id: &WorkerId,
+    ) -> anyhow::Result<UnboundedReceiver<LogEvent>> {
+        unimplemented!()
+    }
+
+    async fn capture_output_with_termination(
+        &self,
+        _worker_id: &WorkerId,
+    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>> {
+        unimplemented!()
+    }
+
+    async fn auto_update_worker(
+        &self,
+        _worker_id: &WorkerId,
+        _target_version: ComponentRevision,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn manual_update_worker(
+        &self,
+        _worker_id: &WorkerId,
+        _target_version: ComponentRevision,
+    ) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn delete_worker(&self, _worker_id: &WorkerId) -> anyhow::Result<()> {
+        unimplemented!()
+    }
+
+    async fn get_worker_metadata(
+        &self,
+        _worker_id: &WorkerId,
+    ) -> anyhow::Result<WorkerMetadataDto> {
+        unimplemented!()
+    }
+
+    async fn get_workers_metadata(
+        &self,
+        _component_id: &ComponentId,
+        _filter: Option<WorkerFilter>,
+        _cursor: ScanCursor,
+        _count: u64,
+        _precise: bool,
+    ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)> {
+        unimplemented!()
+    }
+
+    async fn get_running_workers_metadata(
+        &self,
+        _component_id: &ComponentId,
+        _filter: Option<WorkerFilter>,
+    ) -> anyhow::Result<Vec<WorkerMetadataDto>> {
+        unimplemented!()
+    }
+
+    async fn cancel_invocation(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: &IdempotencyKey,
+    ) -> anyhow::Result<bool> {
         unimplemented!()
     }
 }

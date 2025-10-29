@@ -22,6 +22,8 @@
 use bincode::{Decode, Encode};
 use goldenfile::differs::Differ;
 use goldenfile::Mint;
+use golem_common::model::account::AccountId;
+use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::{
     DurableFunctionType, LogLevel, OplogIndex, OplogPayload, PayloadId,
@@ -30,9 +32,8 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::RetryConfig;
 use golem_common::model::{
-    AccountId, ComponentId, FailedUpdateRecord, IdempotencyKey, PromiseId, ShardId,
-    SuccessfulUpdateRecord, Timestamp, TimestampedWorkerInvocation, WorkerId, WorkerInvocation,
-    WorkerStatus,
+    FailedUpdateRecord, IdempotencyKey, PromiseId, ShardId, SuccessfulUpdateRecord, Timestamp,
+    TimestampedWorkerInvocation, WorkerId, WorkerInvocation, WorkerStatus,
 };
 use golem_common::serialization::{deserialize, serialize};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -56,7 +57,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 use test_r::test;
-use uuid::Uuid;
+use uuid::{uuid, Uuid};
 
 fn is_deserializable<T: Encode + Decode<()> + PartialEq + Debug>(old: &Path, new: &Path) {
     let old = std::fs::read(old).unwrap();
@@ -292,7 +293,7 @@ pub fn timestamped_worker_invocation() {
     let twi2 = TimestampedWorkerInvocation {
         timestamp: Timestamp::from(1724701938466),
         invocation: WorkerInvocation::ManualUpdate {
-            target_version: 100,
+            target_version: ComponentRevision(100),
         },
     };
 
@@ -317,14 +318,14 @@ pub fn timestamped_update_description() {
         timestamp: Timestamp::from(1724701938466),
         oplog_index: OplogIndex::from_u64(123),
         description: UpdateDescription::Automatic {
-            target_version: 100,
+            target_version: ComponentRevision(100),
         },
     };
     let tud2 = TimestampedUpdateDescription {
         timestamp: Timestamp::from(1724701938466),
         oplog_index: OplogIndex::from_u64(123),
         description: UpdateDescription::SnapshotBased {
-            target_version: 100,
+            target_version: ComponentRevision(100),
             payload: OplogPayload::Inline(vec![0, 1, 2, 3, 4]),
         },
     };
@@ -341,7 +342,7 @@ pub fn timestamped_update_description() {
 pub fn successful_update_record() {
     let sur1 = SuccessfulUpdateRecord {
         timestamp: Timestamp::from(1724701938466),
-        target_version: 123,
+        target_version: ComponentRevision(123),
     };
     let mut mint = Mint::new("tests/goldenfiles");
     backward_compatible("successful_update_record", &mut mint, sur1);
@@ -351,12 +352,12 @@ pub fn successful_update_record() {
 pub fn failed_update_record() {
     let fur1 = FailedUpdateRecord {
         timestamp: Timestamp::from(1724701938466),
-        target_version: 123,
+        target_version: ComponentRevision(123),
         details: None,
     };
     let fur2 = FailedUpdateRecord {
         timestamp: Timestamp::from(1724701938466),
-        target_version: 123,
+        target_version: ComponentRevision(123),
         details: Some("details".to_string()),
     };
     let mut mint = Mint::new("tests/goldenfiles");
@@ -423,9 +424,7 @@ pub fn account_id() {
     backward_compatible(
         "account_id",
         &mut mint,
-        AccountId {
-            value: "account_id".to_string(),
-        },
+        AccountId(uuid!("85ea56a5-5158-4186-be98-457613ca1bae")),
     );
 }
 
@@ -596,12 +595,12 @@ pub fn golem_error() {
     };
     let g6 = WorkerExecutorError::ComponentDownloadFailed {
         component_id: wid.component_id.clone(),
-        component_version: 0,
+        component_version: ComponentRevision(0),
         reason: "reason".to_string(),
     };
     let g7 = WorkerExecutorError::ComponentParseFailed {
         component_id: wid.component_id.clone(),
-        component_version: 0,
+        component_version: ComponentRevision(0),
         reason: "reason".to_string(),
     };
     let g8 = WorkerExecutorError::GetLatestVersionOfComponentFailed {

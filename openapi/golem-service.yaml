@@ -8151,7 +8151,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/FlatWorkerMetadata'
+                $ref: '#/components/schemas/WorkerMetadataDto'
         '400':
           description: ''
           content:
@@ -13666,100 +13666,6 @@ components:
       required:
       - key
       - description
-    FlatWorkerMetadata:
-      title: FlatWorkerMetadata
-      type: object
-      properties:
-        workerId:
-          $ref: '#/components/schemas/WorkerId'
-        environmentId:
-          type: string
-          format: uuid
-        createdBy:
-          type: string
-          format: uuid
-        args:
-          type: array
-          items:
-            type: string
-        env:
-          type: object
-          additionalProperties:
-            type: string
-        wasiConfigVars:
-          type: array
-          items:
-            $ref: '#/components/schemas/WasiConfigVarsEntry'
-        status:
-          $ref: '#/components/schemas/WorkerStatus'
-        componentVersion:
-          type: integer
-          format: uint64
-        retryCount:
-          type: integer
-          format: uint32
-        pendingInvocationCount:
-          type: integer
-          format: uint64
-        updates:
-          type: array
-          items:
-            $ref: '#/components/schemas/UpdateRecord'
-        createdAt:
-          type: string
-          format: date-time
-        lastError:
-          type: string
-        componentSize:
-          type: integer
-          format: uint64
-        totalLinearMemorySize:
-          type: integer
-          format: uint64
-        exportedResourceInstances:
-          type: array
-          items:
-            $ref: '#/components/schemas/ExportedResourceMetadata'
-        activePlugins:
-          type: array
-          items:
-            title: |-
-              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
-              There can only be a single plugin with a given priority installed to a component.
-            type: integer
-            format: int32
-        skippedRegions:
-          description: |-
-            Oplog regions that are skipped during the worker's state recovery, but describe
-            the history of the worker. For example if an atomic region gets restarted, its partially
-            recorded oplog entries will be skipped on retry.
-          type: array
-          items:
-            $ref: '#/components/schemas/OplogRegion'
-        deletedRegions:
-          description: Oplog regions permanently deleted from the workers using the revert functionality.
-          type: array
-          items:
-            $ref: '#/components/schemas/OplogRegion'
-      required:
-      - workerId
-      - environmentId
-      - createdBy
-      - args
-      - env
-      - wasiConfigVars
-      - status
-      - componentVersion
-      - retryCount
-      - pendingInvocationCount
-      - updates
-      - createdAt
-      - componentSize
-      - totalLinearMemorySize
-      - exportedResourceInstances
-      - activePlugins
-      - skippedRegions
-      - deletedRegions
     PluginInstallationDescription:
       title: PluginInstallationDescription
       type: object
@@ -13931,6 +13837,100 @@ components:
         required:
         - type
       - $ref: '#/components/schemas/SuccessfulUpdate'
+    WorkerMetadataDto:
+      title: WorkerMetadataDto
+      type: object
+      properties:
+        workerId:
+          $ref: '#/components/schemas/WorkerId'
+        environmentId:
+          type: string
+          format: uuid
+        createdBy:
+          type: string
+          format: uuid
+        args:
+          type: array
+          items:
+            type: string
+        env:
+          type: object
+          additionalProperties:
+            type: string
+        wasiConfigVars:
+          type: array
+          items:
+            $ref: '#/components/schemas/WasiConfigVarsEntry'
+        status:
+          $ref: '#/components/schemas/WorkerStatus'
+        componentVersion:
+          type: integer
+          format: uint64
+        retryCount:
+          type: integer
+          format: uint32
+        pendingInvocationCount:
+          type: integer
+          format: uint64
+        updates:
+          type: array
+          items:
+            $ref: '#/components/schemas/UpdateRecord'
+        createdAt:
+          type: string
+          format: date-time
+        lastError:
+          type: string
+        componentSize:
+          type: integer
+          format: uint64
+        totalLinearMemorySize:
+          type: integer
+          format: uint64
+        exportedResourceInstances:
+          type: array
+          items:
+            $ref: '#/components/schemas/ExportedResourceMetadata'
+        activePlugins:
+          type: array
+          items:
+            title: |-
+              Priority of a given plugin. Plugins with a lower priority will be applied before plugins with a higher priority.
+              There can only be a single plugin with a given priority installed to a component.
+            type: integer
+            format: int32
+        skippedRegions:
+          description: |-
+            Oplog regions that are skipped during the worker's state recovery, but describe
+            the history of the worker. For example if an atomic region gets restarted, its partially
+            recorded oplog entries will be skipped on retry.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+        deletedRegions:
+          description: Oplog regions permanently deleted from the workers using the revert functionality.
+          type: array
+          items:
+            $ref: '#/components/schemas/OplogRegion'
+      required:
+      - workerId
+      - environmentId
+      - createdBy
+      - args
+      - env
+      - wasiConfigVars
+      - status
+      - componentVersion
+      - retryCount
+      - pendingInvocationCount
+      - updates
+      - createdAt
+      - componentSize
+      - totalLinearMemorySize
+      - exportedResourceInstances
+      - activePlugins
+      - skippedRegions
+      - deletedRegions
     WorkerResourceDescription:
       title: WorkerResourceDescription
       type: object
@@ -13953,7 +13953,7 @@ components:
         workers:
           type: array
           items:
-            $ref: '#/components/schemas/FlatWorkerMetadata'
+            $ref: '#/components/schemas/WorkerMetadataDto'
         cursor:
           $ref: '#/components/schemas/ScanCursor'
       required:

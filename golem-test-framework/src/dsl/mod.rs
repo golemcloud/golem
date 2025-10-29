@@ -16,6 +16,7 @@ pub mod benchmark;
 pub mod debug_render;
 
 use self::debug_render::debug_render_oplog_entry;
+use crate::components::redis::Redis;
 use crate::model::IFSEntry;
 use anyhow::{anyhow, Context};
 use async_trait::async_trait;
@@ -41,13 +42,18 @@ use golem_common::model::environment::{
 };
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
-use golem_common::model::worker::FlatWorkerMetadata;
-use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId};
+use golem_common::model::worker::WorkerMetadataDto;
+use golem_common::model::{
+    IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
+};
+use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::PublicOplogEntryWithIndex;
 use golem_wasm::Value;
 use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tempfile::{Builder, TempDir};
 use tokio::fs::File;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -58,6 +64,8 @@ use wasm_metadata::{AddMetadata, AddMetadataField};
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
 pub trait TestDsl {
+    fn redis(&self) -> Arc<dyn Redis>;
+
     fn component(
         &self,
         environment_id: &EnvironmentId,
@@ -79,6 +87,70 @@ pub trait TestDsl {
         env: BTreeMap<String, String>,
         plugins: Vec<PluginInstallation>,
     ) -> anyhow::Result<ComponentDto>;
+
+    async fn get_latest_component_version(
+        &self,
+        component_id: &ComponentId,
+    ) -> anyhow::Result<ComponentDto>;
+
+    async fn update_component(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+    ) -> anyhow::Result<ComponentDto> {
+        let latest_version = self.get_latest_component_version(component_id).await?;
+        self.update_component_with(
+            component_id,
+            latest_version.revision,
+            Some(name),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn update_component_with_files(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        files: Vec<IFSEntry>,
+    ) -> anyhow::Result<ComponentDto> {
+        let latest_version = self.get_latest_component_version(component_id).await?;
+        self.update_component_with(
+            component_id,
+            latest_version.revision,
+            Some(name),
+            None,
+            files,
+            latest_version.files.into_iter().map(|f| f.path).collect(),
+            None,
+            None,
+        )
+        .await
+    }
+
+    async fn update_component_with_env(
+        &self,
+        component_id: &ComponentId,
+        name: &str,
+        env: &[(String, String)],
+    ) -> anyhow::Result<ComponentDto> {
+        let latest_version = self.get_latest_component_version(component_id).await?;
+        self.update_component_with(
+            component_id,
+            latest_version.revision,
+            Some(name),
+            None,
+            Vec::new(),
+            Vec::new(),
+            None,
+            Some(BTreeMap::from_iter(env.to_vec())),
+        )
+        .await
+    }
 
     async fn update_component_with(
         &self,
@@ -105,7 +177,7 @@ pub trait TestDsl {
         &self,
         component_id: &ComponentId,
         name: &str,
-    ) -> anyhow::Result<Result<WorkerId, WorkerGrpcError>> {
+    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>> {
         self.try_start_worker_with(component_id, name, vec![], HashMap::new(), vec![])
             .await
     }
@@ -131,15 +203,33 @@ pub trait TestDsl {
         args: Vec<String>,
         env: HashMap<String, String>,
         wasi_config_vars: Vec<(String, String)>,
-    ) -> anyhow::Result<Result<WorkerId, WorkerGrpcError>>;
+    ) -> anyhow::Result<Result<WorkerId, WorkerExecutorError>>;
+
+    async fn invoke(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<(), WorkerExecutorError>> {
+        self.invoke_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
+            .await
+    }
+
+    async fn invoke_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<(), WorkerExecutorError>>;
 
     async fn invoke_and_await(
         &self,
         worker_id: &WorkerId,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerGrpcError>> {
-        self.invoke_and_await_custom(worker_id, function_name, params)
+    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>> {
+        self.invoke_and_await_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
             .await
     }
 
@@ -149,32 +239,7 @@ pub trait TestDsl {
         idempotency_key: &IdempotencyKey,
         function_name: &str,
         params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerGrpcError>> {
-        self.invoke_and_await_custom_with_key(worker_id, idempotency_key, function_name, params)
-            .await
-    }
-
-    async fn invoke_and_await_custom(
-        &self,
-        worker_id: &WorkerId,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerGrpcError>> {
-        let idempotency_key = IdempotencyKey::fresh();
-        self.invoke_and_await_custom_with_key(worker_id, &idempotency_key, function_name, params)
-            .await
-    }
-
-    async fn invoke_and_await_custom_with_key(
-        &self,
-        worker_id: &WorkerId,
-        idempotency_key: &IdempotencyKey,
-        function_name: &str,
-        params: Vec<ValueAndType>,
-    ) -> anyhow::Result<Result<Vec<Value>, WorkerGrpcError>>;
-
-    async fn get_worker_metadata(&self, worker_id: &WorkerId)
-        -> anyhow::Result<FlatWorkerMetadata>;
+    ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>>;
 
     async fn get_oplog(
         &self,
@@ -191,6 +256,122 @@ pub trait TestDsl {
 
         Ok(())
     }
+
+    async fn interrupt_with_optional_recovery(
+        &self,
+        worker_id: &WorkerId,
+        recover_immediately: bool,
+    ) -> anyhow::Result<()>;
+
+    async fn interrupt(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
+        self.interrupt_with_optional_recovery(worker_id, false)
+            .await
+    }
+
+    async fn simulated_crash(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
+        self.interrupt_with_optional_recovery(worker_id, true).await
+    }
+
+    async fn resume(&self, worker_id: &WorkerId, force: bool) -> anyhow::Result<()>;
+
+    async fn complete_promise(&self, promise_id: &PromiseId, data: Vec<u8>) -> anyhow::Result<()>;
+
+    async fn capture_output(
+        &self,
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<UnboundedReceiver<LogEvent>>;
+
+    async fn capture_output_with_termination(
+        &self,
+        worker_id: &WorkerId,
+    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>>;
+
+    async fn log_output(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
+        let mut rx = self.capture_output(worker_id).await?;
+
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                info!("Received event: {:?}", event);
+            }
+        });
+
+        Ok(())
+    }
+
+    async fn auto_update_worker(
+        &self,
+        worker_id: &WorkerId,
+        target_version: ComponentRevision,
+    ) -> anyhow::Result<()>;
+
+    async fn manual_update_worker(
+        &self,
+        worker_id: &WorkerId,
+        target_version: ComponentRevision,
+    ) -> anyhow::Result<()>;
+
+    async fn delete_worker(&self, worker_id: &WorkerId) -> anyhow::Result<()>;
+
+    async fn get_worker_metadata(&self, worker_id: &WorkerId) -> anyhow::Result<WorkerMetadataDto>;
+
+    async fn get_workers_metadata(
+        &self,
+        component_id: &ComponentId,
+        filter: Option<WorkerFilter>,
+        cursor: ScanCursor,
+        count: u64,
+        precise: bool,
+    ) -> anyhow::Result<(Option<ScanCursor>, Vec<WorkerMetadataDto>)>;
+
+    async fn get_running_workers_metadata(
+        &self,
+        component_id: &ComponentId,
+        filter: Option<WorkerFilter>,
+    ) -> anyhow::Result<Vec<WorkerMetadataDto>>;
+
+    async fn wait_for_status(
+        &self,
+        worker_id: &WorkerId,
+        status: WorkerStatus,
+        timeout: Duration,
+    ) -> anyhow::Result<WorkerMetadataDto> {
+        self.wait_for_statuses(worker_id, &[status], timeout).await
+    }
+
+    async fn wait_for_statuses(
+        &self,
+        worker_id: &WorkerId,
+        statuses: &[WorkerStatus],
+        timeout: Duration,
+    ) -> anyhow::Result<WorkerMetadataDto> {
+        let start = Instant::now();
+        let mut last_known = None;
+        while start.elapsed() < timeout {
+            let metadata = self.get_worker_metadata(worker_id).await?;
+
+            if statuses.contains(&metadata.status) {
+                return Ok(metadata);
+            }
+
+            last_known = Some(metadata.status.clone());
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(anyhow!(
+            "Timeout waiting for worker status {} (last known: {last_known:?})",
+            statuses
+                .iter()
+                .map(|s| format!("{s:?}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))
+    }
+
+    async fn cancel_invocation(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+    ) -> anyhow::Result<bool>;
 }
 
 #[async_trait]
@@ -198,7 +379,6 @@ pub trait TestDsl {
 pub trait TestDslExtended: TestDsl {
     fn account_id(&self) -> &AccountId;
 
-    // Has to use the same token as self.token()
     async fn registry_service_client(&self) -> RegistryServiceClientLive;
 
     async fn app(&self) -> anyhow::Result<Application> {
@@ -550,104 +730,92 @@ pub fn is_worker_execution_error(
     matches!(got, WorkerGrpcError::InternalError(error) if error.error.as_ref() == Some(expected))
 }
 
-pub fn worker_error_message(error: &WorkerGrpcError) -> String {
+pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
-        WorkerGrpcError::BadRequest(errors) => errors.errors.join(", "),
-        WorkerGrpcError::Unauthorized(error) => error.error.clone(),
-        WorkerGrpcError::LimitExceeded(error) => error.error.clone(),
-        WorkerGrpcError::NotFound(error) => error.error.clone(),
-        WorkerGrpcError::AlreadyExists(error) => error.error.clone(),
-        WorkerGrpcError::InternalError(error) => match &error.error {
-            None => "Internal error".to_string(),
-            Some(error) => match error {
-                worker_execution_error::Error::InvalidRequest(error) => error.details.clone(),
-                worker_execution_error::Error::WorkerAlreadyExists(error) => {
-                    format!("Worker already exists: {:?}", error.worker_id)
-                }
-                worker_execution_error::Error::WorkerCreationFailed(error) => format!(
-                    "Worker creation failed: {:?}: {}",
-                    error.worker_id, error.details
-                ),
-                worker_execution_error::Error::FailedToResumeWorker(error) => {
-                    format!("Failed to resume worker: {:?}", error.worker_id)
-                }
-                worker_execution_error::Error::ComponentDownloadFailed(error) => format!(
-                    "Failed to download component: {:?} version {}: {}",
-                    error.component_id, error.component_version, error.reason
-                ),
-                worker_execution_error::Error::ComponentParseFailed(error) => format!(
-                    "Failed to parse component: {:?} version {}: {}",
-                    error.component_id, error.component_version, error.reason
-                ),
-                worker_execution_error::Error::GetLatestVersionOfComponentFailed(error) => format!(
-                    "Failed to get latest version of component: {:?}: {}",
-                    error.component_id, error.reason
-                ),
-                worker_execution_error::Error::PromiseNotFound(error) => {
-                    format!("Promise not found: {:?}", error.promise_id)
-                }
-                worker_execution_error::Error::PromiseDropped(error) => {
-                    format!("Promise dropped: {:?}", error.promise_id)
-                }
-                worker_execution_error::Error::PromiseAlreadyCompleted(error) => {
-                    format!("Promise already completed: {:?}", error.promise_id)
-                }
-                worker_execution_error::Error::Interrupted(error) => {
-                    if error.recover_immediately {
-                        "Simulated crash".to_string()
-                    } else {
-                        "Interrupted via the Golem API".to_string()
-                    }
-                }
-                worker_execution_error::Error::ParamTypeMismatch(_error) => {
-                    "Parameter type mismatch".to_string()
-                }
-                worker_execution_error::Error::NoValueInMessage(_error) => {
-                    "No value in message".to_string()
-                }
-                worker_execution_error::Error::ValueMismatch(error) => {
-                    format!("Value mismatch: {}", error.details)
-                }
-                worker_execution_error::Error::UnexpectedOplogEntry(error) => format!(
-                    "Unexpected oplog entry; Expected: {}, got: {}",
-                    error.expected, error.got
-                ),
-                worker_execution_error::Error::RuntimeError(error) => {
-                    format!("Runtime error: {}", error.details)
-                }
-                worker_execution_error::Error::InvalidShardId(error) => format!(
-                    "Invalid shard id: {:?}; ids: {:?}",
-                    error.shard_id, error.shard_ids
-                ),
-                worker_execution_error::Error::PreviousInvocationFailed(_) => {
-                    "Previous invocation failed".to_string()
-                }
-                worker_execution_error::Error::Unknown(error) => {
-                    format!("Unknown error: {}", error.details)
-                }
-                worker_execution_error::Error::PreviousInvocationExited(_error) => {
-                    "Previous invocation exited".to_string()
-                }
-                worker_execution_error::Error::InvalidAccount(_error) => {
-                    "Invalid account id".to_string()
-                }
-                worker_execution_error::Error::WorkerNotFound(error) => {
-                    format!("Worker not found: {:?}", error.worker_id)
-                }
-                worker_execution_error::Error::ShardingNotReady(_error) => {
-                    "Sharing not ready".to_string()
-                }
-                worker_execution_error::Error::InitialComponentFileDownloadFailed(error) => {
-                    format!("Initial File download failed: {}", error.reason)
-                }
-                worker_execution_error::Error::FileSystemError(error) => {
-                    format!("File system error: {}", error.reason)
-                }
-                worker_execution_error::Error::InvocationFailed(_) => {
-                    "Invocation failed".to_string()
-                }
-            },
-        },
+        WorkerExecutorError::InvalidRequest { details } => details.clone(),
+        WorkerExecutorError::WorkerAlreadyExists { worker_id } => {
+            format!("Worker already exists: {:?}", worker_id)
+        }
+        WorkerExecutorError::WorkerCreationFailed { worker_id, details } => {
+            format!("Worker creation failed: {:?}: {}", worker_id, details)
+        }
+        WorkerExecutorError::FailedToResumeWorker { worker_id, .. } => {
+            format!("Failed to resume worker: {:?}", worker_id)
+        }
+        WorkerExecutorError::ComponentDownloadFailed {
+            component_id,
+            component_version,
+            reason,
+        } => format!(
+            "Failed to download component: {:?} version {}: {}",
+            component_id, component_version, reason
+        ),
+        WorkerExecutorError::ComponentParseFailed {
+            component_id,
+            component_version,
+            reason,
+        } => format!(
+            "Failed to parse component: {:?} version {}: {}",
+            component_id, component_version, reason
+        ),
+        WorkerExecutorError::GetLatestVersionOfComponentFailed {
+            component_id,
+            reason,
+        } => format!(
+            "Failed to get latest version of component: {:?}: {}",
+            component_id, reason
+        ),
+        WorkerExecutorError::PromiseNotFound { promise_id } => {
+            format!("Promise not found: {:?}", promise_id)
+        }
+        WorkerExecutorError::PromiseDropped { promise_id } => {
+            format!("Promise dropped: {:?}", promise_id)
+        }
+        WorkerExecutorError::PromiseAlreadyCompleted { promise_id } => {
+            format!("Promise already completed: {:?}", promise_id)
+        }
+        WorkerExecutorError::Interrupted { kind } => {
+            if *kind == InterruptKind::Restart {
+                "Simulated crash".to_string()
+            } else {
+                "Interrupted via the Golem API".to_string()
+            }
+        }
+        WorkerExecutorError::ParamTypeMismatch { .. } => "Parameter type mismatch".to_string(),
+        WorkerExecutorError::NoValueInMessage => "No value in message".to_string(),
+        WorkerExecutorError::ValueMismatch { details } => {
+            format!("Value mismatch: {}", details)
+        }
+        WorkerExecutorError::UnexpectedOplogEntry { expected, got } => format!(
+            "Unexpected oplog entry; Expected: {}, got: {}",
+            expected, got
+        ),
+        WorkerExecutorError::Runtime { details } => {
+            format!("Runtime error: {}", details)
+        }
+        WorkerExecutorError::InvalidShardId {
+            shard_id,
+            shard_ids,
+        } => format!("Invalid shard id: {:?}; ids: {:?}", shard_id, shard_ids),
+        WorkerExecutorError::PreviousInvocationFailed { .. } => {
+            "Previous invocation failed".to_string()
+        }
+        WorkerExecutorError::Unknown { details } => {
+            format!("Unknown error: {}", details)
+        }
+        WorkerExecutorError::PreviousInvocationExited => "Previous invocation exited".to_string(),
+        WorkerExecutorError::InvalidAccount => "Invalid account id".to_string(),
+        WorkerExecutorError::WorkerNotFound { worker_id } => {
+            format!("Worker not found: {:?}", worker_id)
+        }
+        WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
+        WorkerExecutorError::InitialComponentFileDownloadFailed { reason, .. } => {
+            format!("Initial File download failed: {}", reason)
+        }
+        WorkerExecutorError::FileSystemError { reason, .. } => {
+            format!("File system error: {}", reason)
+        }
+        WorkerExecutorError::InvocationFailed { .. } => "Invocation failed".to_string(),
     }
 }
 
@@ -668,17 +836,10 @@ pub fn worker_error_underlying_error(
     }
 }
 
-pub fn worker_error_logs(error: &WorkerGrpcError) -> Option<String> {
+pub fn worker_error_logs(error: &WorkerExecutorError) -> Option<String> {
     match error {
-        WorkerGrpcError::InternalError(error) => match &error.error {
-            Some(worker_execution_error::Error::InvocationFailed(error)) => {
-                Some(error.stderr.clone())
-            }
-            Some(worker_execution_error::Error::PreviousInvocationFailed(error)) => {
-                Some(error.stderr.clone())
-            }
-            _ => None,
-        },
+        WorkerExecutorError::InvocationFailed { stderr, .. } => Some(stderr.clone()),
+        WorkerExecutorError::PreviousInvocationFailed { stderr, .. } => Some(stderr.clone()),
         _ => None,
     }
 }

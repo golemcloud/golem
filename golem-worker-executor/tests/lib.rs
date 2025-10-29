@@ -39,9 +39,9 @@ use tracing::Level;
 mod common;
 
 pub mod agent;
-// pub mod api;
+pub mod api;
 pub mod blobstore;
-// pub mod compatibility;
+pub mod compatibility;
 // pub mod durability;
 // pub mod hot_update;
 // pub mod http;

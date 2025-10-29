@@ -249,35 +249,34 @@ impl FileSystemComponentWriter {
         .await
     }
 
-    // pub async fn add_component_with_id(
-    //     &self,
-    //     local_path: &Path,
-    //     component_id: &ComponentId,
-    //     component_name: &str,
-    //     component_type: ComponentType,
-    //     environment_id: EnvironmentId,
-    //     application_id: ApplicationId,
-    //     account_id: AccountId,
-    //     environment_roles_from_shares: HashSet<EnvironmentRole>,
-    // ) -> anyhow::Result<()> {
-    //     self.write_component_to_filesystem(
-    //         local_path,
-    //         component_name,
-    //         component_id,
-    //         ComponentRevision(0),
-    //         component_type,
-    //         Vec::new(),
-    //         false,
-    //         HashMap::new(),
-    //         BTreeMap::new(),
-    //         environment_id,
-    //         application_id,
-    //         account_id,
-    //         environment_roles_from_shares,
-    //     )
-    //     .await?;
-    //     Ok(())
-    // }
+    pub async fn add_component_with_id(
+        &self,
+        local_path: &Path,
+        component_id: &ComponentId,
+        component_name: &str,
+        component_type: ComponentType,
+        environment_id: EnvironmentId,
+        application_id: ApplicationId,
+        account_id: AccountId,
+        environment_roles_from_shares: HashSet<EnvironmentRole>,
+    ) -> anyhow::Result<ComponentDto> {
+        self.write_component_to_filesystem(
+            local_path,
+            component_name,
+            component_id,
+            ComponentRevision(0),
+            component_type,
+            Vec::new(),
+            false,
+            HashMap::new(),
+            BTreeMap::new(),
+            environment_id,
+            application_id,
+            account_id,
+            environment_roles_from_shares,
+        )
+        .await
+    }
 
     pub async fn update_component(
         &self,

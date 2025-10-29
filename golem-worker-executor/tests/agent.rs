@@ -16,12 +16,9 @@ use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::let_assert;
 use assert2::{assert, check};
-use golem_api_grpc::proto::golem::worker::v1::worker_error::Error;
-use golem_api_grpc::proto::golem::worker::v1::{
-    worker_execution_error, InvocationFailed, WorkerExecutionError,
-};
-use golem_api_grpc::proto::golem::worker::{UnknownError, WorkerError};
+use golem_common::model::oplog::WorkerError;
 use golem_common::model::WorkerId;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_wasm::{IntoValueAndType, Value};
 use pretty_assertions::assert_eq;
@@ -59,22 +56,10 @@ async fn agent_self_rpc_is_not_allowed(
         .await?;
 
     let_assert!(
-        Err(Error::InternalError(WorkerExecutionError {
-            error: Some(worker_execution_error::Error::InvocationFailed(
-                InvocationFailed {
-                    error: Some(WorkerError {
-                        error: Some(
-                            golem_api_grpc::proto::golem::worker::worker_error::Error::UnknownError(
-                                UnknownError {
-                                    details: error_details
-                                }
-                            )
-                        )
-                    }),
-                    ..
-                }
-            ))
-        })) = result
+        Err(WorkerExecutorError::InvocationFailed {
+            error: WorkerError::Unknown(error_details),
+            ..
+        }) = result
     );
     assert!(error_details.contains("RPC calls to the same agent are not supported"));
 

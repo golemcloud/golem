@@ -117,7 +117,7 @@ declare_structs! {
         pub description: WorkerResourceDescription,
     }
 
-    pub struct FlatWorkerMetadata {
+    pub struct WorkerMetadataDto {
         pub worker_id: WorkerId,
         pub environment_id: EnvironmentId,
         pub created_by: AccountId,
@@ -140,14 +140,14 @@ declare_structs! {
         /// recorded oplog entries will be skipped on retry.
         pub skipped_regions: Vec<OplogRegion>,
         /// Oplog regions permanently deleted from the workers using the revert functionality.
-        pub deleted_regions: Vec<OplogRegion>,
+        pub deleted_regions: Vec<OplogRegion>
     }
 
 }
 
 mod protobuf {
-    use super::FlatWorkerMetadata;
     use super::WasiConfigVarsEntry;
+    use super::WorkerMetadataDto;
     use super::{
         ExportedResourceMetadata, FailedUpdate, PendingUpdate, SuccessfulUpdate, UpdateRecord,
         WasiConfigVars,
@@ -190,7 +190,7 @@ mod protobuf {
         }
     }
 
-    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for FlatWorkerMetadata {
+    impl TryFrom<golem_api_grpc::proto::golem::worker::WorkerMetadata> for WorkerMetadataDto {
         type Error = String;
 
         fn try_from(
@@ -254,8 +254,8 @@ mod protobuf {
         }
     }
 
-    impl From<FlatWorkerMetadata> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
-        fn from(value: FlatWorkerMetadata) -> Self {
+    impl From<WorkerMetadataDto> for golem_api_grpc::proto::golem::worker::WorkerMetadata {
+        fn from(value: WorkerMetadataDto) -> Self {
             let mut owned_resources = Vec::new();
             for instance in value.exported_resource_instances {
                 owned_resources.push(golem_api_grpc::proto::golem::worker::ResourceDescription {
