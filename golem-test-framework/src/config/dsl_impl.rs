@@ -30,7 +30,7 @@ use golem_common::model::component::{
 use golem_common::model::component_metadata::DynamicLinkedInstance;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::worker::WorkerMetadataDto;
-use golem_common::model::IdempotencyKey;
+use golem_common::model::{ComponentFileSystemNode, IdempotencyKey};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -44,6 +44,7 @@ use tokio::fs::File;
 use tokio::sync::mpsc::{UnboundedReceiver};
 use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
+use bytes::Bytes;
 
 #[derive(Clone)]
 pub struct TestDependenciesTestDsl<Deps> {
@@ -363,6 +364,18 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         _worker_id: &WorkerId,
         _idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool> {
+        unimplemented!()
+    }
+
+    async fn get_file_system_node(
+        &self,
+        _worker_id: &WorkerId,
+        _path: &str,
+    ) -> anyhow::Result<Vec<ComponentFileSystemNode>> {
+        unimplemented!()
+    }
+
+    async fn get_file_contents(&self, _worker_id: &WorkerId, _path: &str) -> anyhow::Result<Bytes> {
         unimplemented!()
     }
 }

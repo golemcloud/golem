@@ -44,7 +44,7 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
 use golem_common::model::{
-    IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
+    ComponentFileSystemNode, IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
@@ -61,6 +61,7 @@ use tokio::sync::oneshot::Sender;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
+use bytes::Bytes;
 
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
@@ -404,6 +405,14 @@ pub trait TestDsl {
         worker_id: &WorkerId,
         idempotency_key: &IdempotencyKey,
     ) -> anyhow::Result<bool>;
+
+    async fn get_file_system_node(
+        &self,
+        worker_id: &WorkerId,
+        path: &str,
+    ) -> anyhow::Result<Vec<ComponentFileSystemNode>>;
+
+    async fn get_file_contents(&self, worker_id: &WorkerId, path: &str) -> anyhow::Result<Bytes>;
 }
 
 #[async_trait]
