@@ -27,8 +27,6 @@ use tonic::codec::CompressionEncoding;
 use tonic::transport::{Channel, Endpoint};
 use tracing::Level;
 
-pub mod docker;
-pub mod k8s;
 pub mod provided;
 pub mod spawned;
 

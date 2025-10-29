@@ -112,9 +112,9 @@ pub trait DbTransaction<T: RdbmsType> {
 pub trait Rdbms<T: RdbmsType> {
     async fn create(&self, address: &str, worker_id: &WorkerId) -> Result<RdbmsPoolKey, Error>;
 
-    fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
+    async fn exists(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
-    fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
+    async fn remove(&self, key: &RdbmsPoolKey, worker_id: &WorkerId) -> bool;
 
     async fn execute(
         &self,
@@ -166,7 +166,7 @@ pub trait Rdbms<T: RdbmsType> {
         transaction_id: &TransactionId,
     ) -> Result<(), Error>;
 
-    fn status(&self) -> RdbmsStatus;
+    async fn status(&self) -> RdbmsStatus;
 }
 
 pub trait RdbmsService: Send + Sync {

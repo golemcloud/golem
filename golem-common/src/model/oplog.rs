@@ -100,6 +100,12 @@ impl AtomicOplogIndex {
         self.0
             .fetch_sub(count - 1, std::sync::atomic::Ordering::AcqRel);
     }
+
+    /// Keeps the larger value of this and `other`
+    pub fn max(&self, other: OplogIndex) {
+        self.0
+            .fetch_max(other.0, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 impl Display for AtomicOplogIndex {

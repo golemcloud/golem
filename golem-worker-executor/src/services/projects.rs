@@ -23,6 +23,7 @@ use golem_common::retries::with_retries;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::Uri;
 use std::hash::Hash;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 use tonic::codec::CompressionEncoding;
@@ -57,8 +58,6 @@ pub fn configured(config: &ProjectServiceConfig) -> Arc<dyn ProjectService> {
         )),
         ProjectServiceConfig::Disabled(config) => Arc::new(ProjectServiceDisabled {
             account_id: config.account_id.clone(),
-            project_id: config.project_id.clone(),
-            project_name: config.project_name.clone(),
         }),
     }
 }
@@ -278,24 +277,19 @@ where
     )
 }
 
+/// Project service implementation that accepts arbitrary Project IDs and
+/// treats them as existing projects belonging to the same account, with a name corresponding to the ID itself.
 struct ProjectServiceDisabled {
     account_id: AccountId,
-    project_id: ProjectId,
-    project_name: String,
 }
 
 #[async_trait]
 impl ProjectService for ProjectServiceDisabled {
     async fn get_project_owner(
         &self,
-        project_id: &ProjectId,
+        _project_id: &ProjectId,
     ) -> Result<AccountId, WorkerExecutorError> {
-        if project_id != &self.project_id {
-            Err(WorkerExecutorError::unknown(
-                format!("Project ID passed to ProjectServiceDisabled::get_project_owner ({project_id}) is not the default project ID")))
-        } else {
-            Ok(self.account_id.clone())
-        }
+        Ok(self.account_id.clone())
     }
 
     async fn resolve_project(
@@ -304,15 +298,15 @@ impl ProjectService for ProjectServiceDisabled {
         project_name: &str,
     ) -> Result<Option<ProjectId>, WorkerExecutorError> {
         if account_id != &self.account_id {
-            return Err(WorkerExecutorError::unknown(
+            Err(WorkerExecutorError::unknown(
                 format!("Account ID passed to ProjectServiceDisabled::resolve_project ({account_id}) does not match the default account")
-            ));
+            ))
+        } else if let Ok(project_id) = ProjectId::from_str(project_name) {
+            Ok(Some(project_id))
+        } else {
+            Err(WorkerExecutorError::unknown(
+                format!("Project name passed to ProjectServiceDisabled::resolve_project ({project_name}) must be the project id itself")
+            ))
         }
-        if project_name != self.project_name {
-            return Err(WorkerExecutorError::unknown(
-                format!("Project name passed to ProjectServiceDisabled::resolve_project ({project_name}) does not match the default project name")
-            ));
-        }
-        Ok(Some(self.project_id.clone()))
     }
 }

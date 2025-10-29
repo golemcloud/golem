@@ -19,6 +19,7 @@ use test_r::{inherit_test_dep, sequential_suite};
 
 pub mod repo;
 pub mod service;
+pub mod stubs;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(Arc<dyn LimitService>);

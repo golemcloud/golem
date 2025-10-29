@@ -684,7 +684,7 @@ impl Oplog for ForwardingOplog {
         self.inner.add(entry).await
     }
 
-    async fn drop_prefix(&self, last_dropped_id: OplogIndex) {
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
         self.inner.drop_prefix(last_dropped_id).await
     }
 

@@ -12,28 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::cloud_service::docker::DockerCloudService;
-use crate::components::cloud_service::k8s::K8sCloudService;
 use crate::components::cloud_service::provided::ProvidedCloudService;
 use crate::components::cloud_service::spawned::SpawnedCloudService;
 use crate::components::cloud_service::CloudService;
-use crate::components::component_compilation_service::docker::DockerComponentCompilationService;
-use crate::components::component_compilation_service::k8s::K8sComponentCompilationService;
+
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
 use crate::components::component_compilation_service::ComponentCompilationService;
-use crate::components::component_service::docker::DockerComponentService;
-use crate::components::component_service::k8s::K8sComponentService;
+
 use crate::components::component_service::provided::ProvidedComponentService;
 use crate::components::component_service::spawned::SpawnedComponentService;
 use crate::components::component_service::ComponentService;
-use crate::components::k8s::{aws_nlb_service_annotations, K8sNamespace, K8sRoutingType};
 use crate::components::rdb::docker_postgres::DockerPostgresRdb;
-use crate::components::rdb::k8s_postgres::K8sPostgresRdb;
+
 use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
 use crate::components::rdb::{PostgresInfo, Rdb};
-use crate::components::redis::docker::DockerRedis;
-use crate::components::redis::k8s::K8sRedis;
+
 use crate::components::redis::provided::ProvidedRedis;
 use crate::components::redis::spawned::SpawnedRedis;
 use crate::components::redis::Redis;
@@ -41,18 +35,15 @@ use crate::components::redis_monitor::spawned::SpawnedRedisMonitor;
 use crate::components::redis_monitor::RedisMonitor;
 use crate::components::service::spawned::SpawnedService;
 use crate::components::service::Service;
-use crate::components::shard_manager::docker::DockerShardManager;
-use crate::components::shard_manager::k8s::K8sShardManager;
+
 use crate::components::shard_manager::provided::ProvidedShardManager;
 use crate::components::shard_manager::spawned::SpawnedShardManager;
 use crate::components::shard_manager::ShardManager;
-use crate::components::worker_executor_cluster::docker::DockerWorkerExecutorCluster;
-use crate::components::worker_executor_cluster::k8s::K8sWorkerExecutorCluster;
+
 use crate::components::worker_executor_cluster::provided::ProvidedWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::spawned::SpawnedWorkerExecutorCluster;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
-use crate::components::worker_service::docker::DockerWorkerService;
-use crate::components::worker_service::k8s::K8sWorkerService;
+
 use crate::components::worker_service::provided::ProvidedWorkerService;
 use crate::components::worker_service::spawned::SpawnedWorkerService;
 use crate::components::worker_service::WorkerService;
@@ -69,7 +60,6 @@ use itertools::Itertools;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 use tempfile::TempDir;
 use tracing::Level;
 use uuid::Uuid;
@@ -249,13 +239,6 @@ pub enum TestMode {
         blob_storage_path: PathBuf,
     },
     #[command()]
-    Docker {
-        #[arg(long, default_value = "")]
-        redis_prefix: String,
-        #[arg(long, default_value = "false")]
-        compilation_service_disabled: bool,
-    },
-    #[command()]
     Spawned {
         #[arg(long, default_value = ".")]
         workspace_root: String,
@@ -296,42 +279,12 @@ pub enum TestMode {
         #[arg(long, default_value = "9095")]
         mute_child: bool,
     },
-    #[command()]
-    Minikube {
-        #[arg(long, default_value = "default")]
-        namespace: String,
-        #[arg(long, default_value = "")]
-        redis_prefix: String,
-        #[arg(long, default_value = "false")]
-        compilation_service_disabled: bool,
-    },
-    #[command()]
-    Aws {
-        #[arg(long, default_value = "default")]
-        namespace: String,
-        #[arg(long, default_value = "")]
-        redis_prefix: String,
-        #[arg(long, default_value = "false")]
-        compilation_service_disabled: bool,
-    },
 }
 
 impl TestMode {
     pub fn compilation_service_disabled(&self) -> bool {
         match self {
             TestMode::Provided { .. } => false,
-            TestMode::Docker {
-                compilation_service_disabled,
-                ..
-            } => *compilation_service_disabled,
-            TestMode::Minikube {
-                compilation_service_disabled,
-                ..
-            } => *compilation_service_disabled,
-            TestMode::Aws {
-                compilation_service_disabled,
-                ..
-            } => *compilation_service_disabled,
             TestMode::Spawned {
                 compilation_service_disabled,
                 ..
@@ -354,132 +307,6 @@ impl CliTestDependencies {
                 )
             },
         );
-    }
-
-    async fn make_docker(
-        params: CliParams,
-        cluster_size: usize,
-        redis_prefix: &str,
-        compilation_service_disabled: bool,
-    ) -> Self {
-        let params_clone = params.clone();
-        let unique_network_id = Uuid::new_v4().to_string();
-
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
-        let rdb: Arc<dyn Rdb> = Arc::new(DockerPostgresRdb::new(&unique_network_id).await);
-
-        let cloud_service: Arc<dyn CloudService> = Arc::new(
-            DockerCloudService::new(
-                &unique_network_id,
-                rdb.clone(),
-                params.golem_client_protocol,
-                params.service_verbosity(),
-            )
-            .await,
-        );
-
-        let component_service: Arc<dyn ComponentService> = Arc::new(
-            DockerComponentService::new(
-                &unique_network_id,
-                PathBuf::from(&params.component_directory),
-                (!compilation_service_disabled).then(|| {
-                    (
-                        DockerComponentCompilationService::NAME,
-                        DockerComponentCompilationService::GRPC_PORT.as_u16(),
-                    )
-                }),
-                rdb.clone(),
-                params_clone.service_verbosity(),
-                params.golem_client_protocol,
-                plugin_wasm_files_service.clone(),
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
-            DockerComponentCompilationService::new(
-                &unique_network_id,
-                component_service.clone(),
-                params_clone.service_verbosity(),
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let redis: Arc<dyn Redis> =
-            Arc::new(DockerRedis::new(&unique_network_id, redis_prefix.to_string()).await);
-
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::DEBUG,
-            Level::ERROR,
-        ));
-
-        let shard_manager: Arc<dyn ShardManager> = Arc::new(
-            DockerShardManager::new(
-                &unique_network_id,
-                redis.clone(),
-                None,
-                params.service_verbosity(),
-            )
-            .await,
-        );
-
-        let worker_service: Arc<dyn WorkerService> = Arc::new(
-            DockerWorkerService::new(
-                &unique_network_id,
-                component_service.clone(),
-                shard_manager.clone(),
-                rdb.clone(),
-                params.service_verbosity(),
-                params.golem_client_protocol,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
-            DockerWorkerExecutorCluster::new(
-                cluster_size,
-                &unique_network_id,
-                redis.clone(),
-                component_service.clone(),
-                shard_manager.clone(),
-                worker_service.clone(),
-                params.service_verbosity(),
-                true,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        Self {
-            rdb,
-            redis,
-            redis_monitor,
-            shard_manager,
-            component_service,
-            component_compilation_service,
-            worker_service,
-            worker_executor_cluster,
-            blob_storage,
-            initial_component_files_service,
-            plugin_wasm_files_service,
-            cloud_service,
-            component_directory: params.component_directory.clone().into(),
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -666,319 +493,6 @@ impl CliTestDependencies {
         }
     }
 
-    async fn make_minikube(
-        params: CliParams,
-        cluster_size: usize,
-        namespace: &str,
-        redis_prefix: &str,
-        compilation_service_disabled: bool,
-    ) -> Self {
-        let routing_type = K8sRoutingType::Minikube;
-        let namespace = K8sNamespace(namespace.to_string());
-        let timeout = Duration::from_secs(90);
-
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
-        let rdb: Arc<dyn Rdb> =
-            Arc::new(K8sPostgresRdb::new(&namespace, &routing_type, timeout, None).await);
-
-        let cloud_service: Arc<dyn CloudService> = Arc::new(
-            K8sCloudService::new(
-                &namespace,
-                &routing_type,
-                params.golem_client_protocol,
-                Level::INFO,
-                rdb.clone(),
-                timeout,
-                None,
-            )
-            .await,
-        );
-
-        let component_service: Arc<dyn ComponentService> = Arc::new(
-            K8sComponentService::new(
-                PathBuf::from(&params.component_directory),
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                (!compilation_service_disabled).then_some((
-                    K8sComponentCompilationService::NAME,
-                    K8sComponentCompilationService::GRPC_PORT,
-                )),
-                rdb.clone(),
-                timeout,
-                None,
-                params.golem_client_protocol,
-                plugin_wasm_files_service.clone(),
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
-            K8sComponentCompilationService::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                component_service.clone(),
-                timeout,
-                None,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let redis: Arc<dyn Redis> = Arc::new(
-            K8sRedis::new(
-                &namespace,
-                &routing_type,
-                redis_prefix.to_string(),
-                timeout,
-                None,
-            )
-            .await,
-        );
-
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::DEBUG,
-            Level::ERROR,
-        ));
-
-        let shard_manager: Arc<dyn ShardManager> = Arc::new(
-            K8sShardManager::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                redis.clone(),
-                timeout,
-                None,
-            )
-            .await,
-        );
-
-        let worker_service: Arc<dyn WorkerService + 'static> = Arc::new(
-            K8sWorkerService::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                component_service.clone(),
-                shard_manager.clone(),
-                rdb.clone(),
-                timeout,
-                None,
-                params.golem_client_protocol,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
-            K8sWorkerExecutorCluster::new(
-                cluster_size,
-                &namespace,
-                &routing_type,
-                redis.clone(),
-                component_service.clone(),
-                shard_manager.clone(),
-                worker_service.clone(),
-                Level::INFO,
-                timeout,
-                None,
-                true,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        Self {
-            rdb,
-            redis,
-            redis_monitor,
-            shard_manager,
-            component_service,
-            component_compilation_service,
-            worker_service,
-            worker_executor_cluster,
-            blob_storage,
-            initial_component_files_service,
-            plugin_wasm_files_service,
-            component_directory: Path::new(&params.component_directory).to_path_buf(),
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            cloud_service,
-        }
-    }
-
-    async fn make_aws(
-        params: CliParams,
-        cluster_size: usize,
-        namespace: &str,
-        redis_prefix: &str,
-        compilation_service_disabled: bool,
-    ) -> Self {
-        let routing_type = K8sRoutingType::Service;
-        let namespace = K8sNamespace(namespace.to_string());
-        let service_annotations = Some(aws_nlb_service_annotations());
-        let timeout = Duration::from_secs(900);
-
-        let blob_storage = Arc::new(
-            FileSystemBlobStorage::new(&PathBuf::from("/tmp/ittest-local-object-store/golem"))
-                .await
-                .unwrap(),
-        );
-        let initial_component_files_service =
-            Arc::new(InitialComponentFilesService::new(blob_storage.clone()));
-
-        let plugin_wasm_files_service = Arc::new(PluginWasmFilesService::new(blob_storage.clone()));
-
-        let rdb: Arc<dyn Rdb> = Arc::new(
-            K8sPostgresRdb::new(
-                &namespace,
-                &routing_type,
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
-
-        let cloud_service: Arc<dyn CloudService> = Arc::new(
-            K8sCloudService::new(
-                &namespace,
-                &routing_type,
-                params.golem_client_protocol,
-                Level::INFO,
-                rdb.clone(),
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
-
-        let component_service: Arc<dyn ComponentService> = {
-            let component_directory = PathBuf::from(&params.component_directory);
-
-            Arc::new(
-                K8sComponentService::new(
-                    component_directory,
-                    &namespace,
-                    &routing_type,
-                    Level::INFO,
-                    (!compilation_service_disabled).then_some((
-                        K8sComponentCompilationService::NAME,
-                        K8sComponentCompilationService::GRPC_PORT,
-                    )),
-                    rdb.clone(),
-                    timeout,
-                    service_annotations.clone(),
-                    params.golem_client_protocol,
-                    plugin_wasm_files_service.clone(),
-                    cloud_service.clone(),
-                )
-                .await,
-            )
-        };
-
-        let component_compilation_service: Arc<dyn ComponentCompilationService> = Arc::new(
-            K8sComponentCompilationService::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                component_service.clone(),
-                timeout,
-                service_annotations.clone(),
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        let redis: Arc<dyn Redis> = Arc::new(
-            K8sRedis::new(
-                &namespace,
-                &routing_type,
-                redis_prefix.to_string(),
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
-
-        let redis_monitor: Arc<dyn RedisMonitor> = Arc::new(SpawnedRedisMonitor::new(
-            redis.clone(),
-            Level::DEBUG,
-            Level::ERROR,
-        ));
-
-        let shard_manager: Arc<dyn ShardManager> = Arc::new(
-            K8sShardManager::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                redis.clone(),
-                timeout,
-                service_annotations.clone(),
-            )
-            .await,
-        );
-
-        let worker_service: Arc<dyn WorkerService> = Arc::new(
-            K8sWorkerService::new(
-                &namespace,
-                &routing_type,
-                Level::INFO,
-                component_service.clone(),
-                shard_manager.clone(),
-                rdb.clone(),
-                timeout,
-                service_annotations.clone(),
-                params.golem_client_protocol,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-        let worker_executor_cluster: Arc<dyn WorkerExecutorCluster> = Arc::new(
-            K8sWorkerExecutorCluster::new(
-                cluster_size,
-                &namespace,
-                &routing_type,
-                redis.clone(),
-                component_service.clone(),
-                shard_manager.clone(),
-                worker_service.clone(),
-                Level::INFO,
-                timeout,
-                service_annotations.clone(),
-                true,
-                cloud_service.clone(),
-            )
-            .await,
-        );
-
-        Self {
-            rdb,
-            redis,
-            redis_monitor,
-            shard_manager,
-            component_service,
-            component_compilation_service,
-            worker_service,
-            worker_executor_cluster,
-            component_directory: Path::new(&params.component_directory).to_path_buf(),
-            blob_storage,
-            plugin_wasm_files_service,
-            initial_component_files_service,
-            component_temp_directory: Arc::new(TempDir::new().unwrap()),
-            cloud_service,
-        }
-    }
-
     pub async fn new(params: CliParams, cluster_size: usize) -> Self {
         match &params.mode {
             TestMode::Provided {
@@ -1103,18 +617,6 @@ impl CliTestDependencies {
                     cloud_service,
                 }
             }
-            TestMode::Docker {
-                redis_prefix,
-                compilation_service_disabled,
-            } => {
-                Self::make_docker(
-                    params.clone(),
-                    cluster_size,
-                    redis_prefix,
-                    *compilation_service_disabled,
-                )
-                .await
-            }
             TestMode::Spawned {
                 workspace_root,
                 build_target,
@@ -1158,34 +660,6 @@ impl CliTestDependencies {
                     *cloud_service_http_port,
                     *cloud_service_grpc_port,
                     *mute_child,
-                )
-                .await
-            }
-            TestMode::Minikube {
-                namespace,
-                redis_prefix,
-                compilation_service_disabled,
-            } => {
-                Self::make_minikube(
-                    params.clone(),
-                    cluster_size,
-                    namespace,
-                    redis_prefix,
-                    *compilation_service_disabled,
-                )
-                .await
-            }
-            TestMode::Aws {
-                namespace,
-                redis_prefix,
-                compilation_service_disabled,
-            } => {
-                Self::make_aws(
-                    params.clone(),
-                    cluster_size,
-                    namespace,
-                    redis_prefix,
-                    *compilation_service_disabled,
                 )
                 .await
             }

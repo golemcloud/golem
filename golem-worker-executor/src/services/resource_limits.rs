@@ -17,7 +17,6 @@ use crate::metrics::resources::{record_fuel_borrow, record_fuel_return};
 use crate::model::CurrentResourceLimits;
 use crate::services::golem_config::ResourceLimitsConfig;
 use async_trait::async_trait;
-use dashmap::DashMap;
 use golem_api_grpc::proto::golem::limit::v1::cloud_limits_service_client::CloudLimitsServiceClient;
 use golem_api_grpc::proto::golem::limit::v1::{
     batch_update_resource_limits_response, get_resource_limits_response, BatchUpdateResourceLimits,
@@ -91,7 +90,7 @@ pub struct ResourceLimitsGrpc {
     endpoint: Uri,
     access_token: Uuid,
     retry_config: RetryConfig,
-    current_limits: DashMap<AccountId, CurrentResourceLimitsEntry>,
+    current_limits: scc::HashMap<AccountId, CurrentResourceLimitsEntry>,
     background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
@@ -187,18 +186,22 @@ impl ResourceLimitsGrpc {
     }
 
     /// Takes all recorded fuel updates and resets them to 0
-    fn take_all_fuel_updates(&self) -> HashMap<AccountId, i64> {
+    async fn take_all_fuel_updates(&self) -> HashMap<AccountId, i64> {
         let mut updates = HashMap::new();
-        for mut entry in self.current_limits.iter_mut() {
-            if entry.delta != 0 {
-                updates.insert(entry.key().clone(), entry.delta);
-                entry.delta = 0;
-            }
-        }
+        self.current_limits
+            .iter_mut_async(|mut entry| {
+                if entry.1.delta != 0 {
+                    updates.insert(entry.0.clone(), entry.1.delta);
+                    entry.1.delta = 0;
+                }
+                true
+            })
+            .await;
+
         updates
     }
 
-    pub fn new(
+    pub async fn new(
         endpoint: Uri,
         access_token: Uuid,
         retry_config: RetryConfig,
@@ -208,7 +211,7 @@ impl ResourceLimitsGrpc {
             endpoint,
             access_token,
             retry_config,
-            current_limits: DashMap::new(),
+            current_limits: scc::HashMap::new(),
             background_handle: Arc::new(Mutex::new(None)),
         };
         let svc = Arc::new(svc);
@@ -216,7 +219,7 @@ impl ResourceLimitsGrpc {
         let background_handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(batch_update_interval).await;
-                let updates = svc_clone.take_all_fuel_updates();
+                let updates = svc_clone.take_all_fuel_updates().await;
                 if !updates.is_empty() {
                     let r = svc_clone.send_batch_updates(updates.clone()).await;
                     if let Err(err) = r {
@@ -269,15 +272,14 @@ impl ResourceLimits for ResourceLimitsGrpc {
 
     fn borrow_fuel_sync(&self, account_id: &AccountId, amount: i64) -> Option<i64> {
         let mut borrowed = None;
-        self.current_limits
-            .entry(account_id.clone())
-            .and_modify(|entry| {
-                let available = max(0, min(amount, entry.limits.fuel));
-                borrowed = Some(available);
-                record_fuel_borrow(available);
-                entry.limits.fuel -= available;
-                entry.delta -= available;
-            });
+        self.current_limits.update_sync(account_id, |_, entry| {
+            let available = max(0, min(amount, entry.limits.fuel));
+            borrowed = Some(available);
+            record_fuel_borrow(available);
+            entry.limits.fuel -= available;
+            entry.delta -= available;
+        });
+
         borrowed
     }
 
@@ -286,13 +288,11 @@ impl ResourceLimits for ResourceLimitsGrpc {
         account_id: &AccountId,
         remaining: i64,
     ) -> Result<(), WorkerExecutorError> {
-        self.current_limits
-            .entry(account_id.clone())
-            .and_modify(|entry| {
-                record_fuel_return(remaining);
-                entry.limits.fuel += remaining;
-                entry.delta += remaining;
-            });
+        self.current_limits.update_sync(account_id, |_, entry| {
+            record_fuel_return(remaining);
+            entry.limits.fuel += remaining;
+            entry.delta += remaining;
+        });
         Ok(())
     }
 
@@ -302,7 +302,8 @@ impl ResourceLimits for ResourceLimitsGrpc {
         last_known_limits: &CurrentResourceLimits,
     ) -> Result<(), WorkerExecutorError> {
         self.current_limits
-            .entry(account_id.clone())
+            .entry_async(account_id.clone())
+            .await
             .and_modify(|entry| {
                 entry.limits.fuel = last_known_limits.fuel + entry.delta;
                 entry.limits.max_memory = last_known_limits.max_memory;
@@ -318,8 +319,8 @@ impl ResourceLimits for ResourceLimitsGrpc {
         loop {
             match self
                 .current_limits
-                .get(account_id)
-                .map(|entry| entry.limits.max_memory)
+                .read_async(account_id, |_, entry| entry.limits.max_memory)
+                .await
             {
                 Some(max_memory) => break Ok(max_memory),
                 None => {
@@ -383,17 +384,20 @@ impl ResourceLimits for ResourceLimitsDisabled {
     }
 }
 
-pub fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits + Send + Sync> {
+pub async fn configured(config: &ResourceLimitsConfig) -> Arc<dyn ResourceLimits + Send + Sync> {
     match config {
-        ResourceLimitsConfig::Grpc(config) => ResourceLimitsGrpc::new(
-            config.uri(),
-            config
-                .access_token
-                .parse::<Uuid>()
-                .expect("Access token must be an UUID"),
-            config.retries.clone(),
-            config.batch_update_interval,
-        ),
+        ResourceLimitsConfig::Grpc(config) => {
+            ResourceLimitsGrpc::new(
+                config.uri(),
+                config
+                    .access_token
+                    .parse::<Uuid>()
+                    .expect("Access token must be an UUID"),
+                config.retries.clone(),
+                config.batch_update_interval,
+            )
+            .await
+        }
         ResourceLimitsConfig::Disabled(_) => ResourceLimitsDisabled::new(),
     }
 }

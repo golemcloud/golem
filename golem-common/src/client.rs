@@ -14,8 +14,8 @@
 
 use crate::model::RetryConfig;
 use crate::retries::RetryState;
-use dashmap::DashMap;
 use http::Uri;
+use scc::hash_map::Entry;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -115,7 +115,7 @@ impl<T: Clone> GrpcClient<T> {
 #[derive(Clone)]
 pub struct MultiTargetGrpcClient<T: Clone> {
     config: GrpcClientConfig,
-    clients: Arc<DashMap<Uri, GrpcClientConnection<T>>>,
+    clients: Arc<scc::HashMap<Uri, GrpcClientConnection<T>>>,
     client_factory: Arc<dyn Fn(Channel) -> T + Send + Sync>,
     target_name: String,
 }
@@ -128,7 +128,7 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
     ) -> Self {
         Self {
             config,
-            clients: Arc::new(DashMap::new()),
+            clients: Arc::new(scc::HashMap::new()),
             client_factory: Arc::new(client_factory),
             target_name: target_name.as_ref().to_string(),
         }
@@ -155,12 +155,13 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
             retries.start_attempt();
             let mut entry = self
                 .get(endpoint.clone())
+                .await
                 .map_err(|err| Status::from_error(Box::new(err)))?;
             match f(&mut entry.client).instrument(span.clone()).await {
                 Ok(result) => break Ok(result),
                 Err(e) => {
                     if requires_reconnect(&e) {
-                        self.clients.remove(&endpoint);
+                        self.clients.remove_async(&endpoint).await;
                         if !retries.failed_attempt().await {
                             span.in_scope(|| {
                                 warn!("gRPC call failed: {:?}, no more retries", e);
@@ -183,18 +184,20 @@ impl<T: Clone> MultiTargetGrpcClient<T> {
         }
     }
 
-    fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
+    async fn get(&self, endpoint: Uri) -> Result<GrpcClientConnection<T>, tonic::transport::Error> {
         let connect_timeout = self.config.connect_timeout;
-        let entry = self
-            .clients
-            .entry(endpoint.clone())
-            .or_try_insert_with(move || {
+        let entry = self.clients.entry_async(endpoint.clone()).await;
+        match entry {
+            Entry::Occupied(entry) => Ok(entry.get().clone()),
+            Entry::Vacant(entry) => {
                 let endpoint = Endpoint::new(endpoint)?.connect_timeout(connect_timeout);
                 let channel = endpoint.connect_lazy();
                 let client = (self.client_factory)(channel);
-                Ok(GrpcClientConnection { client })
-            })?;
-        Ok(entry.clone())
+                let connection = GrpcClientConnection { client };
+                entry.insert_entry(connection.clone());
+                Ok(connection)
+            }
+        }
     }
 }
 

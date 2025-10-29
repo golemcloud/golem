@@ -36,7 +36,9 @@ use crate::services::agent_types::AgentTypesService;
 use crate::services::blob_store::{BlobStoreService, DefaultBlobStoreService};
 use crate::services::component::ComponentService;
 use crate::services::events::Events;
-use crate::services::golem_config::{GolemConfig, IndexedStorageConfig, KeyValueStorageConfig};
+use crate::services::golem_config::{
+    EngineConfig, GolemConfig, IndexedStorageConfig, KeyValueStorageConfig,
+};
 use crate::services::key_value::{DefaultKeyValueService, KeyValueService};
 use crate::services::oplog::plugin::{
     ForwardingOplogService, OplogProcessorPlugin, PerExecutorOplogProcessorPlugin,
@@ -209,7 +211,7 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
     ) -> anyhow::Result<All<Ctx>>;
 
     /// Can be overridden to customize the wasmtime configuration
-    fn create_wasmtime_config(&self) -> Config {
+    fn create_wasmtime_config(&self, engine_config: &EngineConfig) -> Config {
         let mut config = Config::default();
 
         config.wasm_multi_value(true);
@@ -218,6 +220,13 @@ pub trait Bootstrap<Ctx: WorkerCtx> {
         config.epoch_interruption(true);
         config.consume_fuel(true);
         config.wasm_backtrace_details(WasmBacktraceDetails::Enable);
+
+        if engine_config.enable_fs_cache {
+            config.cache(Some(
+                wasmtime::Cache::new(wasmtime::CacheConfig::new())
+                    .expect("Failed to initialize cache"),
+            ));
+        }
 
         config
     }
@@ -453,7 +462,7 @@ pub async fn create_worker_executor_impl<Ctx: WorkerCtx, A: Bootstrap<Ctx> + ?Si
 
     let shard_manager_service = shard_manager::configured(&golem_config.shard_manager_service);
 
-    let config = bootstrap.create_wasmtime_config();
+    let config = bootstrap.create_wasmtime_config(&golem_config.engine);
     let engine = Arc::new(Engine::new(&config)?);
     let linker = bootstrap.create_wasmtime_linker(&engine)?;
 

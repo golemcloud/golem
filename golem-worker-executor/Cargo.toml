@@ -46,7 +46,6 @@ bytes = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
 chrono = { workspace = true }
-dashmap = { workspace = true }
 drop-stream = { workspace = true }
 evicting_cache_map = { workspace = true }
 figment = { workspace = true }
@@ -74,6 +73,7 @@ prost = { workspace = true }
 rand = { workspace = true }
 regex = { workspace = true }
 ringbuf = { workspace = true }
+scc = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 sqlx = { workspace = true }
