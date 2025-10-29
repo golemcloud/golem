@@ -1,10 +1,11 @@
 {
   "description": "Composable App Common template for Rust",
-  "appCommonGroup": "default",
+  "appCommonGroup": "generic",
   "appCommonSkipIfExists": "common-rust/golem.yaml",
   "requiresGolemHostWIT": true,
   "requiresWASI": true,
   "witDepsPaths": [
     "wit/deps"
-  ]
+  ],
+  "devOnly": true
 }
