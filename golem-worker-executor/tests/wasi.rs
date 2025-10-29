@@ -1197,7 +1197,7 @@ async fn http_client_interrupting_response_stream(
     let worker_id = executor
         .start_worker_with(&component.id, "http-client-2", vec![], env, vec![])
         .await?;
-    let (rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 
@@ -1311,7 +1311,7 @@ async fn http_client_interrupting_response_stream_async(
     let worker_id = executor
         .start_worker_with(&component.id, "http-client-2-async", vec![], env, vec![])
         .await?;
-    let (rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let key = IdempotencyKey::fresh();
 

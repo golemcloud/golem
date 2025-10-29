@@ -2229,7 +2229,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(20))
         .await?;
 
-    let (mut rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     {
         let mut response = response.lock().unwrap();
@@ -2315,7 +2315,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
         .start_worker_with(&component.id, "poll-loop-component-2", vec![], env, vec![])
         .await?;
 
-    let (mut rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke(
@@ -2401,7 +2401,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
         .start_worker_with(&component.id, "poll-loop-component-3", vec![], env, vec![])
         .await?;
 
-    let (rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke(
@@ -2481,7 +2481,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .start_worker_with(&component.id, "poll-loop-component-4", vec![], env, vec![])
         .await?;
 
-    let (rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke(
@@ -2505,7 +2505,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
         .wait_for_status(&worker_id, WorkerStatus::Running, Duration::from_secs(10))
         .await?;
 
-    let (mut rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (mut rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     // wait for one loop to finish
     {
@@ -2616,7 +2616,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
         .start_worker_with(&component.id, "poll-loop-component-5", vec![], env, vec![])
         .await?;
 
-    let (rx, _) = executor.capture_output_with_termination(&worker_id).await?;
+    let (rx, _abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     executor
         .invoke(
