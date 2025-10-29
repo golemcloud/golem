@@ -500,13 +500,14 @@ dependencies = [
     "cli-integration-tests-group3",
 ]
 
+# TODO: readd nocapture after fixing base path bug
 [tasks.cli-integration-tests-group1]
 dependencies = ["build-bins-all-non-ci"]
 description = "Run CLI integration tests (1/3)"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli :tag: --test integration -- --report-time %{JUNIT_OPTS}
+exec --fail-on-error cargo-test-r run --package golem-cli :tag:group1 --test integration -- --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-group2]
