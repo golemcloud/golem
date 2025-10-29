@@ -319,7 +319,6 @@ jobs:
       - name: ${{ matrix.group.description }}
         env:
           QUIET: false
-          GOLEM_RUST_PATH: ${{ github.workspace }}/sdks/rust/golem-rust
         run: cargo make --profile ci ${{ matrix.group.name }}
         timeout-minutes: 15
       - name: Publish Test Report

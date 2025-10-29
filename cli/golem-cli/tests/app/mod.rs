@@ -298,6 +298,18 @@ impl TestContext {
             }
         }
 
+        // TODO: remove before 1.3.A release
+        if !env.contains_key("GOLEM_RUST_PATH") && !env.contains_key("GOLEM_RUST_VERSION") {
+            env.insert(
+                "GOLEM_RUST_PATH".to_string(),
+                Path::new("../../sdks/rust/golem-rust")
+                    .canonicalize()
+                    .expect("Failed to canonicalize golem-rust path")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+        }
+
         let ctx = Self {
             quiet,
             golem_path: PathBuf::from("../../target/debug/golem")
