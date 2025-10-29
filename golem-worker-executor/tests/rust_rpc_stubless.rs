@@ -17,11 +17,11 @@ use test_r::{inherit_test_dep, test};
 use crate::common::{start, TestContext};
 use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
+use golem_common::model::component::ComponentType;
 use golem_common::model::component_metadata::{
     DynamicLinkedInstance, DynamicLinkedWasmRpc, WasmRpcTarget,
 };
 use golem_common::model::oplog::WorkerError;
-use golem_common::model::component::ComponentType;
 use golem_test_framework::dsl::{worker_error_underlying_error, TestDsl};
 use golem_wasm::analysis::analysed_type;
 use golem_wasm::{IntoValueAndType, Value, ValueAndType};
@@ -42,7 +42,8 @@ async fn auction_example_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let registry_component = executor.component(&context.default_environment_id, "auction_registry")
+    let registry_component = executor
+        .component(&context.default_environment_id, "auction_registry")
         .with_dynamic_linking(&[(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
@@ -69,7 +70,10 @@ async fn auction_example_1(
         .store()
         .await?;
 
-    let auction_component = executor.component(&context.default_environment_id, "auction").store().await?;
+    let auction_component = executor
+        .component(&context.default_environment_id, "auction")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
@@ -113,7 +117,9 @@ async fn auction_example_1(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&registry_worker_id).await?;
+    executor
+        .check_oplog_is_queryable(&registry_worker_id)
+        .await?;
 
     check!(create_auction_result.is_ok());
 
@@ -143,7 +149,8 @@ async fn auction_example_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let registry_component = executor.component(&context.default_environment_id, "auction_registry")
+    let registry_component = executor
+        .component(&context.default_environment_id, "auction_registry")
         .with_dynamic_linking(&[(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
@@ -170,7 +177,10 @@ async fn auction_example_2(
         .store()
         .await?;
 
-    let auction_component = executor.component(&context.default_environment_id, "auction").store().await?;
+    let auction_component = executor
+        .component(&context.default_environment_id, "auction")
+        .store()
+        .await?;
 
     let mut env = HashMap::new();
     env.insert(
@@ -215,7 +225,9 @@ async fn auction_example_2(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&registry_worker_id).await?;
+    executor
+        .check_oplog_is_queryable(&registry_worker_id)
+        .await?;
 
     check!(create_auction_result.is_ok());
 
@@ -245,8 +257,12 @@ async fn counter_resource_test_1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -329,8 +345,12 @@ async fn counter_resource_test_2(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -416,8 +436,12 @@ async fn counter_resource_test_2_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -505,8 +529,12 @@ async fn counter_resource_test_3(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -590,8 +618,12 @@ async fn counter_resource_test_3_with_restart(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -679,8 +711,12 @@ async fn context_inheritance(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -813,8 +849,12 @@ async fn counter_resource_test_5(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -900,8 +940,13 @@ async fn counter_resource_test_5_with_restart(
     let executor = start(deps, &context).await?;
 
     // using store_unique_component to avoid collision with counter_resource_test_5
-    let counters_component = executor.component(&context.default_environment_id, "counters").unique().store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .unique()
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .unique()
         .with_dynamic_linking(&[
             (
@@ -1007,8 +1052,12 @@ async fn wasm_rpc_bug_32_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -1103,7 +1152,8 @@ async fn error_message_non_existing_target_component(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let registry_component = executor.component(&context.default_environment_id, "auction_registry")
+    let registry_component = executor
+        .component(&context.default_environment_id, "auction_registry")
         .with_dynamic_linking(&[(
             "auction:auction-client/auction-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {
@@ -1165,7 +1215,9 @@ async fn error_message_non_existing_target_component(
         )
         .await?;
 
-    executor.check_oplog_is_queryable(&registry_worker_id).await?;
+    executor
+        .check_oplog_is_queryable(&registry_worker_id)
+        .await?;
 
     assert!(
         matches!(worker_error_underlying_error(&create_auction_result.err().unwrap()), Some(WorkerError::Unknown(err)) if err.contains("Could not find any component with the given id"))
@@ -1184,8 +1236,13 @@ async fn ephemeral_worker_invocation_via_rpc1(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let ephemeral_component = executor.component(&context.default_environment_id, "ephemeral").ephemeral().store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let ephemeral_component = executor
+        .component(&context.default_environment_id, "ephemeral")
+        .ephemeral()
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",
@@ -1295,8 +1352,12 @@ async fn golem_bug_1265_test(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let counters_component = executor.component(&context.default_environment_id, "counters").store().await?;
-    let caller_component = executor.component(&context.default_environment_id, "caller")
+    let counters_component = executor
+        .component(&context.default_environment_id, "counters")
+        .store()
+        .await?;
+    let caller_component = executor
+        .component(&context.default_environment_id, "caller")
         .with_dynamic_linking(&[
             (
                 "rpc:counters-client/counters-client",

@@ -53,9 +53,14 @@ async fn spawning_many_workers_that_sleep(
     }
 
     let executor = start(deps, &context).await?;
-    let component = executor.component(&context.default_environment_id, "clocks").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "clocks")
+        .store()
+        .await?;
 
-    let warmup_worker = executor.start_worker(&component.id, &worker_name(0)).await?;
+    let warmup_worker = executor
+        .start_worker(&component.id, &worker_name(0))
+        .await?;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
@@ -147,9 +152,14 @@ async fn spawning_many_workers_that_sleep_long_enough_to_get_suspended(
     }
 
     let executor = start(deps, &context).await?;
-    let component = executor.component(&context.default_environment_id, "clocks").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "clocks")
+        .store()
+        .await?;
 
-    let warmup_worker = executor.start_worker(&component.id, &worker_name(0)).await?;
+    let warmup_worker = executor
+        .start_worker(&component.id, &worker_name(0))
+        .await?;
 
     let executor_clone = executor.clone();
     let warmup_result = timed(async move {
@@ -252,7 +262,10 @@ async fn initial_large_memory_allocation(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
-    let component = executor.component(&context.default_environment_id, "large-initial-memory").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "large-initial-memory")
+        .store()
+        .await?;
 
     let mut handles = JoinSet::new();
     let mut results: Vec<Vec<Value>> = Vec::new();
@@ -299,7 +312,10 @@ async fn dynamic_large_memory_allocation(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start_customized(deps, &context, Some(768 * 1024 * 1024), None).await?;
-    let component = executor.component(&context.default_environment_id, "large-dynamic-memory").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "large-dynamic-memory")
+        .store()
+        .await?;
 
     let mut handles = JoinSet::new();
     let mut results: Vec<Vec<Value>> = Vec::new();

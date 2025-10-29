@@ -18,6 +18,7 @@ use crate::dsl::{build_ifs_archive, rename_component_if_needed, TestDsl, TestDsl
 use crate::model::IFSEntry;
 use applying::Apply;
 use async_trait::async_trait;
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::LogEvent;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
 use golem_common::model::account::AccountId;
@@ -41,10 +42,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
-use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
-use bytes::Bytes;
 
 #[derive(Clone)]
 pub struct TestDependenciesTestDsl<Deps> {

@@ -14,10 +14,19 @@
 
 use super::TestWorkerExecutor;
 use anyhow::anyhow;
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    cancel_invocation_response, complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response, get_running_workers_metadata_response, get_workers_metadata_response, interrupt_worker_response, resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, GetFileContentsRequest, GetFileSystemNodeRequest, GetRunningWorkersMetadataRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest
+    cancel_invocation_response, complete_promise_response, create_worker_response,
+    delete_worker_response, get_oplog_response, get_running_workers_metadata_response,
+    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
+    revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest,
+    CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest,
+    GetFileContentsRequest, GetFileSystemNodeRequest, GetRunningWorkersMetadataRequest,
+    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
+    InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest,
+    UpdateWorkerRequest,
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -41,10 +50,9 @@ use golem_wasm::{Value, ValueAndType};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::oneshot::Sender;
 use tracing::{debug, Instrument};
 use uuid::Uuid;
-use tokio::sync::oneshot::Sender;
-use bytes::Bytes;
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
@@ -1001,16 +1009,14 @@ impl TestDsl for TestWorkerExecutor {
         let response = self
             .client
             .clone()
-            .get_file_system_node(
-                GetFileSystemNodeRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    path: path.to_string(),
-                    environment_id: Some(latest_version.environment_id.into()),
-                    component_owner_account_id: Some(latest_version.account_id.into()),
-                    account_limits: None,
-                    auth_ctx: Some(self.auth_ctx().into()),
-                },
-            )
+            .get_file_system_node(GetFileSystemNodeRequest {
+                worker_id: Some(worker_id.clone().into()),
+                path: path.to_string(),
+                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                account_limits: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
             .await?
             .into_inner();
 
@@ -1018,15 +1024,12 @@ impl TestDsl for TestWorkerExecutor {
             Some(workerexecutor::v1::get_file_system_node_response::Result::DirSuccess(data)) => {
                 data.nodes
                     .into_iter()
-                    .map(|v|
-                        v
-                            .try_into()
-                            .map_err(|_| anyhow!("Failed to convert node"))
-                    )
+                    .map(|v| v.try_into().map_err(|_| anyhow!("Failed to convert node")))
                     .collect::<Result<Vec<_>, _>>()
             }
             Some(workerexecutor::v1::get_file_system_node_response::Result::FileSuccess(data)) => {
-                let file_node = data.file
+                let file_node = data
+                    .file
                     .ok_or(anyhow!("Missing file data in response"))?
                     .try_into()
                     .map_err(|_| anyhow!("Failed to convert file node"))?;
@@ -1035,9 +1038,12 @@ impl TestDsl for TestWorkerExecutor {
             Some(workerexecutor::v1::get_file_system_node_response::Result::NotFound(_)) => {
                 Ok(Vec::new())
             }
-            Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(error)) =>
-                Err(anyhow!("Error getting file system node: {error:?}")),
-            None => Err(anyhow!("No response from golem-worker-executor list-directory call")),
+            Some(workerexecutor::v1::get_file_system_node_response::Result::Failure(error)) => {
+                Err(anyhow!("Error getting file system node: {error:?}"))
+            }
+            None => Err(anyhow!(
+                "No response from golem-worker-executor list-directory call"
+            )),
         }
     }
 
@@ -1049,16 +1055,14 @@ impl TestDsl for TestWorkerExecutor {
         let mut stream = self
             .client
             .clone()
-            .get_file_contents(
-                GetFileContentsRequest {
-                    worker_id: Some(worker_id.clone().into()),
-                    file_path: path.to_string(),
-                    environment_id: Some(latest_version.environment_id.into()),
-                    component_owner_account_id: Some(latest_version.account_id.into()),
-                    account_limits: None,
-                    auth_ctx: Some(self.auth_ctx().into()),
-                },
-            )
+            .get_file_contents(GetFileContentsRequest {
+                worker_id: Some(worker_id.clone().into()),
+                file_path: path.to_string(),
+                environment_id: Some(latest_version.environment_id.into()),
+                component_owner_account_id: Some(latest_version.account_id.into()),
+                account_limits: None,
+                auth_ctx: Some(self.auth_ctx().into()),
+            })
             .await?
             .into_inner();
 

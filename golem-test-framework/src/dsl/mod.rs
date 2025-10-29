@@ -22,6 +22,7 @@ use anyhow::{anyhow, Context};
 use async_trait::async_trait;
 use async_zip::tokio::write::ZipFileWriter;
 use async_zip::{Compression, ZipEntryBuilder};
+use bytes::Bytes;
 use golem_api_grpc::proto::golem::worker::v1::worker_error::Error as WorkerGrpcError;
 use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{log_event, LogEvent, StdErrLog, StdOutLog};
@@ -44,7 +45,8 @@ use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::environment_share::{EnvironmentShare, EnvironmentShareCreation};
 use golem_common::model::worker::{UpdateRecord, WorkerMetadataDto};
 use golem_common::model::{
-    ComponentFileSystemNode, IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus
+    ComponentFileSystemNode, IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter,
+    WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
@@ -56,12 +58,11 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::{Builder, TempDir};
 use tokio::fs::File;
-use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::oneshot::Sender;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
-use bytes::Bytes;
 
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
