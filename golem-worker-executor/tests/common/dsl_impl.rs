@@ -20,10 +20,11 @@ use golem_api_grpc::proto::golem::workerexecutor::v1::{
     cancel_invocation_response, complete_promise_response, create_worker_response,
     delete_worker_response, get_oplog_response, get_running_workers_metadata_response,
     get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
-    update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest,
-    CreateWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest,
-    GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse,
-    InterruptWorkerRequest, ResumeWorkerRequest, UpdateWorkerRequest,
+    search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
+    ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest,
+    GetRunningWorkersMetadataRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
+    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest,
+    SearchOplogRequest, UpdateWorkerRequest,
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -443,6 +444,64 @@ impl TestDsl for TestWorkerExecutor {
                     }
                     get_oplog_response::Result::Failure(error) => {
                         return Err(anyhow!("Failed to get oplog: {error:?}"));
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        Ok(result)
+    }
+
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let mut result = Vec::new();
+        let mut cursor = None;
+
+        loop {
+            let chunk = self
+                .client
+                .clone()
+                .search_oplog(SearchOplogRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    environment_id: Some(latest_version.environment_id.clone().into()),
+                    cursor,
+                    count: 100,
+                    query: query.to_string(),
+                    auth_ctx: Some(self.auth_ctx().into()),
+                })
+                .await?
+                .into_inner();
+
+            if let Some(chunk) = chunk.result {
+                match chunk {
+                    search_oplog_response::Result::Success(chunk) => {
+                        if chunk.entries.is_empty() {
+                            break;
+                        } else {
+                            result.extend(
+                                chunk
+                                    .entries
+                                    .into_iter()
+                                    .map(|entry| entry.try_into())
+                                    .collect::<Result<Vec<_>, _>>()
+                                    .map_err(|err| {
+                                        anyhow!("Failed to convert oplog entry: {err}")
+                                    })?,
+                            );
+                            cursor = chunk.next;
+                        }
+                    }
+                    search_oplog_response::Result::Failure(error) => {
+                        return Err(anyhow!("Failed to search oplog: {error:?}"));
                     }
                 }
             } else {

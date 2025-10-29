@@ -48,7 +48,7 @@ pub mod http;
 pub mod indexed_storage;
 pub mod key_value_storage;
 pub mod keyvalue;
-// pub mod observability;
+pub mod observability;
 // pub mod rdbms;
 // pub mod rdbms_service;
 // pub mod revert;

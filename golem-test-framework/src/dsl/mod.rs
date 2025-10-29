@@ -247,6 +247,12 @@ pub trait TestDsl {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    async fn search_oplog(
+        &self,
+        worker_id: &WorkerId,
+        query: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
     async fn check_oplog_is_queryable(&self, worker_id: &WorkerId) -> crate::Result<()> {
         let entries = self.get_oplog(worker_id, OplogIndex::INITIAL).await?;
 

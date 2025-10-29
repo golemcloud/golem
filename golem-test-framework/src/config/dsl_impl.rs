@@ -251,6 +251,14 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         unimplemented!()
     }
 
+    async fn search_oplog(
+        &self,
+        _worker_id: &WorkerId,
+        _query: &str,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        unimplemented!()
+    }
+
     async fn interrupt_with_optional_recovery(
         &self,
         _worker_id: &WorkerId,
