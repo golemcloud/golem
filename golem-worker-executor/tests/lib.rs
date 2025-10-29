@@ -44,7 +44,7 @@ pub mod blobstore;
 pub mod compatibility;
 pub mod durability;
 pub mod hot_update;
-// pub mod http;
+pub mod http;
 // pub mod indexed_storage;
 // pub mod key_value_storage;
 // pub mod keyvalue;
