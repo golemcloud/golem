@@ -7,18 +7,18 @@ trait Counter {
 }
 
 struct CounterImpl {
-    init: i32,
+    count: i32,
     _id: CounterId,
 }
 
 #[agent_implementation]
 impl Counter for CounterImpl {
     fn new(id: CounterId) -> Self {
-        CounterImpl { _id: id, init: 0 }
+        CounterImpl { _id: id, count: 0 }
     }
     fn increment(&mut self) -> i32 {
-        self.init += 1;
-        self.init
+        self.count += 1;
+        self.count
     }
 }
 
