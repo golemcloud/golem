@@ -251,7 +251,7 @@ async fn rdbms_postgres_crud(
         worker_ids_1.clone(),
         RdbmsTest::new(insert_tests, Some(TransactionEnd::Commit)),
     )
-    .await;
+    .await?;
 
     let expected = postgres_get_expected(expected_values.clone());
     let select_test1 = StatementTest::query_stream_test(
@@ -275,7 +275,7 @@ async fn rdbms_postgres_crud(
             Some(TransactionEnd::Commit),
         ),
     )
-    .await;
+    .await?;
 
     let delete = StatementTest::execute_test("DELETE FROM test_users".to_string(), vec![], None);
 
@@ -892,7 +892,7 @@ async fn rdbms_postgres_select1(
         RdbmsTest::new(vec![test1, test2], None),
         3,
     )
-    .await;
+    .await?;
 
     Ok(())
 }
@@ -1278,7 +1278,7 @@ async fn rdbms_mysql_commit_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
         mysql_transaction_recovery_test(
             last_unique_id,
@@ -1287,8 +1287,10 @@ async fn rdbms_mysql_commit_recovery(
             TransactionFailOn::oplog_add("CommittedRemoteTransaction", fail_count),
             TransactionEnd::Commit,
         )
-        .await;
+        .await?;
     }
+
+    Ok(())
 }
 
 #[test]
@@ -1298,7 +1300,7 @@ async fn rdbms_mysql_pre_commit_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -1306,7 +1308,7 @@ async fn rdbms_mysql_pre_commit_recovery(
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 1),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
 
     mysql_transaction_recovery_test(
         last_unique_id,
@@ -1315,7 +1317,9 @@ async fn rdbms_mysql_pre_commit_recovery(
         TransactionFailOn::oplog_add("PreCommitRemoteTransaction", 2),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -1325,7 +1329,7 @@ async fn rdbms_mysql_rollback_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     for fail_count in 1..=2 {
         mysql_transaction_recovery_test(
             last_unique_id,
@@ -1334,8 +1338,10 @@ async fn rdbms_mysql_rollback_recovery(
             TransactionFailOn::oplog_add("RolledBackRemoteTransaction", fail_count),
             TransactionEnd::Rollback,
         )
-        .await;
+        .await?;
     }
+
+    Ok(())
 }
 
 #[test]
@@ -1345,7 +1351,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -1353,7 +1359,7 @@ async fn rdbms_mysql_pre_rollback_recovery(
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 1),
         TransactionEnd::Rollback,
     )
-    .await;
+    .await?;
 
     mysql_transaction_recovery_test(
         last_unique_id,
@@ -1362,7 +1368,9 @@ async fn rdbms_mysql_pre_rollback_recovery(
         TransactionFailOn::oplog_add("PreRollbackRemoteTransaction", 2),
         TransactionEnd::Rollback,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
@@ -1373,7 +1381,7 @@ async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     mysql_transaction_recovery_test(
         last_unique_id,
         deps,
@@ -1386,7 +1394,8 @@ async fn rdbms_mysql_commit_and_tx_status_not_found_recovery(
         ),
         TransactionEnd::Commit,
     )
-    .await;
+    .await?;
+    Ok(())
 }
 
 fn mysql_create_table_statement(table_name: &str) -> String {
@@ -1522,7 +1531,7 @@ async fn rdbms_mysql_select1(
     deps: &WorkerExecutorTestDependencies,
     mysql: &DockerMysqlRdb,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let test1 = StatementTest::execute_test("SELECT 1".to_string(), vec![], Some(0));
 
     let expected_rows: Vec<serde_json::Value> = vec![json!({
@@ -1551,7 +1560,9 @@ async fn rdbms_mysql_select1(
         RdbmsTest::new(vec![test1, test2], None),
         1,
     )
-    .await;
+    .await?;
+
+    Ok(())
 }
 
 #[test]
