@@ -243,6 +243,16 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         unimplemented!()
     }
 
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        _worker_id: &WorkerId,
+        _idempotency_key: &IdempotencyKey,
+        _function_name: &str,
+        _params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        unimplemented!()
+    }
+
     async fn get_oplog(
         &self,
         _worker_id: &WorkerId,

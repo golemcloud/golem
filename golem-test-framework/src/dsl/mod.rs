@@ -241,6 +241,24 @@ pub trait TestDsl {
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Vec<Value>, WorkerExecutorError>>;
 
+    async fn invoke_and_await_typed(
+        &self,
+        worker_id: &WorkerId,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        self.invoke_and_await_typed_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
+            .await
+    }
+
+    async fn invoke_and_await_typed_with_key(
+        &self,
+        worker_id: &WorkerId,
+        idempotency_key: &IdempotencyKey,
+        function_name: &str,
+        params: Vec<ValueAndType>,
+    ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>>;
+
     async fn get_oplog(
         &self,
         worker_id: &WorkerId,
