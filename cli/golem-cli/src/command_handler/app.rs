@@ -177,6 +177,7 @@ impl AppCommandHandler {
                         None,
                         &app_dir,
                         &dummy_package_name,
+                        Some(self.ctx.template_sdk_overrides()),
                     ) {
                         Ok(()) => {
                             log_action(
@@ -211,6 +212,7 @@ impl AppCommandHandler {
                     Some(component_template),
                     &app_dir,
                     component_package_name,
+                    Some(self.ctx.template_sdk_overrides()),
                 ) {
                     Ok(()) => {
                         log_action(

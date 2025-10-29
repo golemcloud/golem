@@ -3,5 +3,3 @@
 components:
   componentname:
     template: rust
-
-# golem-app-manifest-component-hints

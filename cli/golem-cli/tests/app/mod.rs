@@ -38,6 +38,7 @@ use crate::Tracing;
 use assert2::assert;
 use colored::Colorize;
 use itertools::Itertools;
+use lenient_bool::LenientBool;
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::io;
@@ -97,7 +98,11 @@ pub struct Output {
 }
 
 impl Output {
-    pub async fn stream_and_collect(prefix: &str, child: &mut Child) -> io::Result<Self> {
+    pub async fn stream_and_collect(
+        quiet: bool,
+        prefix: &str,
+        child: &mut Child,
+    ) -> io::Result<Self> {
         let stdout = child
             .stdout
             .take()
@@ -116,7 +121,9 @@ impl Output {
             async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    println!("{prefix} {line}");
+                    if !quiet {
+                        println!("{prefix} {line}");
+                    }
                     tx.send(CommandOutput::Stdout(line)).unwrap();
                 }
             }
@@ -128,7 +135,9 @@ impl Output {
             async move {
                 let mut lines = BufReader::new(stderr).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    println!("{prefix} {line}");
+                    if !quiet {
+                        println!("{prefix} {line}");
+                    }
                     tx.send(CommandOutput::Stderr(line)).unwrap();
                 }
             }
@@ -237,6 +246,7 @@ impl From<std::process::Output> for Output {
 
 #[derive(Debug)]
 struct TestContext {
+    quiet: bool,
     golem_path: PathBuf,
     golem_cli_path: PathBuf,
     _test_dir: TempDir,
@@ -261,10 +271,35 @@ impl Drop for TestContext {
 
 impl TestContext {
     fn new() -> Self {
+        let quiet = std::env::var("QUIET")
+            .ok()
+            .and_then(|b| b.parse::<LenientBool>().ok())
+            .unwrap_or_default()
+            .0;
+
         let test_dir = TempDir::new().unwrap();
         let working_dir = test_dir.path().to_path_buf();
 
+        let mut env = HashMap::new();
+
+        env.insert(
+            "GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(),
+            "true".to_string(),
+        );
+
+        for key in [
+            "GOLEM_RUST_PATH",
+            "GOLEM_RUST_VERSION",
+            "GOLEM_TS_PACKAGES_PATH",
+            "GOLEM_TS_VERSION",
+        ] {
+            if let Ok(val) = std::env::var(key) {
+                env.insert(key.to_string(), val);
+            }
+        }
+
         let ctx = Self {
+            quiet,
             golem_path: PathBuf::from("../../target/debug/golem")
                 .canonicalize()
                 .unwrap_or_else(|_| {
@@ -286,9 +321,7 @@ impl TestContext {
             data_dir: TempDir::new().unwrap(),
             working_dir,
             server_process: None,
-            env: HashMap::from_iter(vec![
-                ("GOLEM_ENABLE_WASMTIME_FS_CACHE".to_string(), "true".to_string())
-            ]),
+            env,
         };
 
         info!(ctx = ?ctx ,"Created test context");
@@ -345,7 +378,7 @@ impl TestContext {
             .spawn()
             .unwrap();
 
-        Output::stream_and_collect("golem-cli", &mut child)
+        Output::stream_and_collect(self.quiet, "golem-cli", &mut child)
             .await
             .unwrap()
     }
@@ -365,16 +398,22 @@ impl TestContext {
             self.data_dir.path().display()
         );
 
+        let mut args = vec![
+            "server",
+            "run",
+            "--config-dir",
+            self.config_dir.path().to_str().unwrap(),
+            "--data-dir",
+            self.data_dir.path().to_str().unwrap(),
+        ];
+
+        if self.quiet {
+            args.push("-q");
+        }
+
         self.server_process = Some(
             Command::new(&self.golem_path)
-                .args([
-                    "server",
-                    "run",
-                    "--config-dir",
-                    self.config_dir.path().to_str().unwrap(),
-                    "--data-dir",
-                    self.data_dir.path().to_str().unwrap(),
-                ])
+                .args(&args)
                 .current_dir(&self.working_dir)
                 .spawn()
                 .unwrap(),
