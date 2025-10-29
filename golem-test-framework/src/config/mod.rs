@@ -24,7 +24,7 @@ use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
 use clap::ValueEnum;
-pub use cli::{CliParams, CliTestDependencies, CliTestService};
+pub use benchmark::{BenchmarkCliParameters, BenchmarkTestDependencies, CliTestService};
 pub use env::EnvBasedTestDependencies;
 pub use env::EnvBasedTestDependenciesConfig;
 use golem_client::model::AccountData;
@@ -37,7 +37,7 @@ use std::sync::Arc;
 use tracing::info;
 use uuid::Uuid;
 
-pub mod cli;
+pub mod benchmark;
 mod env;
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]

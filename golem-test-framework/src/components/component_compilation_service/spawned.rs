@@ -46,6 +46,7 @@ impl SpawnedComponentCompilationService {
         out_level: Level,
         err_level: Level,
         cloud_service: Arc<dyn CloudService>,
+        enable_fs_cache: bool
     ) -> Self {
         info!("Starting golem-component-compilation-service process");
 
@@ -62,6 +63,7 @@ impl SpawnedComponentCompilationService {
                     component_service,
                     &cloud_service,
                     verbosity,
+                    enable_fs_cache
                 )
                 .await,
             )

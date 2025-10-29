@@ -230,6 +230,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
+                false
             )
             .await,
         )
@@ -297,6 +298,7 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 cloud_service.clone(),
+                true
             )
             .await,
         )
@@ -324,6 +326,7 @@ impl EnvBasedTestDependencies {
                 config.default_stderr_level(),
                 config.golem_client_protocol,
                 cloud_service,
+                true
             )
             .await,
         )

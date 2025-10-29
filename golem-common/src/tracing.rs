@@ -14,7 +14,7 @@
 
 use std::backtrace::Backtrace;
 use std::fs::OpenOptions;
-use std::io::stdout;
+use std::io::{stderr, stdout};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -35,6 +35,7 @@ use crate::SafeDisplay;
 
 pub enum Output {
     Stdout,
+    Stderr,
     File,
     TracingConsole,
 }
@@ -173,6 +174,7 @@ impl SafeDisplay for OutputConfig {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TracingConfig {
     pub stdout: OutputConfig,
+    pub stderr: OutputConfig,
     pub file: OutputConfig,
     pub file_dir: Option<String>,
     pub file_name: Option<String>,
@@ -185,6 +187,7 @@ impl TracingConfig {
     pub fn local_dev(name: &str) -> Self {
         Self {
             stdout: OutputConfig::text_ansi(),
+            stderr: OutputConfig::disabled(),
             file: OutputConfig {
                 enabled: false,
                 ..OutputConfig::json_flatten_span()
@@ -236,6 +239,12 @@ impl TracingConfig {
             .expect("Failed to load tracing config env overrides")
             .tracing
     }
+
+    pub fn use_stderr(mut self) -> Self {
+        self.stderr = self.stdout.clone();
+        self.stdout.enabled = false;
+        self
+    }
 }
 
 impl SafeDisplay for TracingConfig {
@@ -270,6 +279,7 @@ impl Default for TracingConfig {
     fn default() -> Self {
         Self {
             stdout: OutputConfig::json_flatten_span(),
+            stderr: OutputConfig::disabled(),
             file: OutputConfig {
                 enabled: false,
                 ..OutputConfig::json_flatten_span()
@@ -424,6 +434,14 @@ where
             &config.stdout,
             make_filter(Output::Stdout),
             stdout,
+        ))
+    }
+
+    if config.stderr.enabled {
+        layers.push(make_layer(
+            &config.stdout,
+            make_filter(Output::Stderr),
+            stderr,
         ))
     }
 

@@ -4614,13 +4614,16 @@ dependencies = [
  "golem-common",
  "golem-service-base",
  "golem-wasm",
+ "humantime-serde",
  "itertools 0.14.0",
  "redis",
  "reqwest 0.12.23",
  "serde",
  "serde_json",
+ "serde_with",
  "serde_yaml",
  "sqlx",
+ "sysinfo",
  "tempfile",
  "test-r",
  "testcontainers",
@@ -5689,6 +5692,8 @@ dependencies = [
  "golem-test-framework",
  "golem-wasm",
  "golem-wasm-derive",
+ "headers 0.4.1",
+ "indoc",
  "rand 0.9.2",
  "reqwest 0.12.23",
  "serde",
@@ -9910,9 +9915,9 @@ dependencies = [
 
 [[package]]
 name = "serde_with"
-version = "3.14.0"
+version = "3.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2c45cd61fefa9db6f254525d46e392b852e0e61d9a1fd36e5bd183450a556d5"
+checksum = "aa66c845eee442168b2c8134fec70ac50dc20e760769c8ba0ad1319ca1959b04"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -9921,8 +9926,7 @@ dependencies = [
  "indexmap 2.11.0",
  "schemars 0.9.0",
  "schemars 1.0.4",
- "serde",
- "serde_derive",
+ "serde_core",
  "serde_json",
  "serde_with_macros",
  "time",
@@ -9930,11 +9934,11 @@ dependencies = [
 
 [[package]]
 name = "serde_with_macros"
-version = "3.14.0"
+version = "3.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de90945e6565ce0d9a25098082ed4ee4002e047cb59892c318d66821e14bb30f"
+checksum = "b91a903660542fced4e99881aa481bdbaec1634568ee02e0b8bd57c64cb38955"
 dependencies = [
- "darling 0.20.11",
+ "darling 0.21.2",
  "proc-macro2",
  "quote",
  "syn 2.0.105",

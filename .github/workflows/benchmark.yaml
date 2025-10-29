@@ -214,7 +214,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git pull
-          git add benchmark-data
+#          git add benchmark-data
           git commit -m "Adding benchmarking data"
           if git push; then
             echo "Successfully pushed the benchmark data"

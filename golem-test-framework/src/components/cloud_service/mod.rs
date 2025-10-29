@@ -39,6 +39,7 @@ use golem_client::model::{
     Account, ProjectActions, ProjectDataRequest, ProjectGrantDataRequest, ProjectPolicyData,
 };
 use golem_client::{Context, Security};
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::{AccountId, ProjectId};
 use golem_service_base::clients::authorised_request;
 use std::collections::HashMap;
@@ -159,24 +160,43 @@ pub trait CloudService: Send + Sync {
         }
     }
 
+    fn default_project_cache(&self) -> &Cache<Uuid, (), ProjectId, String>;
+
     async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {
-        match self.client_protocol() {
-            GolemClientProtocol::Grpc => {
-                let mut client = self.project_grpc_client().await;
-                let request = authorised_request(GetDefaultProjectRequest {}, token);
-                let response = client.get_default_project(request).await?;
-                match response.into_inner().result.unwrap() {
-                    get_default_project_response::Result::Success(result) => {
-                        Ok(result.id.unwrap().try_into().unwrap())
+        self.default_project_cache()
+            .get_or_insert_simple(token, move || async {
+                match self.client_protocol() {
+                    GolemClientProtocol::Grpc => {
+                        let mut client = self.project_grpc_client().await;
+                        let request = authorised_request(GetDefaultProjectRequest {}, token);
+                        let response = client
+                            .get_default_project(request)
+                            .await
+                            .map_err(|err| err.to_string());
+                        match response {
+                            Ok(response) => match response.into_inner().result.unwrap() {
+                                get_default_project_response::Result::Success(result) => {
+                                    Ok(result.id.unwrap().try_into().unwrap())
+                                }
+                                get_default_project_response::Result::Error(error) => {
+                                    Err(format!("{error:?}"))
+                                }
+                            },
+                            Err(err) => Err(err),
+                        }
                     }
-                    get_default_project_response::Result::Error(error) => Err(anyhow!("{error:?}")),
+                    GolemClientProtocol::Http => {
+                        let client = self.project_http_client(*token).await;
+                        client
+                            .get_default_project()
+                            .await
+                            .map_err(|err| err.to_string())
+                            .map(|prj| ProjectId(prj.project_id))
+                    }
                 }
-            }
-            GolemClientProtocol::Http => {
-                let client = self.project_http_client(*token).await;
-                Ok(ProjectId(client.get_default_project().await?.project_id))
-            }
-        }
+            })
+            .await
+            .map_err(|err| anyhow!(err))
     }
 
     async fn get_project_name(&self, project_id: &ProjectId) -> crate::Result<String> {
@@ -470,16 +490,40 @@ async fn env_vars(
     rdb: Arc<dyn Rdb + Send + Sync + 'static>,
     verbosity: Level,
     private_rdb_connection: bool,
+    unlimited: bool,
 ) -> HashMap<String, String> {
-    EnvVarBuilder::golem_service(verbosity)
+    let mut env = EnvVarBuilder::golem_service(verbosity)
         .with("GOLEM__ACCOUNTS__ROOT__ID", ADMIN_ACCOUNT_ID.to_string())
         .with("GOLEM__ACCOUNTS__ROOT__TOKEN", ADMIN_TOKEN.to_string())
         .with("GOLEM__ACCOUNTS__ROOT__EMAIL", ADMIN_EMAIL.to_string())
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
-        .with_all(rdb.info().env("cloud_service", private_rdb_connection))
-        .build()
+        .with_all(rdb.info().env("cloud_service", private_rdb_connection));
+
+    if unlimited {
+        env = env.with(
+            "GOLEM__PLANS__DEFAULT__COMPONENT_LIMIT",
+            i32::MAX.to_string(),
+        );
+        env = env.with(
+            "GOLEM__PLANS__DEFAULT__MAX_MEMORY_PER_WORKER",
+            i64::MAX.to_string(),
+        );
+        env = env.with(
+            "GOLEM__PLANS__DEFAULT__MONTHLY_GAS_LIMIT",
+            i64::MAX.to_string(),
+        );
+        env = env.with(
+            "GOLEM__PLANS__DEFAULT__MONTHLY_UPLOAD_LIMIT",
+            i32::MAX.to_string(),
+        );
+        env = env.with("GOLEM__PLANS__DEFAULT__PROJECT_LIMIT", i32::MAX.to_string());
+        env = env.with("GOLEM__PLANS__DEFAULT__STORAGE_LIMIT", i32::MAX.to_string());
+        env = env.with("GOLEM__PLANS__DEFAULT__WORKER_LIMIT", i32::MAX.to_string());
+    }
+
+    env.build()
 }
 
 pub struct AccountWithToken {
@@ -493,6 +537,7 @@ pub struct AdminOnlyStubCloudService {
     admin_token: Uuid,
     admin_default_project: ProjectId,
     admin_default_project_name: String,
+    default_project_cache: Cache<Uuid, (), ProjectId, String>,
 }
 
 impl AdminOnlyStubCloudService {
@@ -507,6 +552,12 @@ impl AdminOnlyStubCloudService {
             admin_token,
             admin_default_project,
             admin_default_project_name,
+            default_project_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "default-project-cache",
+            ),
         }
     }
 }
@@ -542,6 +593,10 @@ impl CloudService for AdminOnlyStubCloudService {
             Err(anyhow!("StubCloudService received unexpected token"))?
         }
         Ok(self.admin_account_id.clone())
+    }
+
+    fn default_project_cache(&self) -> &Cache<Uuid, (), ProjectId, String> {
+        &self.default_project_cache
     }
 
     async fn get_default_project(&self, token: &Uuid) -> crate::Result<ProjectId> {

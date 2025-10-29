@@ -23,6 +23,8 @@ use crate::components::rdb::Rdb;
 use crate::components::{new_reqwest_client, ChildProcessLogger};
 use crate::config::GolemClientProtocol;
 use async_trait::async_trait;
+use golem_common::base_model::ProjectId;
+use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -31,6 +33,7 @@ use tokio::sync::OnceCell;
 use tonic::transport::Channel;
 use tracing::info;
 use tracing::Level;
+use uuid::Uuid;
 
 pub struct SpawnedCloudService {
     http_port: u16,
@@ -43,6 +46,7 @@ pub struct SpawnedCloudService {
     token_grpc_client: OnceCell<TokenServiceGrpcClient<Channel>>,
     project_grpc_client: OnceCell<ProjectServiceGrpcClient<Channel>>,
     auth_grpc_client: OnceCell<AuthServiceGrpcClient<Channel>>,
+    default_project_cache: Cache<Uuid, (), ProjectId, String>,
 }
 
 impl SpawnedCloudService {
@@ -56,6 +60,7 @@ impl SpawnedCloudService {
         verbosity: Level,
         out_level: Level,
         err_level: Level,
+        unlimited: bool,
     ) -> Self {
         info!("Starting cloud-service process");
 
@@ -63,21 +68,19 @@ impl SpawnedCloudService {
             panic!("Expected to have precompiled cloud-service at {executable:?}");
         }
 
+        let env = super::env_vars(http_port, grpc_port, rdb, verbosity, false, unlimited).await;
+
         let mut child = Command::new(executable)
             .current_dir(working_directory)
-            .envs(super::env_vars(http_port, grpc_port, rdb, verbosity, false).await)
+            .envs(env)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("Failed to start golem-component-service");
+            .expect("Failed to start cloud-service");
 
-        let logger = ChildProcessLogger::log_child_process(
-            "[componentsvc]",
-            out_level,
-            err_level,
-            &mut child,
-        );
+        let logger =
+            ChildProcessLogger::log_child_process("[cloudsvc]", out_level, err_level, &mut child);
 
         wait_for_startup(
             client_protocol,
@@ -99,6 +102,12 @@ impl SpawnedCloudService {
             token_grpc_client: OnceCell::new(),
             project_grpc_client: OnceCell::new(),
             auth_grpc_client: OnceCell::new(),
+            default_project_cache: Cache::new(
+                None,
+                FullCacheEvictionMode::None,
+                BackgroundEvictionMode::None,
+                "default-project-cache",
+            ),
         }
     }
 }
@@ -150,6 +159,10 @@ impl CloudService for SpawnedCloudService {
             })
             .await
             .clone()
+    }
+
+    fn default_project_cache(&self) -> &Cache<Uuid, (), ProjectId, String> {
+        &self.default_project_cache
     }
 
     fn private_host(&self) -> String {

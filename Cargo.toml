@@ -352,3 +352,7 @@ strip = "debuginfo"
 
 [profile.release]
 panic = "abort"
+
+[profile.benchmarks]
+inherits = "release"
+panic = "unwind"
