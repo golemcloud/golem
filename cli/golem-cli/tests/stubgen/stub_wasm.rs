@@ -15,6 +15,7 @@
 //! Tests in this module are verifying the STUB WASM created by the stub generator
 //! regardless of how the actual wasm generator is implemented. (Currently generates Rust code and compiles it)
 
+use std::time::Duration;
 use crate::stubgen::{golem_rust_override, test_data_path};
 use fs_extra::dir::CopyOptions;
 use golem_cli::model::app::AppComponentName;
@@ -411,6 +412,9 @@ async fn resource() {
 async fn circular_resources() {
     let source = test_data_path().join("wit/circular-resources");
     let source_wit_root = tempdir().unwrap();
+
+    println!("source: {:?}", source);
+    println!("source_wit_root: {:?}", source_wit_root);
 
     fs_extra::dir::copy(
         source,

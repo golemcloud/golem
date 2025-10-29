@@ -34,7 +34,7 @@ sequential_suite!(agents);
 
 inherit_test_dep!(Tracing);
 
-use crate::Tracing;
+use crate::{crate_path, workspace_path, Tracing};
 use assert2::assert;
 use colored::Colorize;
 use itertools::Itertools;
@@ -302,9 +302,8 @@ impl TestContext {
         if !env.contains_key("GOLEM_RUST_PATH") && !env.contains_key("GOLEM_RUST_VERSION") {
             env.insert(
                 "GOLEM_RUST_PATH".to_string(),
-                Path::new("../../sdks/rust/golem-rust")
-                    .canonicalize()
-                    .expect("Failed to canonicalize golem-rust path")
+                workspace_path()
+                    .join("sdks/rust/golem-rust")
                     .to_string_lossy()
                     .to_string(),
             );
@@ -312,22 +311,20 @@ impl TestContext {
 
         let ctx = Self {
             quiet,
-            golem_path: PathBuf::from("../../target/debug/golem")
-                .canonicalize()
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "golem binary not found in ../../target/debug/golem, with current dir: {:?}",
-                        std::env::current_dir().unwrap()
-                    );
-                }),
-            golem_cli_path: PathBuf::from("../../target/debug/golem-cli")
-                .canonicalize()
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "golem binary not found in ../../target/debug/golem-cli, with current dir: {:?}",
-                        std::env::current_dir().unwrap()
-                    );
-                }),
+            golem_path: {
+                let path = workspace_path().join("target/debug/golem");
+                if !path.exists() {
+                    panic!("golem binary not found at {}", path.display());
+                }
+                path
+            },
+            golem_cli_path: {
+                let path = workspace_path().join("target/debug/golem-cli");
+                if !path.exists() {
+                    panic!("golem-cli binary not found at {}", path.display());
+                }
+                path
+            },
             _test_dir: test_dir,
             config_dir: TempDir::new().unwrap(),
             data_dir: TempDir::new().unwrap(),
@@ -438,6 +435,10 @@ impl TestContext {
 
     fn cwd_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
         self.working_dir.join(path)
+    }
+
+    fn test_data_path_join<P: AsRef<Path>>(&self, path: P) -> PathBuf {
+        crate_path().join("test-data").join(path)
     }
 }
 

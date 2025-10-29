@@ -126,13 +126,13 @@ async fn test_ts_code_first_complex() {
     .unwrap();
 
     fs::copy(
-        "test-data/ts-code-first-snippets/main.ts",
+        ctx.test_data_path_join("ts-code-first-snippets/main.ts"),
         &component_source_code_main_file,
     )
     .unwrap();
 
     fs::copy(
-        "test-data/ts-code-first-snippets/model.ts",
+        ctx.test_data_path_join("ts-code-first-snippets/model.ts"),
         &component_source_code_model_file,
     )
     .unwrap();
@@ -822,7 +822,7 @@ async fn test_naming_extremes() {
     );
 
     fs::copy(
-        "test-data/ts-code-first-snippets/naming_extremes.ts",
+        ctx.test_data_path_join("ts-code-first-snippets/naming_extremes.ts"),
         &component_source_code,
     )
     .unwrap();

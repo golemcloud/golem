@@ -13,6 +13,8 @@
 // limitations under the License.
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
+use std::path::PathBuf;
+use std::sync::OnceLock;
 use test_r::{tag_suite, test_dep};
 
 test_r::enable!();
@@ -37,4 +39,27 @@ impl Tracing {
 #[test_dep]
 fn tracing() -> Tracing {
     Tracing::init()
+}
+
+static WORKSPACE_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn workspace_path() -> PathBuf {
+    WORKSPACE_PATH
+        .get_or_init(|| {
+            crate_path()
+                .join("../..")
+                .canonicalize()
+                .expect("Failed to canonicalize workspace path")
+        })
+        .clone()
+}
+
+static CRATE_PATH: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn crate_path() -> PathBuf {
+    CRATE_PATH
+        .get_or_init(|| {
+            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"))
+        })
+        .clone()
 }
