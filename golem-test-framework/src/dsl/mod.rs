@@ -47,7 +47,7 @@ use golem_common::model::{
     IdempotencyKey, OplogIndex, PromiseId, ScanCursor, WorkerFilter, WorkerId, WorkerStatus,
 };
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm::Value;
 use golem_wasm::ValueAndType;
 use std::collections::{BTreeMap, HashMap};
@@ -263,6 +263,8 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>>;
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()>;
 
     async fn get_oplog(
         &self,

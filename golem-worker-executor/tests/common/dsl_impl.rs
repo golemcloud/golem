@@ -17,14 +17,7 @@ use anyhow::anyhow;
 use golem_api_grpc::proto::golem::worker::{LogEvent, UpdateMode};
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    cancel_invocation_response, complete_promise_response, create_worker_response,
-    delete_worker_response, get_oplog_response, get_running_workers_metadata_response,
-    get_workers_metadata_response, interrupt_worker_response, resume_worker_response,
-    search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest,
-    ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest,
-    GetRunningWorkersMetadataRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest,
-    GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest,
-    SearchOplogRequest, UpdateWorkerRequest,
+    cancel_invocation_response, complete_promise_response, create_worker_response, delete_worker_response, get_oplog_response, get_running_workers_metadata_response, get_workers_metadata_response, interrupt_worker_response, resume_worker_response, revert_worker_response, search_oplog_response, update_worker_response, CancelInvocationRequest, CompletePromiseRequest, ConnectWorkerRequest, CreateWorkerRequest, DeleteWorkerRequest, GetRunningWorkersMetadataRequest, GetWorkerMetadataRequest, GetWorkersMetadataRequest, GetWorkersMetadataSuccessResponse, InterruptWorkerRequest, ResumeWorkerRequest, RevertWorkerRequest, SearchOplogRequest, UpdateWorkerRequest
 };
 use golem_common::model::component::{
     ComponentDto, ComponentFilePath, ComponentId, ComponentName, ComponentRevision, ComponentType,
@@ -39,7 +32,7 @@ use golem_common::model::{IdempotencyKey, ScanCursor, WorkerFilter};
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::widen_infallible;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_service_base::replayable_stream::ReplayableStream;
 use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{rename_component_if_needed, TestDsl};
@@ -439,6 +432,34 @@ impl TestDsl for TestWorkerExecutor {
             )) => Ok(Err(error
                 .try_into()
                 .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
+        }
+    }
+
+    async fn revert(&self, worker_id: &WorkerId, target: RevertWorkerTarget) -> anyhow::Result<()> {
+        let latest_version = self
+            .get_latest_component_version(&worker_id.component_id)
+            .await?;
+
+        let response = self
+            .client
+            .clone()
+            .revert_worker(
+                RevertWorkerRequest {
+                    worker_id: Some(worker_id.clone().into()),
+                    environment_id: Some(latest_version.environment_id.into()),
+                    target: Some(target.into()),
+                    auth_ctx: Some(self.auth_ctx().into()),
+                },
+            )
+            .await?
+            .into_inner();
+
+        match response.result {
+            Some(revert_worker_response::Result::Success(_)) => Ok(()),
+            Some(revert_worker_response::Result::Failure(error)) => {
+                Err(anyhow!("Failed to revert worker: {error:?}"))
+            }
+            _ => Err(anyhow!("Failed to revert worker: unknown error")),
         }
     }
 

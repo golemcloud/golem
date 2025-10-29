@@ -34,7 +34,7 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::{OplogIndex, WorkerId};
 use golem_common::model::{PromiseId, ScanCursor, WorkerFilter};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::PublicOplogEntryWithIndex;
+use golem_service_base::model::{PublicOplogEntryWithIndex, RevertWorkerTarget};
 use golem_wasm::{Value, ValueAndType};
 use std::borrow::Borrow;
 use std::collections::{BTreeMap, HashMap};
@@ -250,6 +250,10 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
         _function_name: &str,
         _params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
+        unimplemented!()
+    }
+
+    async fn revert(&self, _worker_id: &WorkerId, _target: RevertWorkerTarget) -> anyhow::Result<()> {
         unimplemented!()
     }
 
