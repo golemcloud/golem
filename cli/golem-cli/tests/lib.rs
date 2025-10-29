@@ -59,7 +59,7 @@ static CRATE_PATH: OnceLock<PathBuf> = OnceLock::new();
 pub fn crate_path() -> PathBuf {
     CRATE_PATH
         .get_or_init(|| {
-            PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"))
+            PathBuf::from(env!("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"))
         })
         .clone()
 }
