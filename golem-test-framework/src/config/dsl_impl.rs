@@ -41,7 +41,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::sync::oneshot::Sender;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -307,7 +308,7 @@ impl<Deps: TestDependencies> TestDsl for TestDependenciesTestDsl<Deps> {
     async fn capture_output_with_termination(
         &self,
         _worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>> {
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
         unimplemented!()
     }
 

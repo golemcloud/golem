@@ -150,7 +150,7 @@ async fn jump(
         .start_worker_with(&component.id, "runtime-service-jump", vec![], env, vec![])
         .await?;
 
-    let (rx, abort_capture) = executor.capture_output_forever(&worker_id).await;
+    let (rx, abort_capture) = executor.capture_output_with_termination(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{jump}", vec![])

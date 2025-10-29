@@ -56,7 +56,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::{Builder, TempDir};
 use tokio::fs::File;
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver};
+use tokio::sync::oneshot::Sender;
 use tracing::info;
 use uuid::Uuid;
 use wasm_metadata::{AddMetadata, AddMetadataField};
@@ -315,7 +316,7 @@ pub trait TestDsl {
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>>;
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)>;
 
     async fn log_output(&self, worker_id: &WorkerId) -> anyhow::Result<()> {
         let mut rx = self.capture_output(worker_id).await?;

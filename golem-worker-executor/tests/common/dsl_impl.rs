@@ -50,6 +50,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, Instrument};
 use uuid::Uuid;
+use tokio::sync::oneshot::Sender;
 
 #[async_trait::async_trait]
 impl TestDsl for TestWorkerExecutor {
@@ -715,11 +716,14 @@ impl TestDsl for TestWorkerExecutor {
     async fn capture_output_with_termination(
         &self,
         worker_id: &WorkerId,
-    ) -> anyhow::Result<UnboundedReceiver<Option<LogEvent>>> {
+    ) -> anyhow::Result<(UnboundedReceiver<Option<LogEvent>>, Sender<()>)> {
         let latest_version = self
             .get_latest_component_version(&worker_id.component_id)
             .await?;
+
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (abort_tx, mut abort_rx) = tokio::sync::oneshot::channel();
+
         let mut response = self
             .client
             .clone()
@@ -735,9 +739,26 @@ impl TestDsl for TestWorkerExecutor {
 
         tokio::spawn(
             async move {
-                while let Some(event) = response.message().await.expect("Failed to get message") {
-                    debug!("Received event: {:?}", event);
-                    let _ = tx.send(Some(event));
+                loop {
+                    tokio::select! {
+                        msg = response.message() => {
+                            match msg {
+                                Ok(Some(event)) =>  {
+                                    debug!("Received event: {:?}", event);
+                                    tx.send(Some(event)).expect("Failed to send event");
+                                }
+                                Ok(None) => {
+                                    break;
+                                }
+                                Err(e) => {
+                                    panic!("Failed to get message: {e:?}");
+                                }
+                            }
+                        }
+                        _ = (&mut abort_rx) => {
+                            break;
+                        }
+                    }
                 }
 
                 debug!("Finished receiving events");
@@ -747,7 +768,7 @@ impl TestDsl for TestWorkerExecutor {
             .in_current_span(),
         );
 
-        Ok(rx)
+        Ok((rx, abort_tx))
     }
 
     async fn auto_update_worker(
