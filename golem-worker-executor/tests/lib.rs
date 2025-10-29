@@ -55,7 +55,7 @@ pub mod revert;
 pub mod rust_rpc;
 pub mod rust_rpc_stubless;
 pub mod scalability;
-// pub mod transactions;
+pub mod transactions;
 // pub mod wasi;
 
 test_r::enable!();

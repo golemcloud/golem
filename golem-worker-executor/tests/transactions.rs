@@ -21,10 +21,9 @@ use axum::Router;
 use bytes::Bytes;
 use golem_common::model::oplog::WorkerError;
 use golem_common::model::{IdempotencyKey, WorkerId};
-use golem_test_framework::config::TestDependencies;
 use golem_test_framework::dsl::{
     drain_connection, stdout_event_starting_with, stdout_events, worker_error_logs,
-    worker_error_message, worker_error_underlying_error, TestDslUnsafe,
+    worker_error_message, worker_error_underlying_error, TestDsl,
 };
 use golem_wasm::{IntoValueAndType, Value};
 use std::collections::HashMap;
@@ -136,37 +135,32 @@ async fn jump(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(1).await;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "runtime-service-jump", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "runtime-service-jump", vec![], env, vec![])
+        .await?;
 
     let (rx, abort_capture) = executor.capture_output_forever(&worker_id).await;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{jump}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
     while (rx.len() as u64) < 19 {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -195,6 +189,8 @@ async fn jump(
                 "fifth: 5\n",
             ]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -203,21 +199,17 @@ async fn explicit_oplog_commit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
 
     let worker_id = executor
-        .start_worker(&component_id, "runtime-service-explicit-oplog-commit")
-        .await;
+        .start_worker(&component.id, "runtime-service-explicit-oplog-commit")
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
     let result = executor
@@ -226,12 +218,13 @@ async fn explicit_oplog_commit(
             "golem:it/api.{explicit-commit}",
             vec![0u8.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    drop(executor);
     check!(result.is_ok());
+
+    Ok(())
 }
 
 #[test]
@@ -240,20 +233,16 @@ async fn set_retry_policy(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
     let worker_id = executor
-        .start_worker(&component_id, "set-retry-policy-1")
-        .await;
+        .start_worker(&component.id, "set-retry-policy-1")
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     let start = SystemTime::now();
     let result1 = executor
@@ -262,7 +251,7 @@ async fn set_retry_policy(
             "golem:it/api.{fail-with-custom-max-retries}",
             vec![2u64.into_value_and_type()],
         )
-        .await;
+        .await?;
     let elapsed = start.elapsed().unwrap();
 
     let result2 = executor
@@ -271,11 +260,9 @@ async fn set_retry_policy(
             "golem:it/api.{fail-with-custom-max-retries}",
             vec![1u64.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
     assert!(result1.is_err());
@@ -296,6 +283,8 @@ async fn set_retry_policy(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
     assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:68:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+
+    Ok(())
 }
 
 #[test]
@@ -305,30 +294,25 @@ async fn atomic_region(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(2).await;
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "atomic-region", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "atomic-region", vec![], env, vec![])
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -337,6 +321,8 @@ async fn atomic_region(
     info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+
+    Ok(())
 }
 
 #[test]
@@ -346,36 +332,30 @@ async fn idempotence_on(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(1).await;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "idempotence-flag", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "idempotence-flag", vec![], env, vec![])
+        .await?;
 
-    let result = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
             vec![true.into_value_and_type()],
         )
-        .await;
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    let _ = result.unwrap();
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -384,6 +364,8 @@ async fn idempotence_on(
     info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "1"]);
+
+    Ok(())
 }
 
 #[test]
@@ -393,24 +375,20 @@ async fn idempotence_off(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(1).await;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "idempotence-flag", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "idempotence-flag", vec![], env, vec![])
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -418,9 +396,9 @@ async fn idempotence_off(
             "golem:it/api.{idempotence-flag}",
             vec![false.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -431,6 +409,8 @@ async fn idempotence_off(
 
     check!(events == vec!["1"]);
     check!(result.is_err());
+
+    Ok(())
 }
 
 #[test]
@@ -440,30 +420,26 @@ async fn persist_nothing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(2).await;
 
-    let component_id = executor.component("runtime-service").store().await;
+    let component = executor.component(&context.default_environment_id, "runtime-service").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
-        .start_worker_with(&component_id, "persist-nothing", vec![], env, vec![])
-        .await;
+        .start_worker_with(&component.id, "persist-nothing", vec![], env, vec![])
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -474,6 +450,8 @@ async fn persist_nothing(
 
     check!(events == vec!["1", "2", "3"]);
     check!(result.is_err());
+
+    Ok(())
 }
 
 // golem-rust library tests
@@ -484,21 +462,17 @@ async fn golem_rust_explicit_oplog_commit(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let worker_id = executor
-        .start_worker(&component_id, "golem-rust-tests-explicit-oplog-commit")
-        .await;
+        .start_worker(&component.id, "golem-rust-tests-explicit-oplog-commit")
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     // Note: we can only test with replicas=0 because we don't have redis slaves in the test environment currently
     let result = executor
@@ -507,12 +481,12 @@ async fn golem_rust_explicit_oplog_commit(
             "golem:it/api.{explicit-commit}",
             vec![0u8.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
-    drop(executor);
     check!(result.is_ok());
+    Ok(())
 }
 
 #[test]
@@ -521,20 +495,16 @@ async fn golem_rust_set_retry_policy(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
     let worker_id = executor
-        .start_worker(&component_id, "golem-rust-tests-set-retry-policy-1")
-        .await;
+        .start_worker(&component.id, "golem-rust-tests-set-retry-policy-1")
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     let start = SystemTime::now();
     let result1 = executor
@@ -543,7 +513,7 @@ async fn golem_rust_set_retry_policy(
             "golem:it/api.{fail-with-custom-max-retries}",
             vec![2u64.into_value_and_type()],
         )
-        .await;
+        .await?;
     let elapsed = start.elapsed().unwrap();
 
     let result2 = executor
@@ -552,11 +522,9 @@ async fn golem_rust_set_retry_policy(
             "golem:it/api.{fail-with-custom-max-retries}",
             vec![1u64.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
-
-    drop(executor);
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     assert!(elapsed < Duration::from_secs(3)); // 2 retry attempts, 1s delay
     assert!(result1.is_err());
@@ -576,6 +544,8 @@ async fn golem_rust_set_retry_policy(
         matches!(worker_error_underlying_error(&result2_err), Some(WorkerError::Unknown(error)) if error.starts_with("error while executing at wasm backtrace:"))
     );
     assert_eq!(worker_error_logs(&result2_err), Some("\nthread '<unnamed>' panicked at src/lib.rs:26:9:\nFail now\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace\n".to_string()));
+
+    Ok(())
 }
 
 #[test]
@@ -585,36 +555,31 @@ async fn golem_rust_atomic_region(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(2).await;
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "golem-rust-tests-atomic-region",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(&worker_id, "golem:it/api.{atomic-region}", vec![])
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -623,6 +588,8 @@ async fn golem_rust_atomic_region(
     info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "2", "1", "2", "1", "2", "3", "4", "5", "5", "5", "6"]);
+
+    Ok(())
 }
 
 #[test]
@@ -632,41 +599,36 @@ async fn golem_rust_idempotence_on(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(1).await;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "golem-rust-tests-idempotence-flag-on",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    let _ = executor
+    executor
         .invoke_and_await(
             &worker_id,
             "golem:it/api.{idempotence-flag}",
             vec![true.into_value_and_type()],
         )
-        .await
-        .unwrap();
+        .await??;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -675,6 +637,8 @@ async fn golem_rust_idempotence_on(
     info!("events:\n - {}", events.join("\n - "));
 
     check!(events == vec!["1", "1"]);
+
+    Ok(())
 }
 
 #[test]
@@ -684,30 +648,26 @@ async fn golem_rust_idempotence_off(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(1).await;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "golem-rust-tests-idempotence-flag-off",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(
@@ -715,9 +675,9 @@ async fn golem_rust_idempotence_off(
             "golem:it/api.{idempotence-flag}",
             vec![false.into_value_and_type()],
         )
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -728,6 +688,8 @@ async fn golem_rust_idempotence_off(
 
     check!(events == vec!["1"]);
     check!(result.is_err());
+
+    Ok(())
 }
 
 #[test]
@@ -737,36 +699,32 @@ async fn golem_rust_persist_nothing(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start(2).await;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "golem-rust-tests-persist-nothing",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
     let result = executor
         .invoke_and_await(&worker_id, "golem:it/api.{persist-nothing}", vec![])
-        .await;
+        .await?;
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -777,6 +735,8 @@ async fn golem_rust_persist_nothing(
 
     check!(events == vec!["1", "2", "3"]);
     check!(result.is_err());
+
+    Ok(())
 }
 
 #[test]
@@ -786,13 +746,9 @@ async fn golem_rust_fallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start_custom(
         Arc::new(|step| match step {
@@ -803,21 +759,21 @@ async fn golem_rust_fallible_transaction(
     )
     .await;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "golem-rust-tests-fallible-transaction",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(
@@ -825,11 +781,11 @@ async fn golem_rust_fallible_transaction(
             "golem:it/api.{fallible-transaction-test}",
             vec![],
         )
-        .await;
+        .await?;
 
     let events = http_server.get_events();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -846,6 +802,8 @@ async fn golem_rust_fallible_transaction(
                 "<= 1".to_string()
             ]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -855,13 +813,9 @@ async fn golem_rust_infallible_transaction(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
     let http_server = TestHttpServer::start_custom(
         Arc::new(|step| match step {
@@ -872,21 +826,21 @@ async fn golem_rust_infallible_transaction(
     )
     .await;
 
-    let component_id = executor.component("golem-rust-tests").store().await;
+    let component = executor.component(&context.default_environment_id, "golem-rust-tests").store().await?;
 
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), http_server.port().to_string());
     let worker_id = executor
         .start_worker_with(
-            &component_id,
+            &component.id,
             "golem-rust-tests-infallible-transaction",
             vec![],
             env,
             vec![],
         )
-        .await;
+        .await?;
 
-    executor.log_output(&worker_id).await;
+    executor.log_output(&worker_id).await?;
 
     let result = executor
         .invoke_and_await(
@@ -894,11 +848,11 @@ async fn golem_rust_infallible_transaction(
             "golem:it/api.{infallible-transaction-test}",
             vec![],
         )
-        .await;
+        .await?;
 
     let events = http_server.get_events();
 
-    executor.check_oplog_is_queryable(&worker_id).await;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     drop(executor);
     http_server.abort();
@@ -916,6 +870,8 @@ async fn golem_rust_infallible_transaction(
                 "=> 4".to_string(),
             ]
     );
+
+    Ok(())
 }
 
 #[test]
@@ -925,22 +881,18 @@ async fn idempotency_keys_in_ephemeral_workers(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     _tracing: &Tracing,
-) {
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context)
-        .await
-        .unwrap()
-        .into_admin_with_unique_project()
-        .await;
+    let executor = start(deps, &context).await?;
 
-    let component_id = executor
-        .component("runtime-service")
+    let component = executor
+        .component(&context.default_environment_id, "runtime-service")
         .ephemeral()
         .store()
-        .await;
+        .await?;
 
     let target_worker_id = WorkerId {
-        component_id,
+        component_id: component.id,
         worker_name: "ephemeral".to_string(),
     };
 
@@ -953,8 +905,8 @@ async fn idempotency_keys_in_ephemeral_workers(
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let result21 = executor
         .invoke_and_await_with_key(
             &target_worker_id,
@@ -962,8 +914,8 @@ async fn idempotency_keys_in_ephemeral_workers(
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let result31 = executor
         .invoke_and_await_with_key(
             &target_worker_id,
@@ -971,16 +923,16 @@ async fn idempotency_keys_in_ephemeral_workers(
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let result12 = executor
         .invoke_and_await(
             &target_worker_id,
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let result22 = executor
         .invoke_and_await_with_key(
             &target_worker_id,
@@ -988,8 +940,8 @@ async fn idempotency_keys_in_ephemeral_workers(
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
+        .await??;
+
     let result32 = executor
         .invoke_and_await_with_key(
             &target_worker_id,
@@ -997,10 +949,7 @@ async fn idempotency_keys_in_ephemeral_workers(
             "golem:it/api.{generate-idempotency-keys}",
             vec![],
         )
-        .await
-        .unwrap();
-
-    drop(executor);
+        .await??;
 
     fn returned_keys_are_different(value: &[Value]) -> bool {
         if value.len() == 1 {
@@ -1030,4 +979,6 @@ async fn idempotency_keys_in_ephemeral_workers(
     check!(result11 != result31);
     check!(result21 == result22); // same idempotency key should lead to the same result
     check!(result31 == result32);
+
+    Ok(())
 }
