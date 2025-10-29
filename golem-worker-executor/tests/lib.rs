@@ -50,7 +50,7 @@ pub mod key_value_storage;
 pub mod keyvalue;
 pub mod observability;
 // pub mod rdbms;
-// pub mod rdbms_service;
+pub mod rdbms_service;
 // pub mod revert;
 // pub mod rust_rpc;
 // pub mod rust_rpc_stubless;

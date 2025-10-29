@@ -15,7 +15,8 @@
 use assert2::check;
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use golem_common::model::{ComponentId, TransactionId, WorkerId};
+use golem_common::model::component::ComponentId;
+use golem_common::model::{TransactionId, WorkerId};
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_worker_executor::services::golem_config::{RdbmsConfig, RdbmsPoolConfig};
