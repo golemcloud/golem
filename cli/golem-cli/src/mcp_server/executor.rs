@@ -120,14 +120,19 @@ fn build_command_args(tool_name: &str, arguments: &Option<Value>) -> anyhow::Res
     // Parse tool name into CLI subcommands
     // Format: "component_list" -> ["component", "list"]
     //         "worker_invoke" -> ["worker", "invoke"]
+    //         "component" -> ["component", "--help"] (single-word tools show help)
     let parts: Vec<&str> = tool_name.split('_').collect();
 
-    if parts.len() < 2 {
-        anyhow::bail!("Invalid tool name format: {}. Expected format: 'noun_verb'", tool_name);
+    if parts.len() == 1 {
+        // Single-word tool - treat as help command
+        args.push(parts[0].to_string());
+        args.push("--help".to_string());
+    } else if parts.len() >= 2 {
+        // Multi-part tool - split into subcommands
+        args.extend(parts.iter().map(|s| s.to_string()));
+    } else {
+        anyhow::bail!("Invalid tool name: {}", tool_name);
     }
-
-    // Add subcommands
-    args.extend(parts.iter().map(|s| s.to_string()));
 
     // Add arguments from MCP request
     if let Some(Value::Object(obj)) = arguments {
