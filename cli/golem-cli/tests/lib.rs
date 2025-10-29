@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::tracing::{init_tracing_with_default_debug_env_filter, TracingConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use test_r::{tag_suite, test_dep};
 
@@ -54,12 +54,8 @@ pub fn workspace_path() -> PathBuf {
         .clone()
 }
 
-static CRATE_PATH: OnceLock<PathBuf> = OnceLock::new();
+static CRATE_PATH: &str = env!("CARGO_MANIFEST_DIR");
 
-pub fn crate_path() -> PathBuf {
-    CRATE_PATH
-        .get_or_init(|| {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"))
-        })
-        .clone()
+pub fn crate_path() -> &'static Path {
+    Path::new(CRATE_PATH)
 }
