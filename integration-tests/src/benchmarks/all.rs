@@ -30,6 +30,7 @@ type RunFn = Box<
         Level,
         &'a BenchmarkSuiteItem,
         bool,
+        bool,
     ) -> Pin<Box<dyn Future<Output = BenchmarkResult> + 'a>>,
 >;
 
@@ -38,95 +39,96 @@ async fn main() {
     let mut benchmarks_by_name: BTreeMap<&str, RunFn> = BTreeMap::new();
     benchmarks_by_name.insert(
         "cold-start-unknown-small",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownSmall,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "cold-start-unknown-medium",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownMedium,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "cold-start-unknown-large",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::cold_start_unknown::ColdStartUnknownLarge,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "latency-small",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::latency::LatencySmall,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "latency-medium",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::latency::LatencyMedium,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "latency-large",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::latency::LatencyLarge,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "sleep",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(
                 run_benchmark::<integration_tests::benchmarks::sleep::Sleep>(
                     mode,
                     verbosity,
                     item,
                     primary_only,
+                    otlp,
                 ),
             )
         }),
     );
     benchmarks_by_name.insert(
         "durability-overhead",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::durability_overhead::DurabilityOverhead,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "throughput-echo",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::throughput::ThroughputEcho,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "throughput-large-input",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::throughput::ThroughputLargeInput,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
     benchmarks_by_name.insert(
         "throughput-cpu-intensive",
-        Box::new(|mode, verbosity, item, primary_only| {
+        Box::new(|mode, verbosity, item, primary_only, otlp| {
             Box::pin(run_benchmark::<
                 integration_tests::benchmarks::throughput::ThroughputCpuIntensive,
-            >(mode, verbosity, item, primary_only))
+            >(mode, verbosity, item, primary_only, otlp))
         }),
     );
 
@@ -153,10 +155,11 @@ async fn main() {
                     disable_compilation_cache: Some(*disable_compilation_cache),
                 };
                 let result = f(
-                    &params.benchmark_config.mode(),
+                    params.benchmark_config.mode(),
                     params.service_verbosity(),
                     &item,
                     params.primary_only,
+                    params.otlp,
                 )
                 .await;
                 if params.json {
@@ -187,10 +190,11 @@ async fn main() {
 
                 if let Some(f) = benchmarks_by_name.get(benchmark.name.as_str()) {
                     let result = f(
-                        &params.benchmark_config.mode(),
+                        params.benchmark_config.mode(),
                         params.service_verbosity(),
                         &benchmark,
                         params.primary_only,
+                        params.otlp,
                     )
                     .await;
                     suite_result.add(result);
@@ -239,6 +243,7 @@ async fn run_benchmark<B: Benchmark>(
     verbosity: Level,
     item: &BenchmarkSuiteItem,
     primary_only: bool,
+    otlp: bool,
 ) -> BenchmarkResult {
-    B::run_benchmark(mode, verbosity, item, primary_only).await
+    B::run_benchmark(mode, verbosity, item, primary_only, otlp).await
 }

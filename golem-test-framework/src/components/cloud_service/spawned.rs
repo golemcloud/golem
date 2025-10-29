@@ -61,6 +61,7 @@ impl SpawnedCloudService {
         out_level: Level,
         err_level: Level,
         unlimited: bool,
+        otlp: bool,
     ) -> Self {
         info!("Starting cloud-service process");
 
@@ -68,7 +69,8 @@ impl SpawnedCloudService {
             panic!("Expected to have precompiled cloud-service at {executable:?}");
         }
 
-        let env = super::env_vars(http_port, grpc_port, rdb, verbosity, false, unlimited).await;
+        let env =
+            super::env_vars(http_port, grpc_port, rdb, verbosity, false, unlimited, otlp).await;
 
         let mut child = Command::new(executable)
             .current_dir(working_directory)

@@ -159,10 +159,10 @@ pub struct DurationResult {
     #[serde_as(as = "DurationMilliSecondsWithFrac")]
     pub p99: Duration,
     #[serde_as(as = "Vec<DurationMilliSecondsWithFrac>")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub all: Vec<Duration>,
     #[serde_as(as = "Vec<Vec<DurationMilliSecondsWithFrac>>")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub per_iteration: Vec<Vec<Duration>>,
     #[serde(skip)]
     locked: bool,
@@ -192,7 +192,7 @@ impl DurationResult {
 
         fn percentile(k: f64, sorted_series: &[Duration]) -> Duration {
             assert!(!sorted_series.is_empty());
-            assert!(k >= 0.0 && k <= 100.0);
+            assert!((0.0..=100.0).contains(&k));
 
             let n = sorted_series.len();
             let p = (k / 100.0) * (n as f64 - 1.0);
@@ -244,9 +244,9 @@ pub struct CountResult {
     pub avg: u64,
     pub min: u64,
     pub max: u64,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub all: Vec<u64>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub per_iteration: Vec<Vec<u64>>,
     #[serde(skip)]
     locked: bool,
@@ -294,14 +294,11 @@ impl Default for CountResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RunConfigView {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     cluster_size: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     length: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     size: Option<usize>,
 }
 
@@ -366,14 +363,11 @@ impl From<&CountResult> for CountResultView {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BenchmarkResultItemView {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     config: Option<RunConfigView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     duration: Option<DurationResultView>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none", default)]
     count: Option<CountResultView>,
 }
 
@@ -589,7 +583,7 @@ impl BenchmarkSuiteResult {
         BenchmarkSuiteResultView {
             suite: self.suite.clone(),
             environment: self.environment.clone(),
-            timestamp: self.timestamp.clone(),
+            timestamp: self.timestamp,
             results: self.results.iter().map(|r| r.view()).collect(),
         }
     }
@@ -635,11 +629,11 @@ impl Display for BenchmarkSuiteResultView {
         writeln!(f, "{}: {}", "Ran at         ".bold(), self.timestamp)?;
         writeln!(f, "{}\n{}", "Environment".bold(), self.environment)?;
 
-        writeln!(f, "")?;
+        writeln!(f)?;
         for result in &self.results {
             writeln!(f, "{} '{}'", "Benchmark".bold(), result.name)?;
             writeln!(f, "{}", result.description.blue())?;
-            writeln!(f, "")?;
+            writeln!(f)?;
             writeln!(f, "{}", result)?;
         }
 
@@ -734,9 +728,9 @@ impl BenchmarkResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkRunResult {
     pub run_config: RunConfig,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub duration_results: HashMap<ResultKey, DurationResult>,
-    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub count_results: HashMap<ResultKey, CountResult>,
 }
 
@@ -759,10 +753,10 @@ impl BenchmarkRunResult {
     }
 
     pub fn drop_details(&mut self) {
-        for (_, duration_result) in &mut self.duration_results {
+        for duration_result in self.duration_results.values_mut() {
             duration_result.drop_details();
         }
-        for (_, count_result) in &mut self.count_results {
+        for count_result in self.count_results.values_mut() {
             count_result.drop_details();
         }
     }

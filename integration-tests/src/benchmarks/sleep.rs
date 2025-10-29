@@ -59,6 +59,7 @@ impl Benchmark for Sleep {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         SleepBenchmarkContext {
             deps: BenchmarkTestDependencies::new(
@@ -66,6 +67,7 @@ impl Benchmark for Sleep {
                 verbosity,
                 cluster_size,
                 disable_compilation_cache,
+                otlp,
             )
             .await,
         }
@@ -103,9 +105,7 @@ impl Benchmark for Sleep {
             worker_ids.push(worker_id);
         }
 
-        SleepIterationContext {
-            worker_ids,
-        }
+        SleepIterationContext { worker_ids }
     }
 
     async fn warmup(
@@ -123,7 +123,7 @@ impl Benchmark for Sleep {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{sleep}",
                     vec![10u64.into_value_and_type()],
                 )
@@ -150,7 +150,7 @@ impl Benchmark for Sleep {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{sleep}",
                     vec![length.into_value_and_type()],
                 )

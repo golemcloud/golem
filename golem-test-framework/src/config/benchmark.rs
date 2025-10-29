@@ -103,6 +103,9 @@ pub struct BenchmarkCliParameters {
     /// Only display the primary benchmark results (no per-worker measurements, for example)
     #[arg(long, default_value = "false")]
     pub primary_only: bool,
+
+    #[arg(long, default_value = "false")]
+    pub otlp: bool,
 }
 
 impl BenchmarkCliParameters {
@@ -194,7 +197,7 @@ pub enum TestMode {
         redis_prefix: String,
         #[arg(long, default_value = "8080")]
         shard_manager_http_port: u16,
-        #[arg(long, default_value = "9090")]
+        #[arg(long, default_value = "9096")]
         shard_manager_grpc_port: u16,
         #[arg(long, default_value = "8081")]
         component_service_http_port: u16,
@@ -230,14 +233,15 @@ impl BenchmarkTestDependencies {
         init_tracing(
             &TracingConfig::test_pretty("benchmarks")
                 .with_env_overrides()
-                .use_stderr(),
+                .use_stderr()
+                .with_otlp(params.otlp, "localhost", 4318, "benchmarks"),
             |_output| {
                 golem_common::tracing::filter::boxed::env_with_directives(
                     params
                         .default_log_level()
                         .parse()
                         .expect("Failed to parse log cli test log level"),
-                    vec![
+                    [
                         golem_common::tracing::directive::default_deps(),
                         vec![warn("golem_client")],
                     ]
@@ -271,6 +275,7 @@ impl BenchmarkTestDependencies {
         cloud_service_grpc_port: u16,
         mute_child: bool,
         component_directory: &str,
+        otlp: bool,
     ) -> Self {
         let workspace_root = Path::new(workspace_root).canonicalize().unwrap();
         let build_root = workspace_root.join(build_target);
@@ -308,6 +313,7 @@ impl BenchmarkTestDependencies {
                 out_level,
                 Level::ERROR,
                 true,
+                otlp,
             )
             .await,
         );
@@ -329,6 +335,7 @@ impl BenchmarkTestDependencies {
                     GolemClientProtocol::Http,
                     plugin_wasm_files_service.clone(),
                     cloud_service.clone(),
+                    otlp,
                 )
                 .await,
             )
@@ -346,6 +353,7 @@ impl BenchmarkTestDependencies {
                 Level::ERROR,
                 cloud_service.clone(),
                 false,
+                otlp,
             )
             .await,
         );
@@ -374,6 +382,7 @@ impl BenchmarkTestDependencies {
                 verbosity,
                 out_level,
                 Level::ERROR,
+                otlp,
             )
             .await,
         );
@@ -394,6 +403,7 @@ impl BenchmarkTestDependencies {
                 GolemClientProtocol::Http,
                 cloud_service.clone(),
                 false,
+                otlp,
             )
             .await,
         );
@@ -413,6 +423,7 @@ impl BenchmarkTestDependencies {
                 Level::ERROR,
                 true,
                 cloud_service.clone(),
+                otlp,
             )
             .await,
         );
@@ -440,6 +451,7 @@ impl BenchmarkTestDependencies {
         verbosity: Level,
         cluster_size: usize,
         compilation_cache_disabled: bool,
+        otlp: bool,
     ) -> Self {
         match mode {
             TestMode::Provided {
@@ -609,6 +621,7 @@ impl BenchmarkTestDependencies {
                     *cloud_service_grpc_port,
                     *mute_child,
                     component_directory,
+                    otlp,
                 )
                 .await
             }

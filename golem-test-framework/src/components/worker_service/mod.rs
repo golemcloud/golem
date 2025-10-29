@@ -1435,6 +1435,7 @@ async fn env_vars(
     rdb_private_connection: bool,
     cloud_service: &Arc<dyn CloudService>,
     enable_fs_cache: bool,
+    otlp: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("GOLEM__BLOB_STORAGE__TYPE", "LocalFileSystem")
@@ -1480,6 +1481,7 @@ async fn env_vars(
             enable_fs_cache.to_string(),
         )
         .with_all(rdb.info().env("golem_worker", rdb_private_connection))
+        .with_optional_otlp("worker_service", otlp)
         .build()
 }
 

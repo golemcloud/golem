@@ -61,6 +61,7 @@ impl Benchmark for LatencySmall {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         LatencyBenchmark::new(
             "benchmark_direct_rust",
@@ -71,6 +72,7 @@ impl Benchmark for LatencySmall {
             verbosity,
             cluster_size,
             disable_compilation_cache,
+            otlp,
         )
         .await
     }
@@ -142,6 +144,7 @@ impl Benchmark for LatencyMedium {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         LatencyBenchmark::new(
             "benchmark_agent_ts",
@@ -152,6 +155,7 @@ impl Benchmark for LatencyMedium {
             verbosity,
             cluster_size,
             disable_compilation_cache,
+            otlp,
         )
         .await
     }
@@ -223,6 +227,7 @@ impl Benchmark for LatencyLarge {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         LatencyBenchmark::new(
             "benchmark_agent_ts_large",
@@ -233,6 +238,7 @@ impl Benchmark for LatencyLarge {
             verbosity,
             cluster_size,
             disable_compilation_cache,
+            otlp,
         )
         .await
     }
@@ -301,6 +307,7 @@ impl LatencyBenchmark {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self {
         Self {
             component_name: component_name.to_string(),
@@ -312,6 +319,7 @@ impl LatencyBenchmark {
                 verbosity,
                 cluster_size,
                 disable_compilation_cache,
+                otlp,
             )
             .await,
         }
@@ -366,7 +374,7 @@ impl LatencyBenchmark {
 
                 let cold_result = invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     &self.function_name,
                     self.function_params.clone(),
                 )
@@ -376,7 +384,7 @@ impl LatencyBenchmark {
                 for _ in 0..iteration.length {
                     let hot_result = invoke_and_await(
                         &deps_clone,
-                        &worker_id,
+                        worker_id,
                         &self.function_name,
                         self.function_params.clone(),
                     )

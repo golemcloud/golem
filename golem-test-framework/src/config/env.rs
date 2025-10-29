@@ -230,7 +230,8 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
-                false
+                false,
+                false,
             )
             .await,
         )
@@ -251,6 +252,7 @@ impl EnvBasedTestDependencies {
                 config.default_verbosity(),
                 config.default_stdout_level(),
                 config.default_stderr_level(),
+                false,
             )
             .await,
         )
@@ -277,6 +279,7 @@ impl EnvBasedTestDependencies {
                 config.golem_client_protocol,
                 plugin_wasm_files_service,
                 cloud_service,
+                false,
             )
             .await,
         )
@@ -298,7 +301,8 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 cloud_service.clone(),
-                true
+                true,
+                false,
             )
             .await,
         )
@@ -326,7 +330,8 @@ impl EnvBasedTestDependencies {
                 config.default_stderr_level(),
                 config.golem_client_protocol,
                 cloud_service,
-                true
+                true,
+                false,
             )
             .await,
         )
@@ -356,6 +361,7 @@ impl EnvBasedTestDependencies {
                 config.default_stderr_level(),
                 config.shared_client,
                 cloud_service,
+                false,
             )
             .await,
         )

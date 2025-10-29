@@ -68,6 +68,7 @@ impl Benchmark for ThroughputEcho {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
@@ -86,6 +87,7 @@ impl Benchmark for ThroughputEcho {
             cluster_size,
             disable_compilation_cache,
             250,
+            otlp,
         )
         .await
     }
@@ -158,6 +160,7 @@ impl Benchmark for ThroughputLargeInput {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{large-input}",
@@ -182,6 +185,7 @@ impl Benchmark for ThroughputLargeInput {
             cluster_size,
             disable_compilation_cache,
             100,
+            otlp,
         )
         .await
     }
@@ -254,6 +258,7 @@ impl Benchmark for ThroughputCpuIntensive {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         ThroughputBenchmark::new(
             "benchmark:direct-rust-exports/benchmark-direct-rust-api.{cpu-intensive}",
@@ -275,6 +280,7 @@ impl Benchmark for ThroughputCpuIntensive {
             cluster_size,
             disable_compilation_cache,
             10,
+            otlp,
         )
         .await
     }
@@ -348,6 +354,7 @@ impl ThroughputBenchmark {
         cluster_size: usize,
         disable_compilation_cache: bool,
         call_count: usize,
+        otlp: bool,
     ) -> Self {
         Self {
             rust_function_name: rust_function_name.to_string(),
@@ -359,6 +366,7 @@ impl ThroughputBenchmark {
                 verbosity,
                 cluster_size,
                 disable_compilation_cache,
+                otlp,
             )
             .await,
             call_count,
@@ -500,7 +508,7 @@ impl ThroughputBenchmark {
             .expect("Failed to register API definition");
 
         let request = ApiDeploymentRequest {
-            project_id: admin.default_project_id.0.clone(),
+            project_id: admin.default_project_id.0,
             api_definitions: vec![ApiDefinitionInfo {
                 id: api_definition_id.clone(),
                 version: "1".to_string(),
@@ -539,7 +547,7 @@ impl ThroughputBenchmark {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     &self.rust_function_name,
                     (self.function_params)(iteration.length),
                 )
@@ -558,7 +566,7 @@ impl ThroughputBenchmark {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     &self.ts_function_name,
                     (self.function_params)(iteration.length),
                 )
@@ -577,7 +585,7 @@ impl ThroughputBenchmark {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     &self.ts_function_name,
                     (self.function_params)(iteration.length),
                 )
@@ -603,7 +611,7 @@ impl ThroughputBenchmark {
                     results.push(
                         invoke_and_await(
                             &deps_clone,
-                            &worker_id,
+                            worker_id,
                             &self.rust_function_name,
                             (self.function_params)(iteration.length),
                         )
@@ -633,7 +641,7 @@ impl ThroughputBenchmark {
                     results.push(
                         invoke_and_await(
                             &deps_clone,
-                            &worker_id,
+                            worker_id,
                             &self.ts_function_name,
                             (self.function_params)(iteration.length),
                         )

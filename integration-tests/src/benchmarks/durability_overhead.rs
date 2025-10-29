@@ -64,6 +64,7 @@ impl Benchmark for DurabilityOverhead {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         DurabilityOverheadBenchmarkContext {
             deps: BenchmarkTestDependencies::new(
@@ -71,6 +72,7 @@ impl Benchmark for DurabilityOverhead {
                 verbosity,
                 cluster_size,
                 disable_compilation_cache,
+                otlp,
             )
             .await,
         }
@@ -156,7 +158,7 @@ impl Benchmark for DurabilityOverhead {
                     let deps_clone = deps.clone().into_admin().await;
                     invoke_and_await(
                         &deps_clone,
-                        &worker_id,
+                        worker_id,
                         "benchmark:direct-rust-exports/benchmark-direct-rust-api.{echo}",
                         vec!["test".into_value_and_type()],
                     )
@@ -166,8 +168,16 @@ impl Benchmark for DurabilityOverhead {
             let _ = result_futures.join().await;
         }
 
-        warmup(&benchmark_context.deps, &context.durable_persistent_worker_ids).await;
-        warmup(&benchmark_context.deps, &context.durable_nonpersistent_worker_ids).await;
+        warmup(
+            &benchmark_context.deps,
+            &context.durable_persistent_worker_ids,
+        )
+        .await;
+        warmup(
+            &benchmark_context.deps,
+            &context.durable_nonpersistent_worker_ids,
+        )
+        .await;
 
         info!(
             "Warmed up {} workers",
@@ -191,7 +201,7 @@ impl Benchmark for DurabilityOverhead {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
                     vec![length.into_value_and_type(), true.into_value_and_type()],
                 )
@@ -211,7 +221,7 @@ impl Benchmark for DurabilityOverhead {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
                     vec![length.into_value_and_type(), false.into_value_and_type()],
                 )
@@ -235,7 +245,7 @@ impl Benchmark for DurabilityOverhead {
 
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     "benchmark:direct-rust-exports/benchmark-direct-rust-api.{oplog-heavy}",
                     vec![length.into_value_and_type(), false.into_value_and_type()],
                 )

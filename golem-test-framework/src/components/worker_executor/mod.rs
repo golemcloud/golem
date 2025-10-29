@@ -84,6 +84,7 @@ async fn env_vars(
     redis: Arc<dyn Redis + Send + Sync + 'static>,
     cloud_service: &Arc<dyn CloudService>,
     verbosity: Level,
+    otlp: bool,
 ) -> HashMap<String, String> {
     EnvVarBuilder::golem_service(verbosity)
         .with_str("ENVIRONMENT", "local")
@@ -185,5 +186,6 @@ async fn env_vars(
         )
         .with("GOLEM__PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
+        .with_optional_otlp("worker_executor", otlp)
         .build()
 }

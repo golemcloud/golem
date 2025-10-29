@@ -15,9 +15,6 @@
 mod config;
 mod results;
 
-#[cfg(test)]
-mod tests;
-
 pub use config::{BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, RunConfig};
 pub use results::{BenchmarkResult, BenchmarkRunResult, BenchmarkSuiteResult, ResultKey};
 
@@ -107,6 +104,7 @@ pub trait Benchmark: Send + Sync + 'static {
         verbosity: Level,
         cluster_size: usize,
         disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext;
 
     async fn cleanup(benchmark_context: Self::BenchmarkContext);
@@ -144,6 +142,7 @@ pub trait BenchmarkApi {
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        otlp: bool,
     ) -> BenchmarkResult;
 
     async fn run_benchmark(
@@ -151,8 +150,9 @@ pub trait BenchmarkApi {
         verbosity: Level,
         item: &BenchmarkSuiteItem,
         primary_only: bool,
+        otlp: bool,
     ) -> BenchmarkResult {
-        let mut results = Self::run_benchmark_internal(mode, verbosity, item).await;
+        let mut results = Self::run_benchmark_internal(mode, verbosity, item, otlp).await;
         results.drop_zero_counts();
         results.drop_details();
         if primary_only {
@@ -235,12 +235,13 @@ impl<B: Benchmark> BenchmarkApi for B {
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        otlp: bool,
     ) -> BenchmarkResult {
         let span = tracing::info_span!("benchmark", name = B::name());
         let _enter = span.enter();
         info!("Initializing benchmark {}", B::name());
 
-        let runs = item.runs(&mode);
+        let runs = item.runs(mode);
 
         let runs_cnt = runs.len();
         let mut current_run = 0;
@@ -265,6 +266,7 @@ impl<B: Benchmark> BenchmarkApi for B {
                 verbosity,
                 cluster_size,
                 item.disable_compilation_cache.unwrap_or_default(),
+                otlp,
             )
             .instrument(span.clone())
             .await;

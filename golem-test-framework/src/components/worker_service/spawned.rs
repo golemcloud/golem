@@ -57,7 +57,8 @@ impl SpawnedWorkerService {
         err_level: Level,
         client_protocol: GolemClientProtocol,
         cloud_service: Arc<dyn CloudService>,
-        enable_fs_cache: bool
+        enable_fs_cache: bool,
+        otlp: bool,
     ) -> Self {
         info!("Starting golem-worker-service process");
 
@@ -78,7 +79,8 @@ impl SpawnedWorkerService {
                     verbosity,
                     false,
                     &cloud_service,
-                    enable_fs_cache
+                    enable_fs_cache,
+                    otlp,
                 )
                 .await,
             )

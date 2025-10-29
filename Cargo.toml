@@ -217,6 +217,7 @@ once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "3.5.0"
 opentelemetry = "0.28.0"
+opentelemetry-otlp = "0.28.0"
 opentelemetry-prometheus = "0.28.0"
 opentelemetry_sdk = "0.28.0"
 phf = { version = "0.11.3", features = ["macros"] }
@@ -303,8 +304,9 @@ tonic-prost-build = "0.14.1"
 tonic-reflection = "0.14.1"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-futures = "0.2.5"
+tracing-opentelemetry = "0.29.0"
 tracing-serde = "0.2.0"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "fmt", "std", "json", ] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt", "std", "json", ] }
 tracing-test = "0.2.5"
 try_match = "0.4.2"
 tryhard = "0.5.1"
@@ -318,7 +320,7 @@ walkdir = "2.5.0"
 warp = "0.3.7"
 wasm-encoder = "0.235.0"
 wasm-metadata = { version = "0.235.0", features = ["oci"] }
- wasm-rquickjs = "0.0.20"
+wasm-rquickjs = "0.0.20"
 wasm-wave = "0.235"
 wasmparser = "0.229.0"
 wasmprinter = "0.219.1"

@@ -491,6 +491,7 @@ async fn env_vars(
     verbosity: Level,
     private_rdb_connection: bool,
     unlimited: bool,
+    otlp: bool,
 ) -> HashMap<String, String> {
     let mut env = EnvVarBuilder::golem_service(verbosity)
         .with("GOLEM__ACCOUNTS__ROOT__ID", ADMIN_ACCOUNT_ID.to_string())
@@ -499,7 +500,8 @@ async fn env_vars(
         .with("GOLEM__GRPC_PORT", grpc_port.to_string())
         .with("GOLEM__HTTP_PORT", http_port.to_string())
         .with("GOLEM__LOGIN__TYPE", "Disabled".to_string())
-        .with_all(rdb.info().env("cloud_service", private_rdb_connection));
+        .with_all(rdb.info().env("cloud_service", private_rdb_connection))
+        .with_optional_otlp("cloud_service", otlp);
 
     if unlimited {
         env = env.with(

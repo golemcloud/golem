@@ -58,7 +58,8 @@ impl Benchmark for ColdStartUnknownSmall {
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
-        disable_compilation_cache: bool
+        disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_direct_rust",
@@ -67,7 +68,8 @@ impl Benchmark for ColdStartUnknownSmall {
             mode,
             verbosity,
             cluster_size,
-            disable_compilation_cache
+            disable_compilation_cache,
+            otlp,
         )
         .await
     }
@@ -136,7 +138,8 @@ impl Benchmark for ColdStartUnknownMedium {
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
-        disable_compilation_cache: bool
+        disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts",
@@ -145,7 +148,8 @@ impl Benchmark for ColdStartUnknownMedium {
             mode,
             verbosity,
             cluster_size,
-            disable_compilation_cache
+            disable_compilation_cache,
+            otlp,
         )
         .await
     }
@@ -214,7 +218,8 @@ impl Benchmark for ColdStartUnknownLarge {
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
-        disable_compilation_cache: bool
+        disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self::BenchmarkContext {
         ColdStartUnknownBenchmark::new(
             "benchmark_agent_ts_large",
@@ -223,7 +228,8 @@ impl Benchmark for ColdStartUnknownLarge {
             mode,
             verbosity,
             cluster_size,
-            disable_compilation_cache
+            disable_compilation_cache,
+            otlp,
         )
         .await
     }
@@ -288,13 +294,21 @@ impl ColdStartUnknownBenchmark {
         mode: &TestMode,
         verbosity: Level,
         cluster_size: usize,
-        disable_compilation_cache: bool
+        disable_compilation_cache: bool,
+        otlp: bool,
     ) -> Self {
         Self {
             component_name: component_name.to_string(),
             function_name: function_name.to_string(),
             function_params,
-            deps: BenchmarkTestDependencies::new(mode, verbosity, cluster_size, disable_compilation_cache).await,
+            deps: BenchmarkTestDependencies::new(
+                mode,
+                verbosity,
+                cluster_size,
+                disable_compilation_cache,
+                otlp,
+            )
+            .await,
         }
     }
 
@@ -343,7 +357,7 @@ impl ColdStartUnknownBenchmark {
                 let deps_clone = self.deps.clone().into_admin().await;
                 invoke_and_await(
                     &deps_clone,
-                    &worker_id,
+                    worker_id,
                     &self.function_name,
                     self.function_params.clone(),
                 )
