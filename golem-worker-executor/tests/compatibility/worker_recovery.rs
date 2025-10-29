@@ -261,7 +261,11 @@ async fn restore_from_recovery_golden_file(
     for (idx, component_name) in component_names.iter().enumerate() {
         if idx == 0 {
             executor
-                .store_component_with_id(component_name, &worker_id.component_id)
+                .store_component_with_id(
+                    component_name,
+                    &worker_id.component_id,
+                    &context.default_environment_id,
+                )
                 .await?;
         } else {
             executor

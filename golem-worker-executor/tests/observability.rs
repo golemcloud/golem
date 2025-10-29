@@ -48,7 +48,7 @@ async fn get_oplog_1(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "runtime-service")
+        .component(&context.default_environment_id, "runtime-service")
         .store()
         .await?;
 
@@ -125,7 +125,7 @@ async fn search_oplog_1(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .store()
         .await?;
 
@@ -230,7 +230,7 @@ async fn get_oplog_with_api_changing_updates(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -287,7 +287,7 @@ async fn get_oplog_starting_with_updated_component(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -360,7 +360,7 @@ async fn invocation_context_test(
     env.insert("PORT".to_string(), host_http_port.to_string());
 
     let component = executor
-        .component(&executor.environment_id, "golem_ictest")
+        .component(&context.default_environment_id, "golem_ictest")
         .with_dynamic_linking(&[(
             "golem:ictest-client/golem-ictest-client",
             DynamicLinkedInstance::WasmRpc(DynamicLinkedWasmRpc {

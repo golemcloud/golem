@@ -63,7 +63,7 @@ async fn http_client(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client")
+        .component(&context.default_environment_id, "http-client")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -136,7 +136,7 @@ async fn http_client_using_reqwest(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -208,7 +208,7 @@ async fn http_client_using_reqwest_async(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-3")
+        .component(&context.default_environment_id, "http-client-3")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -285,7 +285,7 @@ async fn http_client_using_reqwest_async_parallel(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-3")
+        .component(&context.default_environment_id, "http-client-3")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -395,7 +395,7 @@ async fn outgoing_http_contains_idempotency_key(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -441,7 +441,7 @@ async fn http_response_request_chaining(
     let executor = start_customized(deps, &context, None, Some(RetryConfig::no_retries())).await?;
 
     let component = executor
-        .component(&executor.environment_id, "fetch")
+        .component(&context.default_environment_id, "fetch")
         .store()
         .await?;
     let mut env = HashMap::new();

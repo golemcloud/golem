@@ -247,8 +247,13 @@ pub trait TestDsl {
         function_name: &str,
         params: Vec<ValueAndType>,
     ) -> anyhow::Result<Result<Option<ValueAndType>, WorkerExecutorError>> {
-        self.invoke_and_await_typed_with_key(worker_id, &IdempotencyKey::fresh(), function_name, params)
-            .await
+        self.invoke_and_await_typed_with_key(
+            worker_id,
+            &IdempotencyKey::fresh(),
+            function_name,
+            params,
+        )
+        .await
     }
 
     async fn invoke_and_await_typed_with_key(

@@ -167,7 +167,7 @@ async fn auto_update_on_running(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -246,7 +246,7 @@ async fn auto_update_on_idle(
     let executor = common::start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -300,7 +300,7 @@ async fn failing_auto_update_on_idle(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -368,7 +368,7 @@ async fn auto_update_on_idle_with_non_diverging_history(
     let executor = common::start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -435,7 +435,7 @@ async fn failing_auto_update_on_running(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -529,7 +529,7 @@ async fn manual_update_on_idle(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v2")
+        .component(&context.default_environment_id, "update-test-v2")
         .unique()
         .store()
         .await?;
@@ -599,7 +599,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -670,7 +670,7 @@ async fn auto_update_on_running_followed_by_manual(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -775,7 +775,7 @@ async fn manual_update_on_idle_with_failing_load(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v2")
+        .component(&context.default_environment_id, "update-test-v2")
         .unique()
         .store()
         .await?;
@@ -845,7 +845,7 @@ async fn manual_update_on_idle_using_v11(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v2-11")
+        .component(&context.default_environment_id, "update-test-v2-11")
         .unique()
         .store()
         .await?;
@@ -921,7 +921,7 @@ async fn manual_update_on_idle_using_golem_rust_sdk(
     env.insert("PORT".to_string(), http_server.port().to_string());
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v2-11")
+        .component(&context.default_environment_id, "update-test-v2-11")
         .unique()
         .store()
         .await?;
@@ -993,7 +993,7 @@ async fn auto_update_on_idle_to_non_existing(
     let executor = common::start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "update-test-v1")
+        .component(&context.default_environment_id, "update-test-v1")
         .unique()
         .store()
         .await?;
@@ -1055,7 +1055,7 @@ async fn update_component_version_environment_variable(
     let executor = common::start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "update-test-env-var")
+        .component(&context.default_environment_id, "update-test-env-var")
         .store()
         .await?;
 

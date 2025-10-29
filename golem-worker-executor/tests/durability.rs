@@ -79,7 +79,7 @@ async fn custom_durability_1(
     );
 
     let component = executor
-        .component(&executor.environment_id, "custom_durability")
+        .component(&context.default_environment_id, "custom_durability")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -175,7 +175,7 @@ async fn lazy_pollable(
     );
 
     let component = executor
-        .component(&executor.environment_id, "custom_durability")
+        .component(&context.default_environment_id, "custom_durability")
         .store()
         .await?;
     let mut env = HashMap::new();

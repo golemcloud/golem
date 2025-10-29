@@ -77,7 +77,7 @@ async fn interruption(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "interruption")
+        .component(&context.default_environment_id, "interruption")
         .store()
         .await?;
     let worker_id = executor
@@ -121,7 +121,7 @@ async fn simulated_crash(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "interruption")
+        .component(&context.default_environment_id, "interruption")
         .store()
         .await?;
     let worker_id = executor
@@ -167,7 +167,7 @@ async fn shopping_cart_example(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .store()
         .await?;
     let worker_id = executor
@@ -285,7 +285,7 @@ async fn dynamic_worker_creation(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "environment-service")
+        .component(&context.default_environment_id, "environment-service")
         .store()
         .await?;
     let worker_id = WorkerId {
@@ -365,7 +365,7 @@ async fn ephemeral_worker_creation_with_name_is_not_persistent(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "counters")
+        .component(&context.default_environment_id, "counters")
         .ephemeral()
         .store()
         .await?;
@@ -408,7 +408,7 @@ async fn promise(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "promise")
+        .component(&context.default_environment_id, "promise")
         .store()
         .await?;
     let worker_id = executor.start_worker(&component.id, "promise-1").await?;
@@ -489,7 +489,7 @@ async fn get_workers_from_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "runtime-service")
+        .component(&context.default_environment_id, "runtime-service")
         .store()
         .await?;
 
@@ -592,7 +592,7 @@ async fn get_metadata_from_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "runtime-service")
+        .component(&context.default_environment_id, "runtime-service")
         .store()
         .await?;
 
@@ -701,7 +701,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .store()
         .await?;
     let worker_id = executor
@@ -768,7 +768,7 @@ async fn invoking_with_same_idempotency_key_is_idempotent_after_restart(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .store()
         .await?;
     let worker_id = executor
@@ -838,7 +838,7 @@ async fn component_env_variables(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "environment-service")
+        .component(&context.default_environment_id, "environment-service")
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
@@ -891,7 +891,7 @@ async fn component_env_variables_update(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "environment-service")
+        .component(&context.default_environment_id, "environment-service")
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
@@ -948,7 +948,7 @@ async fn component_env_and_worker_env_priority(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "environment-service")
+        .component(&context.default_environment_id, "environment-service")
         .with_env(vec![("FOO".to_string(), "bar".to_string())])
         .store()
         .await?;
@@ -987,7 +987,7 @@ async fn optional_parameters(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -1059,7 +1059,7 @@ async fn flags_parameters(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "flags-service")
+        .component(&context.default_environment_id, "flags-service")
         .store()
         .await?;
     let worker_id = executor
@@ -1123,7 +1123,7 @@ async fn variants_with_no_payloads(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "variant-service")
+        .component(&context.default_environment_id, "variant-service")
         .store()
         .await?;
     let worker_id = executor
@@ -1150,7 +1150,7 @@ async fn delete_worker(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -1219,7 +1219,7 @@ async fn get_workers(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
 
@@ -1346,7 +1346,7 @@ async fn error_handling_when_worker_is_invoked_with_fewer_than_expected_paramete
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -1373,7 +1373,7 @@ async fn error_handling_when_worker_is_invoked_with_more_than_expected_parameter
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -1410,7 +1410,7 @@ async fn get_worker_metadata(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "clock-service")
+        .component(&context.default_environment_id, "clock-service")
         .store()
         .await?;
 
@@ -1456,7 +1456,7 @@ async fn get_worker_metadata(
     check!(metadata2.status == WorkerStatus::Idle);
     check!(metadata1.component_version == ComponentRevision(0));
     check!(metadata1.worker_id == worker_id);
-    check!(metadata1.created_by == executor.account_id);
+    check!(metadata1.created_by == context.account_id);
 
     check!(metadata2.component_size == 202619);
     check!(metadata2.total_linear_memory_size == 1245184);
@@ -1474,7 +1474,7 @@ async fn create_invoke_delete_create_invoke(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .store()
         .await?;
     let worker_id = executor
@@ -1533,7 +1533,7 @@ async fn recovering_an_old_worker_after_updating_a_component(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .unique()
         .store()
         .await?;
@@ -1619,7 +1619,7 @@ async fn recreating_a_worker_after_it_got_deleted_with_a_different_version(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart")
+        .component(&context.default_environment_id, "shopping-cart")
         .unique()
         .store()
         .await?;
@@ -1693,7 +1693,7 @@ async fn trying_to_use_an_old_wasm_provides_good_error_message(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "old-component")
+        .component(&context.default_environment_id, "old-component")
         .unverified()
         .store()
         .await?;
@@ -1730,7 +1730,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     // case: WASM can be parsed, but wasmtime does not support it
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(&executor.environment_id, "write-stdout")
+        .component(&context.default_environment_id, "write-stdout")
         .store()
         .await?;
 
@@ -1785,7 +1785,7 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
-        .component(&executor.environment_id, "write-stdout")
+        .component(&context.default_environment_id, "write-stdout")
         .store()
         .await?;
 
@@ -1882,7 +1882,7 @@ async fn long_running_poll_loop_works_as_expected(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -1981,7 +1981,7 @@ async fn long_running_poll_loop_http_failures_are_retried(
         start_http_poll_server(response.clone(), poll_count.clone(), None).await;
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2091,7 +2091,7 @@ async fn long_running_poll_loop_works_as_expected_async_http(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-3")
+        .component(&context.default_environment_id, "http-client-3")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2164,7 +2164,7 @@ async fn long_running_poll_loop_interrupting_and_resuming_by_second_invocation(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2306,7 +2306,7 @@ async fn long_running_poll_loop_connection_breaks_on_interrupt(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2391,7 +2391,7 @@ async fn long_running_poll_loop_connection_retry_does_not_resume_interrupted_wor
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2471,7 +2471,7 @@ async fn long_running_poll_loop_connection_can_be_restored_after_resume(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2606,7 +2606,7 @@ async fn long_running_poll_loop_worker_can_be_deleted_after_interrupt(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -2656,7 +2656,7 @@ async fn shopping_cart_resource_example(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "shopping-cart-resource")
+        .component(&context.default_environment_id, "shopping-cart-resource")
         .store()
         .await?;
     let worker_id = executor
@@ -2807,7 +2807,7 @@ async fn counter_resource_test_1(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "counters")
+        .component(&context.default_environment_id, "counters")
         .store()
         .await?;
     let worker_id = executor.start_worker(&component.id, "counters-1").await?;
@@ -2932,7 +2932,7 @@ async fn reconstruct_interrupted_state(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "interruption")
+        .component(&context.default_environment_id, "interruption")
         .store()
         .await?;
     let worker_id = executor
@@ -3013,7 +3013,7 @@ async fn invocation_queue_is_persistent(
     );
 
     let component = executor
-        .component(&executor.environment_id, "http-client-2")
+        .component(&context.default_environment_id, "http-client-2")
         .store()
         .await?;
     let mut env = HashMap::new();
@@ -3107,7 +3107,7 @@ async fn invoke_with_non_existing_function(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -3151,7 +3151,7 @@ async fn invoke_with_wrong_parameters(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -3195,7 +3195,7 @@ async fn stderr_returned_for_failed_component(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "failing-component")
+        .component(&context.default_environment_id, "failing-component")
         .store()
         .await?;
     let worker_id = executor
@@ -3280,7 +3280,7 @@ async fn cancelling_pending_invocations(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "counters")
+        .component(&context.default_environment_id, "counters")
         .store()
         .await?;
     let worker_id = executor
@@ -3409,13 +3409,13 @@ async fn resolve_components_from_name(
 
     // Make sure the name is unique
     let counter_component = executor
-        .component(&executor.environment_id, "counters")
+        .component(&context.default_environment_id, "counters")
         .name("component-resolve-target")
         .store()
         .await?;
 
     let resolver_component = executor
-        .component(&executor.environment_id, "component-resolve")
+        .component(&context.default_environment_id, "component-resolve")
         .store()
         .await?;
 
@@ -3473,7 +3473,7 @@ async fn scheduled_invocation_test(
     let executor = start(deps, &context).await?;
 
     let server_component = executor
-        .component(&executor.environment_id, server_component_name)
+        .component(&context.default_environment_id, server_component_name)
         .store()
         .await?;
 
@@ -3482,7 +3482,7 @@ async fn scheduled_invocation_test(
         .await?;
 
     let client_component = executor
-        .component(&executor.environment_id, client_component_name)
+        .component(&context.default_environment_id, client_component_name)
         .with_dynamic_linking(&[
             (
                 "it:scheduled-invocation-server-client/server-client",
@@ -3677,7 +3677,7 @@ async fn error_handling_when_worker_is_invoked_with_wrong_parameter_type(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "option-service")
+        .component(&context.default_environment_id, "option-service")
         .store()
         .await?;
     let worker_id = executor
@@ -3721,7 +3721,7 @@ async fn delete_worker_during_invocation(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "clock-service")
+        .component(&context.default_environment_id, "clock-service")
         .store()
         .await?;
     let worker_id = executor
@@ -3777,7 +3777,7 @@ async fn invoking_worker_while_its_getting_deleted_works(
     let executor = start(deps, &context).await?;
 
     let component = executor
-        .component(&executor.environment_id, "counters")
+        .component(&context.default_environment_id, "counters")
         .unique()
         .store()
         .await?;

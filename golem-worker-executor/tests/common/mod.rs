@@ -28,7 +28,7 @@ use golem_common::config::RedisConfig;
 use golem_common::model::account::{AccountId, PlanId};
 use golem_common::model::agent::AgentId;
 use golem_common::model::application::ApplicationId;
-use golem_common::model::auth::{AccountRole, EnvironmentRole};
+use golem_common::model::auth::AccountRole;
 use golem_common::model::component::{ComponentDto, ComponentFilePath, ComponentId, ComponentType};
 use golem_common::model::component::{ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
@@ -130,26 +130,15 @@ pub struct TestWorkerExecutor {
     _join_set: Arc<JoinSet<anyhow::Result<()>>>,
     deps: WorkerExecutorTestDependencies,
     client: WorkerExecutorClient<Channel>,
-    // default account id to use during tests
-    pub account_id: AccountId,
-    // plan of the default account id
-    pub account_plan_id: PlanId,
-    // roles of the default plan
-    pub account_roles: HashSet<AccountRole>,
-    // default application id to use during tests
-    pub application_id: ApplicationId,
-    // default environment id to use during tests
-    pub environment_id: EnvironmentId,
-    // shares for the default environment
-    pub environment_roles_from_shares: HashSet<EnvironmentRole>,
+    context: TestContext,
 }
 
 impl TestWorkerExecutor {
     pub fn auth_ctx(&self) -> AuthCtx {
         AuthCtx::User(UserAuthCtx {
-            account_id: self.account_id.clone(),
-            account_plan_id: self.account_plan_id.clone(),
-            account_roles: self.account_roles.clone(),
+            account_id: self.context.account_id.clone(),
+            account_plan_id: self.context.account_plan_id.clone(),
+            account_roles: self.context.account_roles.clone(),
         })
     }
 
@@ -157,6 +146,7 @@ impl TestWorkerExecutor {
         &self,
         name: &str,
         component_id: &ComponentId,
+        environment_id: &EnvironmentId,
     ) -> anyhow::Result<ComponentDto> {
         let source_path = self.deps.component_directory.join(format!("{name}.wasm"));
         self.deps
@@ -166,18 +156,30 @@ impl TestWorkerExecutor {
                 component_id,
                 name,
                 ComponentType::Durable,
-                self.environment_id.clone(),
-                self.application_id.clone(),
-                self.account_id.clone(),
-                self.environment_roles_from_shares.clone(),
+                environment_id.clone(),
+                self.context.application_id.clone(),
+                self.context.account_id.clone(),
+                HashSet::new(),
             )
             .await
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct TestContext {
     base_prefix: String,
     unique_id: u16,
+
+    // account id to use during tests
+    pub account_id: AccountId,
+    // plan of the account id to use
+    pub account_plan_id: PlanId,
+    // roles of the account plan
+    pub account_roles: HashSet<AccountRole>,
+    // application id to use during tests
+    pub application_id: ApplicationId,
+    // default environment id to use during tests
+    pub default_environment_id: EnvironmentId,
 }
 
 impl TestContext {
@@ -185,9 +187,20 @@ impl TestContext {
         let base_prefix = Uuid::new_v4().to_string();
         let unique_id = last_unique_id.id.fetch_add(1, Ordering::Relaxed);
 
+        let account_id = AccountId::new_v4();
+        let account_plan_id = PlanId::new_v4();
+        let account_roles = HashSet::new();
+        let application_id = ApplicationId::new_v4();
+        let default_environment_id = EnvironmentId::new_v4();
+
         Self {
             base_prefix,
             unique_id,
+            account_id,
+            account_plan_id,
+            account_roles,
+            application_id,
+            default_environment_id,
         }
     }
 
@@ -268,24 +281,12 @@ pub async fn start_customized(
         info!("Waiting for worker-executor to be reachable on port {grpc_port}");
         let client = WorkerExecutorClient::connect(format!("http://127.0.0.1:{grpc_port}")).await;
 
-        let account_id = AccountId::new_v4();
-        let account_plan_id = PlanId::new_v4();
-        let account_roles = HashSet::new();
-        let application_id = ApplicationId::new_v4();
-        let environment_id = EnvironmentId::new_v4();
-        let environment_roles_from_shares = HashSet::new();
-
         if let Ok(client) = client {
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 deps: deps.clone(),
                 client,
-                account_id,
-                account_plan_id,
-                account_roles,
-                application_id,
-                environment_id,
-                environment_roles_from_shares,
+                context: context.clone(),
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));

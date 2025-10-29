@@ -17,6 +17,7 @@ use crate::{LastUniqueId, Tracing, WorkerExecutorTestDependencies};
 use assert2::check;
 use golem_common::model::component::ComponentId;
 use golem_common::model::{IdempotencyKey, OplogIndex, WorkerId, WorkerStatus};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::components::rdb::docker_mysql::DockerMysqlRdb;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
@@ -33,7 +34,6 @@ use test_r::{inherit_test_dep, test, test_dep};
 use tokio::task::JoinSet;
 use tracing::Instrument;
 use uuid::Uuid;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -219,7 +219,10 @@ async fn rdbms_postgres_crud(
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids_1 =
         start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
@@ -327,7 +330,6 @@ async fn rdbms_postgres_crud(
     workers_interrupt_test(&executor, worker_ids3.clone()).await?;
 
     drop(executor);
-
     let executor = start(deps, &context).await?;
 
     rdbms_workers_test::<PostgresType>(
@@ -359,9 +361,13 @@ async fn rdbms_postgres_idempotency(
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
-    let worker_ids = start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
+    let worker_ids =
+        start_workers::<PostgresType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -441,7 +447,6 @@ async fn rdbms_postgres_idempotency(
     check!(result2 == result1);
 
     drop(executor);
-
     let executor = start(deps, &context).await?;
 
     let select_tests = postgres_select_statements(table_name, vec![]);
@@ -449,7 +454,9 @@ async fn rdbms_postgres_idempotency(
 
     let idempotency_key = IdempotencyKey::fresh();
 
-    let result1 = execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone()).await?;
+    let result1 =
+        execute_worker_test::<PostgresType>(&executor, &worker_id, &idempotency_key, test.clone())
+            .await?;
 
     check_test_result(&worker_id, result1.clone(), test.clone());
 
@@ -470,7 +477,10 @@ async fn postgres_transaction_recovery_test(
     let db_address = postgres.public_connection_string();
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids = start_workers::<PostgresType>(
         &executor,
@@ -543,7 +553,7 @@ async fn postgres_transaction_recovery_test(
     )
     .await?;
 
-    let _ = executor.check_oplog_is_queryable(&worker_id).await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
 
     check_test_result(&worker_id, result1.clone(), select_test.clone());
 
@@ -554,7 +564,6 @@ async fn postgres_transaction_recovery_test(
     workers_interrupt_test(&executor, worker_ids.clone()).await?;
 
     drop(executor);
-
     let executor = start(deps, &context).await?;
 
     let result1 = execute_worker_test::<PostgresType>(
@@ -910,7 +919,10 @@ async fn rdbms_mysql_crud(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids1 =
         start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
@@ -1050,9 +1062,13 @@ async fn rdbms_mysql_idempotency(
 
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1159,7 +1175,10 @@ async fn mysql_transaction_recovery_test(
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
     let worker_ids = start_workers::<MysqlType>(
         &executor,
@@ -1576,9 +1595,13 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
     let db_address = mysql.public_connection_string();
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1611,7 +1634,8 @@ async fn rdbms_mysql_transaction_repo_create_table_failure(
 
     let db_address = mysql.public_connection_string_with_user("global_reader", "SomeSecurePass!");
 
-    let worker_ids = start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
+    let worker_ids =
+        start_workers::<MysqlType>(&executor, &component.id, &db_address, "", 1).await?;
 
     let worker_id = worker_ids[0].clone();
 
@@ -1650,8 +1674,12 @@ async fn rdbms_component_test<T: RdbmsType>(
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
-    let component = executor.component(&executor.environment_id, "rdbms-service").store().await?;
-    let worker_ids = start_workers::<T>(&executor, &component.id, db_address, "", n_workers).await?;
+    let component = executor
+        .component(&context.default_environment_id, "rdbms-service")
+        .store()
+        .await?;
+    let worker_ids =
+        start_workers::<T>(&executor, &component.id, db_address, "", n_workers).await?;
 
     rdbms_workers_test::<T>(&executor, worker_ids, test).await?;
 
@@ -1666,7 +1694,9 @@ async fn rdbms_workers_test<T: RdbmsType>(
     let mut workers_results: HashMap<WorkerId, Result<Option<ValueAndType>, WorkerExecutorError>> =
         HashMap::new(); // <worker_id, results>
 
-    let mut fibers = JoinSet::<anyhow::Result<(WorkerId, Result<Option<ValueAndType>, WorkerExecutorError>)>>::new();
+    let mut fibers = JoinSet::<
+        anyhow::Result<(WorkerId, Result<Option<ValueAndType>, WorkerExecutorError>)>,
+    >::new();
 
     for worker_id in worker_ids {
         let worker_id_clone = worker_id.clone();

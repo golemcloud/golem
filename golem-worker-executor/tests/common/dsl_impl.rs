@@ -45,7 +45,7 @@ use golem_test_framework::components::redis::Redis;
 use golem_test_framework::dsl::{rename_component_if_needed, TestDsl};
 use golem_test_framework::model::IFSEntry;
 use golem_wasm::{Value, ValueAndType};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedReceiver;
 use tracing::{debug, Instrument};
@@ -138,9 +138,9 @@ impl TestDsl for TestWorkerExecutor {
                         unverified,
                         env,
                         environment_id,
-                        self.application_id.clone(),
-                        self.account_id.clone(),
-                        self.environment_roles_from_shares.clone(),
+                        self.context.application_id.clone(),
+                        self.context.account_id.clone(),
+                        HashSet::new(),
                     )
                     .await
                     .expect("Failed to add component")
@@ -156,9 +156,9 @@ impl TestDsl for TestWorkerExecutor {
                         unverified,
                         env,
                         environment_id,
-                        self.application_id.clone(),
-                        self.account_id.clone(),
-                        self.environment_roles_from_shares.clone(),
+                        self.context.application_id.clone(),
+                        self.context.account_id.clone(),
+                        HashSet::new(),
                     )
                     .await
             }
@@ -423,22 +423,22 @@ impl TestDsl for TestWorkerExecutor {
             None => Err(anyhow!(
                 "No response from golem-worker-executor invoke call"
             )),
-            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(result)) => {
-                match result.output {
-                    None => Ok(Ok(None)),
-                    Some(response) => {
-                        let response: ValueAndType = response.try_into().map_err(|err| {
-                            anyhow!("Invocation result had unexpected format: {err}")
-                        })?;
-                        Ok(Ok(Some(response)))
-                    }
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Success(
+                result,
+            )) => match result.output {
+                None => Ok(Ok(None)),
+                Some(response) => {
+                    let response: ValueAndType = response
+                        .try_into()
+                        .map_err(|err| anyhow!("Invocation result had unexpected format: {err}"))?;
+                    Ok(Ok(Some(response)))
                 }
-            }
-            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(error)) => {
-                Ok(Err(error
-                    .try_into()
-                    .map_err(|e| anyhow!("Failed converting error: {e}"))?))
-            }
+            },
+            Some(workerexecutor::v1::invoke_and_await_worker_response_typed::Result::Failure(
+                error,
+            )) => Ok(Err(error
+                .try_into()
+                .map_err(|e| anyhow!("Failed converting error: {e}"))?)),
         }
     }
 
